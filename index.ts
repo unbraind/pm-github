@@ -1,11 +1,6 @@
 // pm-ext-gh-issues — GitHub Issues importer for pm-cli
 
-function defineExtension(ext: any) {
-  return Object.assign({ activate() {} }, ext, {
-    activate(api: any) { ext.activate?.(api); },
-  });
-}
-
+import { defineExtension } from "@unbrained/pm-cli/sdk";
 import https from "node:https";
 import { spawnSync } from "node:child_process";
 
