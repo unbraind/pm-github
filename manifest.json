@@ -1,0 +1,12 @@
+{
+  "name": "pm-ext-gh-issues",
+  "version": "0.1.0",
+  "description": "GitHub Issues importer. Fetches open (or all) issues from a GitHub repo and creates pm items.",
+  "author": "@unbrained",
+  "entry": "./dist/index.js",
+  "priority": 50,
+  "capabilities": [
+    "commands",
+    "schema"
+  ]
+}
