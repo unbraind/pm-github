@@ -2,6 +2,14 @@
   "name": "pm-ext-gh-issues",
   "version": "0.1.0",
   "description": "GitHub Issues importer extension for pm-cli",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/unbraind/pm-ext-gh-issues.git"
+  },
+  "bugs": {
+    "url": "https://github.com/unbraind/pm-ext-gh-issues/issues"
+  },
+  "homepage": "https://github.com/unbraind/pm-ext-gh-issues#readme",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
