@@ -1,8 +1,11 @@
 // pm-ext-gh-issues — GitHub Issues importer for pm-cli
 
-import { defineExtension } from "@unbrained/pm-cli/sdk";
 import https from "node:https";
 import { spawnSync } from "node:child_process";
+
+import type { defineExtension as defineExtensionType } from "@unbrained/pm-cli/sdk";
+
+const defineExtension: typeof defineExtensionType = ((extension: any) => extension) as any;
 
 // ---------------------------------------------------------------------------
 // Types
