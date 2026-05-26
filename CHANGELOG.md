@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Add bun-install verification to release workflow ([pm-github-np9v](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-np9v.toon))
+
 ## 2026.05.26 - 2026-05-26
 
 ### Fixed
