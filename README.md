@@ -1,4 +1,4 @@
-# pm-ext-gh-issues
+# pm-github
 
 GitHub Issues importer for [pm-cli](https://github.com/unbraind/pm-cli).
 
@@ -9,7 +9,7 @@ Fetch issues from any public GitHub repo and create pm items. No authentication 
 ## Installation
 
 ```bash
-pm extension install github.com/unbraind/pm-ext-gh-issues --global
+pm install github.com/unbraind/pm-github --global
 ```
 
 ## Commands
@@ -35,3 +35,7 @@ pm gh-issues import owner/repo --dry-run
 ## License
 
 MIT
+
+## Release Automation
+
+This package is release-ready for GitHub, npm, and Bun-compatible installs. CI runs type checking, build, production dependency audit, package packing, Bun install verification, and pm-changelog validation. The daily release workflow publishes only when commits exist after the latest release tag and uses pm-changelog to generate CHANGELOG.md and GitHub release notes.

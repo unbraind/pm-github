@@ -1,4 +1,4 @@
-// pm-ext-gh-issues — GitHub Issues importer for pm-cli
+// pm-github — GitHub Issues importer for pm-cli
 
 import https from "node:https";
 import { spawnSync } from "node:child_process";
@@ -33,7 +33,7 @@ function fetchJSON(url: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const req = https.get(url, {
       headers: {
-        "User-Agent": "pm-ext-gh-issues",
+        "User-Agent": "pm-github",
         Accept: "application/vnd.github.v3+json",
       },
     }, (res) => {
@@ -64,7 +64,7 @@ function mapState(state: string): string {
 // ---------------------------------------------------------------------------
 
 export default defineExtension({
-  name: "pm-ext-gh-issues",
+  name: "pm-github",
   version: "0.1.0",
 
   activate(api: any) {
