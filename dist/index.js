@@ -38,7 +38,7 @@ function mapState(state) {
 // ---------------------------------------------------------------------------
 export default defineExtension({
     name: "pm-github",
-    version: "2026.5.26",
+    version: "2026.5.27",
     activate(api) {
         // -----------------------------------------------------------------------
         // Command: pm gh-issues import <owner/repo>
