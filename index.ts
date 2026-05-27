@@ -65,7 +65,7 @@ function mapState(state: string): string {
 
 export default defineExtension({
   name: "pm-github",
-  version: "2026.5.26",
+  version: "2026.5.27",
 
   activate(api: any) {
     // -----------------------------------------------------------------------
