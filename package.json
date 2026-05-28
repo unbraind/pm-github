@@ -1,6 +1,6 @@
 {
   "name": "pm-github",
-  "version": "2026.5.27",
+  "version": "2026.5.28",
   "description": "GitHub Issues importer extension for pm-cli",
   "repository": {
     "type": "git",
