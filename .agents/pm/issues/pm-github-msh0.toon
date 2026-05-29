@@ -1,0 +1,13 @@
+id: pm-github-msh0
+title: Failed imports exited 0 (broke automation)
+description: "Handler returned { error } which runtime treats as success (exit 0). Switched to throwing for non-zero exit; also fail when every create fails."
+type: Issue
+status: closed
+priority: 2
+tags: []
+created_at: "2026-05-29T09:32:37.834Z"
+updated_at: "2026-05-29T09:32:48.382Z"
+author: codex
+parent: pm-github-lixc
+close_reason: Fixed and verified end-to-end (build+tests+live import).
+body: ""

@@ -1,0 +1,13 @@
+id: pm-github-gtnp
+title: "Importer was unauthenticated (60 req/hr, no private repos)"
+description: "fetchJSON sent no Authorization header. Added resolveGitHubToken() honoring GITHUB_TOKEN/GH_TOKEN with gh-CLI fallback (60 -> 5000 req/hr, private repos work)."
+type: Issue
+status: closed
+priority: 2
+tags: []
+created_at: "2026-05-29T09:32:36.038Z"
+updated_at: "2026-05-29T09:32:46.669Z"
+author: codex
+parent: pm-github-lixc
+close_reason: Fixed and verified end-to-end (build+tests+live import).
+body: ""

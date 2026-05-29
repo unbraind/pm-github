@@ -1,0 +1,13 @@
+id: pm-github-v4la
+title: Issue list truncated at one page (no pagination)
+description: per_page=100 with no pagination silently dropped issues beyond page 1. Added RFC-5988 Link-header following via parseNextLink().
+type: Issue
+status: closed
+priority: 2
+tags: []
+created_at: "2026-05-29T09:32:36.965Z"
+updated_at: "2026-05-29T09:32:47.532Z"
+author: codex
+parent: pm-github-lixc
+close_reason: Fixed and verified end-to-end (build+tests+live import).
+body: ""

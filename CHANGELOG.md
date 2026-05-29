@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Production-harden gh-issues import ([pm-github-lixc](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-lixc.toon))
+
+### Other
+
+- Failed imports exited 0 \(broke automation\) ([pm-github-msh0](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-msh0.toon))
+- Issue list truncated at one page \(no pagination\) ([pm-github-v4la](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-v4la.toon))
+- Importer was unauthenticated \(60 req/hr, no private repos\) ([pm-github-gtnp](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-gtnp.toon))
+- --dry-run silently wrote items instead of previewing ([pm-github-2u31](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-2u31.toon))
+
 ## 2026.05.28 - 2026-05-28
 
 ### Added
