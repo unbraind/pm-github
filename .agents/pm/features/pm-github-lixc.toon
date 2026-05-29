@@ -1,0 +1,12 @@
+id: pm-github-lixc
+title: Production-harden gh-issues import
+description: "Make the GitHub issue importer reliable for real-world use: authenticated requests, full pagination, correct dry-run, and accurate exit codes."
+type: Feature
+status: closed
+priority: 2
+tags: []
+created_at: "2026-05-29T09:31:51.615Z"
+updated_at: "2026-05-29T09:32:49.286Z"
+author: codex
+close_reason: "All four hardening fixes shipped, tested (6 unit tests), and verified against a live repo import."
+body: ""

@@ -1,0 +1,13 @@
+id: pm-github-2u31
+title: "--dry-run silently wrote items instead of previewing"
+description: "Flag registered as --dry-run but read as ctx.options['dry-run']; runtime normalizes to camelCase 'dryRun', so dry-run was always false and the importer created real items in 'preview' mode. Fixed by reading both key forms via optionEnabled()."
+type: Issue
+status: closed
+priority: 2
+tags: []
+created_at: "2026-05-29T09:32:35.217Z"
+updated_at: "2026-05-29T09:32:45.764Z"
+author: codex
+parent: pm-github-lixc
+close_reason: Fixed and verified end-to-end (build+tests+live import).
+body: ""
