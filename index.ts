@@ -120,7 +120,7 @@ export function optionString(options: Record<string, unknown>, ...keys: string[]
 
 export default defineExtension({
   name: "pm-github",
-  version: "2026.5.30",
+  version: "2026.5.31",
 
   activate(api: any) {
     // -----------------------------------------------------------------------
