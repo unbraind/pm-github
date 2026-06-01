@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import extension, { parseNextLink, resolveGitHubToken } from "../dist/index.js";
+import extension, { CommandError, EXIT_CODE, parseNextLink, resolveGitHubToken } from "../dist/index.js";
 
 test("extension has required shape", () => {
   assert.ok(extension, "module should export a default value");
@@ -69,7 +69,13 @@ test("gh-issues import rejects a missing owner/repo argument", async () => {
   assert.ok(captured, "import command should be registered");
   await assert.rejects(
     async () => captured!.run({ args: [], options: {}, pm_root: ".agents/pm" }),
-    /owner\/repo/,
-    "missing argument should throw (non-zero exit), not return silently",
+    (err: unknown) => {
+      // The runtime only treats a thrown error as a cleanly handled non-zero
+      // exit (no second handler invocation) when it carries a numeric exitCode.
+      assert.match((err as Error).message, /owner\/repo/);
+      assert.strictEqual((err as CommandError).exitCode, EXIT_CODE.USAGE);
+      return true;
+    },
+    "missing argument should throw a CommandError carrying a USAGE exit code",
   );
 });

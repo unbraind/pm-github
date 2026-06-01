@@ -83,6 +83,27 @@ export function optionString(options, ...keys) {
     }
     return undefined;
 }
+// pm's extension command runtime only treats a thrown error as a cleanly
+// handled non-zero exit when the error carries a numeric `exitCode` property
+// (see @unbrained/pm-cli runCommandHandler). A plain `Error` makes the runtime
+// fall through to its "unhandled" path, which RE-INVOKES the command handler a
+// second time — doubling side effects (e.g. a second GitHub fetch) and exiting
+// with a generic code instead of a semantic one. We mirror the SDK's EXIT_CODE
+// contract here rather than importing it: standalone-installed extensions load
+// only their own `dist/`, so `@unbrained/pm-cli` is not resolvable at runtime.
+export const EXIT_CODE = {
+    GENERIC_FAILURE: 1,
+    USAGE: 2,
+    NOT_FOUND: 3,
+};
+export class CommandError extends Error {
+    exitCode;
+    constructor(message, exitCode = EXIT_CODE.GENERIC_FAILURE) {
+        super(message);
+        this.name = "CommandError";
+        this.exitCode = exitCode;
+    }
+}
 // ---------------------------------------------------------------------------
 // Extension
 // ---------------------------------------------------------------------------
@@ -115,9 +136,10 @@ export default defineExtension({
             async run(ctx) {
                 const repoArg = ctx.args[0];
                 if (!repoArg || !repoArg.includes("/")) {
-                    // Throw so the CLI exits non-zero — a returned { error } is treated
-                    // as a successful run by the runtime.
-                    throw new Error("Usage: pm gh-issues import <owner/repo> [--all] [--labels bug,enhancement]");
+                    // Throw with a USAGE exit code so the CLI exits non-zero AND the
+                    // runtime treats the command as handled (a returned { error } reads
+                    // as success; a plain Error triggers a second handler invocation).
+                    throw new CommandError("Usage: pm gh-issues import <owner/repo> [--all] [--labels bug,enhancement]", EXIT_CODE.USAGE);
                 }
                 const includeAll = optionEnabled(ctx.options, "all");
                 const labelsFilter = optionString(ctx.options, "labels");
@@ -157,8 +179,10 @@ export default defineExtension({
                     const hint = !token && /HTTP 403/.test(msg)
                         ? " — set GITHUB_TOKEN/GH_TOKEN or run `gh auth login` to raise the rate limit (60→5000/hr) and reach private repos"
                         : "";
-                    // Throw so the CLI exits non-zero on a failed fetch.
-                    throw new Error(`Failed to fetch issues from ${repoArg}: ${msg}${hint}`);
+                    // Throw so the CLI exits non-zero on a failed fetch. A 404 maps to
+                    // NOT_FOUND; everything else (403, 5xx, timeouts) is a generic failure.
+                    const exitCode = /HTTP 404/.test(msg) ? EXIT_CODE.NOT_FOUND : EXIT_CODE.GENERIC_FAILURE;
+                    throw new CommandError(`Failed to fetch issues from ${repoArg}: ${msg}${hint}`, exitCode);
                 }
                 // Filter out PRs
                 const filtered = issues.filter((i) => !i.pull_request);
@@ -221,7 +245,7 @@ export default defineExtension({
                 console.error(`Imported ${imported} issue(s), skipped ${skipped}.`);
                 if (imported === 0 && skipped > 0) {
                     // Every create failed — surface as a non-zero exit for automation.
-                    throw new Error(`Imported 0 issue(s); ${skipped} failed.`);
+                    throw new CommandError(`Imported 0 issue(s); ${skipped} failed.`);
                 }
                 return { imported, skipped };
             },
