@@ -1,0 +1,13 @@
+id: pm-github-fgay
+title: Thrown errors lacked exitCode → runtime re-invoked handler (double fetch)
+description: "Command threw plain Error without a numeric exitCode. pm's runCommandHandler only treats a thrown error as cleanly handled when it carries exitCode; a plain Error falls through the unhandled path and RE-INVOKES the handler a second time (a second GitHub fetch on failure) and exits with a generic code. Fixed via a dependency-free CommandError mirroring the SDK EXIT_CODE contract (USAGE=2, NOT_FOUND=3, GENERIC=1); cannot import PmCliError since the SDK is not resolvable from the installed extension dir at runtime."
+type: Issue
+status: closed
+priority: 2
+tags: []
+created_at: "2026-06-01T09:49:24.779Z"
+updated_at: "2026-06-01T09:49:32.334Z"
+author: codex
+parent: pm-github-lixc
+close_reason: "Fixed: CommandError carries exitCode (USAGE/NOT_FOUND/GENERIC). Verified end-to-end — bad-arg exits 2, 404 exits 3, single handler invocation (no double fetch); 6 unit tests pass incl. new exitCode assertion."
+body: ""

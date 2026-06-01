@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Thrown errors lacked exitCode → runtime re-invoked handler \(double fetch\) ([pm-github-fgay](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-fgay.toon))
+
 ## 2026.05.29 - 2026-05-29
 
 ### Added
