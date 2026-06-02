@@ -1,0 +1,12 @@
+id: pm-github-2u0d
+title: Tests + functional verification against real public repo (idempotent re-import)
+description: ""
+type: Task
+status: open
+priority: 2
+tags: []
+created_at: "2026-06-02T07:59:36.002Z"
+updated_at: "2026-06-02T07:59:36.002Z"
+author: codex
+parent: pm-github-mdlp
+body: ""

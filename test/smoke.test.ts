@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import extension, { CommandError, EXIT_CODE, parseNextLink, resolveGitHubToken } from "../dist/index.js";
+import extension, {
+  CommandError,
+  EXIT_CODE,
+  parseNextLink,
+  parseProvenanceTag,
+  planSync,
+  resolveGitHubToken,
+} from "../dist/index.js";
 
 test("extension has required shape", () => {
   assert.ok(extension, "module should export a default value");
@@ -61,6 +68,27 @@ test("parseNextLink returns undefined when there is no next page", () => {
     parseNextLink('<https://api.github.com/repositories/1/issues?page=1>; rel="prev"'),
     undefined,
   );
+});
+
+test("parseProvenanceTag normalizes repository casing", () => {
+  assert.deepEqual(parseProvenanceTag("gh:Owner/Repo#123"), {
+    repo: "owner/repo",
+    number: 123,
+  });
+});
+
+test("planSync matches provenance tags case-insensitively", () => {
+  const plan = planSync([
+    { id: "pm-1", status: "closed", tags: ["gh:Owner/Repo#123"] },
+  ], "owner/repo");
+
+  assert.deepEqual(plan, [{
+    id: "pm-1",
+    number: 123,
+    title: "(untitled)",
+    from: "open",
+    to: "closed",
+  }]);
 });
 
 test("resolveGitHubToken prefers the GITHUB_TOKEN env var", () => {

@@ -1,0 +1,12 @@
+id: pm-github-jget
+title: "preflight capability: validate token/gh auth + repo reachability before mutating github commands"
+description: ""
+type: Task
+status: open
+priority: 2
+tags: []
+created_at: "2026-06-02T07:59:35.366Z"
+updated_at: "2026-06-02T07:59:35.366Z"
+author: codex
+parent: pm-github-mdlp
+body: ""
