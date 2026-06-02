@@ -13,17 +13,36 @@ test("extension has required shape", () => {
 
 test("extension registers at least one capability", () => {
   const registered: string[] = [];
+  // Mirror the real ExtensionApi surface so activate() can register every
+  // capability the extension uses (commands, importers, exporters, schema
+  // fields, hooks).
   const api = {
     registerCommand: () => { registered.push("command"); },
-    registerHook: () => { registered.push("hook"); },
-    registerImporter: () => { registered.push("importer"); },
-    registerSchema: () => { registered.push("schema"); },
-    registerRenderer: () => { registered.push("renderer"); },
-    registerSearchProvider: () => { registered.push("search"); },
+    registerParser: () => { registered.push("parser"); },
     registerPreflight: () => { registered.push("preflight"); },
     registerService: () => { registered.push("service"); },
+    registerFlags: () => { registered.push("flags"); },
+    registerItemFields: () => { registered.push("itemFields"); },
+    registerItemTypes: () => { registered.push("itemTypes"); },
+    registerMigration: () => { registered.push("migration"); },
+    registerRenderer: () => { registered.push("renderer"); },
+    registerImporter: () => { registered.push("importer"); },
+    registerExporter: () => { registered.push("exporter"); },
+    registerSearchProvider: () => { registered.push("search"); },
+    registerVectorStoreAdapter: () => { registered.push("vectorStore"); },
+    hooks: {
+      beforeCommand: () => { registered.push("hook:before"); },
+      afterCommand: () => { registered.push("hook:after"); },
+      onWrite: () => { registered.push("hook:onWrite"); },
+      onRead: () => { registered.push("hook:onRead"); },
+      onIndex: () => { registered.push("hook:onIndex"); },
+    },
   };
   extension.activate(api as any);
+  assert.ok(registered.includes("importer"), "should register the github importer");
+  assert.ok(registered.includes("exporter"), "should register the github exporter");
+  assert.ok(registered.includes("itemFields"), "should register github schema fields");
+  assert.ok(registered.includes("hook:after"), "should register an afterCommand hook");
   assert.ok(registered.length > 0, `extension should register at least one capability, got: ${JSON.stringify(registered)}`);
 });
 
@@ -59,11 +78,14 @@ test("resolveGitHubToken prefers the GITHUB_TOKEN env var", () => {
 
 test("gh-issues import rejects a missing owner/repo argument", async () => {
   let captured: { run: (ctx: any) => unknown } | undefined;
+  const noop = () => {};
   const api = {
     registerCommand: (def: any) => { if (def?.name === "gh-issues import") captured = def; },
-    registerHook: () => {}, registerImporter: () => {}, registerSchema: () => {},
-    registerRenderer: () => {}, registerSearchProvider: () => {},
-    registerPreflight: () => {}, registerService: () => {},
+    registerParser: noop, registerPreflight: noop, registerService: noop,
+    registerFlags: noop, registerItemFields: noop, registerItemTypes: noop,
+    registerMigration: noop, registerRenderer: noop, registerImporter: noop,
+    registerExporter: noop, registerSearchProvider: noop, registerVectorStoreAdapter: noop,
+    hooks: { beforeCommand: noop, afterCommand: noop, onWrite: noop, onRead: noop, onIndex: noop },
   };
   extension.activate(api as any);
   assert.ok(captured, "import command should be registered");
