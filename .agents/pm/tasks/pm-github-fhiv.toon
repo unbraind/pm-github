@@ -1,0 +1,12 @@
+id: pm-github-fhiv
+title: "Idempotent import: match by github_number, update not duplicate; populate schema fields"
+description: ""
+type: Task
+status: open
+priority: 2
+tags: []
+created_at: "2026-06-02T07:59:34.702Z"
+updated_at: "2026-06-02T07:59:34.702Z"
+author: codex
+parent: pm-github-mdlp
+body: ""

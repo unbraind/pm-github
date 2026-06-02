@@ -1,0 +1,12 @@
+id: pm-github-rx1q
+title: Rate-limit/backoff handling (Retry-After / X-RateLimit-Reset) + useful afterCommand hook
+description: ""
+type: Task
+status: open
+priority: 2
+tags: []
+created_at: "2026-06-02T07:59:35.793Z"
+updated_at: "2026-06-02T07:59:35.793Z"
+author: codex
+parent: pm-github-mdlp
+body: ""

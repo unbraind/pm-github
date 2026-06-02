@@ -1,0 +1,11 @@
+id: pm-github-mdlp
+title: "Domain-max SDK enhancement: idempotent import, sync, preflight, renderer"
+description: "Drastically enhance pm-github toward domain-appropriate max of the pm-cli SDK surface.\n\nValue: turn the importer from a one-shot duplicating fetch into a real GitHub<->pm sync tool, and surface the remaining SDK capabilities that genuinely fit the GitHub-issues domain.\n\nOutcome / acceptance criteria:\n- Re-import is IDEMPOTENT: existing pm items matched by github_number provenance are UPDATEd (via pm update <id>), not duplicated. The schema fields github_url/github_number/github_state are actually populated (not just description text).\n- --with-comments flag appends issue comments to the item body.\n- New 'pm github sync' command pushes pm status changes back to GitHub (close/reopen linked issue) guarded by token + --repo + --dry-run preview.\n- preflight capability validates token/gh auth + repo reachability before mutating github commands, with clear failure_hints.\n- renderers capability registers a 'github' output format rendering pm items as GitHub-issue markdown.\n- afterCommand hook made genuinely useful (still no surprise network calls by default).\n- Rate-limit/backoff handling (Retry-After / X-RateLimit-Reset), timeouts retained.\n- manifest capabilities updated to exactly match: commands, importers, schema, hooks, preflight, renderers.\n\nCapabilities before: commands, importers, schema, hooks (4/9).\nCapabilities after target: commands, importers, schema, hooks, preflight, renderers (6/9). search intentionally skipped (no genuinely useful remote search provider distinct from import filters)."
+type: Feature
+status: in_progress
+priority: 2
+tags: []
+created_at: "2026-06-02T07:59:17.313Z"
+updated_at: "2026-06-02T07:59:17.313Z"
+author: codex
+body: ""
