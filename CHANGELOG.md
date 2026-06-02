@@ -1,6 +1,12 @@
 # Changelog
 
-## 2026.6.1 - 2026-06-01
+## 2026.6.2 - 2026-06-02
+
+### Added
+
+- Adopt full SDK capability surface: native importer/exporter, schema fields, afterCommand hook, richer import flags ([pm-github-gh83](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-gh83.toon))
+
+## 2026.06.01 - 2026-06-01
 
 ### Fixed
 
