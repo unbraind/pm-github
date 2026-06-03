@@ -1,0 +1,16 @@
+id: pm-github-f3xf
+title: Unit tests + functional verification + README + decisions
+description: "node --test unit tests for new pure fns (buildSearchQuery/matcher, validate result builder, export plan builder). Functional: import w/ filters, upsert re-import, search, export --dry-run, validate against real public repo. Update README. Record decisions."
+type: Task
+status: closed
+priority: 2
+tags: []
+created_at: "2026-06-03T05:07:29.252Z"
+updated_at: "2026-06-03T05:26:55.008Z"
+author: codex
+parent: pm-github-9dqy
+resolution: tests + functional verification complete
+expected_result: all verified vs real data
+actual_result: 16/16 tests; full flow verified
+close_reason: "Added 8 unit tests (buildExportPlan create/update, exportWillApply precedence, buildSearchUrl, mapSearchHits, resolveSearchRepo, search-provider + validate registration) — 16/16 pass. Functional vs real public repo sindresorhus/slugify: activation ok:1/warnings:[]; import --state all=34; re-import=0 new/34 updated/0 dupes; --labels bug=1 (matches gh); search 'dashes' --semantic=2 hits mapped to local items; export dry-run-default would_update:34 + --json plan; validate ok/accessible + exit 3 on 404. README updated."
+body: ""

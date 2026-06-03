@@ -1,0 +1,16 @@
+id: pm-github-fv0x
+title: "Export: dry-run default + upsert existing issues by provenance"
+description: "Change exporter so it DEFAULTS to dry-run (print would-create/update). Real writes only with --apply/--no-dry-run AND --repo. Upsert: if a pm item's provenance tag points at an existing issue in target repo, PATCH it instead of creating a duplicate."
+type: Task
+status: closed
+priority: 2
+tags: []
+created_at: "2026-06-03T05:07:28.950Z"
+updated_at: "2026-06-03T05:25:02.892Z"
+author: codex
+parent: pm-github-9dqy
+resolution: dry-run-default export + upsert
+expected_result: safe-by-default export
+actual_result: "dry-run default verified, writes opt-in only"
+close_reason: "Export now SAFE BY DEFAULT (dry-run). Verified: 'pm github export --repo X' prints would-create/update plan + writes NOTHING (dry_run:true); --json returns plan object (no stdout corruption); items imported from the target repo correctly show would_update:34 (upsert via provenance), a different repo shows would_create:34; '--apply' without --repo errors safely (no writes); '--apply' requires token+repo. Real GitHub writes NOT performed (constraint). Legacy --push kept as --apply alias. Also fixed upsert reader bug (pm list -> list-all so closed items aren't duplicated)."
+body: ""

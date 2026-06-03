@@ -2,11 +2,15 @@ id: pm-github-vvov
 title: "renderers capability: register 'github' output format (pm items as GitHub-issue markdown)"
 description: ""
 type: Task
-status: open
+status: closed
 priority: 2
 tags: []
 created_at: "2026-06-02T07:59:35.591Z"
-updated_at: "2026-06-02T07:59:35.591Z"
+updated_at: "2026-06-03T05:06:49.773Z"
 author: codex
 parent: pm-github-mdlp
+resolution: Delivered in prior releases
+expected_result: Capability landed
+actual_result: Landed and released
+close_reason: "Shipped in prior releases (2026.5.29-2026.6.2): idempotent import, --with-comments, backoff, sync. Note: renderer/preflight tasks (vvov/jget) intended but renderer never coded + preflight missing from manifest."
 body: ""

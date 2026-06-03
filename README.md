@@ -1,8 +1,8 @@
 # pm-github
 
-GitHub Issues importer **and exporter** for [pm-cli](https://github.com/unbraind/pm-cli).
+A true **round-trip** GitHub Issues integration for [pm-cli](https://github.com/unbraind/pm-cli): import, export, status-sync, search, and validate.
 
-Import issues from any GitHub repo as pm items, export pm items back as a GitHub-issues payload, and track GitHub provenance on each item. Works unauthenticated (60 req/hr); set `GITHUB_TOKEN`/`GH_TOKEN` or run `gh auth login` for 5000 req/hr and private repos.
+Import issues from any GitHub repo as pm items, export pm items back to GitHub (safely, dry-run by default), push status changes upstream, reach GitHub from `pm search`, and track GitHub provenance on each item. Works unauthenticated (60 req/hr); set `GITHUB_TOKEN`/`GH_TOKEN` or run `gh auth login` for 5000 req/hr and private repos.
 
 ---
 
@@ -16,11 +16,13 @@ pm install github.com/unbraind/pm-github --global
 
 | SDK capability | What it provides |
 |---|---|
-| `importers` | `pm github import <owner/repo>` — native import pipeline |
-| `importers` (exporter) | `pm github export` — render pm items as a GitHub-issues payload |
-| `commands` | `pm gh-issues import <owner/repo>` — legacy alias of the importer |
+| `importers` | `pm github import <owner/repo>` — idempotent native import pipeline |
+| `importers` (exporter) | `pm github export` — pm items → GitHub issues (dry-run by default; upsert) |
+| `commands` | `pm gh-issues import` (legacy import alias), `pm github sync` (push status), `pm github validate` (diagnostics) |
 | `schema` | declares `github_url`, `github_number`, `github_state` item fields |
 | `hooks` | `afterCommand` — opt-in sync reminder (`PM_GITHUB_SYNC`) for linked items |
+| `preflight` | early warning when a mutating github command lacks a token |
+| `search` | `github` search provider — `pm search` reaches GitHub for imported items |
 
 ## Import
 
@@ -51,21 +53,62 @@ pm github import owner/repo --dry-run
 | `--dry-run` | boolean | Preview without writing |
 | `--type <type>` | string | Override pm item type (default: Issue) |
 
-## Export
+## Export (pm → GitHub)
 
 ### `pm github export`
 
+**Safe by default.** Export previews the create/update plan and writes *nothing* unless you explicitly opt in with `--apply` **and** name a `--repo`. With a `--repo`, items already linked to an issue in that repo (via the `gh:owner/repo#N` provenance tag) are **updated** (upsert) instead of duplicated.
+
 ```bash
-pm github export                       # JSON GitHub-issues payload to stdout
-pm github export --format md           # markdown
-pm github export --repo owner/repo --push   # create the issues on GitHub (requires a token)
+pm github export --repo owner/repo            # DRY-RUN: print the create/update plan, write nothing
+pm github export --repo owner/repo --format md
+pm --json github export --repo owner/repo     # return the plan as JSON
+pm github export --repo owner/repo --apply    # actually create/update issues (requires a token)
 ```
 
 | Flag | Type | Description |
 |---|---|---|
-| `--format <json\|md>` | string | Output format (default: json) |
-| `--repo <owner/repo>` | string | Target repo for `--push` |
-| `--push` | boolean | Create issues on GitHub (requires `GITHUB_TOKEN`/`GH_TOKEN`) |
+| `--repo <owner/repo>` | string | Target repo; decides create-vs-update and is required for `--apply` |
+| `--format <json\|md>` | string | Dry-run output format (default: json) |
+| `--apply` | boolean | Perform real GitHub writes (alias: `--no-dry-run`, legacy `--push`). Requires a token + `--repo` |
+| `--dry-run` | boolean | Force preview even alongside `--apply` (dry-run always wins) |
+
+## Status sync (pm → GitHub state)
+
+### `pm github sync`
+
+Push pm status changes back to GitHub: close/reopen the linked issue to match the pm item's status. Requires a token and explicit `--repo`.
+
+```bash
+pm github sync --repo owner/repo --dry-run    # preview the close/reopen plan
+pm github sync --repo owner/repo              # push the changes
+```
+
+## Search (pm search → GitHub)
+
+### `github` search provider
+
+Registers a `github` search provider so `pm search ... --semantic` can reach GitHub. It asks GitHub which issues in the target repo match your query, then returns hits for the **pm items you've already imported** from those issues (matched by the `gh:owner/repo#N` provenance tag).
+
+```bash
+pm config project set ...                      # set search.provider = "github" in .agents/pm/settings.json
+export PM_GITHUB_REPO=owner/repo               # or pass the repo another way
+pm search "uppercase dashes" --semantic        # hits = imported items whose upstream issue matches
+```
+
+Enable it by setting `search.provider` to `"github"` in `.agents/pm/settings.json` and pointing it at a repo via the `PM_GITHUB_REPO` env var.
+
+## Validate / diagnostics
+
+### `pm github validate`
+
+Read-only check of the integration: `gh` CLI presence, token resolvability (and source), and—with `--repo`—repo accessibility. Never mutates anything.
+
+```bash
+pm github validate
+pm github validate --repo owner/repo
+pm --json github validate --repo owner/repo
+```
 
 ## License
 

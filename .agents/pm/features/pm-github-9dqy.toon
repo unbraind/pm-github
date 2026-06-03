@@ -1,0 +1,15 @@
+id: pm-github-9dqy
+title: "True round-trip GitHub sync: search provider, validate diagnostics, safe-by-default export, fix activation"
+description: "Deepen pm-github toward true round-trip + fix activation-breaking bug. CRITICAL: published 2026.6.2 manifest omits 'preflight' but code calls registerPreflight -> extension_activate_failed -> whole extension dead. Add validate command, github search provider (maps to local imported items), dry-run-default export upsert."
+type: Feature
+status: closed
+priority: 2
+tags: []
+created_at: "2026-06-03T05:07:15.430Z"
+updated_at: "2026-06-03T05:28:25.284Z"
+author: codex
+resolution: Round-trip feature delivered + released
+expected_result: true round-trip + activation fixed
+actual_result: import/upsert/export/sync/search/validate all working; activation_failed=0
+close_reason: "All 5 tasks delivered + verified vs real public repo (sindresorhus/slugify): fixed activation-breaking manifest gap (preflight+search), added github validate, github search provider, dry-run-default export with provenance upsert, fixed pm-list-vs-list-all upsert dup bug. 16/16 tests pass; release:check green. Capabilities 4/9 -> 6/9 (commands,importers,schema,hooks,preflight,search)."
+body: ""

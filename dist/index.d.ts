@@ -77,6 +77,38 @@ export interface SyncPlanEntry {
     to: "open" | "closed";
 }
 export declare function planSync(items: PmItem[], repo: string): SyncPlanEntry[];
+export interface GithubExportPayload {
+    title: string;
+    body: string;
+    labels: string[];
+    state: "open" | "closed";
+}
+export interface ExportPlanEntry {
+    id?: string;
+    action: "create" | "update";
+    number?: number;
+    payload: GithubExportPayload;
+}
+export declare function buildExportPlan(items: PmItem[], repo: string | undefined): ExportPlanEntry[];
+export declare function exportWillApply(options: Record<string, unknown>): boolean;
+export declare function buildSearchUrl(repo: string, query: string): string;
+export declare function mapSearchHits(matchedNumbers: number[], repo: string, itemsByProvenance: Map<string, PmItem>): Array<{
+    id: string;
+    score: number;
+    matched_fields: string[];
+}>;
+export declare function resolveSearchRepo(options: Record<string, unknown>): string | undefined;
+export interface ValidateReport {
+    ok: boolean;
+    gh_cli: boolean;
+    token: boolean;
+    token_source: "env" | "gh" | "none";
+    repo?: string;
+    repo_accessible?: boolean;
+    repo_status?: number;
+    rate_limit_remaining?: number;
+    messages: string[];
+}
 export declare function isMutatingGithubCommand(command: string, options: Record<string, unknown>): boolean;
 declare const _default: {
     name: string;

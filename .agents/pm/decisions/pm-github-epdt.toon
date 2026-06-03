@@ -1,0 +1,16 @@
+id: pm-github-epdt
+title: Export defaults to dry-run; real writes need --apply AND --repo
+description: "Safety: pm github export prints a would-create/would-update plan by default. Real POST/PATCH to GitHub only when --apply (or --no-dry-run) AND --repo <owner/repo> are BOTH present and a token resolves. Replaces the prior --push-only path (kept --push as alias of --apply for back-compat)."
+type: Decision
+status: closed
+priority: 2
+tags: []
+created_at: "2026-06-03T05:07:42.025Z"
+updated_at: "2026-06-03T05:28:24.621Z"
+author: codex
+parent: pm-github-9dqy
+resolution: Decision recorded
+expected_result: decision documented
+actual_result: implemented as described
+close_reason: Decision recorded and implemented; no further action.
+body: ""

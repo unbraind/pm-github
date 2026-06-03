@@ -1,0 +1,16 @@
+id: pm-github-qndb
+title: "FIX: add 'preflight' to manifest capabilities (activation-breaking bug)"
+description: Code calls api.registerPreflight but manifest capabilities lack 'preflight' -> extension_activate_failed in 2026.6.2. Add preflight. Verify via pm extension --doctor that activation succeeds.
+type: Task
+status: closed
+priority: 2
+tags: []
+created_at: "2026-06-03T05:07:27.788Z"
+updated_at: "2026-06-03T05:08:29.648Z"
+author: codex
+parent: pm-github-9dqy
+resolution: preflight capability added to manifest
+expected_result: extension activates
+actual_result: "doctor ok:1, commands functional"
+close_reason: "Added 'preflight' to manifest capabilities. Verified: pm extension --doctor went from 'extension_activate_failed:project:pm-github' (whole extension dead) to activation_status_totals ok:1, warnings:[]. Import command now works."
+body: ""

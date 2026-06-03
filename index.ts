@@ -292,22 +292,24 @@ interface PmItem {
 }
 
 function readPmItems(pmRoot: string): PmItem[] {
-  // `--full --include-body` so tags and body survive the read instead of the
-  // brief projection (which omits them).
+  // `list-all` (NOT `list`) so CLOSED items are included: `pm list` returns only
+  // active items, which would make the idempotency index miss every closed
+  // issue and re-create it as a DUPLICATE on re-import. `--full --include-body`
+  // so tags and body survive the read instead of the brief projection.
   const result = spawnSync(
     "pm",
-    ["--path", pmRoot, "--json", "list", "--full", "--include-body", "--limit", "10000"],
+    ["--path", pmRoot, "--json", "list-all", "--full", "--include-body", "--limit", "10000"],
     { encoding: "utf-8" },
   );
   if (result.status !== 0) {
-    throw new CommandError(result.stderr || "pm list failed");
+    throw new CommandError(result.stderr || "pm list-all failed");
   }
   try {
     const parsed = JSON.parse(result.stdout);
     const items = Array.isArray(parsed) ? parsed : parsed.items ?? parsed.results ?? [];
     return items as PmItem[];
   } catch {
-    throw new CommandError("Could not parse `pm list --json` output.");
+    throw new CommandError("Could not parse `pm list-all --json` output.");
   }
 }
 
@@ -717,7 +719,14 @@ async function runSync(ctx: any) {
 // Export core — render pm items as a GitHub-issues payload
 // ---------------------------------------------------------------------------
 
-function itemToGithubPayload(item: PmItem) {
+export interface GithubExportPayload {
+  title: string;
+  body: string;
+  labels: string[];
+  state: "open" | "closed";
+}
+
+function itemToGithubPayload(item: PmItem): GithubExportPayload {
   return {
     title: item.title ?? "(untitled)",
     body: item.body || item.description || "",
@@ -725,6 +734,206 @@ function itemToGithubPayload(item: PmItem) {
     labels: (item.tags ?? []).filter((t) => !parseProvenanceTag(t)),
     state: item.status === "closed" || item.status === "canceled" ? "closed" : "open",
   };
+}
+
+// One planned export action: create a new GitHub issue, or update an existing
+// one already linked to this pm item via its `gh:repo#N` provenance tag.
+export interface ExportPlanEntry {
+  id?: string;
+  action: "create" | "update";
+  number?: number;
+  payload: GithubExportPayload;
+}
+
+// Build the create/update plan. `repo` (lowercased) decides which provenance
+// tags count as an "already exported to THIS repo" link → update; everything
+// else is a create. Pure + side-effect free so it can be unit-tested and
+// printed verbatim in --dry-run.
+export function buildExportPlan(items: PmItem[], repo: string | undefined): ExportPlanEntry[] {
+  const repoLc = repo?.toLowerCase();
+  const plan: ExportPlanEntry[] = [];
+  for (const item of items) {
+    const payload = itemToGithubPayload(item);
+    let number: number | undefined;
+    if (repoLc) {
+      for (const tag of item.tags ?? []) {
+        const p = parseProvenanceTag(tag);
+        if (p && p.repo === repoLc) {
+          number = p.number;
+          break;
+        }
+      }
+    }
+    plan.push({
+      id: item.id,
+      action: number === undefined ? "create" : "update",
+      ...(number === undefined ? {} : { number }),
+      payload,
+    });
+  }
+  return plan;
+}
+
+// Export is SAFE BY DEFAULT: it only performs real GitHub writes when the user
+// explicitly opts in (--apply / --no-dry-run, or the legacy --push alias) AND
+// has not also passed --dry-run (which always wins). Anything else is a
+// preview that prints the plan without touching GitHub.
+export function exportWillApply(options: Record<string, unknown>): boolean {
+  if (optionEnabled(options, "dry-run", "dryRun")) return false;
+  if (optionEnabled(options, "no-dry-run", "noDryRun")) return true;
+  return optionEnabled(options, "apply", "push");
+}
+
+// ---------------------------------------------------------------------------
+// Search provider — reach GitHub from `pm search` for imported items
+// ---------------------------------------------------------------------------
+//
+// The pm search runtime maps a provider's hits back to LOCAL item documents by
+// id and DROPS any hit whose id is not a local item (see
+// normalizeExtensionProviderHits in @unbrained/pm-cli). So this provider cannot
+// surface arbitrary remote issues; instead it asks GitHub which issues in the
+// repo match the query, then returns hits for the pm items that are already
+// imported from those issues (matched by the `gh:repo#N` provenance tag).
+// Semantics: "find my imported pm items whose upstream GitHub issue matches Q".
+
+// Build the GitHub Search-API URL for issues in a repo matching the free-text
+// query. Restricted to `type:issue repo:<repo>` so it never leaks across repos.
+export function buildSearchUrl(repo: string, query: string): string {
+  const q = `${query} repo:${repo} type:issue`;
+  return `https://api.github.com/search/issues?q=${encodeURIComponent(q)}&per_page=100`;
+}
+
+// Map GitHub search results to local pm-item hits. For every returned issue
+// number we look up the pm item carrying the matching `gh:repo#N` provenance
+// tag; only locally-present items become hits (the runtime would drop the rest
+// anyway). Score is GitHub's relevance score, normalized into a sane range.
+export function mapSearchHits(
+  matchedNumbers: number[],
+  repo: string,
+  itemsByProvenance: Map<string, PmItem>,
+): Array<{ id: string; score: number; matched_fields: string[] }> {
+  const repoLc = repo.toLowerCase();
+  const hits: Array<{ id: string; score: number; matched_fields: string[] }> = [];
+  const seen = new Set<string>();
+  let rank = matchedNumbers.length;
+  for (const number of matchedNumbers) {
+    const item = itemsByProvenance.get(`${repoLc}#${number}`);
+    if (!item?.id || seen.has(item.id)) {
+      rank--;
+      continue;
+    }
+    seen.add(item.id);
+    // Preserve GitHub's ranking: earlier results score higher. Normalize to
+    // (0, 1] so hits clear pm's default score threshold.
+    hits.push({
+      id: item.id,
+      score: matchedNumbers.length > 0 ? rank / matchedNumbers.length : 1,
+      matched_fields: [`github:${repoLc}#${number}`],
+    });
+    rank--;
+  }
+  return hits;
+}
+
+interface GhSearchResponse {
+  items?: Array<{ number?: number }>;
+}
+
+// Resolve the search target repo: an explicit option wins, then the
+// PM_GITHUB_REPO env var (so a workspace can pin its upstream).
+export function resolveSearchRepo(options: Record<string, unknown>): string | undefined {
+  const opt = optionString(options, "repo", "github-repo", "githubRepo");
+  if (opt && opt.includes("/")) return opt;
+  const env = process.env.PM_GITHUB_REPO;
+  if (env && env.includes("/")) return env.trim();
+  return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Validate — diagnose gh/token availability + repo accessibility
+// ---------------------------------------------------------------------------
+
+export interface ValidateReport {
+  ok: boolean;
+  gh_cli: boolean;
+  token: boolean;
+  token_source: "env" | "gh" | "none";
+  repo?: string;
+  repo_accessible?: boolean;
+  repo_status?: number;
+  rate_limit_remaining?: number;
+  messages: string[];
+}
+
+function detectGhCli(): boolean {
+  try {
+    const r = spawnSync("gh", ["--version"], { encoding: "utf-8" });
+    return r.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+function detectTokenSource(): "env" | "gh" | "none" {
+  if ((process.env.GITHUB_TOKEN || process.env.GH_TOKEN || "").trim()) return "env";
+  const token = resolveGitHubToken();
+  return token ? "gh" : "none";
+}
+
+async function runValidate(ctx: any): Promise<ValidateReport> {
+  const options = ctx.options || {};
+  const repo = optionString(options, "repo") || (ctx.args?.[0] as string | undefined);
+  const gh_cli = detectGhCli();
+  const token_source = detectTokenSource();
+  const token = resolveGitHubToken();
+  const report: ValidateReport = {
+    ok: true,
+    gh_cli,
+    token: Boolean(token),
+    token_source,
+    messages: [],
+  };
+
+  if (!token) {
+    report.messages.push(
+      "No GitHub token resolvable (GITHUB_TOKEN/GH_TOKEN or `gh auth login`); " +
+        "reads are capped at 60 req/hr and private repos are unreachable.",
+    );
+  } else {
+    report.messages.push(`GitHub token resolved via ${token_source === "env" ? "environment" : "gh CLI"}.`);
+  }
+  if (!gh_cli) report.messages.push("`gh` CLI not found on PATH (optional; only used to borrow a token).");
+
+  if (repo) {
+    if (!repo.includes("/")) {
+      report.ok = false;
+      report.messages.push(`Invalid --repo "${repo}" (expected owner/repo).`);
+    } else {
+      report.repo = repo;
+      try {
+        const res = await fetchJSON(`https://api.github.com/repos/${repo}`, token);
+        report.repo_accessible = res.status >= 200 && res.status < 300;
+        report.repo_status = res.status;
+        const rem = res.headers["x-ratelimit-remaining"] ?? res.headers["X-RateLimit-Remaining"];
+        const remStr = Array.isArray(rem) ? rem[0] : rem;
+        if (remStr !== undefined) report.rate_limit_remaining = Number(remStr);
+        if (report.repo_accessible) {
+          report.messages.push(`Repo ${repo} is accessible (HTTP ${res.status}).`);
+        } else {
+          report.ok = false;
+          report.messages.push(`Repo ${repo} returned HTTP ${res.status}.`);
+        }
+      } catch (err: unknown) {
+        report.ok = false;
+        report.repo_accessible = false;
+        report.messages.push(`Repo ${repo} check failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  } else {
+    report.messages.push("No --repo given; skipped repo accessibility check.");
+  }
+
+  return report;
 }
 
 // ---------------------------------------------------------------------------
@@ -737,7 +946,9 @@ export function isMutatingGithubCommand(command: string, options: Record<string,
   const cmd = (command || "").toLowerCase();
   const dryRun = optionEnabled(options, "dry-run", "dryRun");
   if (cmd === "github sync") return !dryRun;
-  if (cmd === "github export") return optionEnabled(options, "push");
+  // Export is dry-run by default; it only mutates with an explicit apply
+  // (--apply / --no-dry-run / legacy --push) AND no --dry-run override.
+  if (cmd === "github export") return exportWillApply(options);
   if (cmd === "github import" || cmd === "gh-issues import") return !dryRun;
   return false;
 }
@@ -762,6 +973,10 @@ const IMPORT_FLAGS = [
 const SYNC_FLAGS = [
   { long: "--repo", value_name: "owner/repo", description: "Target GitHub repo (required)" },
   { long: "--dry-run", description: "Preview the close/reopen plan without mutating GitHub" },
+];
+
+const VALIDATE_FLAGS = [
+  { long: "--repo", value_name: "owner/repo", description: "Also check this repo is accessible with the resolved token" },
 ];
 
 export default defineExtension({
@@ -806,55 +1021,123 @@ export default defineExtension({
     });
 
     // -----------------------------------------------------------------------
-    // exporter — `pm github export` (render pm items as a GitHub-issues payload)
-    // Default: print JSON payload (or markdown with --format md). With --push
-    // AND a token AND --repo <owner/repo>, create the issues on GitHub.
+    // exporter — `pm github export` (pm items → GitHub issues)
+    // SAFE BY DEFAULT: previews the create/update plan and writes NOTHING.
+    // Real writes happen only with --apply (or --no-dry-run / legacy --push)
+    // AND a token AND --repo <owner/repo>. With --repo, items already linked to
+    // an issue in that repo (via the `gh:repo#N` provenance tag) are UPDATEd
+    // (upsert) rather than duplicated. --json returns the plan object; we never
+    // write our own stdout in JSON mode (pm renders the return value).
     // -----------------------------------------------------------------------
     api.registerExporter("github", async (ctx: any) => {
       const options = ctx.options || {};
+      const jsonMode = ctx.global?.json === true;
       const format = optionString(options, "format") || "json";
-      const items = readPmItems(ctx.pm_root);
-      const payloads = items.map(itemToGithubPayload);
-
-      const push = optionEnabled(options, "push");
       const repo = optionString(options, "repo") || ctx.args?.[0];
+      const apply = exportWillApply(options);
 
-      if (push) {
-        const token = resolveGitHubToken();
-        if (!token) {
-          throw new CommandError(
-            "--push requires a GitHub token (set GITHUB_TOKEN/GH_TOKEN or run `gh auth login`).",
-            EXIT_CODE.USAGE,
+      const items = readPmItems(ctx.pm_root);
+      const plan = buildExportPlan(items, repo);
+      const creates = plan.filter((e) => e.action === "create").length;
+      const updates = plan.filter((e) => e.action === "update").length;
+
+      if (!apply) {
+        // Dry-run (default). Emit the plan; in JSON mode return it silently.
+        if (!jsonMode) {
+          if (format === "md" || format === "markdown") {
+            const md = plan
+              .map((e) => {
+                const head = e.action === "update" ? `## [update #${e.number}] ${e.payload.title}` : `## [create] ${e.payload.title}`;
+                return `${head}\n\n${e.payload.body}\n\n_labels: ${e.payload.labels.join(", ")} · state: ${e.payload.state}_\n`;
+              })
+              .join("\n");
+            console.log(md);
+          } else {
+            console.log(JSON.stringify(plan, null, 2));
+          }
+          console.error(
+            `[dry-run] Would create ${creates} and update ${updates} issue(s)` +
+              `${repo ? ` on ${repo}` : " (no --repo: all treated as create)"}. ` +
+              "Re-run with --apply --repo <owner/repo> to write to GitHub.",
           );
         }
-        if (!repo || !repo.includes("/")) {
-          throw new CommandError("--push requires --repo <owner/repo>.", EXIT_CODE.USAGE);
-        }
-        let created = 0;
-        for (const payload of payloads) {
+        return { dry_run: true, plan, would_create: creates, would_update: updates, repo };
+      }
+
+      // --apply path: real writes. Require token + repo.
+      const token = resolveGitHubToken();
+      if (!token) {
+        throw new CommandError(
+          "--apply requires a GitHub token (set GITHUB_TOKEN/GH_TOKEN or run `gh auth login`).",
+          EXIT_CODE.USAGE,
+        );
+      }
+      if (!repo || !repo.includes("/")) {
+        throw new CommandError("--apply requires --repo <owner/repo>.", EXIT_CODE.USAGE);
+      }
+      let created = 0;
+      let updated = 0;
+      for (const entry of plan) {
+        const p = entry.payload;
+        if (entry.action === "update" && entry.number !== undefined) {
+          await request(
+            "PATCH",
+            `https://api.github.com/repos/${repo}/issues/${entry.number}`,
+            token,
+            JSON.stringify({ title: p.title, body: p.body, labels: p.labels, state: p.state }),
+          );
+          updated++;
+        } else {
           await request(
             "POST",
             `https://api.github.com/repos/${repo}/issues`,
             token,
-            JSON.stringify({ title: payload.title, body: payload.body, labels: payload.labels }),
+            JSON.stringify({ title: p.title, body: p.body, labels: p.labels }),
           );
           created++;
         }
-        console.error(`Created ${created} issue(s) on ${repo}.`);
-        return { pushed: true, created };
       }
-
-      if (format === "md" || format === "markdown") {
-        const md = payloads
-          .map((p) => `## ${p.title}\n\n${p.body}\n\n_labels: ${p.labels.join(", ")} · state: ${p.state}_\n`)
-          .join("\n");
-        console.log(md);
-        return { exported: payloads.length, format: "markdown" };
-      }
-
-      console.log(JSON.stringify(payloads, null, 2));
-      return { exported: payloads.length, format: "json" };
+      if (!jsonMode) console.error(`Created ${created} and updated ${updated} issue(s) on ${repo}.`);
+      return { applied: true, created, updated, repo };
     });
+
+    // -----------------------------------------------------------------------
+    // search — reach GitHub from `pm search` for imported items.
+    // Guarded by a capability check so it is a no-op on runtimes that predate
+    // search providers. The provider asks GitHub which issues in the configured
+    // repo match the query, then returns hits for the LOCAL pm items imported
+    // from those issues (the runtime drops hits that aren't local documents).
+    // Activates in semantic/hybrid mode: `pm search "<q>" --semantic`.
+    // -----------------------------------------------------------------------
+    if (typeof api.registerSearchProvider === "function") {
+      api.registerSearchProvider({
+        name: "github",
+        async query(qctx: any) {
+          const repo = resolveSearchRepo(qctx.options || {});
+          if (!repo) return [];
+          const token = resolveGitHubToken();
+          let matchedNumbers: number[];
+          try {
+            const { body } = await fetchJSON(buildSearchUrl(repo, qctx.query), token);
+            const parsed = JSON.parse(body) as GhSearchResponse;
+            matchedNumbers = (parsed.items ?? [])
+              .map((i) => i.number)
+              .filter((n): n is number => typeof n === "number");
+          } catch {
+            // Network/parse failure → no remote hits; pm degrades to keyword.
+            return [];
+          }
+          // Map remote matches back to local items via provenance tags. Prefer
+          // the runtime-provided documents (already the current corpus); fall
+          // back to a fresh read if absent.
+          const docs: PmItem[] = Array.isArray(qctx.documents)
+            ? qctx.documents.map((d: any) => (d?.metadata ? d.metadata : d))
+            : readPmItems(qctx.pm_root || ".agents/pm");
+          const index = indexByProvenance(docs);
+          return mapSearchHits(matchedNumbers, repo, index);
+        },
+      });
+    }
 
     // -----------------------------------------------------------------------
     // hooks — actionable sync reminder for github-linked items.
@@ -947,6 +1230,45 @@ export default defineExtension({
       ],
       async run(ctx: any) {
         return runImport(ctx.args[0], ctx.pm_root, parseImportOptions(ctx.options));
+      },
+    });
+
+    // -----------------------------------------------------------------------
+    // command — `pm github validate` (diagnostics: gh/token/repo reachability)
+    // -----------------------------------------------------------------------
+    api.registerCommand({
+      name: "github validate",
+      description:
+        "Diagnose the GitHub integration: whether the `gh` CLI is present, " +
+        "whether a token is resolvable (and from where), and—if --repo is " +
+        "given—whether that repo is accessible with the resolved token. " +
+        "Read-only; never mutates anything. Use --json for machine output.",
+      intent: "check gh/token availability and repo accessibility",
+      examples: [
+        "pm github validate",
+        "pm github validate --repo unbraind/pm-cli",
+        "pm github validate --repo unbraind/pm-cli --json",
+      ],
+      flags: VALIDATE_FLAGS,
+      failure_hints: [
+        "Set GITHUB_TOKEN/GH_TOKEN or run `gh auth login` to raise the rate limit and reach private repos.",
+        "Pass --repo <owner/repo> to verify a specific repo is reachable.",
+      ],
+      async run(ctx: any) {
+        const report = await runValidate(ctx);
+        const jsonMode = ctx.global?.json === true;
+        if (!jsonMode) {
+          for (const line of report.messages) console.error(line);
+        }
+        if (!report.ok) {
+          // Surface a non-zero exit for scripts; the report still returns so
+          // --json consumers get structured detail.
+          throw new CommandError(
+            report.messages.join(" "),
+            report.repo && report.repo_accessible === false ? EXIT_CODE.NOT_FOUND : EXIT_CODE.GENERIC_FAILURE,
+          );
+        }
+        return report;
       },
     });
   },

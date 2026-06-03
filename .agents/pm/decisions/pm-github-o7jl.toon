@@ -1,0 +1,16 @@
+id: pm-github-o7jl
+title: Search provider maps remote matches to LOCAL items only
+description: "pm runtime drops provider hits whose id is not a local document (normalizeExtensionProviderHits). So the github provider queries GitHub for the repo, then returns hits ONLY for issues that are already imported locally (matched by provenance tag). Semantics: 'find my imported items whose upstream issue matches this query'. Provider runs only in semantic/hybrid mode. Add 'search' to manifest only after verifying it activates + returns hits."
+type: Decision
+status: closed
+priority: 2
+tags: []
+created_at: "2026-06-03T05:07:42.319Z"
+updated_at: "2026-06-03T05:28:24.390Z"
+author: codex
+parent: pm-github-9dqy
+resolution: Decision recorded
+expected_result: decision documented
+actual_result: implemented as described
+close_reason: Decision recorded and implemented; no further action.
+body: ""
