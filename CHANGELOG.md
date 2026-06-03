@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Domain-max SDK enhancement: idempotent import, sync, preflight, renderer ([pm-github-mdlp](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-mdlp.toon))
+
+### Changed
+
+- Idempotent import: match by github\_number, update not duplicate; populate schema fields ([pm-github-fhiv](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-fhiv.toon))
+
+### Fixed
+
+- True round-trip GitHub sync: search provider, validate diagnostics, safe-by-default export, fix activation ([pm-github-9dqy](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-9dqy.toon))
+- True round-trip GitHub sync: search provider, validate diagnostics, safe-by-default export, fix activation ([pm-github-4elt](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-4elt.toon))
+- FIX: add 'preflight' to manifest capabilities \(activation-breaking bug\) ([pm-github-qndb](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-qndb.toon))
+
+### Other
+
+- Provenance scheme: gh:owner/repo\#N tag \(lowercased\), reused as-is ([pm-github-ggt3](https://github.com/unbraind/pm-github/blob/main/.agents/pm/decisions/pm-github-ggt3.toon))
+- Export defaults to dry-run; real writes need --apply AND --repo ([pm-github-epdt](https://github.com/unbraind/pm-github/blob/main/.agents/pm/decisions/pm-github-epdt.toon))
+- Search provider maps remote matches to LOCAL items only ([pm-github-o7jl](https://github.com/unbraind/pm-github/blob/main/.agents/pm/decisions/pm-github-o7jl.toon))
+- Unit tests + functional verification + README + decisions ([pm-github-f3xf](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-f3xf.toon))
+- Export: dry-run default + upsert existing issues by provenance ([pm-github-fv0x](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-fv0x.toon))
+- github search provider \(search capability\) ([pm-github-5sbx](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-5sbx.toon))
+- github validate diagnostics command ([pm-github-rroh](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-rroh.toon))
+- preflight capability: validate token/gh auth + repo reachability before mutating github commands ([pm-github-jget](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-jget.toon))
+- pm github sync: push pm status -\> GitHub close/reopen, guarded by token+--repo+--dry-run ([pm-github-yted](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-yted.toon))
+- renderers capability: register 'github' output format \(pm items as GitHub-issue markdown\) ([pm-github-vvov](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-vvov.toon))
+- Rate-limit/backoff handling \(Retry-After / X-RateLimit-Reset\) + useful afterCommand hook ([pm-github-rx1q](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-rx1q.toon))
+- Import issue comments via --with-comments \(append to item body\) ([pm-github-kvl1](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-kvl1.toon))
+- Tests + functional verification against real public repo \(idempotent re-import\) ([pm-github-2u0d](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-2u0d.toon))
+- Production-readiness audit 2026-05-28 ([pm-github-0y40](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-0y40.toon))
+
 ## 2026.06.02 - 2026-06-02
 
 ### Added

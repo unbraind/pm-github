@@ -1,0 +1,15 @@
+id: pm-github-4elt
+title: "True round-trip GitHub sync: search provider, validate diagnostics, safe-by-default export, fix activation"
+description: "Deepen pm-github toward a true GitHub<->pm round-trip and fix a shipped activation-breaking bug.\n\nCRITICAL BUG FOUND: published 2026.6.2 manifest capabilities omit 'preflight' but index.ts calls api.registerPreflight -> 'extension_activate_failed' -> the ENTIRE extension fails to activate (no import/export/sync/commands work). Must add 'preflight' to manifest.\n\nEnhancements:\n1. github validate diagnostics command: gh/token availability, repo accessibility, --json.\n2. search provider (search capability): registers a 'github' provider that queries GitHub issues for --repo and maps matches back to local imported pm items (provider hits MUST reference local item ids; remote-only ids are dropped by runtime). Add 'search' to manifest ONLY if verified to activate + return hits.\n3. Export safety: make export DEFAULT to dry-run (print would-create/update payloads); real writes only with --apply/--no-dry-run AND --repo; upsert existing GitHub issues by provenance.\n\nConstraints: CommandError w/ numeric exitCode; --json via ctx.global.json (no own stdout in json mode); type-only SDK imports; backward compatible; real writes opt-in only."
+type: Feature
+status: closed
+priority: 2
+tags: []
+created_at: "2026-06-03T05:07:09.885Z"
+updated_at: "2026-06-03T05:28:13.541Z"
+author: codex
+resolution: Duplicate; superseded by pm-github-9dqy
+expected_result: single feature
+actual_result: closed as duplicate
+close_reason: "Duplicate of pm-github-9dqy (a failed JSON-parse on the create response masked a successful create, so the feature was created twice). 9dqy is the canonical feature carrying all child tasks/decisions."
+body: ""

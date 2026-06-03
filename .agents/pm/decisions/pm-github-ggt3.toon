@@ -1,0 +1,16 @@
+id: pm-github-ggt3
+title: "Provenance scheme: gh:owner/repo#N tag (lowercased), reused as-is"
+description: "Keep existing idempotency key: a tag gh:owner/repo#N stored lowercased. Tags are case-folded by pm anyway; parseProvenanceTag normalizes. Search + export upsert reuse the SAME key so all three round-trip paths agree. No reliance on registerItemFields setters (#97)."
+type: Decision
+status: closed
+priority: 2
+tags: []
+created_at: "2026-06-03T05:07:41.644Z"
+updated_at: "2026-06-03T05:28:24.878Z"
+author: codex
+parent: pm-github-9dqy
+resolution: Decision recorded
+expected_result: decision documented
+actual_result: implemented as described
+close_reason: Decision recorded and implemented; no further action.
+body: ""

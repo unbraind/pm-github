@@ -1,0 +1,16 @@
+id: pm-github-rroh
+title: github validate diagnostics command
+description: "New 'github validate' command: checks gh CLI presence, token resolvability, and repo accessibility (HEAD repo via API). Supports --repo and --json (read ctx.global.json; return object in json mode, no own stdout). CommandError w/ exitCode on hard failure."
+type: Task
+status: closed
+priority: 2
+tags: []
+created_at: "2026-06-03T05:07:28.058Z"
+updated_at: "2026-06-03T05:17:33.648Z"
+author: codex
+parent: pm-github-9dqy
+resolution: github validate command added + verified
+expected_result: diagnostics command with json
+actual_result: "works; ok:true accessible, exit 3 on 404"
+close_reason: "Implemented 'github validate': checks gh CLI, token+source, repo accessibility. --json returns structured report (no stdout corruption); bad repo exits 3. Verified against octocat/Hello-World (HTTP 200, rate_limit_remaining shown) + nonexistent repo (exit 3)."
+body: ""

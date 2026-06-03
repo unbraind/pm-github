@@ -9,7 +9,9 @@
     "commands",
     "importers",
     "schema",
-    "hooks"
+    "hooks",
+    "preflight",
+    "search"
   ],
   "pm": {
     "compatibility": "v2"

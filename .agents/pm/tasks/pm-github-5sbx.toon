@@ -1,0 +1,16 @@
+id: pm-github-5sbx
+title: github search provider (search capability)
+description: "registerSearchProvider({name:'github',query}) guarded by typeof check. Queries GitHub issues for --repo (or settings) and maps upstream matches to LOCAL imported pm items via provenance tag (runtime drops hits whose id is not a local doc). Verify activation + returns hits before adding 'search' to manifest."
+type: Task
+status: closed
+priority: 2
+tags: []
+created_at: "2026-06-03T05:07:28.492Z"
+updated_at: "2026-06-03T05:24:34.457Z"
+author: codex
+parent: pm-github-9dqy
+resolution: search provider added+verified
+expected_result: pm search reaches github
+actual_result: 2 real hits mapped to local items
+close_reason: "Implemented 'github' search provider (search capability). Verified: with search.provider=github + PM_GITHUB_REPO, 'pm search dashes --semantic' returned 2 hits (pm-c3dt #31, pm-w70p #35) mapped from real GitHub search results to local imported items, GH-relevance-ordered (1.0>0.5), matched_fields=github:repo#N. Capability ADDED to manifest only after verifying activation (activation_failed=0) + real results. Note: provider requires settings.search.provider='github' to select it (SDK gating)."
+body: ""
