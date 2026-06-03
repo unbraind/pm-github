@@ -19,7 +19,7 @@ pm install github.com/unbraind/pm-github --global
 | `importers` | `pm github import <owner/repo>` — idempotent native import pipeline |
 | `importers` (exporter) | `pm github export` — pm items → GitHub issues (dry-run by default; upsert) |
 | `commands` | `pm gh-issues import` (legacy import alias), `pm github sync` (push status), `pm github validate` (diagnostics) |
-| `schema` | declares `github_url`, `github_number`, `github_state` item fields |
+| `schema` | declares `github_url`, `github_number`, `github_state`, `github_author`, `github_created_at`, `github_updated_at` item fields |
 | `hooks` | `afterCommand` — opt-in sync reminder (`PM_GITHUB_SYNC`) for linked items |
 | `preflight` | early warning when a mutating github command lacks a token |
 | `search` | `github` search provider — `pm search` reaches GitHub for imported items |
@@ -50,8 +50,12 @@ pm github import owner/repo --dry-run
 | `--assignee <login>` | string | Filter by assignee login |
 | `--milestone <name>` | string | Filter by milestone title |
 | `--include-prs` | boolean | Include pull requests (default: skip PRs) |
+| `--skip-drafts` | boolean | Exclude draft pull requests (only meaningful with `--include-prs`) |
+| `--with-comments` | boolean | Fetch issue comments and append them to the item body |
 | `--dry-run` | boolean | Preview without writing |
 | `--type <type>` | string | Override pm item type (default: Issue) |
+
+Each imported item records GitHub provenance: the `gh:owner/repo#N` idempotency tag, a `github_author:<login>` tag, and an enriched description (`author @<login> · created <iso> · updated <iso>`). The integration declares the `github_url`, `github_number`, `github_state`, `github_author`, `github_created_at`, and `github_updated_at` schema fields.
 
 ## Export (pm → GitHub)
 
@@ -102,7 +106,7 @@ Enable it by setting `search.provider` to `"github"` in `.agents/pm/settings.jso
 
 ### `pm github validate`
 
-Read-only check of the integration: `gh` CLI presence, token resolvability (and source), and—with `--repo`—repo accessibility. Never mutates anything.
+Read-only check of the integration: `gh` CLI presence, token resolvability (and source), and—with `--repo`—repo accessibility. When `--repo` is given it also surfaces the remaining GitHub API quota (`X-RateLimit-Remaining`/`Limit`/`Reset`) and warns when the quota is running low. Never mutates anything.
 
 ```bash
 pm github validate

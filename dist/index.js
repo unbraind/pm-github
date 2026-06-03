@@ -4,7 +4,8 @@
 //   commands   — `pm gh-issues import` (legacy) + `pm github sync`
 //   importers  — `pm github import <owner/repo>` (idempotent native import)
 //   exporters  — `pm github export` (render pm items as a GitHub-issues payload)
-//   schema     — declares github_url / github_number / github_state item fields
+//   schema     — declares github_url / github_number / github_state /
+//                github_author / github_created_at / github_updated_at item fields
 //   hooks      — afterCommand: actionable sync hint for github-linked items
 //   preflight  — local guard for mutating github commands (token presence)
 import https from "node:https";
@@ -99,6 +100,51 @@ export function computeBackoffMs(headers, attempt, nowMs = Date.now()) {
     }
     // Exponential backoff: 1s, 2s, 4s … capped.
     return Math.min(1000 * 2 ** attempt, cap);
+}
+export function parseRateLimit(headers, lowThreshold = 10) {
+    // Node lowercases response header names, but be defensive: scan
+    // case-insensitively so a mixed-case key (e.g. from a different runtime or a
+    // mocked response) is still found.
+    const lower = {};
+    for (const [hk, hv] of Object.entries(headers))
+        lower[hk.toLowerCase()] = hv;
+    const get = (k) => {
+        const v = lower[k.toLowerCase()];
+        return Array.isArray(v) ? v[0] : v;
+    };
+    const num = (s) => {
+        if (s === undefined)
+            return undefined;
+        const n = Number(s);
+        return Number.isFinite(n) ? n : undefined;
+    };
+    const remaining = num(get("x-ratelimit-remaining"));
+    const limit = num(get("x-ratelimit-limit"));
+    const reset = num(get("x-ratelimit-reset"));
+    return {
+        remaining,
+        limit,
+        reset,
+        low: remaining !== undefined && remaining <= lowThreshold,
+    };
+}
+// Human-readable one-liner for a rate-limit snapshot, e.g.
+// "GitHub API quota: 4998/5000 remaining (resets 2026-06-04T01:00:00.000Z)".
+// Returns undefined when no quota headers were present.
+export function formatRateLimit(info) {
+    if (info.remaining === undefined)
+        return undefined;
+    const limitPart = info.limit !== undefined ? `/${info.limit}` : "";
+    let resetPart = "";
+    if (info.reset !== undefined) {
+        try {
+            resetPart = ` (resets ${new Date(info.reset * 1000).toISOString()})`;
+        }
+        catch {
+            resetPart = "";
+        }
+    }
+    return `GitHub API quota: ${info.remaining}${limitPart} remaining${resetPart}`;
 }
 function isRetryableStatus(status, headers) {
     if (status === 429)
@@ -207,6 +253,15 @@ export function parseProvenanceTag(tag) {
         return undefined;
     return { repo: m[1].toLowerCase(), number: Number(m[2]) };
 }
+// Surface the GitHub issue author as a machine-readable tag (`github_author:login`)
+// — consistent with how provenance rides on tags. Returns undefined when the
+// API did not include a usable login (so we never emit an empty tag).
+export function authorTag(issue) {
+    const login = issue.user?.login?.trim();
+    if (!login)
+        return undefined;
+    return `github_author:${login}`;
+}
 function readPmItems(pmRoot) {
     // `list-all` (NOT `list`) so CLOSED items are included: `pm list` returns only
     // active items, which would make the idempotency index miss every closed
@@ -311,11 +366,20 @@ export function composeBody(issue, comments) {
     }
     return body;
 }
-// Apply the client-side filters (PRs, milestone-by-title).
+// A draft PR is an issue that is both a pull request and flagged `draft: true`.
+// (Plain issues are never drafts.)
+export function isDraftPr(issue) {
+    return Boolean(issue.pull_request) && issue.draft === true;
+}
+// Apply the client-side filters (PRs, drafts, milestone-by-title).
 export function applyClientFilters(issues, opts) {
     let result = issues;
     if (!opts.includePrs)
         result = result.filter((i) => !i.pull_request);
+    // --skip-drafts only takes effect alongside --include-prs (without it, all
+    // PRs — drafts included — are already filtered out above).
+    if (opts.skipDrafts)
+        result = result.filter((i) => !isDraftPr(i));
     if (opts.milestone) {
         result = result.filter((i) => i.milestone?.title === opts.milestone);
     }
@@ -337,6 +401,7 @@ export function parseImportOptions(options) {
         assignee: optionString(options, "assignee"),
         milestone: optionString(options, "milestone"),
         includePrs: optionEnabled(options, "include-prs", "includePrs"),
+        skipDrafts: optionEnabled(options, "skip-drafts", "skipDrafts"),
         withComments: optionEnabled(options, "with-comments", "withComments"),
         itemType: optionString(options, "type") || "Issue",
         dryRun: optionEnabled(options, "dry-run", "dryRun"),
@@ -353,7 +418,7 @@ async function runImport(repoArg, pmRoot, opts) {
     if (!repoArg || !repoArg.includes("/")) {
         throw new CommandError("Usage: pm github import <owner/repo> [--all|--state open|closed|all] " +
             "[--labels bug,enhancement] [--since <iso>] [--assignee <login>] " +
-            "[--milestone <name>] [--include-prs] [--with-comments]", EXIT_CODE.USAGE);
+            "[--milestone <name>] [--include-prs] [--skip-drafts] [--with-comments]", EXIT_CODE.USAGE);
     }
     const repo = repoArg;
     const token = resolveGitHubToken();
@@ -390,15 +455,22 @@ async function runImport(repoArg, pmRoot, opts) {
         const kind = issue.pull_request ? "PR" : "issue";
         const labels = issue.labels.map((l) => l.name).filter(Boolean);
         const tag = provenanceTag(repo, issue.number);
-        const tags = [...labels, tag];
+        const ghAuthorTag = authorTag(issue);
+        const tags = [...labels, tag, ...(ghAuthorTag ? [ghAuthorTag] : [])];
         const status = mapState(issue.state);
         const assignee = issue.assignee?.login;
         const milestone = issue.milestone?.title;
         const key = `${repo.toLowerCase()}#${issue.number}`;
         const match = existing.get(key);
         // GitHub provenance lives in the description (human-readable) and the
-        // declared schema fields (github_url/github_number/github_state).
-        const description = `GH ${kind} #${issue.number}: ${issue.html_url}`;
+        // declared schema fields (github_url/github_number/github_state/
+        // github_author/github_created_at/github_updated_at). Author + timestamps
+        // are appended additively so a re-import keeps them current.
+        const author = issue.user?.login;
+        const description = `GH ${kind} #${issue.number}: ${issue.html_url}` +
+            (author ? ` · author @${author}` : "") +
+            (issue.created_at ? ` · created ${issue.created_at}` : "") +
+            (issue.updated_at ? ` · updated ${issue.updated_at}` : "");
         let comments = [];
         if (opts.withComments) {
             try {
@@ -730,10 +802,22 @@ async function runValidate(ctx) {
                 const res = await fetchJSON(`https://api.github.com/repos/${repo}`, token);
                 report.repo_accessible = res.status >= 200 && res.status < 300;
                 report.repo_status = res.status;
-                const rem = res.headers["x-ratelimit-remaining"] ?? res.headers["X-RateLimit-Remaining"];
-                const remStr = Array.isArray(rem) ? rem[0] : rem;
-                if (remStr !== undefined)
-                    report.rate_limit_remaining = Number(remStr);
+                const rate = parseRateLimit(res.headers);
+                if (rate.remaining !== undefined)
+                    report.rate_limit_remaining = rate.remaining;
+                if (rate.limit !== undefined)
+                    report.rate_limit_limit = rate.limit;
+                if (rate.reset !== undefined)
+                    report.rate_limit_reset = rate.reset;
+                report.rate_limit_low = rate.low;
+                const rateLine = formatRateLimit(rate);
+                if (rateLine)
+                    report.messages.push(rateLine);
+                if (rate.low) {
+                    report.messages.push(`WARNING: GitHub API quota is low (${rate.remaining} left)` +
+                        (token ? "" : " — set GITHUB_TOKEN/GH_TOKEN or run `gh auth login` to raise it (60→5000/hr)") +
+                        ".");
+                }
                 if (report.repo_accessible) {
                     report.messages.push(`Repo ${repo} is accessible (HTTP ${res.status}).`);
                 }
@@ -783,6 +867,7 @@ const IMPORT_FLAGS = [
     { long: "--assignee", value_name: "login", description: "Filter by assignee login" },
     { long: "--milestone", value_name: "name", description: "Filter by milestone title" },
     { long: "--include-prs", description: "Include pull requests (default: skip PRs)" },
+    { long: "--skip-drafts", description: "Exclude draft pull requests (only meaningful with --include-prs)" },
     { long: "--with-comments", description: "Fetch issue comments and append them to the item body" },
     { long: "--dry-run", description: "Preview without writing" },
     { long: "--type", value_name: "type", description: "Override pm item type (default: Issue)" },
@@ -796,7 +881,7 @@ const VALIDATE_FLAGS = [
 ];
 export default defineExtension({
     name: "pm-github",
-    version: "2026.6.3",
+    version: "2026.6.4",
     activate(api) {
         // -----------------------------------------------------------------------
         // schema — declare the GitHub provenance fields so the workspace knows them
@@ -805,6 +890,9 @@ export default defineExtension({
             { name: "github_url", type: "string", optional: true },
             { name: "github_number", type: "number", optional: true },
             { name: "github_state", type: "string", optional: true },
+            { name: "github_author", type: "string", optional: true },
+            { name: "github_created_at", type: "string", optional: true },
+            { name: "github_updated_at", type: "string", optional: true },
         ]);
         // -----------------------------------------------------------------------
         // preflight — safe, local guard for mutating github commands.

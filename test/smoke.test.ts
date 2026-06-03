@@ -4,16 +4,47 @@ import test from "node:test";
 import extension, {
   CommandError,
   EXIT_CODE,
+  applyClientFilters,
+  authorTag,
   buildExportPlan,
   buildSearchUrl,
   exportWillApply,
+  formatRateLimit,
+  isDraftPr,
   mapSearchHits,
   parseNextLink,
   parseProvenanceTag,
+  parseRateLimit,
   planSync,
   resolveGitHubToken,
   resolveSearchRepo,
 } from "../dist/index.js";
+
+// Minimal GhIssue factory for filter/field tests.
+function issue(overrides: Record<string, unknown> = {}): any {
+  return {
+    number: 1,
+    title: "t",
+    body: null,
+    state: "open",
+    labels: [],
+    assignee: null,
+    milestone: null,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-02T00:00:00Z",
+    html_url: "https://github.com/o/r/issues/1",
+    ...overrides,
+  };
+}
+
+const baseOpts: any = {
+  state: "all",
+  includePrs: false,
+  skipDrafts: false,
+  withComments: false,
+  itemType: "Issue",
+  dryRun: false,
+};
 
 test("extension has required shape", () => {
   assert.ok(extension, "module should export a default value");
@@ -211,6 +242,102 @@ test("github validate command is registered", () => {
   extension.activate(api);
   assert.ok(captured, "github validate should be registered");
   assert.strictEqual(typeof captured.run, "function");
+});
+
+test("isDraftPr only flags draft pull requests, never plain issues", () => {
+  assert.strictEqual(isDraftPr(issue({ pull_request: {}, draft: true })), true);
+  assert.strictEqual(isDraftPr(issue({ pull_request: {}, draft: false })), false);
+  assert.strictEqual(isDraftPr(issue({ pull_request: {} })), false, "PR without draft flag is not a draft");
+  assert.strictEqual(isDraftPr(issue({ draft: true })), false, "a plain issue is never a draft PR");
+});
+
+test("--skip-drafts excludes draft PRs only when --include-prs is set", () => {
+  const plainIssue = issue({ number: 1 });
+  const realPr = issue({ number: 2, pull_request: {}, draft: false });
+  const draftPr = issue({ number: 3, pull_request: {}, draft: true });
+  const all = [plainIssue, realPr, draftPr];
+
+  // include-prs + skip-drafts: keep the issue and the ready PR, drop the draft.
+  const kept = applyClientFilters(all, { ...baseOpts, includePrs: true, skipDrafts: true });
+  assert.deepEqual(kept.map((i) => i.number), [1, 2]);
+
+  // include-prs without skip-drafts: keep everything.
+  const all3 = applyClientFilters(all, { ...baseOpts, includePrs: true, skipDrafts: false });
+  assert.deepEqual(all3.map((i) => i.number), [1, 2, 3]);
+
+  // No include-prs: PRs (drafts included) already filtered out regardless.
+  const issuesOnly = applyClientFilters(all, { ...baseOpts, includePrs: false, skipDrafts: true });
+  assert.deepEqual(issuesOnly.map((i) => i.number), [1]);
+});
+
+test("authorTag emits a github_author tag from user.login, undefined when absent", () => {
+  assert.strictEqual(authorTag(issue({ user: { login: "octocat" } })), "github_author:octocat");
+  assert.strictEqual(authorTag(issue({ user: null })), undefined);
+  assert.strictEqual(authorTag(issue({ user: { login: "  " } })), undefined, "blank login emits no tag");
+  assert.strictEqual(authorTag(issue()), undefined, "missing user emits no tag");
+});
+
+test("parseRateLimit reads X-RateLimit headers case-insensitively and flags low quota", () => {
+  const healthy = parseRateLimit({
+    "x-ratelimit-remaining": "4998",
+    "x-ratelimit-limit": "5000",
+    "x-ratelimit-reset": "1780000000",
+  });
+  assert.deepEqual(
+    { remaining: healthy.remaining, limit: healthy.limit, reset: healthy.reset, low: healthy.low },
+    { remaining: 4998, limit: 5000, reset: 1780000000, low: false },
+  );
+
+  // Mixed-case header keys (as some runtimes normalize them).
+  const mixed = parseRateLimit({ "X-RateLimit-Remaining": "3" });
+  assert.strictEqual(mixed.remaining, 3);
+  assert.strictEqual(mixed.low, true, "3 remaining is at/under the default low threshold");
+
+  // No headers → undefined fields, not low.
+  const none = parseRateLimit({});
+  assert.strictEqual(none.remaining, undefined);
+  assert.strictEqual(none.low, false);
+
+  // Custom threshold.
+  assert.strictEqual(parseRateLimit({ "x-ratelimit-remaining": "50" }, 100).low, true);
+});
+
+test("formatRateLimit renders a quota line, undefined when no quota present", () => {
+  const line = formatRateLimit({ remaining: 4998, limit: 5000, reset: 1780000000, low: false });
+  assert.ok(line);
+  assert.match(line!, /GitHub API quota: 4998\/5000 remaining \(resets 20\d\d-/);
+  assert.strictEqual(formatRateLimit({ low: false }), undefined, "no remaining → no line");
+});
+
+test("schema registers github_author / created_at / updated_at fields", () => {
+  let fields: any[] = [];
+  const noop = () => {};
+  const api: any = {
+    registerCommand: noop, registerParser: noop, registerPreflight: noop, registerService: noop,
+    registerFlags: noop, registerItemFields: (f: any[]) => { fields = f; }, registerItemTypes: noop,
+    registerMigration: noop, registerRenderer: noop, registerImporter: noop,
+    registerExporter: noop, registerSearchProvider: noop, registerVectorStoreAdapter: noop,
+    hooks: { beforeCommand: noop, afterCommand: noop, onWrite: noop, onRead: noop, onIndex: noop },
+  };
+  extension.activate(api);
+  const names = fields.map((f) => f.name);
+  for (const expected of ["github_url", "github_number", "github_state", "github_author", "github_created_at", "github_updated_at"]) {
+    assert.ok(names.includes(expected), `schema should declare ${expected}`);
+  }
+});
+
+test("import command advertises the --skip-drafts flag", () => {
+  let captured: any;
+  const noop = () => {};
+  const api: any = {
+    registerCommand: (def: any) => { if (def?.name === "gh-issues import") captured = def; },
+    registerParser: noop, registerPreflight: noop, registerService: noop, registerFlags: noop,
+    registerItemFields: noop, registerItemTypes: noop, registerMigration: noop, registerRenderer: noop,
+    registerImporter: noop, registerExporter: noop, registerSearchProvider: noop, registerVectorStoreAdapter: noop,
+    hooks: { beforeCommand: noop, afterCommand: noop, onWrite: noop, onRead: noop, onIndex: noop },
+  };
+  extension.activate(api);
+  assert.ok(captured?.flags?.some((f: any) => f.long === "--skip-drafts"), "import should expose --skip-drafts");
 });
 
 test("gh-issues import rejects a missing owner/repo argument", async () => {
