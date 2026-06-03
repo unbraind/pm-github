@@ -1,6 +1,12 @@
 # Changelog
 
-## 2026.6.3 - 2026-06-03
+## 2026.6.4 - 2026-06-03
+
+### Added
+
+- Import GitHub author + timestamps, rate-limit visibility, --skip-drafts ([pm-github-v0c3](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-v0c3.toon))
+
+## 2026.06.03 - 2026-06-03
 
 ### Added
 

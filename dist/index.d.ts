@@ -6,6 +6,9 @@ interface GhIssue {
     labels: Array<{
         name: string;
     }>;
+    user?: {
+        login: string;
+    } | null;
     assignee: {
         login: string;
     } | null;
@@ -18,6 +21,7 @@ interface GhIssue {
     comments?: number;
     comments_url?: string;
     pull_request?: unknown;
+    draft?: boolean;
 }
 interface GhComment {
     user: {
@@ -33,12 +37,22 @@ interface ImportOptions {
     assignee?: string;
     milestone?: string;
     includePrs: boolean;
+    skipDrafts: boolean;
     withComments: boolean;
     itemType: string;
     dryRun: boolean;
 }
 export declare function resolveGitHubToken(): string | undefined;
 export declare function computeBackoffMs(headers: Record<string, string | string[] | undefined>, attempt: number, nowMs?: number): number;
+export interface RateLimitInfo {
+    remaining?: number;
+    limit?: number;
+    reset?: number;
+    /** True when the remaining quota is at/under the low-water mark. */
+    low: boolean;
+}
+export declare function parseRateLimit(headers: Record<string, string | string[] | undefined>, lowThreshold?: number): RateLimitInfo;
+export declare function formatRateLimit(info: RateLimitInfo): string | undefined;
 export declare function parseNextLink(linkHeader?: string): string | undefined;
 export declare function optionEnabled(options: Record<string, unknown>, ...keys: string[]): boolean;
 export declare function optionString(options: Record<string, unknown>, ...keys: string[]): string | undefined;
@@ -56,6 +70,7 @@ export declare function parseProvenanceTag(tag: string): {
     repo: string;
     number: number;
 } | undefined;
+export declare function authorTag(issue: GhIssue): string | undefined;
 interface PmItem {
     id?: string;
     title?: string;
@@ -67,6 +82,7 @@ interface PmItem {
 export declare function indexByProvenance(items: PmItem[]): Map<string, PmItem>;
 export declare function buildIssuesUrl(repo: string, opts: ImportOptions): string;
 export declare function composeBody(issue: GhIssue, comments: GhComment[]): string;
+export declare function isDraftPr(issue: GhIssue): boolean;
 export declare function applyClientFilters(issues: GhIssue[], opts: ImportOptions): GhIssue[];
 export declare function parseImportOptions(options: Record<string, unknown>): ImportOptions;
 export interface SyncPlanEntry {
@@ -107,6 +123,9 @@ export interface ValidateReport {
     repo_accessible?: boolean;
     repo_status?: number;
     rate_limit_remaining?: number;
+    rate_limit_limit?: number;
+    rate_limit_reset?: number;
+    rate_limit_low?: boolean;
     messages: string[];
 }
 export declare function isMutatingGithubCommand(command: string, options: Record<string, unknown>): boolean;

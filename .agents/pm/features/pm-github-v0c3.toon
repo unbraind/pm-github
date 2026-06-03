@@ -1,0 +1,16 @@
+id: pm-github-v0c3
+title: "Import GitHub author + timestamps, rate-limit visibility, --skip-drafts"
+description: "Additive enhancements: github_author tag + github_created_at/github_updated_at schema fields, X-RateLimit visibility in validate, and a --skip-drafts import flag"
+type: Feature
+status: closed
+priority: 2
+tags: []
+created_at: "2026-06-03T23:25:14.831Z"
+updated_at: "2026-06-03T23:25:38.938Z"
+author: codex
+comments[3]{created_at,author,text}:
+  "2026-06-03T23:25:32.486Z",codex,"Feature 1: registerItemFields now declares github_author/github_created_at/github_updated_at; import emits a github_author:<login> tag and enriches the description with author + created/updated ISO timestamps (additive). Verified on a real 106-item import of unbraind/pm-cli."
+  "2026-06-03T23:25:32.646Z",codex,"Feature 2: parseRateLimit/formatRateLimit parse X-RateLimit-Remaining/Limit/Reset case-insensitively; pm github validate --repo surfaces quota + warns when low. Verified live: quota 4900/5000 reported."
+  "2026-06-03T23:25:32.805Z",codex,"Feature 3: --skip-drafts excludes draft PRs (isDraftPr) when --include-prs set. Unit-tested; live import accepted the flag."
+close_reason: "Shipped in 2026.6.4: github_author/timestamps fields, rate-limit visibility, --skip-drafts. Built, typechecked, 23 tests pass, functionally verified."
+body: ""
