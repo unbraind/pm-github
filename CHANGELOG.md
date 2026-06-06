@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Preserve GitHub not-planned closures as canceled pm items ([pm-github-54tv](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-54tv.toon))
+
+### Other
+
+- Align package dependencies to pm CLI/SDK 2026.6.6 ([pm-github-ctqq](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-ctqq.toon))
+
 ## 2026.06.04 - 2026-06-04
 
 ### Added

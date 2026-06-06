@@ -197,7 +197,9 @@ export function parseNextLink(linkHeader) {
     }
     return undefined;
 }
-function mapState(state) {
+export function mapState(state, stateReason) {
+    if (state === "closed" && stateReason === "not_planned")
+        return "canceled";
     return state === "closed" ? "closed" : "open";
 }
 // Flags may arrive under their kebab-case (`dry-run`) or camelCase (`dryRun`)
@@ -457,7 +459,7 @@ async function runImport(repoArg, pmRoot, opts) {
         const tag = provenanceTag(repo, issue.number);
         const ghAuthorTag = authorTag(issue);
         const tags = [...labels, tag, ...(ghAuthorTag ? [ghAuthorTag] : [])];
-        const status = mapState(issue.state);
+        const status = mapState(issue.state, issue.state_reason);
         const assignee = issue.assignee?.login;
         const milestone = issue.milestone?.title;
         const key = `${repo.toLowerCase()}#${issue.number}`;
@@ -469,6 +471,7 @@ async function runImport(repoArg, pmRoot, opts) {
         const author = issue.user?.login;
         const description = `GH ${kind} #${issue.number}: ${issue.html_url}` +
             (author ? ` · author @${author}` : "") +
+            (issue.state_reason ? ` · state reason ${issue.state_reason}` : "") +
             (issue.created_at ? ` · created ${issue.created_at}` : "") +
             (issue.updated_at ? ` · updated ${issue.updated_at}` : "");
         let comments = [];
