@@ -107,6 +107,21 @@ export interface ExportPlanEntry {
 }
 export declare function buildExportPlan(items: PmItem[], repo: string | undefined): ExportPlanEntry[];
 export declare function exportWillApply(options: Record<string, unknown>): boolean;
+export interface ExportApplyFailure {
+    id?: string;
+    action: "create" | "update";
+    number?: number;
+    title: string;
+    error: string;
+}
+export interface ExportApplyResult {
+    created: number;
+    updated: number;
+    failed: number;
+    failures: ExportApplyFailure[];
+}
+export type ExportRequestFn = (method: string, url: string, token: string | undefined, payload?: string) => Promise<unknown>;
+export declare function applyExportPlan(plan: ExportPlanEntry[], repo: string, token: string | undefined, requestFn: ExportRequestFn): Promise<ExportApplyResult>;
 export declare function buildSearchUrl(repo: string, query: string): string;
 export declare function mapSearchHits(matchedNumbers: number[], repo: string, itemsByProvenance: Map<string, PmItem>): Array<{
     id: string;
