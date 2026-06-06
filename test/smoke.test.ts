@@ -5,6 +5,7 @@ import extension, {
   CommandError,
   EXIT_CODE,
   applyClientFilters,
+  applyExportPlan,
   authorTag,
   buildExportPlan,
   buildSearchUrl,
@@ -364,4 +365,103 @@ test("gh-issues import rejects a missing owner/repo argument", async () => {
     },
     "missing argument should throw a CommandError carrying a USAGE exit code",
   );
+});
+
+// ---------------------------------------------------------------------------
+// applyExportPlan — per-item isolation on the --apply path.
+//
+// Regression guard for: one failed create/update used to throw and abandon
+// every remaining item (no try/catch in the apply loop). The loop must now
+// record the failure and CONTINUE, attempting all remaining items, and report
+// a summary instead of aborting mid-batch.
+// ---------------------------------------------------------------------------
+
+function exportEntry(overrides: Partial<{
+  id: string;
+  action: "create" | "update";
+  number: number;
+  title: string;
+}> = {}): any {
+  const action = overrides.action ?? "create";
+  return {
+    id: overrides.id ?? "github-1",
+    action,
+    ...(overrides.number === undefined ? {} : { number: overrides.number }),
+    payload: {
+      title: overrides.title ?? "t",
+      body: "b",
+      labels: [],
+      state: "open" as const,
+    },
+  };
+}
+
+test("applyExportPlan continues after a per-item failure and counts it", async () => {
+  const plan = [
+    exportEntry({ id: "a", title: "first" }),
+    exportEntry({ id: "b", title: "second" }),
+    exportEntry({ id: "c", title: "third" }),
+  ];
+  const attempted: string[] = [];
+  let call = 0;
+  const requestFn = async (_m: string, url: string) => {
+    call++;
+    attempted.push(url);
+    // Fail on the SECOND call; the loop must NOT abort.
+    if (call === 2) throw new Error("GitHub API returned HTTP 422");
+    return {};
+  };
+
+  const result = await applyExportPlan(plan, "o/r", "tok", requestFn);
+
+  // All three items must have been attempted despite the 2nd throwing.
+  assert.strictEqual(attempted.length, 3, "every item should be attempted, not abandoned on first failure");
+  assert.strictEqual(call, 3, "loop should continue past the failed item");
+  // Two succeeded (create), one recorded as a failure.
+  assert.strictEqual(result.created, 2, "two creates should succeed");
+  assert.strictEqual(result.updated, 0);
+  assert.strictEqual(result.failed, 1, "the failure should be counted, not thrown");
+  assert.strictEqual(result.failures.length, 1);
+  assert.strictEqual(result.failures[0].id, "b", "failure should capture the failed item id");
+  assert.match(result.failures[0].error, /422/, "failure should capture the error message");
+});
+
+test("applyExportPlan never throws on a failing item (no mid-batch abort)", async () => {
+  const plan = [exportEntry({ id: "a" }), exportEntry({ id: "b" })];
+  const requestFn = async () => { throw new Error("boom"); };
+  // The whole point: a failing write must resolve to a summary, not reject.
+  const result = await applyExportPlan(plan, "o/r", "tok", requestFn);
+  assert.strictEqual(result.created, 0);
+  assert.strictEqual(result.failed, 2, "both failures counted");
+  assert.strictEqual(result.failures.length, 2);
+});
+
+test("applyExportPlan happy path: all succeed, zero failures", async () => {
+  const plan = [
+    exportEntry({ id: "a", action: "create" }),
+    exportEntry({ id: "b", action: "update", number: 7 }),
+  ];
+  const requestFn = async () => ({});
+  const result = await applyExportPlan(plan, "o/r", "tok", requestFn);
+  assert.strictEqual(result.created, 1);
+  assert.strictEqual(result.updated, 1);
+  assert.strictEqual(result.failed, 0, "happy path must report zero failures");
+  assert.deepStrictEqual(result.failures, [], "happy path must have an empty failures list");
+});
+
+test("applyExportPlan: an update entry missing its number is a failure, not a silent create", async () => {
+  // Regression (gemini review): a malformed "update" entry with no issue number
+  // must NOT fall through to a POST (which would create a duplicate issue).
+  const plan = [exportEntry({ id: "a", action: "update", number: undefined })];
+  let posted = false;
+  const requestFn = async (method: string) => {
+    if (method === "POST") posted = true;
+    return {};
+  };
+  const result = await applyExportPlan(plan, "o/r", "tok", requestFn);
+  assert.strictEqual(posted, false, "must not POST (create) an update-without-number");
+  assert.strictEqual(result.created, 0);
+  assert.strictEqual(result.updated, 0);
+  assert.strictEqual(result.failed, 1, "the malformed update is counted as a failure");
+  assert.match(result.failures[0].error, /number/i);
 });

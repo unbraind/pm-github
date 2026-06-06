@@ -874,6 +874,94 @@ export function exportWillApply(options: Record<string, unknown>): boolean {
   return optionEnabled(options, "apply", "push");
 }
 
+// A single per-item write failure encountered while applying an export plan.
+export interface ExportApplyFailure {
+  id?: string;
+  action: "create" | "update";
+  number?: number;
+  title: string;
+  error: string;
+}
+
+// Outcome of applying an export plan to GitHub.
+export interface ExportApplyResult {
+  created: number;
+  updated: number;
+  failed: number;
+  failures: ExportApplyFailure[];
+}
+
+// The minimal signature the apply loop needs from `request`. Kept injectable so
+// the per-item isolation can be unit-tested without real network I/O.
+export type ExportRequestFn = (
+  method: string,
+  url: string,
+  token: string | undefined,
+  payload?: string,
+) => Promise<unknown>;
+
+// Apply a (already-built) export plan to GitHub, one issue at a time.
+//
+// CRITICAL: each create/update is isolated. A single failed write (e.g. a 422
+// for a label that does not exist on the repo) is recorded and the loop
+// CONTINUES with the remaining items — it never abandons the rest of the batch.
+// This mirrors the per-item isolation already used by the import/sync paths.
+// Pure aside from the injected `requestFn`, so it is directly unit-testable.
+export async function applyExportPlan(
+  plan: ExportPlanEntry[],
+  repo: string,
+  token: string | undefined,
+  requestFn: ExportRequestFn,
+): Promise<ExportApplyResult> {
+  let created = 0;
+  let updated = 0;
+  const failures: ExportApplyFailure[] = [];
+  for (const entry of plan) {
+    const p = entry.payload;
+    try {
+      // An "update" entry must carry the issue number; without it we must NOT
+      // silently fall through to a POST (that would create a duplicate issue).
+      // Record it as a per-item failure and continue.
+      if (entry.action === "update" && entry.number === undefined) {
+        throw new Error("update entry is missing its GitHub issue number");
+      }
+      if (entry.action === "update" && entry.number !== undefined) {
+        await requestFn(
+          "PATCH",
+          `https://api.github.com/repos/${repo}/issues/${entry.number}`,
+          token,
+          JSON.stringify({ title: p.title, body: p.body, labels: p.labels, state: p.state }),
+        );
+        updated++;
+      } else {
+        await requestFn(
+          "POST",
+          `https://api.github.com/repos/${repo}/issues`,
+          token,
+          JSON.stringify({ title: p.title, body: p.body, labels: p.labels }),
+        );
+        created++;
+      }
+    } catch (err: unknown) {
+      // Isolate the failure: record it and keep going so one bad item never
+      // abandons the items that follow it (and that may already be writable).
+      const msg = err instanceof Error ? err.message : String(err);
+      const label = entry.action === "update" && entry.number !== undefined
+        ? `#${entry.number}`
+        : entry.id ?? `"${p.title}"`;
+      console.error(`${label}: ${entry.action} failed — ${msg}`);
+      failures.push({
+        id: entry.id,
+        action: entry.action,
+        ...(entry.number === undefined ? {} : { number: entry.number }),
+        title: p.title,
+        error: msg,
+      });
+    }
+  }
+  return { created, updated, failed: failures.length, failures };
+}
+
 // ---------------------------------------------------------------------------
 // Search provider — reach GitHub from `pm search` for imported items
 // ---------------------------------------------------------------------------
@@ -1183,30 +1271,22 @@ export default defineExtension({
       if (!repo || !repo.includes("/")) {
         throw new CommandError("--apply requires --repo <owner/repo>.", EXIT_CODE.USAGE);
       }
-      let created = 0;
-      let updated = 0;
-      for (const entry of plan) {
-        const p = entry.payload;
-        if (entry.action === "update" && entry.number !== undefined) {
-          await request(
-            "PATCH",
-            `https://api.github.com/repos/${repo}/issues/${entry.number}`,
-            token,
-            JSON.stringify({ title: p.title, body: p.body, labels: p.labels, state: p.state }),
-          );
-          updated++;
-        } else {
-          await request(
-            "POST",
-            `https://api.github.com/repos/${repo}/issues`,
-            token,
-            JSON.stringify({ title: p.title, body: p.body, labels: p.labels }),
-          );
-          created++;
+      // Apply each item independently: a single failed create/update is
+      // recorded and the batch CONTINUES, so one bad item (e.g. a 422 for a
+      // missing label) never abandons the rest of the export.
+      const { created, updated, failed, failures } = await applyExportPlan(
+        plan,
+        repo,
+        token,
+        request,
+      );
+      if (!jsonMode) {
+        console.error(`Created ${created} and updated ${updated} issue(s) on ${repo}.`);
+        if (failed > 0) {
+          console.error(`${failed} item(s) failed and were skipped (see errors above).`);
         }
       }
-      if (!jsonMode) console.error(`Created ${created} and updated ${updated} issue(s) on ${repo}.`);
-      return { applied: true, created, updated, repo };
+      return { applied: true, created, updated, failed, failures, repo };
     });
 
     // -----------------------------------------------------------------------
