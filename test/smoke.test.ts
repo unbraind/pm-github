@@ -13,6 +13,7 @@ import extension, {
   formatRateLimit,
   isDraftPr,
   mapSearchHits,
+  mapState,
   parseNextLink,
   parseProvenanceTag,
   parseRateLimit,
@@ -105,6 +106,12 @@ test("parseNextLink returns undefined when there is no next page", () => {
     parseNextLink('<https://api.github.com/repositories/1/issues?page=1>; rel="prev"'),
     undefined,
   );
+});
+
+test("mapState preserves GitHub not-planned closures as canceled pm items", () => {
+  assert.strictEqual(mapState("open"), "open");
+  assert.strictEqual(mapState("closed", "completed"), "closed");
+  assert.strictEqual(mapState("closed", "not_planned"), "canceled");
 });
 
 test("parseProvenanceTag normalizes repository casing", () => {

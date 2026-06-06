@@ -25,6 +25,7 @@ interface GhIssue {
   title: string;
   body: string | null;
   state: "open" | "closed";
+  state_reason?: "completed" | "not_planned" | "reopened" | null;
   labels: Array<{ name: string }>;
   user?: { login: string } | null;
   assignee: { login: string } | null;
@@ -279,7 +280,8 @@ export function parseNextLink(linkHeader?: string): string | undefined {
   return undefined;
 }
 
-function mapState(state: string): string {
+export function mapState(state: string, stateReason?: string | null): string {
+  if (state === "closed" && stateReason === "not_planned") return "canceled";
   return state === "closed" ? "closed" : "open";
 }
 
@@ -577,7 +579,7 @@ async function runImport(repoArg: string | undefined, pmRoot: string, opts: Impo
     const tag = provenanceTag(repo, issue.number);
     const ghAuthorTag = authorTag(issue);
     const tags = [...labels, tag, ...(ghAuthorTag ? [ghAuthorTag] : [])];
-    const status = mapState(issue.state);
+    const status = mapState(issue.state, issue.state_reason);
     const assignee = issue.assignee?.login;
     const milestone = issue.milestone?.title;
     const key = `${repo.toLowerCase()}#${issue.number}`;
@@ -591,6 +593,7 @@ async function runImport(repoArg: string | undefined, pmRoot: string, opts: Impo
     const description =
       `GH ${kind} #${issue.number}: ${issue.html_url}` +
       (author ? ` · author @${author}` : "") +
+      (issue.state_reason ? ` · state reason ${issue.state_reason}` : "") +
       (issue.created_at ? ` · created ${issue.created_at}` : "") +
       (issue.updated_at ? ` · updated ${issue.updated_at}` : "");
 
