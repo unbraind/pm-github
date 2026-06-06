@@ -3,6 +3,7 @@ interface GhIssue {
     title: string;
     body: string | null;
     state: "open" | "closed";
+    state_reason?: "completed" | "not_planned" | "reopened" | null;
     labels: Array<{
         name: string;
     }>;
@@ -54,6 +55,7 @@ export interface RateLimitInfo {
 export declare function parseRateLimit(headers: Record<string, string | string[] | undefined>, lowThreshold?: number): RateLimitInfo;
 export declare function formatRateLimit(info: RateLimitInfo): string | undefined;
 export declare function parseNextLink(linkHeader?: string): string | undefined;
+export declare function mapState(state: string, stateReason?: string | null): string;
 export declare function optionEnabled(options: Record<string, unknown>, ...keys: string[]): boolean;
 export declare function optionString(options: Record<string, unknown>, ...keys: string[]): string | undefined;
 export declare const EXIT_CODE: {
