@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Other
+
+- Align package dependencies to pm CLI/SDK 2026.6.6 ([pm-github-ctqq](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-ctqq.toon))
+
 ## 2026.06.04 - 2026-06-04
 
 ### Added
