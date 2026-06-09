@@ -66,13 +66,16 @@ Each imported item records GitHub provenance: the `gh:owner/repo#N` idempotency 
 ```bash
 pm github export --repo owner/repo            # DRY-RUN: print the create/update plan, write nothing
 pm github export --repo owner/repo --format md
+pm github export --repo owner/repo --ids pm-12,pm-34
 pm --json github export --repo owner/repo     # return the plan as JSON
 pm github export --repo owner/repo --apply    # actually create/update issues (requires a token)
+pm github export --repo owner/repo --ids pm-12,pm-34 --apply
 ```
 
 | Flag | Type | Description |
 |---|---|---|
 | `--repo <owner/repo>` | string | Target repo; decides create-vs-update and is required for `--apply` |
+| `--ids <pm-1,pm-2>` | string | Scope export to specific pm item IDs (comma-separated); unknown IDs fail fast |
 | `--format <json\|md>` | string | Dry-run output format (default: json) |
 | `--apply` | boolean | Perform real GitHub writes (alias: `--no-dry-run`, legacy `--push`). Requires a token + `--repo` |
 | `--dry-run` | boolean | Force preview even alongside `--apply` (dry-run always wins) |
@@ -85,8 +88,11 @@ Push pm status changes back to GitHub: close/reopen the linked issue to match th
 
 ```bash
 pm github sync --repo owner/repo --dry-run    # preview the close/reopen plan
+pm github sync --repo owner/repo --ids pm-12,pm-34 --dry-run
 pm github sync --repo owner/repo              # push the changes
 ```
+
+`--ids` scopes sync to specific pm item IDs (comma-separated). Unknown IDs fail fast so agent runs do not silently skip typoed targets.
 
 ## Search (pm search → GitHub)
 

@@ -14,12 +14,14 @@ import extension, {
   isDraftPr,
   mapSearchHits,
   mapState,
+  optionCsv,
   parseNextLink,
   parseProvenanceTag,
   parseRateLimit,
   planSync,
   resolveGitHubToken,
   resolveSearchRepo,
+  scopeItemsByIds,
 } from "../dist/index.js";
 
 // Minimal GhIssue factory for filter/field tests.
@@ -192,6 +194,19 @@ test("buildSearchUrl scopes the query to issues in the target repo", () => {
   assert.strictEqual(q, "memory leak repo:owner/repo type:issue");
 });
 
+test("optionCsv parses CSV options with trimming and dedupe", () => {
+  assert.deepEqual(optionCsv({ ids: " pm-1, pm-2 ,pm-1 " }, "ids"), ["pm-1", "pm-2"]);
+  assert.deepEqual(optionCsv({ ids: ["pm-1,pm-2", "pm-3"] }, "ids"), ["pm-1", "pm-2", "pm-3"]);
+  assert.deepEqual(optionCsv({}, "ids"), []);
+});
+
+test("scopeItemsByIds selects requested items and reports unknown ids", () => {
+  const all = [{ id: "pm-1" }, { id: "pm-2" }, { id: "pm-3" }];
+  const scoped = scopeItemsByIds(all, ["pm-2", "pm-99"]);
+  assert.deepEqual(scoped.selected.map((i) => i.id), ["pm-2"]);
+  assert.deepEqual(scoped.missing, ["pm-99"]);
+});
+
 test("mapSearchHits maps remote issue numbers to local items, dropping unmatched", () => {
   const index = new Map<string, any>([
     ["owner/repo#10", { id: "pm-a", tags: ["gh:owner/repo#10"] }],
@@ -346,6 +361,20 @@ test("import command advertises the --skip-drafts flag", () => {
   };
   extension.activate(api);
   assert.ok(captured?.flags?.some((f: any) => f.long === "--skip-drafts"), "import should expose --skip-drafts");
+});
+
+test("sync command advertises the --ids flag", () => {
+  let captured: any;
+  const noop = () => {};
+  const api: any = {
+    registerCommand: (def: any) => { if (def?.name === "github sync") captured = def; },
+    registerParser: noop, registerPreflight: noop, registerService: noop, registerFlags: noop,
+    registerItemFields: noop, registerItemTypes: noop, registerMigration: noop, registerRenderer: noop,
+    registerImporter: noop, registerExporter: noop, registerSearchProvider: noop, registerVectorStoreAdapter: noop,
+    hooks: { beforeCommand: noop, afterCommand: noop, onWrite: noop, onRead: noop, onIndex: noop },
+  };
+  extension.activate(api);
+  assert.ok(captured?.flags?.some((f: any) => f.long === "--ids"), "sync should expose --ids");
 });
 
 test("gh-issues import rejects a missing owner/repo argument", async () => {

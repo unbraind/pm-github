@@ -58,6 +58,8 @@ export declare function parseNextLink(linkHeader?: string): string | undefined;
 export declare function mapState(state: string, stateReason?: string | null): string;
 export declare function optionEnabled(options: Record<string, unknown>, ...keys: string[]): boolean;
 export declare function optionString(options: Record<string, unknown>, ...keys: string[]): string | undefined;
+export declare function optionProvided(options: Record<string, unknown>, ...keys: string[]): boolean;
+export declare function optionCsv(options: Record<string, unknown>, ...keys: string[]): string[];
 export declare const EXIT_CODE: {
     readonly GENERIC_FAILURE: 1;
     readonly USAGE: 2;
@@ -81,6 +83,13 @@ interface PmItem {
     description?: string;
     tags?: string[];
 }
+export interface ItemScopeResult<TItem> {
+    selected: TItem[];
+    missing: string[];
+}
+export declare function scopeItemsByIds<TItem extends {
+    id?: string;
+}>(items: TItem[], ids: string[] | undefined): ItemScopeResult<TItem>;
 export declare function indexByProvenance(items: PmItem[]): Map<string, PmItem>;
 export declare function buildIssuesUrl(repo: string, opts: ImportOptions): string;
 export declare function composeBody(issue: GhIssue, comments: GhComment[]): string;
