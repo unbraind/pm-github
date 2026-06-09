@@ -218,6 +218,40 @@ export function optionString(options, ...keys) {
     }
     return undefined;
 }
+// Whether an option key was explicitly provided (even if empty/falsey).
+export function optionProvided(options, ...keys) {
+    return keys.some((k) => Object.prototype.hasOwnProperty.call(options, k));
+}
+// Parse one or more CSV-like option values into a deduplicated string list.
+// Accepts a single string ("a,b") or repeated values (["a,b", "c"]).
+export function optionCsv(options, ...keys) {
+    const rawChunks = [];
+    for (const k of keys) {
+        const v = options[k];
+        if (typeof v === "string") {
+            rawChunks.push(v);
+            continue;
+        }
+        if (Array.isArray(v)) {
+            for (const entry of v) {
+                if (typeof entry === "string")
+                    rawChunks.push(entry);
+            }
+        }
+    }
+    const out = [];
+    const seen = new Set();
+    for (const chunk of rawChunks) {
+        for (const piece of chunk.split(",")) {
+            const id = piece.trim();
+            if (!id || seen.has(id))
+                continue;
+            seen.add(id);
+            out.push(id);
+        }
+    }
+    return out;
+}
 // pm's extension command runtime only treats a thrown error as a cleanly
 // handled non-zero exit when the error carries a numeric `exitCode` property
 // (see @unbrained/pm-cli runCommandHandler). A plain `Error` makes the runtime
@@ -263,6 +297,20 @@ export function authorTag(issue) {
     if (!login)
         return undefined;
     return `github_author:${login}`;
+}
+// Narrow a set of pm items to explicit IDs. Unknown IDs are surfaced so
+// command handlers can fail fast instead of silently ignoring typos.
+export function scopeItemsByIds(items, ids) {
+    if (!ids || ids.length === 0) {
+        return { selected: [...items], missing: [] };
+    }
+    const wanted = new Set(ids);
+    const selected = items.filter((item) => item.id && wanted.has(item.id));
+    const found = new Set(selected
+        .map((item) => item.id)
+        .filter((id) => typeof id === "string"));
+    const missing = ids.filter((id) => !found.has(id));
+    return { selected, missing };
 }
 function readPmItems(pmRoot) {
     // `list-all` (NOT `list`) so CLOSED items are included: `pm list` returns only
@@ -597,20 +645,36 @@ async function runSync(ctx) {
     const options = ctx.options || {};
     const repo = optionString(options, "repo") || ctx.args?.[0];
     const dryRun = optionEnabled(options, "dry-run", "dryRun");
+    const idsProvided = optionProvided(options, "ids");
+    const scopedIds = optionCsv(options, "ids");
     if (!repo || !repo.includes("/")) {
         throw new CommandError("Usage: pm github sync --repo <owner/repo> [--dry-run]  " +
             "(pushes pm item status to the linked GitHub issue: close/reopen)", EXIT_CODE.USAGE);
+    }
+    if (idsProvided && scopedIds.length === 0) {
+        throw new CommandError("--ids requires at least one pm item id (comma-separated), e.g. --ids pm-123,pm-456.", EXIT_CODE.USAGE);
     }
     const token = resolveGitHubToken();
     if (!token && !dryRun) {
         throw new CommandError("pm github sync needs a GitHub token to mutate issues " +
             "(set GITHUB_TOKEN/GH_TOKEN or run `gh auth login`). Use --dry-run to preview without a token.", EXIT_CODE.USAGE);
     }
-    const items = readPmItems(ctx.pm_root);
-    const plan = planSync(items, repo);
+    const allItems = readPmItems(ctx.pm_root);
+    const scoped = scopeItemsByIds(allItems, scopedIds.length > 0 ? scopedIds : undefined);
+    if (scoped.missing.length > 0) {
+        throw new CommandError(`--ids included unknown pm item id(s): ${scoped.missing.join(", ")}`, EXIT_CODE.NOT_FOUND);
+    }
+    const plan = planSync(scoped.selected, repo);
     if (plan.length === 0) {
-        console.error(`No pm items linked to ${repo} (no \`gh:${repo.toLowerCase()}#N\` provenance tags).`);
-        return { synced: 0, skipped: 0, planned: 0 };
+        const scopeNote = scopedIds.length > 0 ? ` from --ids (${scopedIds.join(", ")})` : "";
+        console.error(`No pm items${scopeNote} linked to ${repo} ` +
+            `(no \`gh:${repo.toLowerCase()}#N\` provenance tags).`);
+        return {
+            synced: 0,
+            skipped: 0,
+            planned: 0,
+            ...(scopedIds.length > 0 ? { scoped_ids: scopedIds } : {}),
+        };
     }
     let synced = 0;
     let skipped = 0;
@@ -649,10 +713,16 @@ async function runSync(ctx) {
     }
     if (dryRun) {
         console.error(`[dry-run] Would update ${synced} issue(s) on ${repo}; ${skipped} already in sync/failed.`);
-        return { dryRun: true, wouldSync: synced, skipped, planned: plan.length };
+        return {
+            dryRun: true,
+            wouldSync: synced,
+            skipped,
+            planned: plan.length,
+            ...(scopedIds.length > 0 ? { scoped_ids: scopedIds } : {}),
+        };
     }
     console.error(`Synced ${synced} issue(s) on ${repo}; skipped ${skipped}.`);
-    return { synced, skipped, planned: plan.length };
+    return { synced, skipped, planned: plan.length, ...(scopedIds.length > 0 ? { scoped_ids: scopedIds } : {}) };
 }
 function itemToGithubPayload(item) {
     return {
@@ -925,6 +995,7 @@ const IMPORT_FLAGS = [
 ];
 const SYNC_FLAGS = [
     { long: "--repo", value_name: "owner/repo", description: "Target GitHub repo (required)" },
+    { long: "--ids", value_name: "pm-1,pm-2", description: "Only sync these pm item IDs (comma-separated)" },
     { long: "--dry-run", description: "Preview the close/reopen plan without mutating GitHub" },
 ];
 const VALIDATE_FLAGS = [
@@ -983,8 +1054,17 @@ export default defineExtension({
             const format = optionString(options, "format") || "json";
             const repo = optionString(options, "repo") || ctx.args?.[0];
             const apply = exportWillApply(options);
-            const items = readPmItems(ctx.pm_root);
-            const plan = buildExportPlan(items, repo);
+            const idsProvided = optionProvided(options, "ids");
+            const scopedIds = optionCsv(options, "ids");
+            if (idsProvided && scopedIds.length === 0) {
+                throw new CommandError("--ids requires at least one pm item id (comma-separated), e.g. --ids pm-123,pm-456.", EXIT_CODE.USAGE);
+            }
+            const allItems = readPmItems(ctx.pm_root);
+            const scoped = scopeItemsByIds(allItems, scopedIds.length > 0 ? scopedIds : undefined);
+            if (scoped.missing.length > 0) {
+                throw new CommandError(`--ids included unknown pm item id(s): ${scoped.missing.join(", ")}`, EXIT_CODE.NOT_FOUND);
+            }
+            const plan = buildExportPlan(scoped.selected, repo);
             const creates = plan.filter((e) => e.action === "create").length;
             const updates = plan.filter((e) => e.action === "update").length;
             if (!apply) {
@@ -1002,11 +1082,22 @@ export default defineExtension({
                     else {
                         console.log(JSON.stringify(plan, null, 2));
                     }
+                    const scopeNote = scopedIds.length > 0
+                        ? ` Scoped to ${scoped.selected.length} item(s) via --ids.`
+                        : "";
                     console.error(`[dry-run] Would create ${creates} and update ${updates} issue(s)` +
                         `${repo ? ` on ${repo}` : " (no --repo: all treated as create)"}. ` +
+                        scopeNote +
                         "Re-run with --apply --repo <owner/repo> to write to GitHub.");
                 }
-                return { dry_run: true, plan, would_create: creates, would_update: updates, repo };
+                return {
+                    dry_run: true,
+                    plan,
+                    would_create: creates,
+                    would_update: updates,
+                    repo,
+                    ...(scopedIds.length > 0 ? { scoped_ids: scopedIds } : {}),
+                };
             }
             // --apply path: real writes. Require token + repo.
             const token = resolveGitHubToken();
@@ -1026,7 +1117,15 @@ export default defineExtension({
                     console.error(`${failed} item(s) failed and were skipped (see errors above).`);
                 }
             }
-            return { applied: true, created, updated, failed, failures, repo };
+            return {
+                applied: true,
+                created,
+                updated,
+                failed,
+                failures,
+                repo,
+                ...(scopedIds.length > 0 ? { scoped_ids: scopedIds } : {}),
+            };
         });
         // -----------------------------------------------------------------------
         // search — reach GitHub from `pm search` for imported items.
@@ -1118,12 +1217,14 @@ export default defineExtension({
             intent: "sync pm item status to the linked GitHub issue state",
             examples: [
                 "pm github sync --repo unbraind/pm-cli --dry-run",
+                "pm github sync --repo unbraind/pm-cli --ids pm-123,pm-456 --dry-run",
                 "pm github sync --repo unbraind/pm-cli",
             ],
             flags: SYNC_FLAGS,
             failure_hints: [
                 "Set GITHUB_TOKEN/GH_TOKEN or run `gh auth login` (sync mutates remote issues).",
                 "Pass --repo <owner/repo> explicitly; sync never guesses the target repo.",
+                "Use --ids <pm-1,pm-2> to scope sync; unknown IDs fail fast to avoid silent misses.",
                 "Items must carry a `gh:owner/repo#N` tag — import with `pm github import` first.",
                 "Use --dry-run to preview the close/reopen plan before pushing.",
             ],
