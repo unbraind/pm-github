@@ -1003,7 +1003,7 @@ const VALIDATE_FLAGS = [
 ];
 export default defineExtension({
     name: "pm-github",
-    version: "2026.6.9",
+    version: "2026.6.10",
     activate(api) {
         // -----------------------------------------------------------------------
         // schema — declare the GitHub provenance fields so the workspace knows them
