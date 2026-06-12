@@ -1,0 +1,15 @@
+id: pm-github-za4r
+title: "Daily Release publish step runs prepublishOnly post-tag: align npm publish with --ignore-scripts"
+description: "Fleet alignment after pm-ts-starter run 27448995157 and pm-web runs 27447490522/27448994089 failed at npm publish: without --ignore-scripts, prepublishOnly re-runs changelog:check AFTER the release tag exists, where pm-changelog suppresses the pending-version window and renders the zero-padded tag heading (e.g. 2026.06.13 != 2026.6.13) — the check can never pass post-tag (tracked upstream as unbraind/pm-changelog#41). Siblings pm-csv/pm-beads/pm-todos/pm-gantt-chart/pm-graph/pm-linear/pm-slack-standup already publish with --ignore-scripts; the full validation suite still runs pre-tag in the dedicated Run release checks step."
+type: Task
+status: closed
+priority: 1
+tags[2]: ci,release-automation
+created_at: "2026-06-12T23:37:20.540Z"
+updated_at: "2026-06-12T23:37:20.916Z"
+author: codex
+acceptance_criteria: "Daily Release with fresh closed pm items publishes to npm without the post-tag changelog:check failure"
+files[1]{path,scope,note}:
+  .github/workflows/release.yml,project,npm publish + --ignore-scripts (both invocations)
+close_reason: Aligned with siblings; YAML validated; full checks still run pre-tag in Run release checks
+body: ""
