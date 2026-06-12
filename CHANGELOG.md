@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Other
+
+- Daily Release publish step runs prepublishOnly post-tag: align npm publish with --ignore-scripts ([pm-github-za4r](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-za4r.toon))
+
 ## 2026.06.07 - 2026-06-07
 
 ### Added
