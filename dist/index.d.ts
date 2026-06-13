@@ -133,6 +133,7 @@ export interface ExportApplyResult {
 }
 export type ExportRequestFn = (method: string, url: string, token: string | undefined, payload?: string) => Promise<unknown>;
 export declare function applyExportPlan(plan: ExportPlanEntry[], repo: string, token: string | undefined, requestFn: ExportRequestFn): Promise<ExportApplyResult>;
+export declare function applyOutcomeError(plan: ExportPlanEntry[], result: ExportApplyResult, repo: string): CommandError | undefined;
 export declare function buildSearchUrl(repo: string, query: string): string;
 export declare function mapSearchHits(matchedNumbers: number[], repo: string, itemsByProvenance: Map<string, PmItem>): Array<{
     id: string;
