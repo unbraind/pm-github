@@ -6,6 +6,7 @@ import extension, {
   EXIT_CODE,
   applyClientFilters,
   applyExportPlan,
+  applyOutcomeError,
   authorTag,
   buildExportPlan,
   buildSearchUrl,
@@ -500,4 +501,70 @@ test("applyExportPlan: an update entry missing its number is a failure, not a si
   assert.strictEqual(result.updated, 0);
   assert.strictEqual(result.failed, 1, "the malformed update is counted as a failure");
   assert.match(result.failures[0].error, /number/i);
+});
+
+// ---------------------------------------------------------------------------
+// applyOutcomeError — batch-level exit status of `export --apply`.
+//
+// Regression guard for: the --apply handler returned exit 0 regardless of
+// outcome, so a non-empty plan that wrote NOTHING (every item failed) still
+// reported success to the shell. Per-item-continue is preserved; partial and
+// full success still exit 0. Only a non-empty all-fail batch must exit 1.
+// ---------------------------------------------------------------------------
+
+test("applyOutcomeError: a non-empty plan where every item fails throws CommandError with exit 1", async () => {
+  // Simulate the real handler path: apply a plan whose every write 404s, then
+  // run the same decision the handler runs on the result.
+  const plan = [exportEntry({ id: "a" }), exportEntry({ id: "b" })];
+  const requestFn = async () => { throw new Error("GitHub API returned HTTP 404"); };
+  const result = await applyExportPlan(plan, "o/r", "tok", requestFn);
+  assert.strictEqual(result.created, 0);
+  assert.strictEqual(result.updated, 0);
+  assert.strictEqual(result.failed, 2, "both items failed");
+
+  const err = applyOutcomeError(plan, result, "o/r");
+  assert.ok(err instanceof CommandError, "all-fail batch must surface a CommandError");
+  assert.strictEqual(err!.exitCode, EXIT_CODE.GENERIC_FAILURE, "all-fail batch must exit 1");
+  assert.match(err!.message, /failed to apply/i);
+  assert.match(err!.message, /o\/r/, "message names the target repo");
+});
+
+test("applyOutcomeError: partial success (1 created, 1 failed) does NOT throw — still exit 0", async () => {
+  // The whole point of per-item isolation: one bad item alongside a real write
+  // must STILL succeed at the batch level.
+  const plan = [exportEntry({ id: "ok" }), exportEntry({ id: "bad" })];
+  let call = 0;
+  const requestFn = async () => {
+    call++;
+    if (call === 2) throw new Error("GitHub API returned HTTP 422");
+    return {};
+  };
+  const result = await applyExportPlan(plan, "o/r", "tok", requestFn);
+  assert.strictEqual(result.created, 1, "one item should have been created");
+  assert.strictEqual(result.failed, 1, "one item should have failed");
+
+  assert.strictEqual(
+    applyOutcomeError(plan, result, "o/r"),
+    undefined,
+    "partial success must NOT throw — the batch wrote a real change",
+  );
+});
+
+test("applyOutcomeError: an empty plan (nothing to do) does NOT throw — still exit 0", () => {
+  const result = { created: 0, updated: 0, failed: 0, failures: [] };
+  assert.strictEqual(
+    applyOutcomeError([], result, "o/r"),
+    undefined,
+    "an empty plan is a no-op success, not a failure",
+  );
+});
+
+test("applyOutcomeError: full success (all created/updated, zero failures) does NOT throw", () => {
+  const plan = [exportEntry({ id: "a" }), exportEntry({ id: "b", action: "update", number: 7 })];
+  const result = { created: 1, updated: 1, failed: 0, failures: [] };
+  assert.strictEqual(
+    applyOutcomeError(plan, result, "o/r"),
+    undefined,
+    "full success must exit 0",
+  );
 });

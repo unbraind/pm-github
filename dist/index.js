@@ -820,6 +820,26 @@ export async function applyExportPlan(plan, repo, token, requestFn) {
     }
     return { created, updated, failed: failures.length, failures };
 }
+// Decide the EXIT STATUS of a completed `export --apply` batch.
+//
+// The per-item-continue design above is intentional: one bad item never aborts
+// the batch. But the batch as a WHOLE still has to report honest success or
+// failure to the shell. A non-empty plan that wrote NOTHING (zero creates, zero
+// updates) yet recorded at least one failure is a total failure — exiting 0 in
+// that case would let a CI/script step believe the export succeeded when in
+// fact nothing reached GitHub. Returns a CommandError to throw in that case, or
+// undefined when the batch should succeed (exit 0):
+//   - empty plan (nothing to do)                       → success
+//   - any creates/updates landed (partial or full)     → success (per-item
+//     failures are already reported; the batch still wrote real changes)
+//   - non-empty plan, nothing written, >=1 failure     → GENERIC_FAILURE
+export function applyOutcomeError(plan, result, repo) {
+    if (plan.length > 0 && result.created === 0 && result.updated === 0 && result.failed > 0) {
+        return new CommandError(`All ${result.failed} item(s) failed to apply to ${repo}; ` +
+            "no issues were created or updated. See errors above.", EXIT_CODE.GENERIC_FAILURE);
+    }
+    return undefined;
+}
 // ---------------------------------------------------------------------------
 // Search provider — reach GitHub from `pm search` for imported items
 // ---------------------------------------------------------------------------
@@ -1117,6 +1137,14 @@ export default defineExtension({
                     console.error(`${failed} item(s) failed and were skipped (see errors above).`);
                 }
             }
+            // Honest batch-level exit status. Per-item failures are tolerated as long
+            // as SOMETHING was written, but a non-empty plan that wrote nothing and
+            // recorded only failures must exit non-zero — otherwise a CI/script step
+            // sees success when no issue reached GitHub. Thrown AFTER the summary so
+            // the per-item errors and the summary line are emitted first for context.
+            const outcomeError = applyOutcomeError(plan, { created, updated, failed, failures }, repo);
+            if (outcomeError)
+                throw outcomeError;
             return {
                 applied: true,
                 created,
