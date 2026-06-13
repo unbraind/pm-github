@@ -1295,7 +1295,7 @@ const VALIDATE_FLAGS = [
 
 export default defineExtension({
   name: "pm-github",
-  version: "2026.6.13",
+  version: "2026.6.13-1",
 
   activate(api: any) {
     // -----------------------------------------------------------------------
