@@ -6,7 +6,7 @@
 
 - Daily Release publish step runs prepublishOnly post-tag: align npm publish with --ignore-scripts ([pm-github-za4r](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-za4r.toon))
 
-## 2026.06.07 - 2026-06-07
+## 2026.6.7 - 2026-06-07
 
 ### Added
 
@@ -17,13 +17,13 @@
 - Harden release readiness checks ([pm-github-1r09](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-1r09.toon))
 - Align package dependencies to pm CLI/SDK 2026.6.6 ([pm-github-ctqq](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-ctqq.toon))
 
-## 2026.06.04 - 2026-06-04
+## 2026.6.4 - 2026-06-04
 
 ### Added
 
 - Import GitHub author + timestamps, rate-limit visibility, --skip-drafts ([pm-github-v0c3](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-v0c3.toon))
 
-## 2026.06.03 - 2026-06-03
+## 2026.6.3 - 2026-06-03
 
 ### Added
 
@@ -56,19 +56,19 @@
 - Tests + functional verification against real public repo \(idempotent re-import\) ([pm-github-2u0d](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-2u0d.toon))
 - Production-readiness audit 2026-05-28 ([pm-github-0y40](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-0y40.toon))
 
-## 2026.06.02 - 2026-06-02
+## 2026.6.2 - 2026-06-02
 
 ### Added
 
 - Adopt full SDK capability surface: native importer/exporter, schema fields, afterCommand hook, richer import flags ([pm-github-gh83](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-gh83.toon))
 
-## 2026.06.01 - 2026-06-01
+## 2026.6.1 - 2026-06-01
 
 ### Fixed
 
 - Thrown errors lacked exitCode → runtime re-invoked handler \(double fetch\) ([pm-github-fgay](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-fgay.toon))
 
-## 2026.05.29 - 2026-05-29
+## 2026.5.29 - 2026-05-29
 
 ### Added
 
@@ -81,19 +81,19 @@
 - Importer was unauthenticated \(60 req/hr, no private repos\) ([pm-github-gtnp](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-gtnp.toon))
 - --dry-run silently wrote items instead of previewing ([pm-github-2u31](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-2u31.toon))
 
-## 2026.05.28 - 2026-05-28
+## 2026.5.28 - 2026-05-28
 
 ### Added
 
 - Add publish retry + provenance fallback to release workflow ([pm-github-4ouy](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-4ouy.toon))
 
-## 2026.05.27 - 2026-05-27
+## 2026.5.27 - 2026-05-27
 
 ### Added
 
 - Add bun-install verification to release workflow ([pm-github-np9v](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-np9v.toon))
 
-## 2026.05.26 - 2026-05-26
+## 2026.5.26 - 2026-05-26
 
 ### Fixed
 
