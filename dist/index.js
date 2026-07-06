@@ -222,6 +222,73 @@ export function optionString(options, ...keys) {
 export function optionProvided(options, ...keys) {
     return keys.some((k) => Object.prototype.hasOwnProperty.call(options, k));
 }
+// Parse a `--since` value into an ISO timestamp the GitHub `since` query param
+// accepts. Accepts either an ISO 8601 timestamp (passed through, invalid date
+// returns undefined) or a relative duration like `7d` / `12h` / `1w` / `30m`,
+// resolved against `now`. This enables incremental imports without the caller
+// having to compute an absolute timestamp first.
+export function parseSince(value, nowMs = Date.now()) {
+    if (!value || !value.trim())
+        return undefined;
+    const v = value.trim();
+    const rel = /^(\d+)\s*(m|h|d|w)$/i.exec(v);
+    if (rel) {
+        const n = Number(rel[1]);
+        if (!Number.isFinite(n) || n <= 0)
+            return undefined;
+        const unit = rel[2].toLowerCase();
+        const ms = unit === "m" ? n * 60_000 :
+            unit === "h" ? n * 3_600_000 :
+                unit === "d" ? n * 86_400_000 :
+                    n * 604_800_000;
+        return new Date(nowMs - ms).toISOString();
+    }
+    const d = new Date(v);
+    if (Number.isNaN(d.getTime()))
+        return undefined;
+    return d.toISOString();
+}
+// Parse a `--label-map` option into a translation table from pm tag/label
+// names to GitHub label names. Accepts `from=to` pairs, comma-separated in a
+// single value ("bug=kind/bug,enhancement=kind/enhancement") or repeated as an
+// array. Entries without a `=` or with an empty side are skipped. Returns
+// undefined when no usable mapping was provided so callers can short-circuit.
+export function parseLabelMap(options, ...keys) {
+    const lookup = keys.length > 0 ? keys : ["label-map", "labelMap"];
+    const raw = optionCsv(options, ...lookup);
+    if (raw.length === 0)
+        return undefined;
+    const map = new Map();
+    for (const entry of raw) {
+        const eq = entry.indexOf("=");
+        if (eq <= 0)
+            continue; // need a non-empty "from" before the '='
+        const from = entry.slice(0, eq).trim();
+        const to = entry.slice(eq + 1).trim();
+        if (!from || !to)
+            continue;
+        map.set(from, to);
+    }
+    return map.size > 0 ? map : undefined;
+}
+// Apply a label translation table to a list of labels. Labels with a mapping
+// are replaced; unmapped labels pass through unchanged. Two source labels that
+// map to the same GitHub label are collapsed (GitHub rejects duplicate labels
+// on an issue with a 422), preserving first-seen order.
+export function applyLabelMap(labels, labelMap) {
+    if (!labelMap || labelMap.size === 0)
+        return labels;
+    const out = [];
+    const seen = new Set();
+    for (const label of labels) {
+        const mapped = labelMap.get(label) ?? label;
+        if (seen.has(mapped))
+            continue;
+        seen.add(mapped);
+        out.push(mapped);
+    }
+    return out;
+}
 // Parse one or more CSV-like option values into a deduplicated string list.
 // Accepts a single string ("a,b") or repeated values (["a,b", "c"]).
 export function optionCsv(options, ...keys) {
@@ -447,12 +514,12 @@ export function parseImportOptions(options) {
     return {
         state,
         labels: optionString(options, "labels"),
-        since: optionString(options, "since"),
+        since: parseSince(optionString(options, "since")),
         assignee: optionString(options, "assignee"),
         milestone: optionString(options, "milestone"),
         includePrs: optionEnabled(options, "include-prs", "includePrs"),
         skipDrafts: optionEnabled(options, "skip-drafts", "skipDrafts"),
-        withComments: optionEnabled(options, "with-comments", "withComments"),
+        withComments: optionEnabled(options, "with-comments", "withComments", "include-comments", "includeComments"),
         itemType: optionString(options, "type") || "Issue",
         dryRun: optionEnabled(options, "dry-run", "dryRun"),
     };
@@ -724,12 +791,14 @@ async function runSync(ctx) {
     console.error(`Synced ${synced} issue(s) on ${repo}; skipped ${skipped}.`);
     return { synced, skipped, planned: plan.length, ...(scopedIds.length > 0 ? { scoped_ids: scopedIds } : {}) };
 }
-function itemToGithubPayload(item) {
+function itemToGithubPayload(item, labelMap) {
+    // Drop our internal provenance tags from exported labels, then apply any
+    // user-supplied label mapping (pm tag → GitHub label).
+    const labels = (item.tags ?? []).filter((t) => !parseProvenanceTag(t));
     return {
         title: item.title ?? "(untitled)",
         body: item.body || item.description || "",
-        // Drop our internal provenance tags from exported labels.
-        labels: (item.tags ?? []).filter((t) => !parseProvenanceTag(t)),
+        labels: applyLabelMap(labels, labelMap),
         state: item.status === "closed" || item.status === "canceled" ? "closed" : "open",
     };
 }
@@ -737,11 +806,11 @@ function itemToGithubPayload(item) {
 // tags count as an "already exported to THIS repo" link → update; everything
 // else is a create. Pure + side-effect free so it can be unit-tested and
 // printed verbatim in --dry-run.
-export function buildExportPlan(items, repo) {
+export function buildExportPlan(items, repo, labelMap) {
     const repoLc = repo?.toLowerCase();
     const plan = [];
     for (const item of items) {
-        const payload = itemToGithubPayload(item);
+        const payload = itemToGithubPayload(item, labelMap);
         let number;
         if (repoLc) {
             for (const tag of item.tags ?? []) {
@@ -839,6 +908,113 @@ export function applyOutcomeError(plan, result, repo) {
             "no issues were created or updated. See errors above.", EXIT_CODE.GENERIC_FAILURE);
     }
     return undefined;
+}
+// ---------------------------------------------------------------------------
+// runExport — shared handler for the `pm github export` exporter + command
+// ---------------------------------------------------------------------------
+//
+// Export is SAFE BY DEFAULT: it previews the create/update plan and writes
+// NOTHING. Real writes happen only with --apply (or --no-dry-run / legacy
+// --push) AND a token AND --repo <owner/repo>. With --repo, items already
+// linked to an issue in that repo (via the `gh:repo#N` provenance tag) are
+// UPDATEd (upsert) rather than duplicated. --label-map translates pm tags to
+// GitHub labels. --json returns the plan object; we never write our own
+// stdout in JSON mode (pm renders the return value). Used by both the
+// `registerExporter("github", ...)` entry point and the `pm github export`
+// command so the surface stays consistent.
+async function runExport(ctx) {
+    const options = ctx.options || {};
+    const jsonMode = ctx.global?.json === true;
+    const format = optionString(options, "format") || "json";
+    const repo = optionString(options, "repo") || ctx.args?.[0];
+    const apply = exportWillApply(options);
+    const idsProvided = optionProvided(options, "ids");
+    const scopedIds = optionCsv(options, "ids");
+    const labelMap = parseLabelMap(options, "label-map", "labelMap");
+    if (idsProvided && scopedIds.length === 0) {
+        throw new CommandError("--ids requires at least one pm item id (comma-separated), e.g. --ids pm-123,pm-456.", EXIT_CODE.USAGE);
+    }
+    const allItems = readPmItems(ctx.pm_root);
+    const scoped = scopeItemsByIds(allItems, scopedIds.length > 0 ? scopedIds : undefined);
+    if (scoped.missing.length > 0) {
+        throw new CommandError(`--ids included unknown pm item id(s): ${scoped.missing.join(", ")}`, EXIT_CODE.NOT_FOUND);
+    }
+    const plan = buildExportPlan(scoped.selected, repo, labelMap);
+    const creates = plan.filter((e) => e.action === "create").length;
+    const updates = plan.filter((e) => e.action === "update").length;
+    if (!apply) {
+        // Dry-run (default). Emit the plan; in JSON mode return it silently.
+        if (!jsonMode) {
+            if (format === "md" || format === "markdown") {
+                const md = plan
+                    .map((e) => {
+                    const head = e.action === "update" ? `## [update #${e.number}] ${e.payload.title}` : `## [create] ${e.payload.title}`;
+                    return `${head}\n\n${e.payload.body}\n\n_labels: ${e.payload.labels.join(", ")} · state: ${e.payload.state}_\n`;
+                })
+                    .join("\n");
+                console.log(md);
+            }
+            else {
+                console.log(JSON.stringify(plan, null, 2));
+            }
+            const scopeNote = scopedIds.length > 0
+                ? ` Scoped to ${scoped.selected.length} item(s) via --ids.`
+                : "";
+            const labelNote = labelMap && labelMap.size > 0
+                ? ` Label map applied (${labelMap.size} mapping(s)).`
+                : "";
+            console.error(`[dry-run] Would create ${creates} and update ${updates} issue(s)` +
+                `${repo ? ` on ${repo}` : " (no --repo: all treated as create)"}. ` +
+                scopeNote +
+                labelNote +
+                "Re-run with --apply --repo <owner/repo> to write to GitHub.");
+        }
+        return {
+            dry_run: true,
+            plan,
+            would_create: creates,
+            would_update: updates,
+            repo,
+            ...(labelMap ? { label_map: Object.fromEntries(labelMap) } : {}),
+            ...(scopedIds.length > 0 ? { scoped_ids: scopedIds } : {}),
+        };
+    }
+    // --apply path: real writes. Require token + repo.
+    const token = resolveGitHubToken();
+    if (!token) {
+        throw new CommandError("--apply requires a GitHub token (set GITHUB_TOKEN/GH_TOKEN or run `gh auth login`).", EXIT_CODE.USAGE);
+    }
+    if (!repo || !repo.includes("/")) {
+        throw new CommandError("--apply requires --repo <owner/repo>.", EXIT_CODE.USAGE);
+    }
+    // Apply each item independently: a single failed create/update is
+    // recorded and the batch CONTINUES, so one bad item (e.g. a 422 for a
+    // missing label) never abandons the rest of the export.
+    const { created, updated, failed, failures } = await applyExportPlan(plan, repo, token, request);
+    if (!jsonMode) {
+        console.error(`Created ${created} and updated ${updated} issue(s) on ${repo}.`);
+        if (failed > 0) {
+            console.error(`${failed} item(s) failed and were skipped (see errors above).`);
+        }
+    }
+    // Honest batch-level exit status. Per-item failures are tolerated as long
+    // as SOMETHING was written, but a non-empty plan that wrote nothing and
+    // recorded only failures must exit non-zero — otherwise a CI/script step
+    // sees success when no issue reached GitHub. Thrown AFTER the summary so
+    // the per-item errors and the summary line are emitted first for context.
+    const outcomeError = applyOutcomeError(plan, { created, updated, failed, failures }, repo);
+    if (outcomeError)
+        throw outcomeError;
+    return {
+        applied: true,
+        created,
+        updated,
+        failed,
+        failures,
+        repo,
+        ...(labelMap ? { label_map: Object.fromEntries(labelMap) } : {}),
+        ...(scopedIds.length > 0 ? { scoped_ids: scopedIds } : {}),
+    };
 }
 // ---------------------------------------------------------------------------
 // Search provider — reach GitHub from `pm search` for imported items
@@ -1004,14 +1180,25 @@ const IMPORT_FLAGS = [
     { long: "--all", description: "Include closed issues (shorthand for --state all)" },
     { long: "--state", value_name: "state", description: "Issue state: open | closed | all (default: open)" },
     { long: "--labels", value_name: "labels", description: "Comma-separated label filter" },
-    { long: "--since", value_name: "iso", description: "Only issues updated after this ISO timestamp (incremental sync)" },
+    { long: "--since", value_name: "date|relative", description: "Only issues updated after this date (ISO 8601 or relative like 7d/12h/1w/30m — incremental sync)" },
     { long: "--assignee", value_name: "login", description: "Filter by assignee login" },
     { long: "--milestone", value_name: "name", description: "Filter by milestone title" },
     { long: "--include-prs", description: "Include pull requests (default: skip PRs)" },
     { long: "--skip-drafts", description: "Exclude draft pull requests (only meaningful with --include-prs)" },
     { long: "--with-comments", description: "Fetch issue comments and append them to the item body" },
+    { long: "--include-comments", description: "Alias for --with-comments" },
     { long: "--dry-run", description: "Preview without writing" },
     { long: "--type", value_name: "type", description: "Override pm item type (default: Issue)" },
+];
+const EXPORT_FLAGS = [
+    { long: "--repo", value_name: "owner/repo", description: "Target GitHub repo (required for --apply; enables upsert of linked issues)" },
+    { long: "--ids", value_name: "pm-1,pm-2", description: "Only export these pm item IDs (comma-separated)" },
+    { long: "--apply", description: "Write to GitHub (default is a safe dry-run preview)" },
+    { long: "--no-dry-run", description: "Alias for --apply" },
+    { long: "--push", description: "Legacy alias for --apply" },
+    { long: "--dry-run", description: "Preview only (default; always wins over --apply)" },
+    { long: "--label-map", value_name: "from=to,...", description: "Translate pm tags to GitHub labels, e.g. bug=kind/bug,enhancement=kind/enhancement" },
+    { long: "--format", value_name: "json|md", description: "Dry-run preview format (default: json)" },
 ];
 const SYNC_FLAGS = [
     { long: "--repo", value_name: "owner/repo", description: "Target GitHub repo (required)" },
@@ -1068,93 +1255,7 @@ export default defineExtension({
         // (upsert) rather than duplicated. --json returns the plan object; we never
         // write our own stdout in JSON mode (pm renders the return value).
         // -----------------------------------------------------------------------
-        api.registerExporter("github", async (ctx) => {
-            const options = ctx.options || {};
-            const jsonMode = ctx.global?.json === true;
-            const format = optionString(options, "format") || "json";
-            const repo = optionString(options, "repo") || ctx.args?.[0];
-            const apply = exportWillApply(options);
-            const idsProvided = optionProvided(options, "ids");
-            const scopedIds = optionCsv(options, "ids");
-            if (idsProvided && scopedIds.length === 0) {
-                throw new CommandError("--ids requires at least one pm item id (comma-separated), e.g. --ids pm-123,pm-456.", EXIT_CODE.USAGE);
-            }
-            const allItems = readPmItems(ctx.pm_root);
-            const scoped = scopeItemsByIds(allItems, scopedIds.length > 0 ? scopedIds : undefined);
-            if (scoped.missing.length > 0) {
-                throw new CommandError(`--ids included unknown pm item id(s): ${scoped.missing.join(", ")}`, EXIT_CODE.NOT_FOUND);
-            }
-            const plan = buildExportPlan(scoped.selected, repo);
-            const creates = plan.filter((e) => e.action === "create").length;
-            const updates = plan.filter((e) => e.action === "update").length;
-            if (!apply) {
-                // Dry-run (default). Emit the plan; in JSON mode return it silently.
-                if (!jsonMode) {
-                    if (format === "md" || format === "markdown") {
-                        const md = plan
-                            .map((e) => {
-                            const head = e.action === "update" ? `## [update #${e.number}] ${e.payload.title}` : `## [create] ${e.payload.title}`;
-                            return `${head}\n\n${e.payload.body}\n\n_labels: ${e.payload.labels.join(", ")} · state: ${e.payload.state}_\n`;
-                        })
-                            .join("\n");
-                        console.log(md);
-                    }
-                    else {
-                        console.log(JSON.stringify(plan, null, 2));
-                    }
-                    const scopeNote = scopedIds.length > 0
-                        ? ` Scoped to ${scoped.selected.length} item(s) via --ids.`
-                        : "";
-                    console.error(`[dry-run] Would create ${creates} and update ${updates} issue(s)` +
-                        `${repo ? ` on ${repo}` : " (no --repo: all treated as create)"}. ` +
-                        scopeNote +
-                        "Re-run with --apply --repo <owner/repo> to write to GitHub.");
-                }
-                return {
-                    dry_run: true,
-                    plan,
-                    would_create: creates,
-                    would_update: updates,
-                    repo,
-                    ...(scopedIds.length > 0 ? { scoped_ids: scopedIds } : {}),
-                };
-            }
-            // --apply path: real writes. Require token + repo.
-            const token = resolveGitHubToken();
-            if (!token) {
-                throw new CommandError("--apply requires a GitHub token (set GITHUB_TOKEN/GH_TOKEN or run `gh auth login`).", EXIT_CODE.USAGE);
-            }
-            if (!repo || !repo.includes("/")) {
-                throw new CommandError("--apply requires --repo <owner/repo>.", EXIT_CODE.USAGE);
-            }
-            // Apply each item independently: a single failed create/update is
-            // recorded and the batch CONTINUES, so one bad item (e.g. a 422 for a
-            // missing label) never abandons the rest of the export.
-            const { created, updated, failed, failures } = await applyExportPlan(plan, repo, token, request);
-            if (!jsonMode) {
-                console.error(`Created ${created} and updated ${updated} issue(s) on ${repo}.`);
-                if (failed > 0) {
-                    console.error(`${failed} item(s) failed and were skipped (see errors above).`);
-                }
-            }
-            // Honest batch-level exit status. Per-item failures are tolerated as long
-            // as SOMETHING was written, but a non-empty plan that wrote nothing and
-            // recorded only failures must exit non-zero — otherwise a CI/script step
-            // sees success when no issue reached GitHub. Thrown AFTER the summary so
-            // the per-item errors and the summary line are emitted first for context.
-            const outcomeError = applyOutcomeError(plan, { created, updated, failed, failures }, repo);
-            if (outcomeError)
-                throw outcomeError;
-            return {
-                applied: true,
-                created,
-                updated,
-                failed,
-                failures,
-                repo,
-                ...(scopedIds.length > 0 ? { scoped_ids: scopedIds } : {}),
-            };
-        });
+        api.registerExporter("github", async (ctx) => runExport(ctx));
         // -----------------------------------------------------------------------
         // search — reach GitHub from `pm search` for imported items.
         // Guarded by a capability check so it is a no-op on runtimes that predate
@@ -1232,6 +1333,38 @@ export default defineExtension({
                 return;
             console.error(`[pm-github] ${id} is linked to ${repo}; run \`pm github sync --repo ${repo}\` ` +
                 "to push this status change upstream (or --dry-run to preview).");
+        });
+        // -----------------------------------------------------------------------
+        // command — `pm github export` (pm items → GitHub issues)
+        // Surfaces the exporter as a discoverable command with explicit flags so
+        // `--label-map`, `--dry-run`, `--apply` and `--ids` are self-documenting.
+        // Delegates to the same `runExport` core the exporter entry point uses.
+        // -----------------------------------------------------------------------
+        api.registerCommand({
+            name: "github export",
+            description: "Export pm items as GitHub issues. SAFE BY DEFAULT: prints a create/update " +
+                "plan and writes NOTHING. Use --apply --repo <owner/repo> to write to " +
+                "GitHub; items already linked to an issue in that repo (via the " +
+                "`gh:owner/repo#N` provenance tag) are updated (upsert) instead of " +
+                "duplicated. --label-map translates pm tags to GitHub labels.",
+            intent: "export pm items as GitHub issues",
+            examples: [
+                "pm github export --repo unbraind/pm-cli",
+                "pm github export --repo unbraind/pm-cli --dry-run",
+                "pm github export --repo unbraind/pm-cli --apply",
+                "pm github export --label-map bug=kind/bug,enhancement=kind/enhancement",
+                "pm github export --ids pm-1,pm-2 --repo unbraind/pm-cli --dry-run",
+            ],
+            flags: EXPORT_FLAGS,
+            failure_hints: [
+                "Export is dry-run by default; pass --apply --repo <owner/repo> to write.",
+                "--apply requires a GitHub token (GITHUB_TOKEN/GH_TOKEN or `gh auth login`).",
+                "--label-map takes from=to pairs, e.g. --label-map bug=kind/bug,enhancement=kind/enhancement.",
+                "Use --ids <pm-1,pm-2> to scope export; unknown IDs fail fast.",
+            ],
+            async run(ctx) {
+                return runExport(ctx);
+            },
         });
         // -----------------------------------------------------------------------
         // command — `pm github sync` (push pm status → GitHub close/reopen)
