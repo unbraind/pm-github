@@ -8,6 +8,7 @@
 
 ### Other
 
+- Align Node engine with pm CLI runtime ([pm-github-zinh](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-zinh.toon))
 - Regenerate CHANGELOG after pm close item ([pm-github-um6d](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-um6d.toon))
 
 ## 2026.6.13 - 2026-06-13
