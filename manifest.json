@@ -8,6 +8,7 @@
   "capabilities": [
     "commands",
     "importers",
+    "exporters",
     "schema",
     "hooks",
     "preflight",

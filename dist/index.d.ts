@@ -59,6 +59,9 @@ export declare function mapState(state: string, stateReason?: string | null): st
 export declare function optionEnabled(options: Record<string, unknown>, ...keys: string[]): boolean;
 export declare function optionString(options: Record<string, unknown>, ...keys: string[]): string | undefined;
 export declare function optionProvided(options: Record<string, unknown>, ...keys: string[]): boolean;
+export declare function parseSince(value: string | undefined, nowMs?: number): string | undefined;
+export declare function parseLabelMap(options: Record<string, unknown>, ...keys: string[]): Map<string, string> | undefined;
+export declare function applyLabelMap(labels: string[], labelMap: Map<string, string> | undefined): string[];
 export declare function optionCsv(options: Record<string, unknown>, ...keys: string[]): string[];
 export declare const EXIT_CODE: {
     readonly GENERIC_FAILURE: 1;
@@ -116,7 +119,7 @@ export interface ExportPlanEntry {
     number?: number;
     payload: GithubExportPayload;
 }
-export declare function buildExportPlan(items: PmItem[], repo: string | undefined): ExportPlanEntry[];
+export declare function buildExportPlan(items: PmItem[], repo: string | undefined, labelMap?: Map<string, string>): ExportPlanEntry[];
 export declare function exportWillApply(options: Record<string, unknown>): boolean;
 export interface ExportApplyFailure {
     id?: string;
