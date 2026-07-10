@@ -6,6 +6,7 @@ import extension, {
   EXIT_CODE,
   applyClientFilters,
   applyExportPlan,
+  applyLabelMap,
   applyOutcomeError,
   authorTag,
   buildExportPlan,
@@ -16,9 +17,12 @@ import extension, {
   mapSearchHits,
   mapState,
   optionCsv,
+  parseImportOptions,
+  parseLabelMap,
   parseNextLink,
   parseProvenanceTag,
   parseRateLimit,
+  parseSince,
   planSync,
   resolveGitHubToken,
   resolveSearchRepo,
@@ -566,5 +570,226 @@ test("applyOutcomeError: full success (all created/updated, zero failures) does 
     applyOutcomeError(plan, result, "o/r"),
     undefined,
     "full success must exit 0",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// parseSince — relative durations + ISO 8601 timestamps for --since
+// ---------------------------------------------------------------------------
+
+test("parseSince accepts ISO 8601 timestamps (passed through, normalized)", () => {
+  assert.strictEqual(
+    parseSince("2026-01-01T00:00:00Z", Date.now()),
+    "2026-01-01T00:00:00.000Z",
+  );
+});
+
+test("parseSince resolves relative durations against now", () => {
+  const now = Date.UTC(2026, 0, 10, 0, 0, 0); // 2026-01-10T00:00:00Z
+  assert.strictEqual(parseSince("7d", now), "2026-01-03T00:00:00.000Z");
+  assert.strictEqual(parseSince("12h", now), "2026-01-09T12:00:00.000Z");
+  assert.strictEqual(parseSince("30m", now), "2026-01-09T23:30:00.000Z");
+  assert.strictEqual(parseSince("1w", now), "2026-01-03T00:00:00.000Z");
+});
+
+test("parseSince ignores whitespace and rejects garbage / zero durations", () => {
+  const now = Date.UTC(2026, 0, 10, 0, 0, 0);
+  assert.strictEqual(parseSince("  7d ", now), "2026-01-03T00:00:00.000Z", "trims first");
+  assert.strictEqual(parseSince("", now), undefined);
+  assert.strictEqual(parseSince("   ", now), undefined);
+  assert.strictEqual(parseSince("not-a-date", now), undefined, "garbage is undefined");
+  assert.strictEqual(parseSince("0d", now), undefined, "zero duration is undefined");
+  assert.strictEqual(parseSince("abc7d", now), undefined, "no leading digits is not relative");
+});
+
+test("parseSince rejects out-of-range relative durations without throwing", () => {
+  assert.doesNotThrow(() => parseSince("999999999999d"));
+  assert.strictEqual(parseSince("999999999999d"), undefined);
+});
+
+// ---------------------------------------------------------------------------
+// parseImportOptions — wires parseSince + the --include-comments alias + --dry-run
+// ---------------------------------------------------------------------------
+
+test("parseImportOptions parses relative --since into an ISO timestamp", () => {
+  const now = Date.UTC(2026, 0, 10, 0, 0, 0);
+  const orig = Date.now;
+  (Date as any).now = () => now;
+  try {
+    const opts = parseImportOptions({ since: "7d" });
+    assert.strictEqual(opts.since, "2026-01-03T00:00:00.000Z");
+  } finally {
+    (Date as any).now = orig;
+  }
+});
+
+test("parseImportOptions honors --include-comments as an alias for --with-comments", () => {
+  assert.strictEqual(
+    parseImportOptions({ "include-comments": true }).withComments,
+    true,
+  );
+  assert.strictEqual(
+    parseImportOptions({ includeComments: "true" }).withComments,
+    true,
+  );
+  assert.strictEqual(
+    parseImportOptions({ "with-comments": true }).withComments,
+    true,
+  );
+  assert.strictEqual(
+    parseImportOptions({}).withComments,
+    false,
+  );
+});
+
+test("parseImportOptions surfaces --dry-run", () => {
+  assert.strictEqual(parseImportOptions({ "dry-run": true }).dryRun, true);
+  assert.strictEqual(parseImportOptions({ dryRun: "true" }).dryRun, true);
+  assert.strictEqual(parseImportOptions({}).dryRun, false);
+});
+
+test("parseImportOptions rejects malformed --since instead of silently removing the filter", () => {
+  assert.throws(
+    () => parseImportOptions({ since: "nonsense" }),
+    (err: any) => err?.name === "CommandError" && err?.exitCode === 2,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// parseLabelMap / applyLabelMap — --label-map support for export
+// ---------------------------------------------------------------------------
+
+test("parseLabelMap parses from=to pairs (CSV + repeated values), skipping invalid entries", () => {
+  assert.deepEqual(
+    parseLabelMap({ "label-map": "bug=kind/bug,enhancement=kind/enhancement" }),
+    new Map([["bug", "kind/bug"], ["enhancement", "kind/enhancement"]]),
+  );
+  // Repeated values accumulate.
+  assert.deepEqual(
+    parseLabelMap({ "label-map": ["bug=kind/bug", "docs=kind/docs"] }),
+    new Map([["bug", "kind/bug"], ["docs", "kind/docs"]]),
+  );
+  // Invalid entries are dropped; whitespace trimmed.
+  assert.deepEqual(
+    parseLabelMap({ "label-map": " bug = kind/bug , =nope ,missing= ,noseparator" }),
+    new Map([["bug", "kind/bug"]]),
+  );
+  // Nothing usable → undefined (so callers can short-circuit).
+  assert.strictEqual(parseLabelMap({ "label-map": "noseparator, =" }), undefined);
+  assert.strictEqual(parseLabelMap({}, "label-map", "labelMap"), undefined);
+});
+
+test("applyLabelMap translates mapped labels and passes unmapped through unchanged", () => {
+  const map = new Map([["bug", "kind/bug"], ["enhancement", "kind/enhancement"]]);
+  assert.deepEqual(
+    applyLabelMap(["bug", "enhancement", "question"], map),
+    ["kind/bug", "kind/enhancement", "question"],
+  );
+});
+
+test("applyLabelMap collapses two source labels that map to the same GitHub label", () => {
+  // GitHub rejects duplicate labels with a 422; first-seen wins.
+  const map = new Map([["bug", "kind/bug"], ["defect", "kind/bug"]]);
+  assert.deepEqual(
+    applyLabelMap(["bug", "defect", "question"], map),
+    ["kind/bug", "question"],
+  );
+});
+
+test("applyLabelMap with no map is a passthrough", () => {
+  assert.deepEqual(applyLabelMap(["bug", "enhancement"], undefined), ["bug", "enhancement"]);
+  assert.deepEqual(applyLabelMap(["bug"], new Map()), ["bug"]);
+});
+
+// ---------------------------------------------------------------------------
+// buildExportPlan — label map integration
+// ---------------------------------------------------------------------------
+
+test("buildExportPlan applies --label-map to exported labels, dropping provenance first", () => {
+  const labelMap = new Map([["bug", "kind/bug"], ["enhancement", "kind/enhancement"]]);
+  const plan = buildExportPlan(
+    [
+      {
+        id: "pm-1",
+        title: "Linked",
+        tags: ["bug", "gh:owner/repo#42"],
+        status: "open",
+      },
+      {
+        id: "pm-2",
+        title: "New",
+        tags: ["enhancement", "question"],
+        status: "closed",
+      },
+    ],
+    "owner/repo",
+    labelMap,
+  );
+  // Provenance tag dropped, "bug" translated.
+  assert.deepEqual(plan[0].payload.labels, ["kind/bug"]);
+  // "enhancement" translated, "question" passed through.
+  assert.deepEqual(plan[1].payload.labels, ["kind/enhancement", "question"]);
+});
+
+test("buildExportPlan without a label map preserves the existing behavior", () => {
+  const plan = buildExportPlan(
+    [{ id: "pm-1", title: "x", tags: ["bug", "gh:owner/repo#42"], status: "open" }],
+    "owner/repo",
+  );
+  assert.deepEqual(plan[0].payload.labels, ["bug"]);
+});
+
+// ---------------------------------------------------------------------------
+// pm github export command registration (new --export mode surface)
+// ---------------------------------------------------------------------------
+
+test("pm github export command is registered with --label-map and --dry-run flags", () => {
+  let captured: any;
+  const noop = () => {};
+  const api: any = {
+    registerCommand: (def: any) => { if (def?.name === "github export") captured = def; },
+    registerParser: noop, registerPreflight: noop, registerService: noop, registerFlags: noop,
+    registerItemFields: noop, registerItemTypes: noop, registerMigration: noop, registerRenderer: noop,
+    registerImporter: noop, registerExporter: noop, registerSearchProvider: noop, registerVectorStoreAdapter: noop,
+    hooks: { beforeCommand: noop, afterCommand: noop, onWrite: noop, onRead: noop, onIndex: noop },
+  };
+  extension.activate(api);
+  assert.ok(captured, "github export command should be registered");
+  assert.strictEqual(typeof captured.run, "function");
+  const longs = captured.flags.map((f: any) => f.long);
+  assert.ok(longs.includes("--label-map"), "export should advertise --label-map");
+  assert.ok(longs.includes("--dry-run"), "export should advertise --dry-run");
+  assert.ok(longs.includes("--apply"), "export should advertise --apply");
+  assert.ok(longs.includes("--repo"), "export should advertise --repo");
+});
+
+test("import command advertises --include-comments as an alias for --with-comments", () => {
+  let captured: any;
+  const noop = () => {};
+  const api: any = {
+    registerCommand: (def: any) => { if (def?.name === "github import") captured = def; },
+    registerParser: noop, registerPreflight: noop, registerService: noop, registerFlags: noop,
+    registerItemFields: noop, registerItemTypes: noop, registerMigration: noop, registerRenderer: noop,
+    registerImporter: noop, registerExporter: noop, registerSearchProvider: noop, registerVectorStoreAdapter: noop,
+    hooks: { beforeCommand: noop, afterCommand: noop, onWrite: noop, onRead: noop, onIndex: noop },
+  };
+  extension.activate(api);
+  assert.ok(
+    captured?.flags?.some((f: any) => f.long === "--include-comments"),
+    "import should expose --include-comments as an alias",
+  );
+  assert.ok(
+    captured?.flags?.some((f: any) => f.long === "--since"),
+    "installed github import command should expose --since",
+  );
+  assert.strictEqual(typeof captured?.run, "function");
+});
+
+test("manifest declares the exporters capability", async () => {
+  const { readFileSync } = await import("node:fs");
+  const manifest = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url), "utf-8"));
+  assert.ok(
+    manifest.capabilities.includes("exporters"),
+    "manifest should declare the exporters capability now that export is reachable as a command",
   );
 });

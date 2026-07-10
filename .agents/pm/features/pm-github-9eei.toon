@@ -6,14 +6,16 @@ status: in_progress
 priority: 1
 tags[3]: ecosystem,ecosystem-pass-2026-06-10,production
 created_at: "2026-06-09T22:38:07.208Z"
-updated_at: "2026-06-09T23:38:23.806Z"
+updated_at: "2026-07-10T11:07:14.481Z"
 assignee: codex-5-3-sweep
 author: codex-5-3-sweep
+comments[1]{created_at,author,text}:
+  "2026-07-10T11:07:14.480Z",codex,"PR #19 clean verification (2026-07-10): npm ci/build passed; final suite 52/52 pass (0 fail/skip). Real project install activated all commands; timeout 20 pm --help returned. Found installed pm github import contract was functionally dead (repo/flags rejected), fixed in e02e6d7. Real import with --since 30d --include-prs --include-comments imported 8 items and appended 4 comments to PR #19. Export dry-run mapped bug/enhancement to kind/bug and kind/enhancement; malformed inputs now exit 2/3 cleanly with no stack trace. Default export stdout/stderr are byte-for-byte identical to origin/main. Cubic oversized-relative-duration concern fixed in 78883f0."
 files[3]{path,scope,note}:
   index.ts,project,null
   README.md,project,null
   test/smoke.test.ts,project,null
-tests[2]{command,path,scope,timeout_seconds,pm_context_mode,env_set,env_clear,shared_host_safe,assert_stdout_contains,assert_stdout_regex,assert_stderr_contains,assert_stderr_regex,assert_stdout_min_lines,assert_json_field_equals,assert_json_field_gte,note}:
-  "npm run release:check",null,project,3600,null,null,null,null,null,null,null,null,null,null,null,null
-  rm -rf /tmp/pm-realdata-github && mkdir -p /tmp/pm-realdata-github && cd /tmp/pm-realdata-github && pm init >/dev/null && pm install /home/steve/container/pm-sweep/pm-github --project >/dev/null && pm github validate --repo unbraind/pm-cli --json > github-validate.json && pm github import unbraind/pm-cli --state open --dry-run --json > github-import-dryrun.json,null,project,1200,null,null,null,null,null,null,null,null,null,null,null,null
+tests[2]{command,scope,timeout_seconds}:
+  "npm run release:check",project,3600
+  rm -rf /tmp/pm-realdata-github && mkdir -p /tmp/pm-realdata-github && cd /tmp/pm-realdata-github && pm init >/dev/null && pm install /home/steve/container/pm-sweep/pm-github --project >/dev/null && pm github validate --repo unbraind/pm-cli --json > github-validate.json && pm github import unbraind/pm-cli --state open --dry-run --json > github-import-dryrun.json,project,1200
 body: ""
