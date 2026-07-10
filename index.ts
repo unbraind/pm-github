@@ -629,10 +629,18 @@ export function parseImportOptions(options: Record<string, unknown>): ImportOpti
       : includeAll
         ? "all"
         : "open";
+  const sinceInput = optionString(options, "since");
+  const since = parseSince(sinceInput);
+  if (optionProvided(options, "since") && !since) {
+    throw new CommandError(
+      "--since must be an ISO 8601 timestamp or a positive relative duration such as 30m, 12h, 7d, or 1w.",
+      EXIT_CODE.USAGE,
+    );
+  }
   return {
     state,
     labels: optionString(options, "labels"),
-    since: parseSince(optionString(options, "since")),
+    since,
     assignee: optionString(options, "assignee"),
     milestone: optionString(options, "milestone"),
     includePrs: optionEnabled(options, "include-prs", "includePrs"),
@@ -1553,6 +1561,37 @@ export default defineExtension({
       return runImport(ctx.args?.[0], ctx.pm_root, parseImportOptions(ctx.options || {}));
     });
 
+    // The native importer capability exposes `pm github import`, but current pm
+    // runtimes synthesize that command without the importer's positional/flag
+    // contract. Register the command explicitly as well so a real installation
+    // can accept <owner/repo> and all importer options.
+    api.registerCommand({
+      name: "github import",
+      description:
+        "Fetch GitHub issues from a repo and create/update pm items (idempotent " +
+        "on re-import via the `gh:owner/repo#N` provenance tag). Skips pull " +
+        "requests by default.",
+      intent: "import GitHub issues as pm items",
+      arguments: [
+        { name: "owner/repo", required: true, description: "GitHub repository to import" },
+      ],
+      examples: [
+        "pm github import unbraind/pm-cli",
+        "pm github import owner/repo --since 7d",
+        "pm github import owner/repo --include-comments",
+        "pm github import owner/repo --dry-run",
+      ],
+      flags: IMPORT_FLAGS,
+      failure_hints: [
+        "Pass <owner/repo>, e.g. `pm github import unbraind/pm-cli`.",
+        "Set GITHUB_TOKEN/GH_TOKEN or run `gh auth login` for private repos / 5000 req/hr.",
+        "Re-running is safe: existing items are updated, not duplicated.",
+      ],
+      async run(ctx: any) {
+        return runImport(ctx.args[0], ctx.pm_root, parseImportOptions(ctx.options));
+      },
+    });
+
     // -----------------------------------------------------------------------
     // exporter — `pm github export` (pm items → GitHub issues)
     // SAFE BY DEFAULT: previews the create/update plan and writes NOTHING.
@@ -1713,6 +1752,9 @@ export default defineExtension({
         "gh CLI) when available for 5000 req/hr and private repos; falls back to " +
         "the unauthenticated API (60 req/hr). Equivalent to `pm github import`.",
       intent: "import GitHub issues as pm items",
+      arguments: [
+        { name: "owner/repo", required: true, description: "GitHub repository to import" },
+      ],
       examples: [
         "pm gh-issues import unbraind/pm-cli",
         "pm gh-issues import unbraind/pm-cli --all",

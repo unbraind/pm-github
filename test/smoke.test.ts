@@ -643,6 +643,13 @@ test("parseImportOptions surfaces --dry-run", () => {
   assert.strictEqual(parseImportOptions({}).dryRun, false);
 });
 
+test("parseImportOptions rejects malformed --since instead of silently removing the filter", () => {
+  assert.throws(
+    () => parseImportOptions({ since: "nonsense" }),
+    (err: any) => err?.name === "CommandError" && err?.exitCode === 2,
+  );
+});
+
 // ---------------------------------------------------------------------------
 // parseLabelMap / applyLabelMap — --label-map support for export
 // ---------------------------------------------------------------------------
@@ -755,7 +762,7 @@ test("import command advertises --include-comments as an alias for --with-commen
   let captured: any;
   const noop = () => {};
   const api: any = {
-    registerCommand: (def: any) => { if (def?.name === "gh-issues import") captured = def; },
+    registerCommand: (def: any) => { if (def?.name === "github import") captured = def; },
     registerParser: noop, registerPreflight: noop, registerService: noop, registerFlags: noop,
     registerItemFields: noop, registerItemTypes: noop, registerMigration: noop, registerRenderer: noop,
     registerImporter: noop, registerExporter: noop, registerSearchProvider: noop, registerVectorStoreAdapter: noop,
@@ -766,6 +773,11 @@ test("import command advertises --include-comments as an alias for --with-commen
     captured?.flags?.some((f: any) => f.long === "--include-comments"),
     "import should expose --include-comments as an alias",
   );
+  assert.ok(
+    captured?.flags?.some((f: any) => f.long === "--since"),
+    "installed github import command should expose --since",
+  );
+  assert.strictEqual(typeof captured?.run, "function");
 });
 
 test("manifest declares the exporters capability", async () => {
