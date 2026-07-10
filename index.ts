@@ -325,7 +325,9 @@ export function parseSince(value: string | undefined, nowMs: number = Date.now()
       unit === "h" ? n * 3_600_000 :
       unit === "d" ? n * 86_400_000 :
       n * 604_800_000;
-    return new Date(nowMs - ms).toISOString();
+    const relativeDate = new Date(nowMs - ms);
+    if (Number.isNaN(relativeDate.getTime())) return undefined;
+    return relativeDate.toISOString();
   }
   const d = new Date(v);
   if (Number.isNaN(d.getTime())) return undefined;

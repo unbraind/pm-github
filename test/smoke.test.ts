@@ -602,6 +602,11 @@ test("parseSince ignores whitespace and rejects garbage / zero durations", () =>
   assert.strictEqual(parseSince("abc7d", now), undefined, "no leading digits is not relative");
 });
 
+test("parseSince rejects out-of-range relative durations without throwing", () => {
+  assert.doesNotThrow(() => parseSince("999999999999d"));
+  assert.strictEqual(parseSince("999999999999d"), undefined);
+});
+
 // ---------------------------------------------------------------------------
 // parseImportOptions — wires parseSince + the --include-comments alias + --dry-run
 // ---------------------------------------------------------------------------
