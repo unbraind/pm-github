@@ -1,0 +1,37 @@
+id: pm-github-sq5l
+title: Adopt current pm SDK and TypeScript 7 toolchain
+description: "Consolidate the five overlapping pm-github dependency updates, synchronize package and manifest compatibility contracts, keep npm build artifacts out of Git, and validate every GitHub importer/exporter/search/hook registration against pm CLI 2026.7.10."
+type: Task
+status: closed
+priority: 1
+tags[5]: dependencies,github,release-readiness,sdk,toolchain
+created_at: "2026-07-11T00:35:06.310Z"
+updated_at: "2026-07-11T00:37:41.321Z"
+closed_at: "2026-07-11T00:37:41.320Z"
+author: codex
+estimated_minutes: 60
+acceptance_criteria: "pm CLI SDK/changelog, TypeScript, Node types, and checkout action are current; package peer/dev and manifest minimums agree on 2026.7.10; generated dist is published but untracked; full release and real installed-extension gates pass with zero vulnerabilities and no private data."
+definition_of_ready: Current origin/main contains Dependabot configuration and the five update PRs are independently green.
+reviewer: greptile
+risk: medium
+confidence: high
+sprint: 2026-07-production
+release: next
+resolution: "Consolidated current dependency updates, synchronized pm 2026.7.10 peer/dev/manifest contracts, migrated importer/exporter help metadata to the SDK-native registration options, removed invalid manifest capability and duplicate explicit commands, updated checkout v7, and untracked generated dist."
+expected_result: "Latest pm-github activates every intended command, field, importer, exporter, search provider, hook, and preflight without SDK capability or handler-collision warnings."
+actual_result: "TypeScript 7 build and all 52 tests pass; zero production vulnerabilities; isolated latest-pm package doctor reports zero warnings with 5 commands, 36 flags, 6 item fields, 1 importer, 1 exporter, 1 search provider, 1 after-command hook, and 1 preflight; github help exposes import/export/sync/validate."
+learnings[1]{created_at,author,text}:
+  "2026-07-11T00:37:41.109Z",codex,registerImporter and registerExporter accept first-class command metadata in the current SDK; duplicating the derived commands causes self-collisions and loses the clean native integration contract.
+files[8]{path,scope,note}:
+  package.json,project,SDK and toolchain contracts
+  package-lock.json,project,Consolidated dependency graph
+  manifest.json,project,Runtime compatibility contract
+  .github/workflows/ci.yml,project,Current CI checkout action
+  .github/workflows/release.yml,project,Daily release artifact policy
+  index.ts,project,SDK-native importer/exporter metadata without duplicate commands
+  test/smoke.test.ts,project,Registration contract and manifest capability regression coverage
+  .gitignore,project,Generated dist excluded from Git history
+tests[1]{command,path,scope,timeout_seconds,pm_context_mode}:
+  "npm run release:check",package.json,project,300,schema
+close_reason: Current toolchain and full SDK integration pass release and installed-extension gates
+body: ""

@@ -1561,14 +1561,7 @@ export default defineExtension({
     // -----------------------------------------------------------------------
     api.registerImporter("github", async (ctx: any) => {
       return runImport(ctx.args?.[0], ctx.pm_root, parseImportOptions(ctx.options || {}));
-    });
-
-    // The native importer capability exposes `pm github import`, but current pm
-    // runtimes synthesize that command without the importer's positional/flag
-    // contract. Register the command explicitly as well so a real installation
-    // can accept <owner/repo> and all importer options.
-    api.registerCommand({
-      name: "github import",
+    }, {
       description:
         "Fetch GitHub issues from a repo and create/update pm items (idempotent " +
         "on re-import via the `gh:owner/repo#N` provenance tag). Skips pull " +
@@ -1589,9 +1582,6 @@ export default defineExtension({
         "Set GITHUB_TOKEN/GH_TOKEN or run `gh auth login` for private repos / 5000 req/hr.",
         "Re-running is safe: existing items are updated, not duplicated.",
       ],
-      async run(ctx: any) {
-        return runImport(ctx.args[0], ctx.pm_root, parseImportOptions(ctx.options));
-      },
     });
 
     // -----------------------------------------------------------------------
@@ -1603,7 +1593,27 @@ export default defineExtension({
     // (upsert) rather than duplicated. --json returns the plan object; we never
     // write our own stdout in JSON mode (pm renders the return value).
     // -----------------------------------------------------------------------
-    api.registerExporter("github", async (ctx: any) => runExport(ctx));
+    api.registerExporter("github", async (ctx: any) => runExport(ctx), {
+      description:
+        "Export pm items as GitHub issues. SAFE BY DEFAULT: prints a create/update " +
+        "plan and writes NOTHING. Use --apply --repo <owner/repo> to write to " +
+        "GitHub; linked items are updated instead of duplicated.",
+      intent: "export pm items as GitHub issues",
+      examples: [
+        "pm github export --repo unbraind/pm-cli",
+        "pm github export --repo unbraind/pm-cli --dry-run",
+        "pm github export --repo unbraind/pm-cli --apply",
+        "pm github export --label-map bug=kind/bug,enhancement=kind/enhancement",
+        "pm github export --ids pm-1,pm-2 --repo unbraind/pm-cli --dry-run",
+      ],
+      flags: EXPORT_FLAGS,
+      failure_hints: [
+        "Export is dry-run by default; pass --apply --repo <owner/repo> to write.",
+        "--apply requires a GitHub token (GITHUB_TOKEN/GH_TOKEN or `gh auth login`).",
+        "--label-map takes from=to pairs, e.g. --label-map bug=kind/bug,enhancement=kind/enhancement.",
+        "Use --ids <pm-1,pm-2> to scope export; unknown IDs fail fast.",
+      ],
+    });
 
     // -----------------------------------------------------------------------
     // search — reach GitHub from `pm search` for imported items.
@@ -1677,40 +1687,6 @@ export default defineExtension({
         `[pm-github] ${id} is linked to ${repo}; run \`pm github sync --repo ${repo}\` ` +
           "to push this status change upstream (or --dry-run to preview).",
       );
-    });
-
-    // -----------------------------------------------------------------------
-    // command — `pm github export` (pm items → GitHub issues)
-    // Surfaces the exporter as a discoverable command with explicit flags so
-    // `--label-map`, `--dry-run`, `--apply` and `--ids` are self-documenting.
-    // Delegates to the same `runExport` core the exporter entry point uses.
-    // -----------------------------------------------------------------------
-    api.registerCommand({
-      name: "github export",
-      description:
-        "Export pm items as GitHub issues. SAFE BY DEFAULT: prints a create/update " +
-        "plan and writes NOTHING. Use --apply --repo <owner/repo> to write to " +
-        "GitHub; items already linked to an issue in that repo (via the " +
-        "`gh:owner/repo#N` provenance tag) are updated (upsert) instead of " +
-        "duplicated. --label-map translates pm tags to GitHub labels.",
-      intent: "export pm items as GitHub issues",
-      examples: [
-        "pm github export --repo unbraind/pm-cli",
-        "pm github export --repo unbraind/pm-cli --dry-run",
-        "pm github export --repo unbraind/pm-cli --apply",
-        "pm github export --label-map bug=kind/bug,enhancement=kind/enhancement",
-        "pm github export --ids pm-1,pm-2 --repo unbraind/pm-cli --dry-run",
-      ],
-      flags: EXPORT_FLAGS,
-      failure_hints: [
-        "Export is dry-run by default; pass --apply --repo <owner/repo> to write.",
-        "--apply requires a GitHub token (GITHUB_TOKEN/GH_TOKEN or `gh auth login`).",
-        "--label-map takes from=to pairs, e.g. --label-map bug=kind/bug,enhancement=kind/enhancement.",
-        "Use --ids <pm-1,pm-2> to scope export; unknown IDs fail fast.",
-      ],
-      async run(ctx: any) {
-        return runExport(ctx);
-      },
     });
 
     // -----------------------------------------------------------------------

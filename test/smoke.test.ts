@@ -743,19 +743,24 @@ test("buildExportPlan without a label map preserves the existing behavior", () =
 // pm github export command registration (new --export mode surface)
 // ---------------------------------------------------------------------------
 
-test("pm github export command is registered with --label-map and --dry-run flags", () => {
+test("native github exporter declares --label-map and --dry-run metadata", () => {
   let captured: any;
+  let handler: unknown;
   const noop = () => {};
   const api: any = {
-    registerCommand: (def: any) => { if (def?.name === "github export") captured = def; },
+    registerCommand: noop,
     registerParser: noop, registerPreflight: noop, registerService: noop, registerFlags: noop,
     registerItemFields: noop, registerItemTypes: noop, registerMigration: noop, registerRenderer: noop,
-    registerImporter: noop, registerExporter: noop, registerSearchProvider: noop, registerVectorStoreAdapter: noop,
+    registerImporter: noop,
+    registerExporter: (name: string, fn: unknown, options: unknown) => {
+      if (name === "github") { handler = fn; captured = options; }
+    },
+    registerSearchProvider: noop, registerVectorStoreAdapter: noop,
     hooks: { beforeCommand: noop, afterCommand: noop, onWrite: noop, onRead: noop, onIndex: noop },
   };
   extension.activate(api);
-  assert.ok(captured, "github export command should be registered");
-  assert.strictEqual(typeof captured.run, "function");
+  assert.ok(captured, "github exporter should declare command metadata");
+  assert.strictEqual(typeof handler, "function");
   const longs = captured.flags.map((f: any) => f.long);
   assert.ok(longs.includes("--label-map"), "export should advertise --label-map");
   assert.ok(longs.includes("--dry-run"), "export should advertise --dry-run");
@@ -763,14 +768,18 @@ test("pm github export command is registered with --label-map and --dry-run flag
   assert.ok(longs.includes("--repo"), "export should advertise --repo");
 });
 
-test("import command advertises --include-comments as an alias for --with-comments", () => {
+test("native github importer advertises --include-comments as an alias for --with-comments", () => {
   let captured: any;
+  let handler: unknown;
   const noop = () => {};
   const api: any = {
-    registerCommand: (def: any) => { if (def?.name === "github import") captured = def; },
+    registerCommand: noop,
     registerParser: noop, registerPreflight: noop, registerService: noop, registerFlags: noop,
     registerItemFields: noop, registerItemTypes: noop, registerMigration: noop, registerRenderer: noop,
-    registerImporter: noop, registerExporter: noop, registerSearchProvider: noop, registerVectorStoreAdapter: noop,
+    registerImporter: (name: string, fn: unknown, options: unknown) => {
+      if (name === "github") { handler = fn; captured = options; }
+    },
+    registerExporter: noop, registerSearchProvider: noop, registerVectorStoreAdapter: noop,
     hooks: { beforeCommand: noop, afterCommand: noop, onWrite: noop, onRead: noop, onIndex: noop },
   };
   extension.activate(api);
@@ -782,14 +791,11 @@ test("import command advertises --include-comments as an alias for --with-commen
     captured?.flags?.some((f: any) => f.long === "--since"),
     "installed github import command should expose --since",
   );
-  assert.strictEqual(typeof captured?.run, "function");
+  assert.strictEqual(typeof handler, "function");
 });
 
-test("manifest declares the exporters capability", async () => {
+test("manifest uses only runtime-supported capability names", async () => {
   const { readFileSync } = await import("node:fs");
   const manifest = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url), "utf-8"));
-  assert.ok(
-    manifest.capabilities.includes("exporters"),
-    "manifest should declare the exporters capability now that export is reachable as a command",
-  );
+  assert.ok(!manifest.capabilities.includes("exporters"), "exporters is a registration, not a manifest capability");
 });
