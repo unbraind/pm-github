@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.7.11 - 2026-07-11
+
+### Other
+
+- Adopt current pm SDK and TypeScript 7 toolchain ([pm-github-sq5l](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-sq5l.toon))
+
 ## 2026.7.6 - 2026-07-06
 
 ### Fixed
