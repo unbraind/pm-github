@@ -5,10 +5,10 @@
   "author": "@unbraind",
   "entry": "./dist/index.js",
   "priority": 50,
+  "pm_min_version": "2026.7.10",
   "capabilities": [
     "commands",
     "importers",
-    "exporters",
     "schema",
     "hooks",
     "preflight",
