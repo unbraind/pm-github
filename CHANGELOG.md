@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026.7.13 - 2026-07-13
+
+### Added
+
+- Productionize GitHub Projects v2 bidirectional sync ([pm-github-jkr6](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-jkr6.toon))
+- GitHub Projects v2 bidirectional sync (import/sync/list/fields) ([pm-github-y27r](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-y27r.toon))
+- Full pm ecosystem production pass for pm-github ([pm-github-9eei](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-9eei.toon))
+
+### Fixed
+
+- Export --apply aborts the whole batch on the first failed item ([pm-github-q3lk](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-q3lk.toon))
+- export --apply exits 0 even when every item fails to write ([pm-github-77wj](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-77wj.toon))
+
+### Security
+
+- Resolve final Projects v2 review findings ([pm-github-0g3p](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-0g3p.toon))
+
+### Other
+
+- Full-cycle hardening wave: pm-github ([pm-github-mdcw](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-mdcw.toon))
+
 ## 2026.7.11 - 2026-07-11
 
 ### Other
