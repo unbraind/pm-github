@@ -1,0 +1,16 @@
+id: pm-github-1nlw
+title: Spawn pm.cmd via shell on win32 in export test workspace helper
+description: "Follow-up to #31: execFileSync of the pm.cmd shim on Windows fails with EINVAL under the CVE-2024-27980 mitigation unless run through a shell. Add shell:process.platform==='win32' to makeExportTestWorkspace spawns (args are static test values, so shell:true is safe). Test-only; mirrors the pm-jira #26 fix flagged by CodeRabbit."
+type: Chore
+status: closed
+priority: 2
+tags[3]: ci,test,windows
+created_at: "2026-07-13T20:52:51.004Z"
+updated_at: "2026-07-13T20:53:39.849Z"
+closed_at: "2026-07-13T20:53:39.848Z"
+author: claude-opus
+resolution: "Added shell:win32 to makeExportTestWorkspace execFileSync spawns"
+expected_result: pm.cmd runs via shell on Windows without EINVAL
+actual_result: Setup spawns shell out on win32; 99/99 tests pass on Linux CI
+close_reason: "Added shell:win32 to makeExportTestWorkspace execFileSync spawns"
+body: ""
