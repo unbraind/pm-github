@@ -1048,6 +1048,10 @@ const PM_BIN = fileURLToPath(
 function makeExportTestWorkspace(): string {
   const root = mkdtempSync(join(tmpdir(), "pm-github-export-test-"));
   const env = { ...process.env, PM_AUTHOR: "tester" };
+  // Node refuses to spawn `.cmd`/`.bat` directly since the CVE-2024-27980
+  // mitigation (EINVAL), so on win32 the pm.cmd shim must run through a shell.
+  // Args are static test values (never user input), so shell:true is safe.
+  const opts = { stdio: "ignore" as const, env, shell: process.platform === "win32" };
   // If any setup spawn fails, remove the freshly-created temp dir before
   // rethrowing so a setup failure never leaks a workspace (the caller's
   // try/finally only covers the dir once it has been returned).
@@ -1058,24 +1062,12 @@ function makeExportTestWorkspace(): string {
     // directly). Both then answer `pm --pm-path <root>`, so pm_root is <root>
     // either way — we just call whichever init form this pm understands.
     try {
-      execFileSync(PM_BIN, ["init", "-y", "--force", "--workspace", root, "--author", "tester"], {
-        stdio: "ignore",
-        env,
-      });
+      execFileSync(PM_BIN, ["init", "-y", "--force", "--workspace", root, "--author", "tester"], opts);
     } catch {
-      execFileSync(PM_BIN, ["init", "-y", "--force", root, "--author", "tester"], {
-        stdio: "ignore",
-        env,
-      });
+      execFileSync(PM_BIN, ["init", "-y", "--force", root, "--author", "tester"], opts);
     }
-    execFileSync(PM_BIN, ["--pm-path", root, "create", "task", "Alpha", "--description", "first body"], {
-      stdio: "ignore",
-      env,
-    });
-    execFileSync(PM_BIN, ["--pm-path", root, "create", "task", "Beta", "--description", "second body"], {
-      stdio: "ignore",
-      env,
-    });
+    execFileSync(PM_BIN, ["--pm-path", root, "create", "task", "Alpha", "--description", "first body"], opts);
+    execFileSync(PM_BIN, ["--pm-path", root, "create", "task", "Beta", "--description", "second body"], opts);
     return root;
   } catch (err) {
     rmSync(root, { recursive: true, force: true });

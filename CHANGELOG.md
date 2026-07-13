@@ -6,6 +6,10 @@
 
 - Route GitHub export dry-run preview to stderr so stdout stays valid JSON ([pm-github-urs1](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-urs1.toon))
 
+### Other
+
+- Spawn pm.cmd via shell on win32 in export test workspace helper ([pm-github-1nlw](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-1nlw.toon))
+
 ## 2026.7.13 - 2026-07-13
 
 ### Added
