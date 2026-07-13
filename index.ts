@@ -1,18 +1,37 @@
-// pm-github — GitHub Issues sync (importer / exporter / sync) for pm-cli
+// pm-github — GitHub Issues + Projects v2 sync for pm-cli
 //
 // Capabilities (see manifest.json):
-//   commands   — `pm gh-issues import` (legacy) + `pm github sync`
+//   commands   — `pm gh-issues import` (legacy) + `pm github sync` +
+//                `pm github project list|fields|import|sync` (Projects v2)
 //   importers  — `pm github import <owner/repo>` (idempotent native import)
 //   exporters  — `pm github export` (render pm items as a GitHub-issues payload)
 //   schema     — declares github_url / github_number / github_state /
 //                github_author / github_created_at / github_updated_at item fields
 //   hooks      — afterCommand: actionable sync hint for github-linked items
 //   preflight  — local guard for mutating github commands (token presence)
+//
+// Issues use the REST API; Projects v2 is GraphQL-only (see the Projects v2
+// section below and the pure plan/mapping logic in ./projects.ts).
 
 import https from "node:https";
 import { spawnSync } from "node:child_process";
 
 import type { defineExtension as defineExtensionType } from "@unbrained/pm-cli/sdk";
+
+import {
+  type ProjectItem,
+  type ProjectItemContent,
+  type ProjectMeta,
+  type ProjectRef,
+  type ProjectStatusField,
+  buildProjectImportPlan,
+  buildProjectPullPlan,
+  buildProjectPushPlan,
+  parseProjectItemTag,
+  parseProjectRef,
+  parseStatusMap,
+  projectItemTag,
+} from "./projects.js";
 
 const defineExtension: typeof defineExtensionType = ((extension: any) => extension) as any;
 
@@ -90,12 +109,27 @@ export function resolveGitHubToken(): string | undefined {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// One low-level request, no retry/backoff (that lives in `request`).
+// Decide whether the Authorization token may be forwarded to a redirect target.
+// Only same-origin (scheme + host + port) redirects keep the credential; any
+// origin change drops it to avoid leaking the token. Exported for
+// unit testing.
+export function sameOrigin(fromUrl: string, toUrl: string): boolean {
+  try {
+    return new URL(fromUrl).origin.toLowerCase() === new URL(toUrl).origin.toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
+// One low-level request, no retry/backoff (that lives in `request`). Follows up
+// to `redirectsLeft` redirects; a cycle or an over-long chain rejects instead of
+// overflowing the stack, and the token is only forwarded to same-host targets.
 function requestOnce(
   method: string,
   url: string,
   token: string | undefined,
   payload?: string,
+  redirectsLeft = 5,
 ): Promise<FetchResult> {
   return new Promise((resolve, reject) => {
     const headers: Record<string, string> = {
@@ -111,7 +145,23 @@ function requestOnce(
     const req = https.request(url, { method, headers }, (res) => {
       const status = res.statusCode ?? 0;
       if (status >= 300 && status < 400 && res.headers.location) {
-        requestOnce(method, res.headers.location, token, payload).then(resolve, reject);
+        // Drain the redirect response so the socket is returned to the pool.
+        res.resume();
+        if (redirectsLeft <= 0) {
+          reject(new Error(`too many redirects following ${url}`));
+          return;
+        }
+        // Resolve the (possibly relative) Location against the current URL, and
+        // only carry the token forward on a same-host redirect.
+        let target: string;
+        try {
+          target = new URL(res.headers.location, url).toString();
+        } catch {
+          reject(new Error(`invalid redirect Location from ${url}`));
+          return;
+        }
+        const forwardToken = sameOrigin(url, target) ? token : undefined;
+        requestOnce(method, target, forwardToken, payload, redirectsLeft - 1).then(resolve, reject);
         return;
       }
       const chunks: Buffer[] = [];
@@ -178,6 +228,8 @@ export interface RateLimitInfo {
   low: boolean;
 }
 
+// Read GitHub's x-ratelimit-* headers into a structured snapshot, reporting a
+// low-remaining warning once the budget drops below `lowThreshold`.
 export function parseRateLimit(
   headers: Record<string, string | string[] | undefined>,
   lowThreshold = 10,
@@ -224,6 +276,8 @@ export function formatRateLimit(info: RateLimitInfo): string | undefined {
   return `GitHub API quota: ${info.remaining}${limitPart} remaining${resetPart}`;
 }
 
+// Decide whether a failed HTTP response is worth retrying: 429, any 5xx, or a
+// 403 that is actually a primary/secondary rate-limit wall (remaining=0).
 function isRetryableStatus(status: number, headers: Record<string, string | string[] | undefined>): boolean {
   if (status === 429) return true;
   if (status >= 500) return true;
@@ -265,6 +319,7 @@ async function request(
   }
 }
 
+// Fetch a single GitHub REST endpoint and return { body, linkHeader }.
 function fetchJSON(url: string, token?: string): Promise<FetchResult> {
   return request("GET", url, token);
 }
@@ -280,6 +335,8 @@ export function parseNextLink(linkHeader?: string): string | undefined {
   return undefined;
 }
 
+// Map a GitHub issue/PR state (+ optional stateReason) onto a pm status,
+// preserving `not_planned` closures as `canceled` rather than `closed`.
 export function mapState(state: string, stateReason?: string | null): string {
   if (state === "closed" && stateReason === "not_planned") return "canceled";
   return state === "closed" ? "closed" : "open";
@@ -294,6 +351,8 @@ export function optionEnabled(options: Record<string, unknown>, ...keys: string[
   });
 }
 
+// Read the first non-empty trimmed string option under any of the given
+// (kebab- or camel-case) keys; returns undefined when none are set.
 export function optionString(options: Record<string, unknown>, ...keys: string[]): string | undefined {
   for (const k of keys) {
     const v = options[k];
@@ -442,6 +501,8 @@ export function provenanceTag(repo: string, issueNumber: number): string {
   return `gh:${repo.toLowerCase()}#${issueNumber}`;
 }
 
+// Parse a `gh:owner/repo#number` provenance tag into its repo + issue number;
+// returns undefined for non-provenance tags.
 export function parseProvenanceTag(tag: string): { repo: string; number: number } | undefined {
   const m = /^gh:([^#\s]+)#(\d+)$/.exec(tag.trim());
   if (!m) return undefined;
@@ -495,6 +556,8 @@ export function scopeItemsByIds<TItem extends { id?: string }>(
   return { selected, missing };
 }
 
+// Read every pm item (active + closed) via `pm list-all --full --include-body`
+// so the idempotency index never misses closed issues and re-creates them.
 function readPmItems(pmRoot: string): PmItem[] {
   // `list-all` (NOT `list`) so CLOSED items are included: `pm list` returns only
   // active items, which would make the idempotency index miss every closed
@@ -545,6 +608,8 @@ export function buildIssuesUrl(repo: string, opts: ImportOptions): string {
   return url;
 }
 
+// Page through GitHub's issues REST endpoint, following the Link header,
+// applying the import filters, and returning the full issue list.
 async function fetchAllIssues(repo: string, opts: ImportOptions, token?: string): Promise<GhIssue[]> {
   const issues: GhIssue[] = [];
   let nextUrl: string | undefined = buildIssuesUrl(repo, opts);
@@ -565,6 +630,7 @@ async function fetchAllIssues(repo: string, opts: ImportOptions, token?: string)
   return issues;
 }
 
+// Fetch all review comments for a single issue/PR, paging through Link.
 async function fetchComments(issue: GhIssue, repo: string, token?: string): Promise<GhComment[]> {
   if (!issue.comments || issue.comments <= 0) return [];
   const comments: GhComment[] = [];
@@ -621,6 +687,8 @@ export function applyClientFilters(issues: GhIssue[], opts: ImportOptions): GhIs
   return result;
 }
 
+// Normalize CLI options into ImportOptions (state filter, labels, assignee,
+// milestone, since-window, PR inclusion, draft skipping, comment fetching).
 export function parseImportOptions(options: Record<string, unknown>): ImportOptions {
   // --state takes precedence; --all is the legacy shorthand for "all".
   const stateOpt = optionString(options, "state") as ImportOptions["state"] | undefined;
@@ -653,6 +721,9 @@ export function parseImportOptions(options: Record<string, unknown>): ImportOpti
   };
 }
 
+// Spawn the `pm` CLI with the given argv and return a normalized ok/stdout/stderr
+// result (ok = exit code 0). Centralizes every pm mutation so callers share one
+// error-handling shape.
 function pmRun(args: string[]): { ok: boolean; stderr: string; stdout: string } {
   const result = spawnSync("pm", args, { encoding: "utf-8" });
   return { ok: result.status === 0, stderr: result.stderr || "", stdout: result.stdout || "" };
@@ -843,6 +914,8 @@ export interface SyncPlanEntry {
   to: "open" | "closed";
 }
 
+// Build the pm → GitHub issue sync plan: for each pm item linked to `repo`, emit
+// a create-or-update entry keyed by the issue's provenance tag.
 export function planSync(items: PmItem[], repo: string): SyncPlanEntry[] {
   const plan: SyncPlanEntry[] = [];
   const repoLc = repo.toLowerCase();
@@ -866,6 +939,8 @@ export function planSync(items: PmItem[], repo: string): SyncPlanEntry[] {
   return plan;
 }
 
+// Command handler for `pm github sync`: preview or apply the pm → GitHub issue
+// sync plan, scoped by --ids and honoring --dry-run / --apply.
 async function runSync(ctx: any) {
   const options = ctx.options || {};
   const repo = optionString(options, "repo") || (ctx.args?.[0] as string | undefined);
@@ -987,10 +1062,17 @@ export interface GithubExportPayload {
   state: "open" | "closed";
 }
 
+// Convert a pm item into the GitHub issue create/update payload, dropping
+// internal provenance tags from labels and applying the optional label map.
 function itemToGithubPayload(item: PmItem, labelMap?: Map<string, string>): GithubExportPayload {
   // Drop our internal provenance tags from exported labels, then apply any
-  // user-supplied label mapping (pm tag → GitHub label).
-  const labels = (item.tags ?? []).filter((t) => !parseProvenanceTag(t));
+  // user-supplied label mapping (pm tag → GitHub label). Both issue provenance
+  // (`gh:owner/repo#N`) and project provenance (`gh-project:owner/number#itemId`)
+  // are stripped, but only via strict anchored matching — user labels that
+  // merely contain similar text (e.g. `gh-project-notes`) are preserved.
+  const labels = (item.tags ?? []).filter(
+    (t) => !parseProvenanceTag(t) && !parseProjectItemTag(t),
+  );
   return {
     title: item.title ?? "(untitled)",
     body: item.body || item.description || "",
@@ -1380,6 +1462,7 @@ export interface ValidateReport {
   messages: string[];
 }
 
+// Detect whether the `gh` CLI is installed and runnable on PATH.
 function detectGhCli(): boolean {
   try {
     const r = spawnSync("gh", ["--version"], { encoding: "utf-8" });
@@ -1389,12 +1472,16 @@ function detectGhCli(): boolean {
   }
 }
 
+// Report which token source is active: `env` (GITHUB_TOKEN/GH_TOKEN), `gh` (gh
+// auth), or `none`.
 function detectTokenSource(): "env" | "gh" | "none" {
   if ((process.env.GITHUB_TOKEN || process.env.GH_TOKEN || "").trim()) return "env";
   const token = resolveGitHubToken();
   return token ? "gh" : "none";
 }
 
+// Command handler for `pm github validate`: checks token source, gh CLI, rate
+// limit, and the reachable issue counts for the configured repo.
 async function runValidate(ctx: any): Promise<ValidateReport> {
   const options = ctx.options || {};
   const repo = optionString(options, "repo") || (ctx.args?.[0] as string | undefined);
@@ -1468,6 +1555,690 @@ async function runValidate(ctx: any): Promise<ValidateReport> {
 
 // Returns true if the command/args describe a github operation that will MUTATE
 // state (a write import, an export --push, or a non-dry-run sync).
+// ===========================================================================
+// GitHub Projects v2 — GraphQL client, operations, and command handlers.
+// Projects v2 is a GraphQL-only API; this section speaks it via the shared
+// `request` infrastructure (retry/backoff/rate-limit) already defined above.
+// The pure plan/mapping logic lives in ./projects.ts for unit-testability.
+// ===========================================================================
+
+const GRAPHQL_URL = "https://api.github.com/graphql";
+
+interface GraphQLResponse<T> {
+  data?: T | null;
+  errors?: Array<{ message: string; type?: string }>;
+}
+
+// One GraphQL round-trip. GraphQL reports business errors as HTTP 200 with an
+// `errors` array, so we surface those explicitly. The combined user+org queries
+// below intentionally return a partial error for the wrong owner type while the
+// right one still resolves; we only throw when there is NO usable data.
+async function githubGraphQL<T>(
+  token: string | undefined,
+  query: string,
+  variables: Record<string, unknown>,
+): Promise<T> {
+  if (!token) {
+    throw new CommandError(
+      "GitHub GraphQL requires a token (set GITHUB_TOKEN/GH_TOKEN or run `gh auth login`).",
+      EXIT_CODE.USAGE,
+    );
+  }
+  const payload = JSON.stringify({ query, variables });
+  const res = await request("POST", GRAPHQL_URL, token, payload);
+  let parsed: GraphQLResponse<T>;
+  try {
+    parsed = JSON.parse(res.body) as GraphQLResponse<T>;
+  } catch {
+    throw new CommandError(`GitHub GraphQL returned an unparseable response (HTTP ${res.status}).`);
+  }
+  if (parsed.data === undefined || parsed.data === null) {
+    const messages = (parsed.errors ?? []).map((e) => e.message).join("; ");
+    throw new CommandError(
+      `GitHub GraphQL error${messages ? `: ${messages}` : ` (HTTP ${res.status})`}.`,
+    );
+  }
+  return parsed.data;
+}
+
+const STATUS_FIELD_GQL = `
+  statusField: field(name: "Status") {
+    ... on ProjectV2SingleSelectField { id name options { id name } }
+  }`;
+
+// Resolve owner/number → project id + Status field. The owner may be a user or
+// an org and GraphQL requires us to pick, so we ask both in one request and use
+// whichever resolves.
+async function resolveProject(ref: ProjectRef, token: string | undefined): Promise<ProjectMeta> {
+  const query = `
+    query($owner:String!,$number:Int!){
+      user(login:$owner){ projectV2(number:$number){ id title url ${STATUS_FIELD_GQL} } }
+      organization(login:$owner){ projectV2(number:$number){ id title url ${STATUS_FIELD_GQL} } }
+    }`;
+  const data = await githubGraphQL<any>(token, query, { owner: ref.owner, number: ref.number });
+  const userNode = data.user?.projectV2;
+  const orgNode = data.organization?.projectV2;
+  const node = userNode ?? orgNode;
+  if (!node) {
+    throw new CommandError(
+      `Project ${ref.owner}/${ref.number} not found or not accessible with the resolved token ` +
+        "(need `project`/`read:project` scope; set GITHUB_TOKEN/GH_TOKEN or `gh auth login`).",
+      EXIT_CODE.NOT_FOUND,
+    );
+  }
+  const ownerType: ProjectMeta["ownerType"] = userNode ? "user" : "organization";
+  const sf = node.statusField;
+  const statusField: ProjectStatusField | undefined =
+    sf && sf.id ? { id: sf.id, name: sf.name, options: sf.options ?? [] } : undefined;
+  return { id: node.id, title: node.title ?? "", url: node.url ?? "", ownerType, statusField };
+}
+
+// Normalize a raw GraphQL project-item node into the ProjectItem model,
+// tolerating null/undefined nodes and missing content (defensive against
+// partial GraphQL errors / inaccessible items).
+function normalizeProjectItemNode(n: any): ProjectItem {
+  const c = n?.content ?? {};
+  const tn = c.__typename;
+  let content: ProjectItemContent;
+  if (tn === "DraftIssue") {
+    content = { typename: "DraftIssue", title: c.title ?? "", body: c.body ?? undefined };
+  } else if (tn === "Issue") {
+    content = {
+      typename: "Issue",
+      title: c.title ?? "",
+      number: c.number,
+      url: c.url,
+      state: typeof c.state === "string" ? c.state.toLowerCase() : undefined,
+      stateReason: typeof c.stateReason === "string" ? c.stateReason.toLowerCase() : null,
+      repo: c.repository?.nameWithOwner,
+    };
+  } else if (tn === "PullRequest") {
+    content = {
+      typename: "PullRequest",
+      title: c.title ?? "",
+      number: c.number,
+      url: c.url,
+      state: typeof c.state === "string" ? c.state.toLowerCase() : undefined,
+      repo: c.repository?.nameWithOwner,
+    };
+  } else {
+    // Redacted or an item type we do not model — carry a placeholder so it is
+    // counted but never mutated.
+    content = { typename: "Unknown", title: "" };
+  }
+  const sv = n?.fieldValueByName;
+  return {
+    id: n?.id ?? "",
+    statusOptionId: sv?.optionId ?? undefined,
+    statusName: sv?.name ?? undefined,
+    content,
+  };
+}
+
+// Fetch every item on the board (paginated, 100/page).
+async function fetchProjectItems(projectId: string, token: string | undefined): Promise<ProjectItem[]> {
+  const query = `
+    query($id:ID!,$cursor:String){
+      node(id:$id){ ... on ProjectV2 {
+        items(first:100, after:$cursor){
+          pageInfo{ hasNextPage endCursor }
+          nodes{
+            id
+            fieldValueByName(name:"Status"){ ... on ProjectV2ItemFieldSingleSelectValue{ name optionId } }
+            content{
+              __typename
+              ... on DraftIssue { title body }
+              ... on Issue { number title url state stateReason repository{ nameWithOwner } }
+              ... on PullRequest { number title url state repository{ nameWithOwner } }
+            }
+          }
+        }
+      }}
+    }`;
+  const items: ProjectItem[] = [];
+  let cursor: string | undefined;
+  for (;;) {
+    const data = await githubGraphQL<any>(token, query, { id: projectId, cursor: cursor ?? null });
+    const conn = data.node?.items;
+    if (!conn) break;
+    for (const n of conn.nodes ?? []) {
+      if (n) items.push(normalizeProjectItemNode(n));
+    }
+    if (conn.pageInfo?.hasNextPage && conn.pageInfo.endCursor) {
+      cursor = conn.pageInfo.endCursor;
+    } else {
+      break;
+    }
+  }
+  return items;
+}
+
+// Add a DraftIssue to a Projects v2 board and return the new project item id.
+async function gqlAddDraft(
+  projectId: string,
+  title: string,
+  body: string | undefined,
+  token: string | undefined,
+): Promise<string> {
+  const q = `mutation($p:ID!,$t:String!,$b:String){ addProjectV2DraftIssue(input:{projectId:$p,title:$t,body:$b}){ projectItem{ id } } }`;
+  const d = await githubGraphQL<any>(token, q, { p: projectId, t: title, b: body ?? "" });
+  const id = d.addProjectV2DraftIssue?.projectItem?.id;
+  if (!id) throw new CommandError("addProjectV2DraftIssue returned no item id.");
+  return id;
+}
+
+// Link an existing repository issue/PR to a Projects v2 board and return the
+// new project item id.
+async function gqlAddIssue(projectId: string, contentId: string, token: string | undefined): Promise<string> {
+  const q = `mutation($p:ID!,$c:ID!){ addProjectV2ItemById(input:{projectId:$p,contentId:$c}){ item{ id } } }`;
+  const d = await githubGraphQL<any>(token, q, { p: projectId, c: contentId });
+  const id = d.addProjectV2ItemById?.item?.id;
+  if (!id) throw new CommandError("addProjectV2ItemById returned no item id.");
+  return id;
+}
+
+// Set a project item's single-select Status field to the given option id.
+async function gqlSetStatus(
+  projectId: string,
+  itemId: string,
+  fieldId: string,
+  optionId: string,
+  token: string | undefined,
+): Promise<void> {
+  const q = `mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){ updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){ projectV2Item{ id } } }`;
+  await githubGraphQL<any>(token, q, { p: projectId, i: itemId, f: fieldId, o: optionId });
+}
+
+// Resolve the GraphQL node id of a repo's issue or PR by number, returning
+// undefined when the item is not found or the repo ref is malformed.
+async function gqlResolveIssueNodeId(
+  repo: string,
+  number: number,
+  token: string | undefined,
+): Promise<string | undefined> {
+  const [owner, name] = repo.split("/");
+  if (!owner || !name) return undefined;
+  const q = `query($o:String!,$n:String!,$num:Int!){ repository(owner:$o,name:$n){ issueOrPullRequest(number:$num){ ... on Issue { id } ... on PullRequest { id } } } }`;
+  const d = await githubGraphQL<any>(token, q, { o: owner, n: name, num: number });
+  return d.repository?.issueOrPullRequest?.id ?? undefined;
+}
+
+// Compose a human-readable + provenance-bearing description for an imported
+// project item (parallels the issue-import description).
+function projectItemDescription(ref: ProjectRef, c: ProjectItemContent): string {
+  const parts = [`GH project item ${ref.owner}/${ref.number}`];
+  if (c.typename === "DraftIssue") parts.push("· draft issue");
+  if (c.repo && typeof c.number === "number") parts.push(`· ${c.repo}#${c.number}`);
+  if (c.url) parts.push(`· ${c.url}`);
+  if (c.state) parts.push(`· state ${c.state}`);
+  return parts.join(" ");
+}
+
+// --- project list ----------------------------------------------------------
+
+// A page of a projectsV2 connection as returned by GitHub GraphQL.
+export interface ProjectsV2Page {
+  nodes?: any[];
+  pageInfo?: { hasNextPage?: boolean; endCursor?: string };
+}
+
+// Paginate a GitHub Projects v2 connection until pageInfo.hasNextPage is false.
+// `fetchPage` returns the connection object (nodes + pageInfo) for the given
+// cursor and may return null/undefined to stop early. Pure over the injected
+// fetcher so the multi-page contract (no silent truncation, cursor threading)
+// is unit-testable without network I/O. Mirrors the fetchProjectItems loop.
+export async function collectProjectsV2Pages(
+  fetchPage: (cursor: string | undefined) => Promise<ProjectsV2Page | null | undefined>,
+): Promise<any[]> {
+  const out: any[] = [];
+  let cursor: string | undefined;
+  for (;;) {
+    const conn = await fetchPage(cursor);
+    if (!conn) break;
+    for (const n of conn.nodes ?? []) if (n) out.push(n);
+    // Continue only when GitHub explicitly reports more pages AND gives us a
+    // cursor; otherwise stop so we never silently truncate by paging past the
+    // end, nor loop forever on a missing endCursor.
+    if (conn.pageInfo?.hasNextPage && conn.pageInfo?.endCursor) {
+      cursor = conn.pageInfo.endCursor;
+    } else {
+      break;
+    }
+  }
+  return out;
+}
+
+// Injectable GraphQL transport shape (matches githubGraphQL minus the token,
+// which the caller closes over). Exported so the listing pagination path can be
+// runtime-tested without network by passing a fake transport.
+export type GraphQLTransport = (
+  query: string,
+  variables: Record<string, unknown>,
+) => Promise<any>;
+
+// Resolve + paginate the projectsV2 connection for a user-or-org owner using an
+// injected GraphQL transport. A login is either a user or an organization,
+// never both; querying both in one request lets us resolve the owner type
+// without a round-trip, then we keep paginating the connection that actually
+// exists so owners with more than 50/100 projects are fully listed instead of
+// silently truncated (Greptile 2006f478). Returns raw connection nodes.
+export async function listOwnerProjectsV2Nodes(
+  owner: string,
+  graphQL: GraphQLTransport,
+): Promise<any[]> {
+  let ownerType: "user" | "organization" | null = null;
+  return collectProjectsV2Pages(async (cursor) => {
+    const q = `
+      query($owner:String!,$cursor:String){
+        user(login:$owner){ projectsV2(first:100, after:$cursor, orderBy:{field:UPDATED_AT, direction:DESC}){ pageInfo{ hasNextPage endCursor } nodes{ number title url closed shortDescription } } }
+        organization(login:$owner){ projectsV2(first:100, after:$cursor, orderBy:{field:UPDATED_AT, direction:DESC}){ pageInfo{ hasNextPage endCursor } nodes{ number title url closed shortDescription } } }
+      }`;
+    const d = await graphQL(q, { owner, cursor: cursor ?? null });
+    if (ownerType === null) {
+      if (d.user?.projectsV2) ownerType = "user";
+      else if (d.organization?.projectsV2) ownerType = "organization";
+    }
+    return ownerType === "organization" ? d.organization?.projectsV2 : d.user?.projectsV2;
+  });
+}
+
+async function runProjectList(ctx: any) {
+  const options = ctx.options || {};
+  const owner = optionString(options, "owner") || (ctx.args?.[0] as string | undefined);
+  if (!owner) {
+    throw new CommandError(
+      "Usage: pm github project list <owner>  (a GitHub user or org login)",
+      EXIT_CODE.USAGE,
+    );
+  }
+  const token = resolveGitHubToken();
+  const nodes = await listOwnerProjectsV2Nodes(owner, (q, vars) => githubGraphQL<any>(token, q, vars));
+  const projects = nodes.map((n: any) => ({
+    number: n.number,
+    title: n.title ?? "",
+    url: n.url ?? "",
+    closed: !!n.closed,
+    description: n.shortDescription ?? undefined,
+  }));
+  if (ctx.global?.json !== true) {
+    if (projects.length === 0) {
+      console.error(`No Projects v2 found for ${owner} (or none accessible with the resolved token).`);
+    } else {
+      console.error(`Projects for ${owner}:`);
+      for (const p of projects) {
+        console.error(`  #${p.number}  ${p.closed ? "[closed] " : ""}${p.title}  ${p.url}`);
+      }
+    }
+  }
+  return { owner, projects };
+}
+
+// --- project fields --------------------------------------------------------
+
+async function runProjectFields(ctx: any) {
+  const options = ctx.options || {};
+  const ref = parseProjectRef(optionString(options, "project") || (ctx.args?.[0] as string | undefined));
+  if (!ref) {
+    throw new CommandError(
+      "Usage: pm github project fields <owner/number>  (e.g. pm github project fields unbraind/5)",
+      EXIT_CODE.USAGE,
+    );
+  }
+  const token = resolveGitHubToken();
+  const meta = await resolveProject(ref, token);
+  const q = `
+    query($id:ID!){ node(id:$id){ ... on ProjectV2 {
+      fields(first:50){ nodes{
+        __typename
+        ... on ProjectV2FieldCommon { name dataType }
+        ... on ProjectV2SingleSelectField { name options{ name } }
+      } }
+    }}}`;
+  const d = await githubGraphQL<any>(token, q, { id: meta.id });
+  const fields = (d.node?.fields?.nodes ?? []).filter(Boolean).map((f: any) => ({
+    name: f.name,
+    type: f.dataType ?? f.__typename,
+    options: Array.isArray(f.options) ? f.options.map((o: any) => o.name) : undefined,
+  }));
+  if (ctx.global?.json !== true) {
+    console.error(`Project ${ref.owner}/${ref.number} — ${meta.title} (${meta.ownerType})`);
+    console.error(`  ${meta.url}`);
+    console.error(`  Status field: ${meta.statusField ? meta.statusField.options.map((o) => o.name).join(" | ") : "(none — pushes cannot set status)"}`);
+    console.error("  Fields:");
+    for (const f of fields) {
+      console.error(`    ${f.name} (${f.type})${f.options ? `: ${f.options.join(", ")}` : ""}`);
+    }
+  }
+  return { project: meta, fields };
+}
+
+// --- project import --------------------------------------------------------
+
+async function runProjectImport(ctx: any) {
+  const options = ctx.options || {};
+  const ref = parseProjectRef(optionString(options, "project") || (ctx.args?.[0] as string | undefined));
+  if (!ref) {
+    throw new CommandError(
+      "Usage: pm github project import <owner/number> [--dry-run] [--status-map pm=Option,...] [--type <type>]",
+      EXIT_CODE.USAGE,
+    );
+  }
+  const dryRun = optionEnabled(options, "dry-run", "dryRun");
+  const itemType = optionString(options, "type") || "Task";
+  const statusMap = parseStatusMap(optionCsv(options, "status-map", "statusMap"));
+  const token = resolveGitHubToken();
+
+  const meta = await resolveProject(ref, token);
+  const projectItems = await fetchProjectItems(meta.id, token);
+  console.error(`Found ${projectItems.length} item(s) on ${ref.owner}/${ref.number} — ${meta.title}.`);
+
+  // Reading the local store is non-mutating and keeps dry-run faithful: linked
+  // project items must preview as updates, not misleading duplicate creates.
+  const pmItems = readPmItems(ctx.pm_root);
+  const plan = buildProjectImportPlan(projectItems, ref, pmItems, statusMap);
+
+  let imported = 0;
+  let updated = 0;
+  let skipped = 0;
+  for (const entry of plan) {
+    const description = projectItemDescription(ref, entry.content);
+    if (dryRun) {
+      console.error(`  [dry-run] ${entry.action} "${entry.title}" (${entry.status})`);
+      if (entry.action === "create") imported++;
+      else updated++;
+      continue;
+    }
+    if (entry.action === "update" && entry.pmId) {
+      const updArgs = [
+        "--path", ctx.pm_root, "update", entry.pmId,
+        "--title", entry.title,
+        "--description", description,
+        "--tags", entry.tags.join(","),
+        "--message", `Re-imported from GitHub project ${ref.owner}/${ref.number}`,
+      ];
+      if (entry.body) updArgs.push("--body", entry.body);
+      // Refresh the mapped pm status alongside the other fields — but ONLY when
+      // the board Status mapped to a known pm status. An unknown mapping is
+      // skipped (no --status) so we never overwrite a real pm state with a guess
+      // (no data loss). `entry.status` carries a fallback for the create path;
+      // `entry.mappedStatus` is set only for an explicit, resolvable mapping.
+      if (entry.mappedStatus) updArgs.push("--status", entry.mappedStatus);
+      const upd = pmRun(updArgs);
+      if (!upd.ok) { console.error(`  ${entry.title}: update failed — ${upd.stderr}`); skipped++; continue; }
+      updated++;
+      continue;
+    }
+    const createArgs = [
+      "--path", ctx.pm_root, "create",
+      "--title", entry.title,
+      "--type", itemType,
+      "--status", entry.status,
+      "--description", description,
+      "--tags", entry.tags.join(","),
+      "--message", `Imported from GitHub project ${ref.owner}/${ref.number}`,
+    ];
+    if (entry.body) createArgs.push("--body", entry.body);
+    const created = pmRun(createArgs);
+    if (!created.ok) { console.error(`  ${entry.title}: create failed — ${created.stderr}`); skipped++; continue; }
+    imported++;
+  }
+
+  if (dryRun) {
+    console.error(`[dry-run] Would import ${imported}, update ${updated}.`);
+    return { dryRun: true, project: `${ref.owner}/${ref.number}`, wouldImport: imported, wouldUpdate: updated, planned: plan.length };
+  }
+  console.error(`Imported ${imported} new, updated ${updated}, skipped ${skipped}.`);
+  if (imported === 0 && updated === 0 && skipped > 0) {
+    throw new CommandError(`Imported 0 project item(s); ${skipped} failed.`);
+  }
+  return { imported, updated, skipped, project: `${ref.owner}/${ref.number}`, planned: plan.length };
+}
+
+// --- project sync (bidirectional) ------------------------------------------
+
+// Push a pm item's status onto its (existing) board item, tolerating a missing
+// target option. Returns true on a real change.
+async function applyPushEntry(
+  entry: ReturnType<typeof buildProjectPushPlan>["entries"][number],
+  meta: ProjectMeta,
+  ref: ProjectRef,
+  pmById: Map<string, PmItem>,
+  pmRoot: string,
+  token: string | undefined,
+): Promise<{ changed: boolean; error?: string }> {
+  try {
+    let itemId = entry.itemId;
+    if (entry.action === "add-draft") {
+      const pm = pmById.get(entry.pmId);
+      itemId = await gqlAddDraft(meta.id, entry.title, pm?.body || pm?.description, token);
+    } else if (entry.action === "add-issue") {
+      if (!entry.issueRepo || typeof entry.issueNumber !== "number") {
+        return { changed: false, error: "add-issue entry missing issue coordinates" };
+      }
+      const contentId = await gqlResolveIssueNodeId(entry.issueRepo, entry.issueNumber, token);
+      if (!contentId) return { changed: false, error: `could not resolve node id for ${entry.issueRepo}#${entry.issueNumber}` };
+      itemId = await gqlAddIssue(meta.id, contentId, token);
+    }
+    if (!itemId) return { changed: false, error: "no project item id to act on" };
+
+    if (entry.targetOptionId && meta.statusField) {
+      await gqlSetStatus(meta.id, itemId, meta.statusField.id, entry.targetOptionId, token);
+    }
+    // Ensure the pm item carries the project provenance tag so future syncs are
+    // idempotent (never strips existing tags; only adds the missing one).
+    const pm = pmById.get(entry.pmId);
+    if (pm?.id) {
+      const tag = projectItemTag(ref, itemId);
+      const existingTags = pm.tags ?? [];
+      if (!existingTags.includes(tag)) {
+        const upd = pmRun([
+          "--path", pmRoot, "update", pm.id,
+          "--tags", [...existingTags, tag].join(","),
+          "--message", `Linked to GitHub project ${ref.owner}/${ref.number}`,
+        ]);
+        if (!upd.ok) return { changed: true, error: `linked but tag write failed — ${upd.stderr}` };
+      }
+    }
+    return { changed: true };
+  } catch (err: unknown) {
+    return { changed: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+// Build the pm CLI argv that applies one pull (project → pm) status transition.
+// Pure so the lifecycle contract is unit-testable without spawning `pm`.
+//
+// pm CLI contracts (verified against pm 2026.7.11):
+//   - `pm close` records `closed_at` + `close_reason` and moves the item to the
+//     terminal `closed` state, but REFUSES on already-terminal items ("use
+//     --force to close again"). It only ever produces `closed`, never `canceled`.
+//   - `canceled` is a DISTINCT terminal state set via `pm update --status
+//     canceled`; `pm update --status canceled` is permitted on both active and
+//     terminal items, and `--close-reason` records the lifecycle rationale.
+//     `pm list-canceled` projects `close_reason` (not `closed_at`), so the close
+//     reason is the lifecycle metadata that must be recorded for `canceled`.
+//
+// Routing `canceled` through `pm close` (as one review suggestion proposed)
+// would conflate `canceled` with `closed`, lose the distinct terminal state,
+// and fail for terminal→canceled transitions. Recording `--close-reason` on the
+// `pm update` keeps the distinction AND the lifecycle metadata, and works for
+// active→canceled and terminal→canceled alike.
+export function buildPullEntryArgs(entry: PullPlanEntryLike, pmRoot: string): string[] {
+  const reason = `GitHub project status → ${entry.toStatus}`;
+  if (entry.toStatus === "closed") {
+    return ["--path", pmRoot, "close", entry.pmId, "--reason", reason];
+  }
+  if (entry.toStatus === "canceled") {
+    return [
+      "--path", pmRoot, "update", entry.pmId,
+      "--status", "canceled",
+      "--close-reason", reason,
+      "--message", reason,
+    ];
+  }
+  return [
+    "--path", pmRoot, "update", entry.pmId,
+    "--status", entry.toStatus,
+    "--message", reason,
+  ];
+}
+
+// Pull a board status onto its pm item. `closed` goes through `pm close`
+// (records closed_at + close_reason); `canceled` keeps its distinct terminal
+// state via `pm update` while recording `--close-reason`; everything else is a
+// plain `pm update --status`.
+function applyPullEntry(entry: PullPlanEntryLike, pmRoot: string): { changed: boolean; error?: string } {
+  const res = pmRun(buildPullEntryArgs(entry, pmRoot));
+  return res.ok ? { changed: true } : { changed: false, error: res.stderr };
+}
+
+interface PullPlanEntryLike {
+  itemId: string;
+  pmId: string;
+  title: string;
+  fromStatus: string;
+  toStatus: string;
+}
+
+// Command handler for `pm github project sync`: preview (default) or apply the
+// bidirectional Projects v2 sync plan, honoring --push/--pull/--apply/--ids.
+async function runProjectSync(ctx: any) {
+  const options = ctx.options || {};
+  const ref = parseProjectRef(optionString(options, "project") || (ctx.args?.[0] as string | undefined));
+  if (!ref) {
+    throw new CommandError(
+      "Usage: pm github project sync <owner/number> [--push|--pull] [--apply] [--ids pm-1,..] [--status-map pm=Option,..] [--no-add-missing] [--prefer pm|github]",
+      EXIT_CODE.USAGE,
+    );
+  }
+
+  const wantPush = optionEnabled(options, "push");
+  const wantPull = optionEnabled(options, "pull");
+  const dryRunFlag = optionEnabled(options, "dry-run", "dryRun");
+  const apply = optionEnabled(options, "apply") && !dryRunFlag;
+  const addMissing = !optionEnabled(options, "no-add-missing", "noAddMissing");
+  const prefer = (optionString(options, "prefer") || "pm").toLowerCase() === "github" ? "github" : "pm";
+  const statusMap = parseStatusMap(optionCsv(options, "status-map", "statusMap"));
+
+  const idsProvided = optionProvided(options, "ids");
+  const scopedIds = optionCsv(options, "ids");
+  if (idsProvided && scopedIds.length === 0) {
+    throw new CommandError("--ids requires at least one pm item id (comma-separated).", EXIT_CODE.USAGE);
+  }
+
+  // Direction resolution. Preview (no --apply) shows BOTH plans unless one is
+  // explicitly requested. --apply defaults to push (never mutates pm silently).
+  const previewBoth = !wantPush && !wantPull;
+  const doPush = previewBoth || wantPush;
+  const doPull = previewBoth || wantPull;
+  const applyPush = apply && (wantPush || (!wantPush && !wantPull));
+  const applyPull = apply && wantPull;
+
+  const token = resolveGitHubToken();
+  if (!token) {
+    throw new CommandError(
+      "pm github project sync needs a GitHub token (set GITHUB_TOKEN/GH_TOKEN or run `gh auth login`).",
+      EXIT_CODE.USAGE,
+    );
+  }
+
+  const meta = await resolveProject(ref, token);
+  const projectItems = await fetchProjectItems(meta.id, token);
+  const allPm = readPmItems(ctx.pm_root);
+  const scoped = scopeItemsByIds(allPm, scopedIds.length > 0 ? scopedIds : undefined);
+  if (scoped.missing.length > 0) {
+    throw new CommandError(`--ids included unknown pm item id(s): ${scoped.missing.join(", ")}`, EXIT_CODE.NOT_FOUND);
+  }
+  const pmById = new Map<string, PmItem>();
+  for (const it of scoped.selected) if (it.id) pmById.set(it.id, it);
+
+  const pushPlan = doPush
+    ? buildProjectPushPlan(scoped.selected, ref, projectItems, meta.statusField, { addMissing, statusMap })
+    : undefined;
+  const pullPlan = doPull
+    ? buildProjectPullPlan(scoped.selected, ref, projectItems, statusMap)
+    : undefined;
+
+  // Conflict resolution when applying BOTH directions: a linked item can appear
+  // in both plans. `--prefer pm` (default) lets push win (skip its pull entry);
+  // `--prefer github` lets pull win (skip its push set-status entry). Adds are
+  // always safe (new items are never in the pull plan).
+  const pushItemIds = new Set((pushPlan?.entries ?? []).filter((e) => e.action === "set-status").map((e) => e.itemId));
+  const pullItemIds = new Set((pullPlan?.entries ?? []).map((e) => e.itemId));
+
+  const pushActionable = (pushPlan?.entries ?? []).filter((e) => e.action !== "noop");
+  const pullActionable = pullPlan?.entries ?? [];
+
+  if (!apply) {
+    if (pushPlan) {
+      console.error(`[dry-run] push (pm → project ${ref.owner}/${ref.number}):`);
+      for (const e of pushActionable) {
+        const detail =
+          e.action === "set-status" ? `${e.currentOptionName ?? "(none)"} → ${e.targetOptionName}`
+          : e.action === "add-draft" ? `add draft${e.targetOptionName ? ` @ ${e.targetOptionName}` : ""}`
+          : `add issue ${e.issueRepo}#${e.issueNumber}${e.targetOptionName ? ` @ ${e.targetOptionName}` : ""}`;
+        console.error(`  ${e.pmId} "${e.title}": ${detail}`);
+      }
+      for (const s of pushPlan.statusSkipped) {
+        console.error(`  [skip] ${s.pmId} "${s.title}": pm status "${s.status}" maps to no board option`);
+      }
+      if (pushActionable.length === 0) console.error("  (nothing to push)");
+    }
+    if (pullPlan) {
+      console.error(`[dry-run] pull (project ${ref.owner}/${ref.number} → pm):`);
+      for (const e of pullActionable) console.error(`  ${e.pmId} "${e.title}": ${e.fromStatus} → ${e.toStatus}`);
+      for (const s of pullPlan.statusSkipped) {
+        console.error(`  [skip] item ${s.itemId}: board status "${s.optionName ?? "(none)"}" maps to no pm status`);
+      }
+      if (pullActionable.length === 0) console.error("  (nothing to pull)");
+    }
+    console.error("Preview only — pass --apply with --push and/or --pull to write.");
+    return {
+      dryRun: true,
+      project: `${ref.owner}/${ref.number}`,
+      push: pushPlan ? { actionable: pushActionable.length, statusSkipped: pushPlan.statusSkipped.length } : undefined,
+      pull: pullPlan ? { actionable: pullActionable.length, statusSkipped: pullPlan.statusSkipped.length } : undefined,
+    };
+  }
+
+  let pushed = 0;
+  let pushFailed = 0;
+  if (applyPush && pushPlan) {
+    for (const e of pushActionable) {
+      if (prefer === "github" && e.action === "set-status" && pullItemIds.has(e.itemId ?? "")) {
+        continue; // pull wins for this linked item
+      }
+      const r = await applyPushEntry(e, meta, ref, pmById, ctx.pm_root, token);
+      if (r.error && !r.changed) { console.error(`  push ${e.pmId} "${e.title}": ${r.error}`); pushFailed++; continue; }
+      if (r.error) console.error(`  push ${e.pmId}: ${r.error}`);
+      pushed++;
+    }
+  }
+
+  let pulled = 0;
+  let pullFailed = 0;
+  if (applyPull && pullPlan) {
+    for (const e of pullActionable) {
+      if (prefer === "pm" && pushItemIds.has(e.itemId)) continue; // push wins
+      const r = applyPullEntry(e, ctx.pm_root);
+      if (!r.changed) { console.error(`  pull ${e.pmId} "${e.title}": ${r.error}`); pullFailed++; continue; }
+      pulled++;
+    }
+  }
+
+  console.error(
+    `Sync complete on ${ref.owner}/${ref.number}: pushed ${pushed}${pushFailed ? ` (${pushFailed} failed)` : ""}, ` +
+      `pulled ${pulled}${pullFailed ? ` (${pullFailed} failed)` : ""}.`,
+  );
+  const result = { project: `${ref.owner}/${ref.number}`, pushed, pushFailed, pulled, pullFailed, prefer };
+  if (pushFailed + pullFailed > 0 && pushed + pulled === 0) {
+    throw new CommandError(`Sync wrote nothing; ${pushFailed + pullFailed} operation(s) failed.`);
+  }
+  return result;
+}
+
+// Report whether a github subcommand mutates GitHub (for the host CLI's
+// "mutating command" guard), accounting for --dry-run / --apply overrides.
 export function isMutatingGithubCommand(command: string, options: Record<string, unknown>): boolean {
   const cmd = (command || "").toLowerCase();
   const dryRun = optionEnabled(options, "dry-run", "dryRun");
@@ -1476,6 +2247,10 @@ export function isMutatingGithubCommand(command: string, options: Record<string,
   // (--apply / --no-dry-run / legacy --push) AND no --dry-run override.
   if (cmd === "github export") return exportWillApply(options);
   if (cmd === "github import" || cmd === "gh-issues import") return !dryRun;
+  if (cmd === "github project import") return !dryRun;
+  // Project sync is dry-run by default; it only mutates with --apply (and no
+  // --dry-run override).
+  if (cmd === "github project sync") return optionEnabled(options, "apply") && !dryRun;
   return false;
 }
 
@@ -1517,6 +2292,33 @@ const SYNC_FLAGS = [
 
 const VALIDATE_FLAGS = [
   { long: "--repo", value_name: "owner/repo", description: "Also check this repo is accessible with the resolved token" },
+];
+
+const PROJECT_LIST_FLAGS = [
+  { long: "--owner", value_name: "login", description: "GitHub user or org login (or pass positionally)" },
+];
+
+const PROJECT_FIELDS_FLAGS = [
+  { long: "--project", value_name: "owner/number", description: "Project reference (or pass positionally, e.g. unbraind/5)" },
+];
+
+const PROJECT_IMPORT_FLAGS = [
+  { long: "--project", value_name: "owner/number", description: "Project reference (or pass positionally)" },
+  { long: "--dry-run", description: "Preview without writing pm items" },
+  { long: "--type", value_name: "type", description: "pm item type for created items (default: Task)" },
+  { long: "--status-map", value_name: "pm=Option,...", description: "Map board Status options to pm statuses, e.g. in_progress=Doing,closed=Shipped (inverted for import)" },
+];
+
+const PROJECT_SYNC_FLAGS = [
+  { long: "--project", value_name: "owner/number", description: "Project reference (or pass positionally)" },
+  { long: "--push", description: "pm → project: add missing items and set their Status" },
+  { long: "--pull", description: "project → pm: update pm item status from the board" },
+  { long: "--apply", description: "Write changes (default is a safe dry-run preview of both directions)" },
+  { long: "--ids", value_name: "pm-1,pm-2", description: "Only sync these pm item IDs (comma-separated)" },
+  { long: "--status-map", value_name: "pm=Option,...", description: "Map pm status to a board Status option, e.g. in_progress=Doing,closed=Shipped" },
+  { long: "--no-add-missing", description: "Push: only reconcile status of already-linked items; never add new board items" },
+  { long: "--prefer", value_name: "pm|github", description: "Conflict winner when applying both directions (default: pm)" },
+  { long: "--dry-run", description: "Preview only (always wins over --apply)" },
 ];
 
 export default defineExtension({
@@ -1788,6 +2590,117 @@ export default defineExtension({
           );
         }
         return report;
+      },
+    });
+
+    // -----------------------------------------------------------------------
+    // command — `pm github project list <owner>` (discover ProjectsV2)
+    // -----------------------------------------------------------------------
+    api.registerCommand({
+      name: "github project list",
+      description:
+        "List the GitHub Projects v2 owned by a user or org (number, title, url, " +
+        "closed state). Read-only. Use --json for machine output. Needs a token " +
+        "with `project`/`read:project` scope for private projects.",
+      intent: "discover GitHub Projects v2 for an owner",
+      arguments: [{ name: "owner", required: false, description: "GitHub user or org login" }],
+      examples: ["pm github project list unbraind", "pm github project list unbraind --json"],
+      flags: PROJECT_LIST_FLAGS,
+      failure_hints: [
+        "Pass an owner login, e.g. `pm github project list unbraind`.",
+        "Set GITHUB_TOKEN/GH_TOKEN or run `gh auth login` (private projects need `project` scope).",
+      ],
+      async run(ctx: any) {
+        return runProjectList(ctx);
+      },
+    });
+
+    // -----------------------------------------------------------------------
+    // command — `pm github project fields <owner/number>` (introspect schema)
+    // -----------------------------------------------------------------------
+    api.registerCommand({
+      name: "github project fields",
+      description:
+        "Introspect a GitHub Project v2: its fields and, crucially, the Status " +
+        "single-select options that push/pull map pm statuses to. Read-only. Use " +
+        "this to design a --status-map. Use --json for machine output.",
+      intent: "introspect Project v2 fields and Status options",
+      arguments: [{ name: "owner/number", required: false, description: "Project reference, e.g. unbraind/5" }],
+      examples: ["pm github project fields unbraind/5", "pm github project fields unbraind/5 --json"],
+      flags: PROJECT_FIELDS_FLAGS,
+      failure_hints: [
+        "Pass <owner/number>, e.g. `pm github project fields unbraind/5`.",
+        "A project without a Status field cannot receive pushed statuses (items are still added).",
+      ],
+      async run(ctx: any) {
+        return runProjectFields(ctx);
+      },
+    });
+
+    // -----------------------------------------------------------------------
+    // command — `pm github project import <owner/number>` (board → pm items)
+    // Idempotent via the `gh-project:owner/number#itemId` provenance tag; draft
+    // issues import too. Maps the board Status option → pm status.
+    // -----------------------------------------------------------------------
+    api.registerCommand({
+      name: "github project import",
+      description:
+        "Import every item on a GitHub Project v2 board as pm items (draft issues " +
+        "included). Idempotent on re-import via the `gh-project:owner/number#itemId` " +
+        "provenance tag; items that wrap a real issue also carry the `gh:repo#N` tag " +
+        "so issue- and project-import stay linked. The board's Status option maps to " +
+        "the pm status. Safe: --dry-run previews without writing.",
+      intent: "import GitHub Project v2 board items as pm items",
+      arguments: [{ name: "owner/number", required: false, description: "Project reference, e.g. unbraind/5" }],
+      examples: [
+        "pm github project import unbraind/5",
+        "pm github project import unbraind/5 --dry-run",
+        "pm github project import unbraind/5 --status-map in_progress=Doing,closed=Shipped",
+      ],
+      flags: PROJECT_IMPORT_FLAGS,
+      failure_hints: [
+        "Pass <owner/number>, e.g. `pm github project import unbraind/5`.",
+        "Set GITHUB_TOKEN/GH_TOKEN or run `gh auth login` (needs `project`/`read:project`).",
+        "Re-running is safe: linked items are updated, not duplicated.",
+      ],
+      async run(ctx: any) {
+        return runProjectImport(ctx);
+      },
+    });
+
+    // -----------------------------------------------------------------------
+    // command — `pm github project sync <owner/number>` (bidirectional)
+    // SAFE BY DEFAULT: previews both directions and writes NOTHING. --apply
+    // writes; direction chosen by --push/--pull (default --apply = push).
+    // NEVER deletes/archives board items or pm items (no data loss).
+    // -----------------------------------------------------------------------
+    api.registerCommand({
+      name: "github project sync",
+      description:
+        "Bidirectionally sync pm items and a GitHub Project v2 board. --push adds " +
+        "missing pm items to the board (linking existing issues where possible, else " +
+        "as draft issues) and sets each item's Status from its pm status. --pull " +
+        "updates pm item status from the board. SAFE BY DEFAULT: with no --apply it " +
+        "previews both directions and writes nothing. Unmapped statuses are SKIPPED, " +
+        "never guessed. Never deletes or archives anything on either side.",
+      intent: "bidirectionally sync pm items with a GitHub Project v2 board",
+      arguments: [{ name: "owner/number", required: false, description: "Project reference, e.g. unbraind/5" }],
+      examples: [
+        "pm github project sync unbraind/5",
+        "pm github project sync unbraind/5 --push --apply",
+        "pm github project sync unbraind/5 --pull --apply",
+        "pm github project sync unbraind/5 --push --pull --apply --prefer pm",
+        "pm github project sync unbraind/5 --push --apply --ids pm-1,pm-2",
+      ],
+      flags: PROJECT_SYNC_FLAGS,
+      failure_hints: [
+        "Preview is default; pass --apply with --push and/or --pull to write.",
+        "--apply requires a GitHub token (GITHUB_TOKEN/GH_TOKEN or `gh auth login`).",
+        "Design a --status-map with `pm github project fields <owner/number>` first.",
+        "Use --ids <pm-1,pm-2> to scope; unknown IDs fail fast.",
+      ],
+      async run(ctx: any) {
+        return runProjectSync(ctx);
       },
     });
   },

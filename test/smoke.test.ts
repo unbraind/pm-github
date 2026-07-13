@@ -10,12 +10,16 @@ import extension, {
   applyOutcomeError,
   authorTag,
   buildExportPlan,
+  buildPullEntryArgs,
   buildSearchUrl,
+  collectProjectsV2Pages,
   exportWillApply,
   formatRateLimit,
   isDraftPr,
+  listOwnerProjectsV2Nodes,
   mapSearchHits,
   mapState,
+  sameOrigin,
   optionCsv,
   parseImportOptions,
   parseLabelMap,
@@ -739,6 +743,35 @@ test("buildExportPlan without a label map preserves the existing behavior", () =
   assert.deepEqual(plan[0].payload.labels, ["bug"]);
 });
 
+// Regression: an item linked to BOTH an issue (gh: provenance) and a GitHub
+// Projects v2 board (gh-project: provenance) must drop BOTH internal provenance
+// tags when exported to a GitHub issue, while user labels that merely contain
+// similar text (e.g. "gh-project-notes") are preserved verbatim. See Greptile
+// review 49e67dcf.
+test("buildExportPlan strips both gh: and gh-project: provenance tags, keeps user labels with similar text", () => {
+  // Valid project provenance tag: gh-project:unbraind/5#<hexItemId>.
+  const projectTag =
+    "gh-project:unbraind/5#505654495f6c41484f4142475a7463344264486a387a475966387055";
+  const plan = buildExportPlan(
+    [
+      {
+        id: "pm-1",
+        title: "Dual-linked",
+        // Normal user tag + issue provenance + project provenance + a user
+        // label that merely contains similar text (not a real provenance tag).
+        tags: ["bug", "gh:owner/repo#42", projectTag, "gh-project-notes"],
+        status: "open",
+      },
+    ],
+    "owner/repo",
+  );
+  assert.strictEqual(plan.length, 1);
+  assert.strictEqual(plan[0].action, "update");
+  assert.strictEqual(plan[0].number, 42);
+  // Both provenance tags dropped; "bug" and the look-alike user label survive.
+  assert.deepEqual(plan[0].payload.labels, ["bug", "gh-project-notes"]);
+});
+
 // ---------------------------------------------------------------------------
 // pm github export command registration (new --export mode surface)
 // ---------------------------------------------------------------------------
@@ -798,4 +831,187 @@ test("manifest uses only runtime-supported capability names", async () => {
   const { readFileSync } = await import("node:fs");
   const manifest = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url), "utf-8"));
   assert.ok(!manifest.capabilities.includes("exporters"), "exporters is a registration, not a manifest capability");
+});
+
+test("sameOrigin only treats identical hosts as same-origin (token forwarding guard)", () => {
+  assert.equal(sameOrigin("https://api.github.com/repos/x", "https://api.github.com/other"), true);
+  assert.equal(sameOrigin("https://api.github.com/x", "https://evil.example.com/x"), false);
+  assert.equal(sameOrigin("https://api.github.com/x", "https://API.GitHub.com/x"), true);
+  assert.equal(sameOrigin("https://api.github.com/x", "http://api.github.com/x"), false);
+  assert.equal(sameOrigin("https://api.github.com/x", "https://api.github.com:444/x"), false);
+  assert.equal(sameOrigin("https://api.github.com/x", "not a url"), false);
+});
+
+test("buildPullEntryArgs routes terminal statuses through the pm close lifecycle", () => {
+  const entry = (toStatus: string): any => ({ itemId: "PVTI_1", pmId: "pm-1", title: "t", fromStatus: "open", toStatus });
+  // `closed` uses `pm close`, which records closed_at + close_reason.
+  assert.deepEqual(
+    buildPullEntryArgs(entry("closed"), "/root"),
+    ["--path", "/root", "close", "pm-1", "--reason", "GitHub project status → closed"],
+  );
+  // `canceled` keeps its distinct terminal state via `pm update --status
+  // canceled` while recording `--close-reason` (the lifecycle metadata pm CLI
+  // tracks for canceled items). It must NOT be routed through `pm close`, which
+  // would conflate canceled with closed and fail on terminal→canceled.
+  assert.deepEqual(
+    buildPullEntryArgs(entry("canceled"), "/root"),
+    ["--path", "/root", "update", "pm-1", "--status", "canceled", "--close-reason", "GitHub project status → canceled", "--message", "GitHub project status → canceled"],
+  );
+  // Active statuses are plain `pm update --status` with an audit message only.
+  assert.deepEqual(
+    buildPullEntryArgs(entry("in_progress"), "/root"),
+    ["--path", "/root", "update", "pm-1", "--status", "in_progress", "--message", "GitHub project status → in_progress"],
+  );
+});
+
+// ---------------------------------------------------------------------------
+// GitHub Projects v2 listing pagination (Greptile 2006f478)
+// ---------------------------------------------------------------------------
+// `runProjectList` must paginate the projectsV2 connection beyond the first page
+// (GitHub caps connections at 100/page) for both user and organization owners,
+// threading the endCursor through pageInfo and never silently truncating.
+
+function projNode(n: number): any {
+  return { number: n, title: `P${n}`, url: `https://github.com/orgs/o/projects/${n}`, closed: false, shortDescription: null };
+}
+
+// Pure pagination contract: collectProjectsV2Pages threads the cursor through
+// each fetch and stops only when pageInfo reports no more pages. A 150-project
+// owner (page 1: 100, page 2: 50) must be fully collected, not truncated at 50
+// or 100.
+test("collectProjectsV2Pages pages through hasNextPage/endCursor with no silent truncation", async () => {
+  const calls: Array<string | undefined> = [];
+  let i = 0;
+  const pages = [
+    { nodes: Array.from({ length: 100 }, (_, k) => projNode(k + 1)), pageInfo: { hasNextPage: true, endCursor: "cursor-1" } },
+    { nodes: Array.from({ length: 50 }, (_, k) => projNode(101 + k)), pageInfo: { hasNextPage: false, endCursor: "cursor-2" } },
+  ];
+  const out = await collectProjectsV2Pages(async (cursor) => {
+    calls.push(cursor);
+    return pages[i++];
+  });
+  // First call starts with no cursor; the second receives the page-1 endCursor.
+  assert.deepEqual(calls, [undefined, "cursor-1"]);
+  assert.equal(out.length, 150, "all 150 projects across two pages must be collected");
+  assert.equal(out[0].number, 1);
+  assert.equal(out[149].number, 150);
+});
+
+test("collectProjectsV2Pages stops on a single page with hasNextPage=false", async () => {
+  let calls = 0;
+  const out = await collectProjectsV2Pages(async () => {
+    calls++;
+    return { nodes: [projNode(1), projNode(2)], pageInfo: { hasNextPage: false, endCursor: "c" } };
+  });
+  assert.equal(calls, 1, "single-page owner must not over-page");
+  assert.equal(out.length, 2);
+});
+
+test("collectProjectsV2Pages stops when pageInfo is missing (defensive, no infinite loop)", async () => {
+  let calls = 0;
+  const out = await collectProjectsV2Pages(async () => {
+    calls++;
+    return { nodes: [projNode(1)] } as any; // no pageInfo
+  });
+  assert.equal(calls, 1);
+  assert.equal(out.length, 1);
+});
+
+test("collectProjectsV2Pages stops when hasNextPage=true but endCursor is absent (no cursor to thread)", async () => {
+  let calls = 0;
+  const out = await collectProjectsV2Pages(async () => {
+    calls++;
+    return { nodes: [projNode(1)], pageInfo: { hasNextPage: true } as any };
+  });
+  assert.equal(calls, 1, "must not loop forever paging with the same (absent) cursor");
+  assert.equal(out.length, 1);
+});
+
+test("collectProjectsV2Pages tolerates null nodes and a null/early-stop fetcher", async () => {
+  const out = await collectProjectsV2Pages(async () => ({ nodes: [null, projNode(1), undefined], pageInfo: { hasNextPage: false } } as any));
+  assert.equal(out.length, 1, "null/undefined nodes are filtered out");
+  const empty = await collectProjectsV2Pages(async () => undefined);
+  assert.equal(empty.length, 0);
+});
+
+// Runtime listing path: listOwnerProjectsV2Nodes detects the owner type from the
+// first page and keeps paginating the right connection (user OR organization)
+// using the injected transport, so the multi-page behavior is verified end to
+// end without any network calls.
+test("listOwnerProjectsV2Nodes paginates an organization owner beyond the first page and threads the cursor", async () => {
+  const calls: Array<{ cursor: string | null; owner: string }> = [];
+  let page = 0;
+  const nodes = await listOwnerProjectsV2Nodes("unbraind", async (_q, vars) => {
+    calls.push({ cursor: vars.cursor as string | null, owner: vars.owner as string });
+    // org login: user is null, organization resolves.
+    if (page === 0) {
+      page++;
+      return {
+        user: null,
+        organization: {
+          projectsV2: {
+            nodes: Array.from({ length: 100 }, (_, k) => projNode(k + 1)),
+            pageInfo: { hasNextPage: true, endCursor: "org-c1" },
+          },
+        },
+      };
+    }
+    return {
+      user: null,
+      organization: {
+        projectsV2: {
+          nodes: Array.from({ length: 30 }, (_, k) => projNode(101 + k)),
+          pageInfo: { hasNextPage: false, endCursor: "org-c2" },
+        },
+      },
+    };
+  });
+  // Two pages, cursor threaded from page 1 (null) → page 2 ("org-c1").
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].cursor, null);
+  assert.equal(calls[1].cursor, "org-c1");
+  assert.equal(calls[0].owner, "unbraind");
+  assert.equal(nodes.length, 130, "org owner with 130 projects is fully listed, not truncated at 50/100");
+  assert.equal(nodes[0].number, 1);
+  assert.equal(nodes[129].number, 130);
+});
+
+test("listOwnerProjectsV2Nodes paginates a user owner and stops at hasNextPage=false", async () => {
+  const calls: Array<string | null> = [];
+  let page = 0;
+  const nodes = await listOwnerProjectsV2Nodes("steve", async (_q, vars) => {
+    calls.push(vars.cursor as string | null);
+    if (page === 0) {
+      page++;
+      return {
+        user: { projectsV2: { nodes: Array.from({ length: 100 }, (_, k) => projNode(k + 1)), pageInfo: { hasNextPage: true, endCursor: "u-c1" } } },
+        organization: null,
+      };
+    }
+    return {
+      user: { projectsV2: { nodes: [projNode(101), projNode(102)], pageInfo: { hasNextPage: false, endCursor: "u-c2" } } },
+      organization: null,
+    };
+  });
+  assert.deepEqual(calls, [null, "u-c1"]);
+  assert.equal(nodes.length, 102);
+});
+
+test("listOwnerProjectsV2Nodes resolves the owner type on the first page and does not switch connections mid-listing", async () => {
+  // Once user is detected on page 1, a later page returning organization data
+  // (defensive against a flaky API) must NOT cause the pager to switch to the
+  // organization connection.
+  let page = 0;
+  const nodes = await listOwnerProjectsV2Nodes("mixed", async () => {
+    page++;
+    if (page === 1) {
+      return { user: { projectsV2: { nodes: [projNode(1)], pageInfo: { hasNextPage: true, endCursor: "c1" } } }, organization: null };
+    }
+    if (page === 2) {
+      return { user: { projectsV2: { nodes: [projNode(2)], pageInfo: { hasNextPage: false, endCursor: "c2" } } }, organization: { projectsV2: { nodes: [projNode(999)] } } };
+    }
+    return null as any;
+  });
+  assert.equal(nodes.length, 2, "organization node from page 2 must be ignored once user is pinned");
+  assert.equal(nodes[1].number, 2);
 });
