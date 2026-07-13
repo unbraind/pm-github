@@ -1,0 +1,44 @@
+id: pm-github-jkr6
+title: Productionize GitHub Projects v2 bidirectional sync
+description: "Complete and harden pm-github Projects v2 import, push, pull, and sync workflows using the current pm CLI/SDK contracts, with safe provenance and status round trips for agent context management."
+type: Feature
+status: closed
+priority: 1
+tags[5]: agent-context,bidirectional-sync,github-projects,production-readiness,projects-v2
+created_at: "2026-07-11T18:03:54.172Z"
+updated_at: "2026-07-11T18:13:43.561Z"
+closed_at: "2026-07-11T18:05:10.564Z"
+author: codex
+acceptance_criteria: Projects v2 commands expose intuitive SDK command contracts; project item provenance survives pm tag normalization; push/pull status mapping is symmetric; existing tags are preserved during import updates; dry-run and add-missing safety semantics are tested; full release check passes; real authenticated read-only validation is recorded; no secrets or private data are tracked.
+definition_of_ready: Existing feat/projects-v2-sync implementation and follow-up hardening are present; gh authentication is available; mutations use dry-run or isolated test data unless explicitly safe.
+value: Agents can use GitHub Projects as a shared planning surface without losing pm context or corrupting status/provenance.
+impact: Adds production-grade multi-surface project context synchronization for pm-managed work.
+outcome: "Deterministic, tested, agent-friendly Projects v2 workflows with safe bidirectional mapping."
+why_now: The implementation is already in progress and must be completed before the branch can be reviewed and released.
+risk: high
+confidence: medium
+resolution: "Implemented and verified Projects v2 bidirectional sync with status symmetry, tag-preserving imports, redirect credential isolation, and real CLI/API dry-run validation."
+expected_result: Projects commands are discoverable and safe by default; status/provenance round trips preserve data; release checks pass.
+actual_result: All nine package actions activated; 78 tests and release gate passed; authenticated list/fields/dry-run succeeded; no current vulnerabilities.
+comments[4]{created_at,author,text}:
+  "2026-07-11T18:03:54.172Z",codex,"Initial verification: git diff --check clean; npm test passed 78/78; npm run release:check passed including zero production vulnerabilities and changelog check."
+  "2026-07-11T18:05:09.310Z",codex,"Real-life SDK/CLI verification with pm 2026.7.11: local package install activated all nine command/action paths with health ok; read-only project list found unbraind/1; fields returned 18 fields and five Status options; default sync dry-run produced a push/pull plan without remote writes. GitHub security review: only alert is fixed CVE-2026-54285 in a dev transitive dependency; npm audit reports zero vulnerabilities."
+  "2026-07-11T18:12:05.139Z",codex,"Sourcery review remediation: removed ad-hoc _pmRoot mutation and hard-coded tracker fallback by passing ctx.pm_root explicitly into applyPushEntry; normalized README terminology to Projects v2. Full release gate rerun after changes."
+  "2026-07-11T18:13:43.561Z",codex,"Greptile/Gemini round-two remediation: dry-run import now reads the local store for idempotent create/update planning; GraphQL fails early with token guidance; nullable project/item/field nodes are filtered or normalized; sync token requirement is explicit; malformed non-string provenance tags are safely rejected with regression coverage. Full release gate passes with 79 tests."
+notes[1]{created_at,author,text}:
+  "2026-07-11T18:03:54.172Z",codex,Existing uncommitted edits were present at session start and are preserved; pm-cli itself remains read-only.
+learnings[2]{created_at,author,text}:
+  "2026-07-11T18:03:54.172Z",codex,"pm normalizes tags to lowercase, so case-sensitive GitHub node IDs require a reversible lowercase-safe provenance encoding."
+  "2026-07-11T18:05:09.811Z",codex,A repo-local local-source install is necessary to test newly registered nested extension commands; invoking the globally/previously installed extension correctly rejected the new path before activation.
+files[4]{path,scope,note}:
+  index.ts,project,SDK command registration and execution
+  projects.ts,project,Projects v2 planning mapping and provenance
+  test/projects.test.ts,project,Projects v2 mapping regression tests
+  test/smoke.test.ts,project,extension contract smoke coverage
+tests[2]{command,scope,timeout_seconds,note}:
+  "npm run release:check",project,600,typecheck build tests audit package and changelog gate
+  npm test,project,300,TypeScript build and 78 unit tests
+docs[1]{path,scope,note}:
+  README.md,project,user-facing Projects v2 workflow documentation
+close_reason: "Projects v2 sync and follow-up safety fixes verified with 78 passing tests, full release gate, local SDK activation, authenticated read-only Projects API calls, and a no-write dry-run against real project data."
+body: ""

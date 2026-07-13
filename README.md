@@ -18,7 +18,7 @@ pm install github.com/unbraind/pm-github --global
 |---|---|
 | `importers` | `pm github import <owner/repo>` — idempotent native import pipeline |
 | `importers` (exporter) | `pm github export` — pm items → GitHub issues (dry-run by default; upsert) |
-| `commands` | `pm gh-issues import` (legacy import alias), `pm github sync` (push status), `pm github validate` (diagnostics) |
+| `commands` | `pm gh-issues import` (legacy import alias), `pm github sync` (push status), `pm github validate` (diagnostics), `pm github project list\|fields\|import\|sync` (Projects v2) |
 | `schema` | declares `github_url`, `github_number`, `github_state`, `github_author`, `github_created_at`, `github_updated_at` item fields |
 | `hooks` | `afterCommand` — opt-in sync reminder (`PM_GITHUB_SYNC`) for linked items |
 | `preflight` | early warning when a mutating github command lacks a token |
@@ -93,6 +93,59 @@ pm github sync --repo owner/repo              # push the changes
 ```
 
 `--ids` scopes sync to specific pm item IDs (comma-separated). Unknown IDs fail fast so agent runs do not silently skip typoed targets.
+
+## GitHub Projects v2 (bidirectional board sync)
+
+GitHub Projects v2 boards are a GraphQL-only surface, distinct from Issues. These commands keep a pm workspace and a Projects v2 board in lockstep — *project management = context management* — **without ever losing data**: nothing is deleted or archived on either side, every action is idempotent via a `gh-project:owner/number#itemId` provenance tag, and a pm status (or board Status) that has no clear counterpart is **skipped, never guessed**.
+
+Needs a token with `project`/`read:project` scope (`GITHUB_TOKEN`/`GH_TOKEN` or `gh auth login`).
+
+### `pm github project list <owner>`
+
+Discover the Projects v2 owned by a user or org (read-only).
+
+```bash
+pm github project list unbraind
+pm github project list unbraind --json
+```
+
+### `pm github project fields <owner/number>`
+
+Introspect a board's fields and — crucially — its **Status** single-select options, so you can design a `--status-map` (read-only).
+
+```bash
+pm github project fields unbraind/5
+```
+
+### `pm github project import <owner/number>`
+
+Import every board item (draft issues included) as pm items. Idempotent: an item already linked (by project tag, or by the `gh:repo#N` issue it wraps) is **updated, not duplicated**. The board's Status option maps to the pm status.
+
+```bash
+pm github project import unbraind/5 --dry-run
+pm github project import unbraind/5
+pm github project import unbraind/5 --status-map in_progress=Doing,closed=Shipped
+```
+
+### `pm github project sync <owner/number>`
+
+Bidirectionally sync pm items and a board. **Safe by default**: with no `--apply` it previews *both* directions and writes nothing.
+
+- `--push` (pm → board): adds missing pm items to the board — attaching the existing GitHub issue when the pm item is issue-linked, otherwise creating a draft issue — and sets each item's **Status** from its pm status.
+- `--pull` (board → pm): updates each linked pm item's status from the board's Status column (status only — never touches title/body/tags).
+- `--apply` writes; with neither direction flag it defaults to `--push` (so pm is never mutated silently).
+- `--prefer pm|github` resolves conflicts when applying both directions (default `pm`).
+
+```bash
+pm github project sync unbraind/5                                  # preview both directions
+pm github project sync unbraind/5 --push --apply                  # pm → board
+pm github project sync unbraind/5 --pull --apply                  # board → pm
+pm github project sync unbraind/5 --push --pull --apply --prefer pm
+pm github project sync unbraind/5 --push --apply --ids pm-1,pm-2  # scope by id
+pm github project sync unbraind/5 --push --apply --no-add-missing # only reconcile linked items
+```
+
+> The GitHub Projects v2 item node id is case-sensitive but pm normalizes tag values to lowercase, so the node id is hex-encoded inside the provenance tag to round-trip losslessly. This is what makes re-sync idempotent instead of silently double-adding.
 
 ## Search (pm search → GitHub)
 

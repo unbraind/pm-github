@@ -1,0 +1,17 @@
+id: pm-github-y27r
+title: GitHub Projects v2 bidirectional sync (import/sync/list/fields)
+description: "pm-github today covers GitHub Issues fully but has no GitHub Projects v2 support. Add full Projects v2 management: import project items as pm items, and bidirectionally sync pm items <-> project items and their Status column. GraphQL-based (Projects v2 is GraphQL-only). Core philosophy: project management = context management; the GitHub Project board should stay in lockstep with pm state without ever losing data."
+type: Feature
+status: closed
+priority: 1
+tags: []
+created_at: "2026-07-11T15:31:41.397Z"
+updated_at: "2026-07-11T15:49:12.370Z"
+closed_at: "2026-07-11T15:49:12.370Z"
+author: claude
+acceptance_criteria: "New GraphQL layer + commands: 'project list', 'project fields', 'project import', 'project sync'. Bidirectional: push pm status->Project Status single-select option AND add missing pm items as draft issues; pull Project Status->pm status. Idempotent via gh-project:<owner>/<num>#<itemId> provenance + github_project_* item fields. Dry-run default on all mutating paths; --apply required to write; explicit direction (--push/--pull). NEVER deletes project items or pm items (no data loss). Configurable --status-map both directions. Unit tests cover status mapping + plan builders. typecheck+test+release:check green. CHANGELOG via pm-changelog."
+resolution: "Implemented GitHub Projects v2 bidirectional sync: new pure logic module projects.ts (ref parsing, hex-encoded provenance tags, status mapping, plan builders) + GraphQL client/handlers in index.ts, registering 4 commands (project list/fields/import/sync). Push adds missing pm items (existing issue or draft) and sets board Status; pull updates pm status from board; import is idempotent and dual-tags issue items. Dry-run default on all mutating paths; unmapped statuses skipped not guessed; nothing ever deleted/archived. 20 new unit tests + full live end-to-end run against a throwaway board (since deleted)."
+expected_result: "New Projects v2 commands work end-to-end, sync is idempotent, and no data is ever lost in either direction."
+actual_result: "Verified live: list/fields/push/pull/import all correct; idempotent re-push is a no-op; import updates linked items (no duplicates). Caught+fixed a real data-loss bug during functional testing — pm lowercases tags, corrupting the case-sensitive ProjectV2Item node id (broke idempotency + pull); fixed by hex-encoding the id in the tag (regression test added). 74/74 tests pass."
+close_reason: "Implemented GitHub Projects v2 bidirectional sync: new pure logic module projects.ts (ref parsing, hex-encoded provenance tags, status mapping, plan builders) + GraphQL client/handlers in index.ts, registering 4 commands (project list/fields/import/sync). Push adds missing pm items (existing issue or draft) and sets board Status; pull updates pm status from board; import is idempotent and dual-tags issue items. Dry-run default on all mutating paths; unmapped statuses skipped not guessed; nothing ever deleted/archived. 20 new unit tests + full live end-to-end run against a throwaway board (since deleted)."
+body: ""

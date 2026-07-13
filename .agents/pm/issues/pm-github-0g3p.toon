@@ -1,0 +1,31 @@
+id: pm-github-0g3p
+title: Resolve final Projects v2 review findings
+description: "Address all still-valid unresolved PR #28 review threads, verify the canceled lifecycle suggestion against pm CLI behavior, run the complete release gate, and close every thread with evidence."
+type: Issue
+status: closed
+priority: 1
+tags[3]: projects-v2,review,security
+created_at: "2026-07-13T00:42:03.184Z"
+updated_at: "2026-07-13T02:59:49.313Z"
+closed_at: "2026-07-13T02:59:48.759Z"
+author: codex
+estimated_minutes: 60
+acceptance_criteria: "Protocol downgrade guard, ambiguous status mapping, merged PR import, and external-data null safety have regression coverage; invalid feedback is documented; all tests and release checks pass; review threads are acknowledged and resolved."
+resolution: "Implemented thread fixes, provenance filtering, full Projects v2 listing pagination, and no-data-loss status refresh on re-import."
+expected_result: All actionable review findings are fixed with regression coverage and release gates pass.
+actual_result: All PR and Greptile findings resolved; paginated listing and safe re-import status refresh verified by 96/96 tests and full release check.
+comments[3]{created_at,author,text}:
+  "2026-07-13T02:22:50.799Z",codex,"Coordinator verification: git diff --check passed; npm run typecheck passed; npm test passed 82/82; npm run audit:prod found 0 vulnerabilities; pm-changelog check passed; npm pack dry-run contained 13 intended files. Local Greptile attempt b74b8871-8bd4-4721-ac4e-b86909d16295 excluded uncommitted files, so changes will be committed locally and reviewed by Greptile before push."
+  "2026-07-13T02:38:48.117Z",codex,"Greptile 49e67dcf resolved: export now removes strictly parsed gh-project provenance tags while retaining look-alike user labels. Coordinator rerun: typecheck green, 83/83 tests, 0 production vulnerabilities, changelog current, 13-file pack dry-run."
+  "2026-07-13T02:59:47.680Z",codex,"Coordinator verification for Greptile 2006f478: project list now follows pageInfo/endCursor for user and organization owners; re-import writes only explicitly mapped statuses and preserves existing state on unknown mappings. release:check passed with 96/96 tests, 0 vulnerabilities, current changelog, and 13-file package."
+files[4]{path,scope,note}:
+  index.ts,project,null
+  projects.ts,project,null
+  test/projects.test.ts,project,null
+  test/smoke.test.ts,project,null
+tests[1]{command,scope}:
+  npm test,project
+docs[1]{path,scope,note}:
+  /tmp/pr28_comments.json,project,null
+close_reason: All PR #28 review and Greptile findings resolved; full release check passes with 96/96 tests.
+body: ""

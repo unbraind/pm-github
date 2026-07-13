@@ -2,12 +2,12 @@ id: pm-github-mdcw
 title: "Full-cycle hardening wave: pm-github"
 description: "Track dependency, changelog, release checks, and security hardening evidence."
 type: Task
-status: in_progress
+status: closed
 priority: 1
 tags[4]: deps-2026-6-7,full-cycle-hardening,hardening-pass,wave-full-cycle-2026-06-07
 created_at: "2026-06-07T07:41:38.767Z"
-updated_at: "2026-06-07T08:00:42.336Z"
-assignee: codex-5.3-full-cycle
+updated_at: "2026-07-11T15:31:06.496Z"
+closed_at: "2026-07-11T15:31:06.495Z"
 author: codex-5.3-full-cycle
 notes[2]{created_at,author,text}:
   "2026-06-07T07:41:40.228Z",codex-5.3-full-cycle,"Hardening pass complete: release:check succeeded after dependency bump and changelog regeneration."
@@ -16,8 +16,9 @@ files[3]{path,scope,note}:
   CHANGELOG.md,project,Regenerated changelog to satisfy release gate
   package-lock.json,project,Regenerated lockfile after dependency alignment
   package.json,project,Upgraded @unbrained/pm-cli and pm-changelog to latest ranges
-tests[1]{command,path,scope,timeout_seconds,pm_context_mode,env_set,env_clear,shared_host_safe,assert_stdout_contains,assert_stdout_regex,assert_stderr_contains,assert_stderr_regex,assert_stdout_min_lines,assert_json_field_equals,assert_json_field_gte,note}:
-  "npm run release:check",.,project,2400,null,null,null,null,null,null,null,null,null,null,null,null
+tests[1]{command,path,scope,timeout_seconds}:
+  "npm run release:check",.,project,2400
 docs[1]{path,scope,note}:
   README.md,project,Primary package docs reference
+close_reason: Full-cycle hardening wave (2026-06-07) completed across later releases; release/changelog/dep checks green at 2026.7.11. Closing stale tracker.
 body: Master execution item for full-cycle hardening in pm-github.

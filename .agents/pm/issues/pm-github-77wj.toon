@@ -2,11 +2,13 @@ id: pm-github-77wj
 title: export --apply exits 0 even when every item fails to write
 description: "The export --apply handler calls applyExportPlan() and then returns { applied:true, ... } and exits 0 regardless of outcome. Per-item-continue isolation is intentional, but when a non-empty plan results in zero successes and at least one failure (created===0 && updated===0 && failed>0) the command still exited 0. A CI/script step would see success when nothing was written to GitHub."
 type: Issue
-status: in_progress
+status: closed
 priority: 2
 tags: []
 created_at: "2026-06-13T07:19:57.156Z"
-updated_at: "2026-06-13T07:19:57.156Z"
+updated_at: "2026-07-11T15:31:03.683Z"
+closed_at: "2026-07-11T15:31:03.682Z"
 author: codex
 acceptance_criteria: "Non-empty all-fail batch throws CommandError(GENERIC_FAILURE=1) after the per-item errors/summary are emitted; partial success (>=1 created/updated) still exits 0; empty plan still exits 0; unit tests cover all-fail/partial/empty/full via applyOutcomeError; release:check green."
+close_reason: "Verified shipped: applyOutcomeError throws CommandError(1) on non-empty all-fail batch; partial/empty still exit 0. Tests present (applyOutcomeError all-fail/partial/empty). Code index.ts:1144-1164, tests in smoke.test.ts."
 body: ""

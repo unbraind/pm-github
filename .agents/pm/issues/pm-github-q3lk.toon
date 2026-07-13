@@ -2,11 +2,13 @@ id: pm-github-q3lk
 title: Export --apply aborts the whole batch on the first failed item
 description: "The exporter's --apply loop did 'await request(...)' per item with no try/catch. A single failed create/update (e.g. a 422 for a label that does not exist on the repo) threw and abandoned every remaining item, with no record of what was already written. The import/sync paths already isolate per-item failures (skipped++/continue); the export path did not."
 type: Issue
-status: in_progress
+status: closed
 priority: 2
 tags: []
 created_at: "2026-06-05T14:47:06.754Z"
-updated_at: "2026-06-05T14:47:13.857Z"
+updated_at: "2026-07-11T15:31:04.529Z"
+closed_at: "2026-07-11T15:31:04.529Z"
 author: codex
 acceptance_criteria: per-item apply failures isolated and counted; batch completes with a summary; happy path + dry-run byte-identical; unit test proves continue-on-failure
+close_reason: "Verified shipped: applyExportPlan isolates per-item failures (try/catch, failures[], continue). Tests: 'continues after a per-item failure', 'never throws on a failing item'. Code index.ts:1054-1139."
 body: ""
