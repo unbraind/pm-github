@@ -1,0 +1,16 @@
+id: pm-github-urs1
+title: Route GitHub export dry-run preview to stderr so stdout stays valid JSON
+description: "pm github export --format json corrupted stdout: extension console.log'd the preview to stdout while the SDK host also renders the return object to stdout, yielding JSON+trailing-YAML. Fix: route the md/JSON preview to stderr like the existing [dry-run] note. Non-breaking; --format json to raw stdout never worked. Mirror of companion item pm-cli-website-ex9n."
+type: Task
+status: closed
+priority: 1
+tags[3]: agent-ux,bug,export
+created_at: "2026-07-13T19:18:04.206Z"
+updated_at: "2026-07-13T20:17:49.709Z"
+closed_at: "2026-07-13T19:24:37.772Z"
+author: pi-github-fix
+files[2]{path,scope,note}:
+  index.ts,project,md+JSON dry-run preview routed to console.error
+  test/smoke.test.ts,project,"regression test: preview routes to stderr,stdout stays clean"
+close_reason: "Routed md+JSON dry-run export preview to stderr; stdout now only the host render. Added regression test. release:check green."
+body: ""

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Route GitHub export dry-run preview to stderr so stdout stays valid JSON ([pm-github-urs1](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-urs1.toon))
+
 ## 2026.7.13 - 2026-07-13
 
 ### Added

@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import extension, {
   CommandError,
@@ -1014,4 +1019,194 @@ test("listOwnerProjectsV2Nodes resolves the owner type on the first page and doe
   });
   assert.equal(nodes.length, 2, "organization node from page 2 must be ignored once user is pinned");
   assert.equal(nodes[1].number, 2);
+});
+
+// ---------------------------------------------------------------------------
+// runExport dry-run preview routing — regression: stdout corruption
+// ---------------------------------------------------------------------------
+//
+// `pm github export --format json` used to console.log the human preview to
+// STDOUT while the SDK host ALSO renders the exporter's return object to
+// STDOUT, so the combined stdout was JSON immediately followed by trailing
+// YAML/markdown — not valid JSON (Python json.loads -> "Extra data"). The fix
+// routes BOTH the md preview and the JSON.stringify(plan) preview to STDERR
+// (console.error), mirroring the existing [dry-run] note, so STDOUT is always
+// only the host render (parseable JSON when the caller passes the global
+// --json).
+//
+// Deterministic + offline: spins up a throwaway pm workspace in the system
+// temp dir via the local pm binary, then drives the real registered exporter
+// handler and asserts the preview lands on stderr, never stdout.
+
+// On Windows the npm shim is `pm.cmd`; the extensionless `pm` shell script is
+// not directly executable via execFileSync (ENOENT/EINVAL). Resolve the
+// platform-appropriate shim so the setup spawns work cross-platform.
+const PM_BIN = fileURLToPath(
+  new URL(`../node_modules/.bin/pm${process.platform === "win32" ? ".cmd" : ""}`, import.meta.url),
+);
+
+function makeExportTestWorkspace(): string {
+  const root = mkdtempSync(join(tmpdir(), "pm-github-export-test-"));
+  const env = { ...process.env, PM_AUTHOR: "tester" };
+  // If any setup spawn fails, remove the freshly-created temp dir before
+  // rethrowing so a setup failure never leaks a workspace (the caller's
+  // try/finally only covers the dir once it has been returned).
+  try {
+    // pm init's workspace flag differs across pm-cli versions: newer builds
+    // expose --workspace (tracker lands under <root>/.agents/pm); older builds
+    // take the tracker target as a positional path (tracker lands in <root>
+    // directly). Both then answer `pm --pm-path <root>`, so pm_root is <root>
+    // either way — we just call whichever init form this pm understands.
+    try {
+      execFileSync(PM_BIN, ["init", "-y", "--force", "--workspace", root, "--author", "tester"], {
+        stdio: "ignore",
+        env,
+      });
+    } catch {
+      execFileSync(PM_BIN, ["init", "-y", "--force", root, "--author", "tester"], {
+        stdio: "ignore",
+        env,
+      });
+    }
+    execFileSync(PM_BIN, ["--pm-path", root, "create", "task", "Alpha", "--description", "first body"], {
+      stdio: "ignore",
+      env,
+    });
+    execFileSync(PM_BIN, ["--pm-path", root, "create", "task", "Beta", "--description", "second body"], {
+      stdio: "ignore",
+      env,
+    });
+    return root;
+  } catch (err) {
+    rmSync(root, { recursive: true, force: true });
+    throw err;
+  }
+}
+
+function captureExporterHandler(): (ctx: any) => Promise<any> {
+  let handler: ((ctx: any) => Promise<any>) | undefined;
+  const noop = () => {};
+  const api: any = {
+    registerCommand: noop, registerParser: noop, registerPreflight: noop, registerService: noop,
+    registerFlags: noop, registerItemFields: noop, registerItemTypes: noop, registerMigration: noop,
+    registerRenderer: noop, registerImporter: noop,
+    registerExporter: (name: string, fn: any) => { if (name === "github") handler = fn; },
+    registerSearchProvider: noop, registerVectorStoreAdapter: noop,
+    hooks: { beforeCommand: noop, afterCommand: noop, onWrite: noop, onRead: noop, onIndex: noop },
+  };
+  extension.activate(api);
+  assert.ok(handler, "github exporter handler should be registered");
+  return handler!;
+}
+
+// Captures every console.log / console.error argument during `fn`. Returns the
+// flat list of joined string arguments written to each stream.
+async function captureConsole<T>(fn: () => Promise<T>): Promise<{ stdout: string[]; stderr: string[]; result: T }> {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  const origLog = console.log;
+  const origErr = console.error;
+  (console as any).log = (...a: any[]) => { stdout.push(a.map(String).join(" ")); };
+  (console as any).error = (...a: any[]) => { stderr.push(a.map(String).join(" ")); };
+  try {
+    const result = await fn();
+    return { stdout, stderr, result };
+  } finally {
+    (console as any).log = origLog;
+    (console as any).error = origErr;
+  }
+}
+
+test("runExport dry-run routes the md preview to STDERR, never STDOUT", async () => {
+  const handler = captureExporterHandler();
+  const root = makeExportTestWorkspace();
+  try {
+    const { stdout, stderr, result } = await captureConsole(() =>
+      handler({ pm_root: root, options: { format: "md" }, global: { json: false } }),
+    );
+    // The whole point of the fix: the human preview must NOT touch stdout.
+    assert.strictEqual(
+      stdout.length,
+      0,
+      "md preview must not be written to stdout (would corrupt host-rendered JSON)",
+    );
+    // The preview header and the dry-run note both land on stderr.
+    assert.ok(
+      stderr.some((l) => l.includes("[create] Alpha")),
+      "md preview header should appear on stderr",
+    );
+    assert.ok(
+      stderr.some((l) => l.includes("[dry-run]")),
+      "the existing [dry-run] note should remain on stderr",
+    );
+    // The machine-readable return object is still intact.
+    assert.strictEqual(result.dry_run, true);
+    assert.ok(Array.isArray(result.plan), "return object should carry the plan array");
+    assert.strictEqual(result.would_create, 2, "both unlinked items are creates");
+    assert.strictEqual(result.would_update, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("runExport dry-run routes the JSON preview to STDERR, never STDOUT", async () => {
+  const handler = captureExporterHandler();
+  const root = makeExportTestWorkspace();
+  try {
+    const { stdout, stderr, result } = await captureConsole(() =>
+      handler({ pm_root: root, options: {}, global: { json: false } }),
+    );
+    // Default format is JSON; the JSON.stringify(plan) preview must go to
+    // stderr so stdout stays only the host render (valid JSON under --json).
+    assert.strictEqual(
+      stdout.length,
+      0,
+      "JSON preview must not be written to stdout (would corrupt host-rendered JSON)",
+    );
+    // The pretty-printed plan array is the first stderr line and parses back
+    // to the same plan the return object carries.
+    const jsonPreview = stderr.find((l) => l.trimStart().startsWith("["));
+    assert.ok(jsonPreview, "a pretty-printed JSON array preview should be on stderr");
+    const parsed = JSON.parse(jsonPreview!);
+    assert.ok(Array.isArray(parsed), "stderr JSON preview should parse to the plan array");
+    assert.strictEqual(parsed.length, 2);
+    assert.ok(
+      stderr.some((l) => l.includes("[dry-run]")),
+      "the [dry-run] note should still be on stderr",
+    );
+    // Return object still carries the plan for the host to render.
+    assert.strictEqual(result.dry_run, true);
+    assert.ok(Array.isArray(result.plan));
+    assert.strictEqual(result.plan.length, 2);
+    assert.strictEqual(result.would_create, 2);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("runExport dry-run with global --json writes NO preview to either stream", async () => {
+  // In JSON mode the host renders the return object to stdout; the extension
+  // must stay completely silent (no preview on either stream) so stdout is a
+  // single valid JSON object.
+  const handler = captureExporterHandler();
+  const root = makeExportTestWorkspace();
+  try {
+    const { stdout, stderr, result } = await captureConsole(() =>
+      handler({ pm_root: root, options: { format: "md" }, global: { json: true } }),
+    );
+    assert.strictEqual(stdout.length, 0, "nothing should be written to stdout in JSON mode");
+    // No human preview lines (only the host renders). The [dry-run] note is
+    // also gated behind !jsonMode, so stderr should be empty too.
+    assert.ok(
+      !stderr.some((l) => l.includes("[create]")),
+      "no md preview should be emitted in JSON mode",
+    );
+    assert.ok(
+      !stderr.some((l) => l.includes("[dry-run]")),
+      "no human dry-run note should be emitted in JSON mode",
+    );
+    assert.ok(Array.isArray(result.plan), "return object should carry the plan array");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

@@ -1300,9 +1300,15 @@ async function runExport(ctx: any) {
             return `${head}\n\n${e.payload.body}\n\n_labels: ${e.payload.labels.join(", ")} · state: ${e.payload.state}_\n`;
           })
           .join("\n");
-        console.log(md);
+        // Route the human preview to STDERR so STDOUT stays only the
+        // host-rendered return value (parseable JSON when the caller passes
+        // the global --json). Writing the preview to stdout via console.log
+        // used to corrupt `pm github export --format json` output: the host
+        // also renders the exporter's return object to stdout, yielding JSON
+        // immediately followed by trailing YAML/markdown — not valid JSON.
+        console.error(md);
       } else {
-        console.log(JSON.stringify(plan, null, 2));
+        console.error(JSON.stringify(plan, null, 2));
       }
       const scopeNote = scopedIds.length > 0
         ? ` Scoped to ${scoped.selected.length} item(s) via --ids.`
