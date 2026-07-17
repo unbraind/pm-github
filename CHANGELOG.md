@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Opt-in native comment sync (GitHub comments → pm comments collection) ([pm-github-p9gp](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-p9gp.toon))
+
 ## 2026.7.13-1 - 2026-07-13
 
 ### Fixed

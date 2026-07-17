@@ -1,0 +1,12 @@
+id: pm-github-503u
+title: Serialize marker-dedupe read-and-append across concurrent imports
+description: "CodeRabbit (PR #33, comment 3599527301) correctly notes the native comment sync's read-markers-then-append sequence is not atomic across two concurrent 'pm github import' processes targeting the same workspace: both can observe a GitHub comment id as absent and append it twice. Individual writes go through the pm CLI (which locks per mutation), but our check-then-act spans multiple mutations. Current disposition: documented limitation (see syncGithubCommentsToAnnotations docstring) — concurrent same-repo imports are an operator edge case and worst case yields a duplicate comment, not data loss. Proper fix: cross-process lock (e.g. lockfile in workspace runtime dir) or an SDK-level conditional append (append-if-marker-absent) — the latter is worth proposing upstream."
+type: Task
+status: open
+priority: 2
+tags: []
+created_at: "2026-07-17T00:17:34.148Z"
+updated_at: "2026-07-17T00:17:34.148Z"
+author: claude-fleet
+acceptance_criteria: "Concurrent 'pm github import --comments-mode annotations' runs against the same workspace never duplicate a comment (verified by a parallel-import test), or the limitation is lifted via an upstream SDK conditional-append primitive"
+body: ""

@@ -1,0 +1,17 @@
+id: pm-github-p9gp
+title: Opt-in native comment sync (GitHub comments → pm comments collection)
+description: "Add --comments-mode body|annotations|both (default body, byte-identical to today). annotations/both sync GitHub issue comments into the pm item's native comments collection via the SDK comments() primitive, deduping on re-sync by a stable GitHub-comment-id marker."
+type: Feature
+status: closed
+priority: 2
+tags[3]: comments,native-comments,sync
+created_at: "2026-07-16T21:41:04.658Z"
+updated_at: "2026-07-17T00:17:33.899Z"
+closed_at: "2026-07-16T21:41:21.471Z"
+author: pi-agent
+comments[3]{created_at,author,text}:
+  "2026-07-16T21:41:14.552Z",pi-agent,"Verified: default mode byte-identical (composeBody pinned in tests + real import of unbraind/pm-cli#574); annotations mode populated native comments for 16 real issues; re-import deduped (42 comments unchanged). 12 new tests + 99 existing all green. peerDependency floor unchanged (comments() SDK fn pre-existed at 2026.7.10)."
+  "2026-07-16T21:50:22.958Z",pi-agent,"Greptile review (2 P2 findings, both fixed): (1) commentsMode validation now validates-before-assign instead of assign-then-detect; (2) --with-comments + --comments-mode annotations now reconciles to 'both' rather than silently dropping the legacy flag (documented in README + test). Re-ran release:check: 112 tests pass, 0 vulns, changelog up to date."
+  "2026-07-17T00:17:33.899Z",claude-fleet,"Correction to the 21:41 verification note (flagged by CodeRabbit on PR #33): (1) the peerDependency floor WAS bumped to >=2026.7.14 in commit 426672e — the comments() SDK primitive is public only since pm CLI 2026.7.14, and the static ESM import would have killed extension load on older hosts, so it is now lazy-loaded and the floor states the real requirement (package.json + package-lock both updated in 54a46a4). (2) Test math: 13 new tests in test/comments-sync.test.ts + 99 existing = 112 total, matching the release:check total; the earlier '12 new' was a miscount."
+close_reason: Implemented and verified; ready for PR review
+body: ""

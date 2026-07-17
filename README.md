@@ -52,10 +52,26 @@ pm github import owner/repo --dry-run
 | `--include-prs` | boolean | Include pull requests (default: skip PRs) |
 | `--skip-drafts` | boolean | Exclude draft pull requests (only meaningful with `--include-prs`) |
 | `--with-comments` | boolean | Fetch issue comments and append them to the item body |
+| `--comments-mode <mode>` | `body`\|`annotations`\|`both` | How fetched GitHub comments are persisted (default `body`). `annotations` syncs comments into the pm item's native comments collection via the SDK; `both` writes the body section AND native comments. `annotations`/`both` are idempotent on re-import (dedupe by GitHub comment id) |
 | `--dry-run` | boolean | Preview without writing |
 | `--type <type>` | string | Override pm item type (default: Issue) |
 
 Each imported item records GitHub provenance: the `gh:owner/repo#N` idempotency tag, a `github_author:<login>` tag, and an enriched description (`author @<login> · state reason <reason> · created <iso> · updated <iso>`). GitHub issues closed as `not_planned` import as pm `canceled` instead of `closed`, preserving the difference between completed work and deliberately dropped work. The integration declares the `github_url`, `github_number`, `github_state`, `github_author`, `github_created_at`, and `github_updated_at` schema fields.
+
+### Native comment sync (`--comments-mode`)
+
+By default (`--comments-mode body`, or `--with-comments`), fetched GitHub issue comments are flattened into the item body as blockquoted markdown under a `### GitHub comments (N)` heading — the historical behavior, byte-identical across releases.
+
+`--comments-mode annotations` instead syncs each GitHub comment into the pm item's **native comments collection** via the public SDK `comments()` primitive, so agents get structured, queryable comments (`pm comments <id>`) instead of body-embedded text. Each stored comment carries a hidden marker with the GitHub comment id (`<!-- pm-github:comment:N -->`), so re-running import is **idempotent** — already-synced comments are skipped and never duplicated. `--comments-mode both` writes the body section *and* the native comments.
+
+When `--with-comments` is combined with `--comments-mode annotations`, the two are reconciled to `both` (the legacy flag asks for body embedding, the mode asks for native comments → both), so neither is silently dropped.
+
+```bash
+pm github import owner/repo --comments-mode annotations   # native comments only
+pm github import owner/repo --comments-mode both            # body section + native comments
+pm github import owner/repo --with-comments                 # legacy body embedding (default shape)
+pm github import owner/repo --with-comments --comments-mode annotations  # same as --comments-mode both
+```
 
 ## Export (pm → GitHub)
 
