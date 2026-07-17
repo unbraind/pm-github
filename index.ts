@@ -18,6 +18,28 @@ import { spawnSync } from "node:child_process";
 
 import type { defineExtension as defineExtensionType } from "@unbrained/pm-cli/sdk";
 
+// The `comments()` annotation primitive is only exported from the public SDK
+// since pm CLI 2026.7.14. Load it lazily so hosts on older CLI versions still
+// load the extension fine (this is ESM — a missing named export in a static
+// import kills the whole module at load time); only `--comments-mode
+// annotations|both` needs it, and it degrades with a clear error instead.
+type PmCommentsFn = (
+  itemId: string,
+  options: Record<string, unknown>,
+  ctx: { pmRoot: string },
+) => Promise<{ comments?: unknown[] } | undefined>;
+
+async function loadPmComments(): Promise<PmCommentsFn> {
+  const sdk = (await import("@unbrained/pm-cli/sdk")) as Record<string, unknown>;
+  const fn = sdk.comments;
+  if (typeof fn !== "function") {
+    throw new Error(
+      "the installed pm CLI does not export the SDK comments() primitive (requires pm CLI >= 2026.7.14)",
+    );
+  }
+  return fn as PmCommentsFn;
+}
+
 import {
   type ProjectItem,
   type ProjectItemContent,
@@ -60,10 +82,27 @@ interface GhIssue {
 }
 
 interface GhComment {
+  id: number;
   user: { login: string } | null;
   created_at: string;
   body: string | null;
 }
+
+// How fetched GitHub issue comments are persisted on the pm item.
+//
+// - "body"        — (default, byte-identical to pre-2026.7.14 behavior) flatten
+//                   comments into the item body as blockquoted markdown under a
+//                   `### GitHub comments (N)` heading. Governed by --with-comments.
+// - "annotations" — sync comments into the pm item's native comments collection
+//                   via the SDK `comments()` primitive. Comments are fetched
+//                   regardless of --with-comments. Re-sync is idempotent: each
+//                   stored comment carries a stable `<!-- pm-github:comment:N -->`
+//                   marker (the GitHub comment id), so re-running import never
+//                   duplicates.
+// - "both"        — write the body section AND sync the native comments.
+type CommentsMode = "body" | "annotations" | "both";
+
+const COMMENTS_MODES: readonly CommentsMode[] = ["body", "annotations", "both"];
 
 interface ImportOptions {
   state: "open" | "closed" | "all";
@@ -74,6 +113,7 @@ interface ImportOptions {
   includePrs: boolean;
   skipDrafts: boolean;
   withComments: boolean;
+  commentsMode: CommentsMode;
   itemType: string;
   dryRun: boolean;
 }
@@ -668,6 +708,106 @@ export function composeBody(issue: GhIssue, comments: GhComment[]): string {
   return body;
 }
 
+// ---------------------------------------------------------------------------
+// Native comment sync (GitHub issue comments → pm comments collection)
+// ---------------------------------------------------------------------------
+//
+// `--comments-mode annotations|both` mirrors a GitHub issue's conversation into
+// the pm item's native comments collection (the SDK `comments()` primitive), so
+// agents get structured, queryable comments instead of body-embedded text.
+//
+// Re-sync is idempotent: every stored comment carries a stable marker embedding
+// the GitHub comment id (`<!-- pm-github:comment:N -->`). On re-import the
+// already-synced ids are read back and skipped, so re-running import never
+// duplicates a comment.
+
+// Hidden HTML comment marker carrying the GitHub comment id. HTML comments are
+// invisible in rendered markdown but survive `pm comments` storage verbatim.
+export const COMMENT_MARKER_REGEX = /<!--\s*pm-github:comment:(\d+)\s*-->/;
+
+// Build the text for a single native pm comment from a GitHub comment. The
+// marker is appended so re-sync can de-duplicate on the GitHub comment id.
+export function buildCommentText(comment: GhComment): string {
+  const body = (comment.body || "").trim() || "(empty comment)";
+  return `${body}\n\n<!-- pm-github:comment:${comment.id} -->`;
+}
+
+// Read the GitHub comment ids already synced into an item's native comments,
+// by scanning each stored comment's text for the stable marker. Returns the set
+// of synced ids (empty when none match, e.g. for hand-written pm comments).
+export function extractSyncedCommentIds(stored: { text?: string }[]): Set<number> {
+  const ids = new Set<number>();
+  for (const entry of stored) {
+    if (!entry?.text) continue;
+    const m = COMMENT_MARKER_REGEX.exec(entry.text);
+    if (m) ids.add(Number(m[1]));
+  }
+  return ids;
+}
+
+// Parse the newly-created item id out of `pm create --json` stdout, which
+// returns `{ "item": { "id": "pm-xxxx", ... } }`. Returns undefined when the
+// output cannot be parsed (e.g. an unexpected/older shape) so callers can fall
+// back to a safe skip-with-warning instead of crashing the whole import.
+export function parseCreatedItemId(stdout: string): string | undefined {
+  try {
+    const parsed = JSON.parse(stdout);
+    const id = parsed?.item?.id;
+    return typeof id === "string" ? id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Sync GitHub issue comments into a pm item's native comments collection via
+// the SDK `comments()` primitive. Idempotent: comments already present (matched
+// by their GitHub comment id marker) are skipped, so re-running import never
+// duplicates. Each GitHub comment becomes one pm comment authored by the
+// GitHub login. Failures are logged and never abort the import.
+//
+// Known limitation (tracked in pm-github-503u): the read-markers-then-append
+// sequence is not atomic across processes. Two concurrent imports of the same
+// repository into the same workspace can both observe a comment id as absent
+// and append it twice. Individual appends are still atomic (pm CLI locks per
+// mutation), so the worst case is a duplicate comment, never corruption.
+export async function syncGithubCommentsToAnnotations(
+  itemId: string,
+  comments: GhComment[],
+  pmRoot: string,
+  issueNumber: number,
+): Promise<{ added: number; skipped: number }> {
+  if (comments.length === 0) return { added: 0, skipped: 0 };
+  let pmComments: PmCommentsFn;
+  let existing: { text?: string }[] = [];
+  try {
+    pmComments = await loadPmComments();
+    const list = await pmComments(itemId, {}, { pmRoot });
+    existing = (list?.comments ?? []) as { text?: string }[];
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`#${issueNumber}: could not read existing comments for ${itemId} — ${msg}`);
+    return { added: 0, skipped: 0 };
+  }
+  const synced = extractSyncedCommentIds(existing);
+  let added = 0;
+  let skipped = 0;
+  for (const c of comments) {
+    if (synced.has(c.id)) {
+      skipped++;
+      continue;
+    }
+    const author = c.user?.login ?? "github";
+    try {
+      await pmComments(itemId, { add: buildCommentText(c), author }, { pmRoot });
+      added++;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`#${issueNumber}: comment ${c.id} sync failed — ${msg}`);
+    }
+  }
+  return { added, skipped };
+}
+
 // A draft PR is an issue that is both a pull request and flagged `draft: true`.
 // (Plain issues are never drafts.)
 export function isDraftPr(issue: GhIssue): boolean {
@@ -707,6 +847,26 @@ export function parseImportOptions(options: Record<string, unknown>): ImportOpti
       EXIT_CODE.USAGE,
     );
   }
+  // --comments-mode controls how fetched GitHub comments are persisted.
+  // Default "body" preserves the historical blockquoted-body behavior exactly.
+  const commentsModeInput = optionString(options, "comments-mode", "commentsMode");
+  if (commentsModeInput && !(COMMENTS_MODES as readonly string[]).includes(commentsModeInput)) {
+    throw new CommandError(
+      `--comments-mode must be one of: ${COMMENTS_MODES.join(", ")} (got ${commentsModeInput})`,
+      EXIT_CODE.USAGE,
+    );
+  }
+  // Resolve --with-comments first so commentsMode can reconcile against it.
+  const withCommentsResolved = optionEnabled(options, "with-comments", "withComments", "include-comments", "includeComments");
+  let commentsMode: CommentsMode = (commentsModeInput as CommentsMode) || "body";
+  // Reconcile with the legacy --with-comments flag. --with-comments historically
+  // means "fetch + embed in body". When the user also asks for annotations, the
+  // intuitive combined intent is BOTH body and native comments (not silently
+  // dropping --with-comments), so upgrade annotations → both. body/both are
+  // already consistent with --with-comments and need no adjustment.
+  if (withCommentsResolved && commentsMode === "annotations") {
+    commentsMode = "both";
+  }
   return {
     state,
     labels: optionString(options, "labels"),
@@ -715,7 +875,8 @@ export function parseImportOptions(options: Record<string, unknown>): ImportOpti
     milestone: optionString(options, "milestone"),
     includePrs: optionEnabled(options, "include-prs", "includePrs"),
     skipDrafts: optionEnabled(options, "skip-drafts", "skipDrafts"),
-    withComments: optionEnabled(options, "with-comments", "withComments", "include-comments", "includeComments"),
+    withComments: withCommentsResolved,
+    commentsMode,
     itemType: optionString(options, "type") || "Issue",
     dryRun: optionEnabled(options, "dry-run", "dryRun"),
   };
@@ -737,7 +898,7 @@ async function runImport(repoArg: string | undefined, pmRoot: string, opts: Impo
     throw new CommandError(
       "Usage: pm github import <owner/repo> [--all|--state open|closed|all] " +
         "[--labels bug,enhancement] [--since <iso>] [--assignee <login>] " +
-        "[--milestone <name>] [--include-prs] [--skip-drafts] [--with-comments]",
+        "[--milestone <name>] [--include-prs] [--skip-drafts] [--with-comments] [--comments-mode body|annotations|both]",
       EXIT_CODE.USAGE,
     );
   }
@@ -806,8 +967,17 @@ async function runImport(repoArg: string | undefined, pmRoot: string, opts: Impo
       (issue.created_at ? ` · created ${issue.created_at}` : "") +
       (issue.updated_at ? ` · updated ${issue.updated_at}` : "");
 
+    // Comments are fetched when --with-comments asks for the legacy body
+    // embedding OR when --comments-mode targets the native comments collection
+    // (annotations/both). In default mode (body + no --with-comments) nothing is
+    // fetched, keeping import output byte-identical to pre-2026.7.14 behavior.
+    const syncAnnotations = opts.commentsMode === "annotations" || opts.commentsMode === "both";
+    const shouldFetchComments = opts.withComments || syncAnnotations;
+    // Comments land in the body only in body/both mode (the historical path).
+    const writeCommentsToBody = opts.commentsMode === "body" || opts.commentsMode === "both";
+
     let comments: GhComment[] = [];
-    if (opts.withComments) {
+    if (shouldFetchComments) {
       try {
         comments = await fetchComments(issue, repo, token);
       } catch (err: unknown) {
@@ -815,7 +985,7 @@ async function runImport(repoArg: string | undefined, pmRoot: string, opts: Impo
         console.error(`#${issue.number}: failed to fetch comments — ${msg}`);
       }
     }
-    const body = composeBody(issue, comments);
+    const body = writeCommentsToBody ? composeBody(issue, comments) : (issue.body || "");
 
     if (opts.dryRun) {
       console.error(`  [dry-run] #${issue.number} ${title} (${status}, ${labels.join(",")})`);
@@ -858,6 +1028,9 @@ async function runImport(repoArg: string | undefined, pmRoot: string, opts: Impo
           continue;
         }
       }
+      if (syncAnnotations) {
+        await syncGithubCommentsToAnnotations(match.id, comments, pmRoot, issue.number);
+      }
       updated++;
       continue;
     }
@@ -874,11 +1047,22 @@ async function runImport(repoArg: string | undefined, pmRoot: string, opts: Impo
     ];
     if (assignee) createArgs.push("--assignee", assignee);
     if (milestone) createArgs.push("--sprint", milestone);
+    // --json lets the annotations sync address the freshly-created item by id
+    // without re-scanning the workspace; only added when we actually need the id.
+    if (syncAnnotations) createArgs.push("--json");
     const created = pmRun(createArgs);
     if (!created.ok) {
       console.error(`#${issue.number}: create failed — ${created.stderr}`);
       skipped++;
       continue;
+    }
+    if (syncAnnotations) {
+      const newId = parseCreatedItemId(created.stdout);
+      if (newId) {
+        await syncGithubCommentsToAnnotations(newId, comments, pmRoot, issue.number);
+      } else {
+        console.error(`#${issue.number}: could not parse created item id — comments not synced`);
+      }
     }
     imported++;
   }
@@ -2275,6 +2459,7 @@ const IMPORT_FLAGS = [
   { long: "--skip-drafts", description: "Exclude draft pull requests (only meaningful with --include-prs)" },
   { long: "--with-comments", description: "Fetch issue comments and append them to the item body" },
   { long: "--include-comments", description: "Alias for --with-comments" },
+  { long: "--comments-mode", value_name: "body|annotations|both", description: "How to persist fetched GitHub comments: `body` (default, embed in item body), `annotations` (sync to the pm item's native comments collection), or `both`. `annotations`/`both` are idempotent on re-import (dedupe by GitHub comment id)" },
   { long: "--dry-run", description: "Preview without writing" },
   { long: "--type", value_name: "type", description: "Override pm item type (default: Issue)" },
 ];
@@ -2382,6 +2567,7 @@ export default defineExtension({
         "pm github import unbraind/pm-cli",
         "pm github import owner/repo --since 7d",
         "pm github import owner/repo --include-comments",
+        "pm github import owner/repo --comments-mode annotations",
         "pm github import owner/repo --dry-run",
       ],
       flags: IMPORT_FLAGS,
@@ -2547,6 +2733,7 @@ export default defineExtension({
         "pm gh-issues import unbraind/pm-cli --labels bug,enhancement",
         "pm gh-issues import unbraind/pm-cli --since 2026-01-01T00:00:00Z",
         "pm github import owner/repo --with-comments",
+        "pm github import owner/repo --comments-mode annotations",
         "pm github import owner/repo --dry-run",
       ],
       flags: IMPORT_FLAGS,
