@@ -14,6 +14,8 @@
 // section below and the pure plan/mapping logic in ./projects.ts).
 
 import https from "node:https";
+import fs from "node:fs";
+import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 import type { defineExtension as defineExtensionType } from "@unbrained/pm-cli/sdk";
@@ -709,6 +711,243 @@ export function composeBody(issue: GhIssue, comments: GhComment[]): string {
 }
 
 // ---------------------------------------------------------------------------
+// Cross-process comment-sync lock (serializes marker dedupe, pm-github-503u)
+// ---------------------------------------------------------------------------
+//
+// The native comment sync below does a read-markers-then-append sequence that
+// spans several pm CLI mutations. Each individual mutation is locked by the pm
+// CLI, but the check-then-act as a whole is not atomic across two concurrent
+// `pm github import` processes on the same workspace: both can observe a
+// GitHub comment id as absent and append it twice. The helper here closes that
+// race with a lockfile in the workspace's own locks/ dir, following the pm
+// CLI's locking convention (see core/lock/lock.js in pm-cli):
+//
+//   - location  <pm data dir>/locks/pm-github.comment-sync.<itemId>.lock — the
+//     same locks/ dir the pm CLI itself uses (gitignored runtime state), with
+//     a payload shape identical to the CLI's so `pm gc` can sweep our stale
+//     locks by their embedded ttl_seconds. The "pm-github.comment-sync."
+//     prefix keeps our namespace disjoint from the CLI's per-item mutation
+//     locks (<itemId>.lock): we hold our lock ACROSS several CLI mutations, so
+//     sharing a name would make the very mutations we wrap conflict with it.
+//   - acquire   fs.openSync(path, "wx") — atomic O_EXCL create on POSIX.
+//   - stale     a lock is broken (with a stderr warning) when it is older than
+//     the TTL (default 5 min) or its recorded owner PID is dead, whichever is
+//     seen first. Unparseable payloads fall back to the file mtime for the age
+//     check so a lock caught mid-write is not broken under a live writer.
+//   - contend   a live, fresh lock is waited out with jittered backoff up to a
+//     budget (default 30s). On timeout the caller reports "contended" and the
+//     comment sync for that item is SKIPPED (never run unlocked) — a wedged
+//     concurrent import can then cost a comment sync, recoverable by
+//     re-running import, but can never produce a duplicate comment. When the
+//     lock mechanism itself is unavailable (read-only fs etc.) the caller
+//     reports "degraded" and proceeds unlocked with a warning, matching the
+//     pre-lock best-effort behavior.
+
+export const IMPORT_LOCK_TTL_MS_DEFAULT = 5 * 60_000;
+export const IMPORT_LOCK_WAIT_MS_DEFAULT = 30_000;
+
+// Payload written into the lock file. Mirrors the pm CLI's own lock payload so
+// the CLI's `pm gc` lock sweep (which reads ttl_seconds) treats our locks
+// exactly like its own.
+export interface ImportLockPayload {
+  id: string;
+  pid: number;
+  owner: string;
+  created_at: string;
+  ttl_seconds: number;
+}
+
+export interface ImportLock {
+  /** Absolute path of the held lock file (diagnostics/tests). */
+  path: string;
+  /** Release the lock. Best-effort, idempotent, never throws. */
+  release(): void;
+}
+
+export type ImportLockAcquisition =
+  | { status: "acquired"; lock: ImportLock }
+  // Another live process held the lock past the wait budget.
+  | { status: "contended" }
+  // The lock mechanism itself failed (fs error) — caller may proceed unlocked.
+  | { status: "degraded" };
+
+// Resolve the pm data dir (the dir holding settings.json and locks/) from the
+// pmRoot the extension host hands the command, which may be either the
+// workspace root (the dir containing .agents/pm) or the data dir itself — the
+// pm CLI accepts both for --path, and tests pass the workspace root.
+export function resolvePmDataDir(pmRoot: string): string {
+  const nested = path.join(pmRoot, ".agents", "pm");
+  try {
+    if (fs.statSync(nested).isDirectory()) return nested;
+  } catch {
+    // Not the workspace-root form — assume pmRoot already is the data dir.
+  }
+  return pmRoot;
+}
+
+// Absolute lock file path for one item's comment-sync critical section. The
+// item id is sanitized defensively (pm ids are already filename-safe, but the
+// lock path must never become a traversal vector if that ever changes).
+export function importCommentSyncLockPath(pmRoot: string, itemId: string): string {
+  const safe = itemId.replace(/[^A-Za-z0-9._-]/g, "_");
+  return path.join(resolvePmDataDir(pmRoot), "locks", `pm-github.comment-sync.${safe}.lock`);
+}
+
+function readImportLockPayload(lockPath: string): ImportLockPayload | undefined {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(lockPath, "utf8");
+  } catch {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return undefined;
+    return parsed as ImportLockPayload;
+  } catch {
+    return undefined;
+  }
+}
+
+function isLockOwnerAlive(pid: unknown): boolean {
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err: unknown) {
+    // EPERM means the process exists but belongs to another user — still alive.
+    // ESRCH means no such process — the lock owner is gone.
+    return (err as NodeJS.ErrnoException)?.code === "EPERM";
+  }
+}
+
+// A held lock is stale when it is older than the TTL (age taken from the
+// payload's created_at, falling back to the file mtime when the payload is
+// missing/unparseable — e.g. caught mid-write) or when its recorded owner PID
+// is dead (crash without release; PID reuse can only make a dead lock look
+// alive, never the reverse, so this stays conservative).
+function importLockStaleReason(
+  payload: ImportLockPayload | undefined,
+  mtimeMs: number,
+  ttlMs: number,
+): string | undefined {
+  const createdMs = payload ? Date.parse(payload.created_at) : Number.NaN;
+  const ageBase = Number.isFinite(createdMs) ? createdMs : mtimeMs;
+  if (!Number.isFinite(ageBase) || Date.now() - ageBase > ttlMs) {
+    return `older than TTL ${Math.round(ttlMs / 1000)}s`;
+  }
+  if (
+    payload &&
+    typeof payload.pid === "number" &&
+    payload.pid !== process.pid &&
+    !isLockOwnerAlive(payload.pid)
+  ) {
+    return `owner pid ${payload.pid} is dead`;
+  }
+  return undefined;
+}
+
+const IMPORT_LOCK_INITIAL_BACKOFF_MS = 25;
+const IMPORT_LOCK_MAX_BACKOFF_MS = 200;
+const IMPORT_LOCK_MAX_STALE_BREAKS = 3;
+
+// Acquire the cross-process comment-sync lock for one item. Never throws:
+// every failure mode maps to one of the three acquisition statuses so the
+// caller can decide how to degrade. `ttlMs`/`waitMs` are injectable for tests.
+export async function acquireImportLock(
+  pmRoot: string,
+  itemId: string,
+  opts: { ttlMs?: number; waitMs?: number } = {},
+): Promise<ImportLockAcquisition> {
+  const ttlMs = opts.ttlMs ?? IMPORT_LOCK_TTL_MS_DEFAULT;
+  const waitMs = opts.waitMs ?? IMPORT_LOCK_WAIT_MS_DEFAULT;
+  let lockPath: string;
+  try {
+    lockPath = importCommentSyncLockPath(pmRoot, itemId);
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`pm-github: comment-sync lock unavailable (${msg}) — proceeding without cross-process serialization`);
+    return { status: "degraded" };
+  }
+  const payload: ImportLockPayload = {
+    id: path.basename(lockPath, ".lock"),
+    pid: process.pid,
+    owner: "pm-github",
+    created_at: new Date().toISOString(),
+    ttl_seconds: Math.ceil(ttlMs / 1000),
+  };
+  const startedAt = Date.now();
+  let backoffMs = IMPORT_LOCK_INITIAL_BACKOFF_MS;
+  let staleBreaks = 0;
+  for (;;) {
+    let fd: number | undefined;
+    try {
+      fd = fs.openSync(lockPath, "wx");
+      fs.writeFileSync(fd, `${JSON.stringify(payload, null, 2)}\n`);
+      fs.closeSync(fd);
+      fd = undefined;
+      let released = false;
+      return {
+        status: "acquired",
+        lock: {
+          path: lockPath,
+          release() {
+            if (released) return;
+            released = true;
+            try {
+              fs.unlinkSync(lockPath);
+            } catch {
+              // Best-effort: already gone (stale-broken by someone else, gc).
+            }
+          },
+        },
+      };
+    } catch (err: unknown) {
+      if (fd !== undefined) {
+        try {
+          fs.closeSync(fd);
+        } catch {
+          // Ignore close errors on the failure path.
+        }
+      }
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code !== "EEXIST") {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`pm-github: comment-sync lock failed (${msg}) — proceeding without cross-process serialization`);
+        return { status: "degraded" };
+      }
+      // The lock exists. If it vanished before we could stat it, retry at once.
+      let existing: ImportLockPayload | undefined;
+      let mtimeMs = Number.NaN;
+      try {
+        mtimeMs = fs.statSync(lockPath).mtimeMs;
+        existing = readImportLockPayload(lockPath);
+      } catch {
+        continue;
+      }
+      const staleReason = importLockStaleReason(existing, mtimeMs, ttlMs);
+      if (staleReason && staleBreaks < IMPORT_LOCK_MAX_STALE_BREAKS) {
+        staleBreaks++;
+        console.error(`pm-github: breaking stale comment-sync lock ${lockPath} (${staleReason})`);
+        try {
+          fs.unlinkSync(lockPath);
+        } catch {
+          // Someone else broke it first — the retry below creates ours.
+        }
+        continue;
+      }
+      const elapsedMs = Date.now() - startedAt;
+      if (elapsedMs >= waitMs) return { status: "contended" };
+      // Jittered backoff, mirroring the pm CLI's lock wait (0.5x–1.5x jitter).
+      const jittered = Math.max(1, Math.round(backoffMs * (0.5 + Math.random())));
+      await sleep(Math.min(jittered, waitMs - elapsedMs));
+      backoffMs = Math.min(backoffMs * 2, IMPORT_LOCK_MAX_BACKOFF_MS);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Native comment sync (GitHub issue comments → pm comments collection)
 // ---------------------------------------------------------------------------
 //
@@ -765,11 +1004,19 @@ export function parseCreatedItemId(stdout: string): string | undefined {
 // duplicates. Each GitHub comment becomes one pm comment authored by the
 // GitHub login. Failures are logged and never abort the import.
 //
-// Known limitation (tracked in pm-github-503u): the read-markers-then-append
-// sequence is not atomic across processes. Two concurrent imports of the same
-// repository into the same workspace can both observe a comment id as absent
-// and append it twice. Individual appends are still atomic (pm CLI locks per
-// mutation), so the worst case is a duplicate comment, never corruption.
+// Concurrency (pm-github-503u, limitation lifted): the read-markers-then-append
+// critical section is serialized across processes by a per-item lockfile (see
+// acquireImportLock above), so two concurrent `pm github import` runs against
+// the same workspace can no longer both observe a comment id as absent and
+// append it twice. The lock is per ITEM, not per import run: unrelated issues
+// in concurrent imports still sync in parallel, and only the one item whose
+// comments are actively being synced is serialized — the smallest scope that
+// closes the race. Stale locks (older than the TTL or owned by a dead PID) are
+// broken with a stderr warning. If a live concurrent import holds the lock
+// past the wait budget, this item's comment sync is skipped with a warning
+// (never run unlocked, so a wedged peer can cost a sync — recoverable on the
+// next import — but never cause a duplicate); if the lock mechanism itself is
+// unavailable the sync proceeds unlocked as before, also with a warning.
 export async function syncGithubCommentsToAnnotations(
   itemId: string,
   comments: GhComment[],
@@ -777,35 +1024,48 @@ export async function syncGithubCommentsToAnnotations(
   issueNumber: number,
 ): Promise<{ added: number; skipped: number }> {
   if (comments.length === 0) return { added: 0, skipped: 0 };
-  let pmComments: PmCommentsFn;
-  let existing: { text?: string }[] = [];
-  try {
-    pmComments = await loadPmComments();
-    const list = await pmComments(itemId, {}, { pmRoot });
-    existing = (list?.comments ?? []) as { text?: string }[];
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(`#${issueNumber}: could not read existing comments for ${itemId} — ${msg}`);
+  const acquisition = await acquireImportLock(pmRoot, itemId);
+  if (acquisition.status === "contended") {
+    console.error(
+      `#${issueNumber}: comment sync for ${itemId} skipped — another import holds the ` +
+        `comment-sync lock; re-run import to pick up the comments`,
+    );
     return { added: 0, skipped: 0 };
   }
-  const synced = extractSyncedCommentIds(existing);
-  let added = 0;
-  let skipped = 0;
-  for (const c of comments) {
-    if (synced.has(c.id)) {
-      skipped++;
-      continue;
-    }
-    const author = c.user?.login ?? "github";
+  const release = acquisition.status === "acquired" ? () => acquisition.lock.release() : () => {};
+  try {
+    let pmComments: PmCommentsFn;
+    let existing: { text?: string }[] = [];
     try {
-      await pmComments(itemId, { add: buildCommentText(c), author }, { pmRoot });
-      added++;
+      pmComments = await loadPmComments();
+      const list = await pmComments(itemId, {}, { pmRoot });
+      existing = (list?.comments ?? []) as { text?: string }[];
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`#${issueNumber}: comment ${c.id} sync failed — ${msg}`);
+      console.error(`#${issueNumber}: could not read existing comments for ${itemId} — ${msg}`);
+      return { added: 0, skipped: 0 };
     }
+    const synced = extractSyncedCommentIds(existing);
+    let added = 0;
+    let skipped = 0;
+    for (const c of comments) {
+      if (synced.has(c.id)) {
+        skipped++;
+        continue;
+      }
+      const author = c.user?.login ?? "github";
+      try {
+        await pmComments(itemId, { add: buildCommentText(c), author }, { pmRoot });
+        added++;
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`#${issueNumber}: comment ${c.id} sync failed — ${msg}`);
+      }
+    }
+    return { added, skipped };
+  } finally {
+    release();
   }
-  return { added, skipped };
 }
 
 // A draft PR is an issue that is both a pull request and flagged `draft: true`.
