@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Other
+
+- Serialize marker-dedupe read-and-append across concurrent imports ([pm-github-503u](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-503u.toon))
+
 ## 2026.7.17 - 2026-07-17
 
 ### Added

@@ -2,11 +2,16 @@ id: pm-github-503u
 title: Serialize marker-dedupe read-and-append across concurrent imports
 description: "CodeRabbit (PR #33, comment 3599527301) correctly notes the native comment sync's read-markers-then-append sequence is not atomic across two concurrent 'pm github import' processes targeting the same workspace: both can observe a GitHub comment id as absent and append it twice. Individual writes go through the pm CLI (which locks per mutation), but our check-then-act spans multiple mutations. Current disposition: documented limitation (see syncGithubCommentsToAnnotations docstring) — concurrent same-repo imports are an operator edge case and worst case yields a duplicate comment, not data loss. Proper fix: cross-process lock (e.g. lockfile in workspace runtime dir) or an SDK-level conditional append (append-if-marker-absent) — the latter is worth proposing upstream."
 type: Task
-status: open
+status: closed
 priority: 2
 tags: []
 created_at: "2026-07-17T00:17:34.148Z"
-updated_at: "2026-07-17T00:17:34.148Z"
+updated_at: "2026-07-18T10:21:18.914Z"
+closed_at: "2026-07-18T10:21:18.913Z"
 author: claude-fleet
 acceptance_criteria: "Concurrent 'pm github import --comments-mode annotations' runs against the same workspace never duplicate a comment (verified by a parallel-import test), or the limitation is lifted via an upstream SDK conditional-append primitive"
+notes[2]{created_at,author,text}:
+  "2026-07-18T09:54:36.132Z",pi-agent,"Started work in worktree .wt-pm-github-503u on branch feat/serialize-comment-import-lock. Plan: cross-process lockfile around comment marker read->append critical section, stale-lock TTL break, parallel-import test + lock unit tests."
+  "2026-07-18T10:20:49.441Z",pi-agent,"Implemented cross-process serialization of the comment marker read->append critical section: acquireImportLock() creates <pm-data-dir>/locks/pm-github.comment-sync.<itemId>.lock via fs.openSync(wx) (atomic O_EXCL), payload mirrors pm CLI lock convention ({id,pid,owner,created_at,ttl_seconds}) so pm gc can sweep it. Stale locks (older than 5min TTL, or dead owner PID) broken with stderr warning; unparseable payloads fall back to mtime so a live writer mid-write is never broken. Live contention waits with jittered backoff up to 30s; on timeout the item's comment sync is skipped with a warning (never run unlocked), on lock-mechanism failure it degrades to unlocked with a warning. Lock scope is per item, not per import run: unrelated issues in concurrent imports still sync in parallel. Tests: 10 new in test/import-lock.test.ts incl. cross-process acceptance test spawning two real concurrent child syncs against one workspace -> 20 unique comments, zero duplicates, loser skips all. Full suite 122/122 green x3 runs, typecheck clean."
+close_reason: "Fixed: cross-process per-item lockfile (acquireImportLock in index.ts) serializes the comment marker read->append section across concurrent pm github import processes. Stale locks broken by 5min TTL or dead-PID check with stderr warning; live contention waits up to 30s then skips the item's sync with a warning (never appends unlocked). Acceptance verified by parallel-import test: two concurrent OS processes syncing 20 identical comments into one workspace item produce exactly 20 stored comments, zero duplicate markers; lock unit tests cover acquire/contend/stale-break. Full suite 122/122 green."
 body: ""
