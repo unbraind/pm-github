@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased
+## 2026.7.18-1 - 2026-07-18
 
 ### Other
 
 - Serialize marker-dedupe read-and-append across concurrent imports ([pm-github-503u](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-503u.toon))
+- Harden release bun-verify so registry-mirror lag cannot block the GitHub release ([pm-github-i6af](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-i6af.toon))
 
 ## 2026.7.17 - 2026-07-17
 
