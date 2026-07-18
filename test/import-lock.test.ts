@@ -1,16 +1,17 @@
 // Tests for the cross-process comment-sync lock (pm-github-503u).
 //
-// Unit tests cover the lock helper in isolation: acquire/release roundtrip,
-// contention (wait → contended → acquire after release), and stale-lock
-// breaking (by TTL, by dead owner PID, and the mtime fallback for unparseable
-// payloads). The integration test spawns two REAL concurrent child processes
+// Unit tests cover the lock helper in isolation: acquire/release roundtrip
+// (incl. token-checked release), contention (wait → contended → acquire after
+// release), and stale-lock breaking (dead owner PID, recycled own PID, the
+// mtime-TTL fallback for unparseable payloads — and, critically, that a LIVE
+// owner is never age-broken). The integration test spawns two REAL concurrent child processes
 // syncing the same GitHub comments into the same item of a throwaway
 // workspace — the exact `pm github import` race from pm-github-503u — and
 // asserts no duplicate comment markers result.
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { execFile, execFileSync, spawnSync } from "node:child_process";
+import { execFile, execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -151,6 +152,7 @@ test("acquireImportLock creates a CLI-convention payload and release removes it"
     assert.strictEqual(payload.owner, "pm-github");
     assert.strictEqual(payload.ttl_seconds, Math.ceil(IMPORT_LOCK_TTL_MS_DEFAULT / 1000));
     assert.ok(Number.isFinite(Date.parse(payload.created_at)), "created_at is an ISO timestamp");
+    assert.ok(typeof payload.token === "string" && payload.token.length > 0, "payload carries an ownership token");
     acq.lock.release();
     assert.ok(!existsSync(acq.lock.path), "release removes the lock file");
     acq.lock.release(); // idempotent — must not throw
@@ -199,19 +201,19 @@ test("a waiter acquires the lock once the holder releases mid-wait", async () =>
 
 // Stale-lock breaking ----------------------------------------------------------
 
-test("a lock older than the TTL is broken with a stderr warning", async () => {
+test("a lock recorded under our own PID is broken (recycled pid), even when fresh", async () => {
   const root = makeWorkspace();
   try {
     const lockPath = plantLock(root, "pm-stale1", {
       id: "pm-github.comment-sync.pm-stale1",
-      pid: process.pid, // alive — only the age makes this stale
+      pid: process.pid, // we demonstrably don't hold it → the pid was recycled
       owner: "pm-github",
-      created_at: new Date(Date.now() - 10 * 60_000).toISOString(),
+      created_at: new Date().toISOString(), // fresh — age is irrelevant here
       ttl_seconds: 300,
     });
     const messages = await captureStderr(async () => {
       const acq = await acquireImportLock(root, "pm-stale1", { waitMs: 1000 });
-      assert.strictEqual(acq.status, "acquired", "stale lock is broken and re-acquired");
+      assert.strictEqual(acq.status, "acquired", "recycled-pid lock is broken and re-acquired");
       if (acq.status === "acquired") {
         const payload = JSON.parse(readFileSync(acq.lock.path, "utf-8"));
         assert.strictEqual(payload.pid, process.pid, "the broken lock is replaced with our payload");
@@ -219,10 +221,61 @@ test("a lock older than the TTL is broken with a stderr warning", async () => {
       }
     });
     assert.ok(
-      messages.some((m) => m.includes("breaking stale comment-sync lock") && m.includes("TTL")),
-      `expected a stale-break warning, got: ${messages.join(" | ")}`,
+      messages.some((m) => m.includes("breaking stale comment-sync lock") && m.includes("recycled")),
+      `expected a recycled-pid stale-break warning, got: ${messages.join(" | ")}`,
     );
     assert.ok(!existsSync(lockPath), "lock released at the end");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an over-TTL lock with a LIVE foreign owner is NOT broken — the waiter contends", async () => {
+  const root = makeWorkspace();
+  // A real live foreign process: a child that sleeps well past the test.
+  const holder = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60_000)"], { stdio: "ignore" });
+  try {
+    assert.ok(holder.pid && holder.pid > 0, "need a live child pid for this test");
+    plantLock(root, "pm-live1", {
+      id: "pm-github.comment-sync.pm-live1",
+      pid: holder.pid,
+      owner: "pm-github",
+      created_at: new Date(Date.now() - 10 * 60_000).toISOString(), // way past TTL
+      ttl_seconds: 300,
+    });
+    const acq = await acquireImportLock(root, "pm-live1", { waitMs: 300 });
+    assert.strictEqual(
+      acq.status,
+      "contended",
+      "a slow-but-alive holder keeps its lock: age alone must never break a live owner's lock",
+    );
+  } finally {
+    holder.kill("SIGKILL");
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("release() is token-checked: a broken-then-replaced lock is never unlinked by the old holder", async () => {
+  const root = makeWorkspace();
+  try {
+    const first = await acquireImportLock(root, "pm-token1");
+    assert.strictEqual(first.status, "acquired");
+    if (first.status !== "acquired") return;
+    // Simulate a stale-break + successor acquisition: replace the file content
+    // with a different owner/token while `first` still believes it holds it.
+    const successor = {
+      id: "pm-github.comment-sync.pm-token1",
+      pid: process.pid,
+      owner: "pm-github",
+      token: "successor-token",
+      created_at: new Date().toISOString(),
+      ttl_seconds: 300,
+    };
+    writeFileSync(first.lock.path, `${JSON.stringify(successor)}\n`);
+    first.lock.release();
+    assert.ok(existsSync(first.lock.path), "release must not unlink a successor's lock");
+    const after = JSON.parse(readFileSync(first.lock.path, "utf-8"));
+    assert.strictEqual(after.token, "successor-token", "successor payload is untouched");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -14,6 +14,7 @@
 // section below and the pure plan/mapping logic in ./projects.ts).
 
 import https from "node:https";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -730,10 +731,18 @@ export function composeBody(issue: GhIssue, comments: GhComment[]): string {
 //     locks (<itemId>.lock): we hold our lock ACROSS several CLI mutations, so
 //     sharing a name would make the very mutations we wrap conflict with it.
 //   - acquire   fs.openSync(path, "wx") — atomic O_EXCL create on POSIX.
-//   - stale     a lock is broken (with a stderr warning) when it is older than
-//     the TTL (default 5 min) or its recorded owner PID is dead, whichever is
-//     seen first. Unparseable payloads fall back to the file mtime for the age
-//     check so a lock caught mid-write is not broken under a live writer.
+//   - stale     a lock is broken (with a stderr warning) only when its owner
+//     is provably gone: the recorded owner PID is dead, or it equals our own
+//     PID (we know we don't hold it, so the PID was recycled). A lock with a
+//     LIVE owner is never age-broken — a slow-but-alive holder keeps its lock
+//     no matter how long it runs (a >TTL holder would otherwise lose the lock
+//     mid-append and the race would reopen). Only when the payload is missing
+//     or unparseable (caught mid-write, then abandoned) does the TTL (default
+//     5 min, age from file mtime) apply as the break criterion.
+//   - release   token-checked: each acquisition embeds a unique token in the
+//     payload and release() unlinks the file only while it still carries that
+//     token, so a holder whose lock was stale-broken (or swept by `pm gc`)
+//     can never unlink a successor's lock.
 //   - contend   a live, fresh lock is waited out with jittered backoff up to a
 //     budget (default 30s). On timeout the caller reports "contended" and the
 //     comment sync for that item is SKIPPED (never run unlocked) — a wedged
@@ -753,6 +762,8 @@ export interface ImportLockPayload {
   id: string;
   pid: number;
   owner: string;
+  /** Unique per acquisition; release() only unlinks a file carrying it. */
+  token: string;
   created_at: string;
   ttl_seconds: number;
 }
@@ -821,28 +832,43 @@ function isLockOwnerAlive(pid: unknown): boolean {
   }
 }
 
-// A held lock is stale when it is older than the TTL (age taken from the
-// payload's created_at, falling back to the file mtime when the payload is
-// missing/unparseable — e.g. caught mid-write) or when its recorded owner PID
-// is dead (crash without release; PID reuse can only make a dead lock look
-// alive, never the reverse, so this stays conservative).
+// A held lock is stale only when its owner is provably gone: the recorded
+// owner PID is dead (crash without release), or it equals our own PID (we
+// know we do not hold this lock, so the PID must have been recycled). A lock
+// with a LIVE recorded owner is never age-broken — breaking a slow-but-alive
+// holder mid-critical-section would reopen the duplicate-marker race this
+// lock exists to close. Only when there is no usable owner PID (payload
+// missing or unparseable — e.g. caught mid-write, then abandoned) does the
+// TTL apply, with age taken from the payload's created_at falling back to
+// the file mtime. (PID reuse can make a dead lock look alive and thus block
+// until the wait budget — conservative; it can never break a live one.)
+// Lock paths currently held by THIS process (any async task). Distinguishes a
+// same-pid payload that is legitimately ours (in-process contention → wait)
+// from a leftover written by a dead process whose PID we inherited (→ break).
+const heldImportLocks = new Set<string>();
+
 function importLockStaleReason(
+  lockPath: string,
   payload: ImportLockPayload | undefined,
   mtimeMs: number,
   ttlMs: number,
 ): string | undefined {
+  const pid = payload?.pid;
+  if (typeof pid === "number" && Number.isInteger(pid) && pid > 0) {
+    if (pid === process.pid) {
+      // Our own PID: either another async task in THIS process holds it (the
+      // in-process race the caller serializes too — contend, don't break), or
+      // we provably don't hold it and the PID was recycled by a dead owner.
+      return heldImportLocks.has(lockPath)
+        ? undefined
+        : `owner pid ${pid} is this process but the lock is not held in-process (pid recycled, lock abandoned)`;
+    }
+    return isLockOwnerAlive(pid) ? undefined : `owner pid ${pid} is dead`;
+  }
   const createdMs = payload ? Date.parse(payload.created_at) : Number.NaN;
   const ageBase = Number.isFinite(createdMs) ? createdMs : mtimeMs;
   if (!Number.isFinite(ageBase) || Date.now() - ageBase > ttlMs) {
-    return `older than TTL ${Math.round(ttlMs / 1000)}s`;
-  }
-  if (
-    payload &&
-    typeof payload.pid === "number" &&
-    payload.pid !== process.pid &&
-    !isLockOwnerAlive(payload.pid)
-  ) {
-    return `owner pid ${payload.pid} is dead`;
+    return `no usable owner pid and older than TTL ${Math.round(ttlMs / 1000)}s`;
   }
   return undefined;
 }
@@ -874,6 +900,7 @@ export async function acquireImportLock(
     id: path.basename(lockPath, ".lock"),
     pid: process.pid,
     owner: "pm-github",
+    token: crypto.randomUUID(),
     created_at: new Date().toISOString(),
     ttl_seconds: Math.ceil(ttlMs / 1000),
   };
@@ -887,6 +914,7 @@ export async function acquireImportLock(
       fs.writeFileSync(fd, `${JSON.stringify(payload, null, 2)}\n`);
       fs.closeSync(fd);
       fd = undefined;
+      heldImportLocks.add(lockPath);
       let released = false;
       return {
         status: "acquired",
@@ -895,7 +923,13 @@ export async function acquireImportLock(
           release() {
             if (released) return;
             released = true;
+            heldImportLocks.delete(lockPath);
             try {
+              // Token check: only unlink the file while it is still OUR lock.
+              // If it was stale-broken or gc-swept and re-acquired, the path
+              // now holds the successor's lock — leave it alone.
+              const current = readImportLockPayload(lockPath);
+              if (current?.token !== payload.token) return;
               fs.unlinkSync(lockPath);
             } catch {
               // Best-effort: already gone (stale-broken by someone else, gc).
@@ -909,6 +943,14 @@ export async function acquireImportLock(
           fs.closeSync(fd);
         } catch {
           // Ignore close errors on the failure path.
+        }
+        // We created the lockfile but failed to write/close it. Remove the
+        // empty/partial file so other processes are not blocked until the
+        // TTL expires on a lock that was never validly held.
+        try {
+          fs.unlinkSync(lockPath);
+        } catch {
+          // Best-effort: already gone.
         }
       }
       const code = (err as NodeJS.ErrnoException)?.code;
@@ -926,7 +968,7 @@ export async function acquireImportLock(
       } catch {
         continue;
       }
-      const staleReason = importLockStaleReason(existing, mtimeMs, ttlMs);
+      const staleReason = importLockStaleReason(lockPath, existing, mtimeMs, ttlMs);
       if (staleReason && staleBreaks < IMPORT_LOCK_MAX_STALE_BREAKS) {
         staleBreaks++;
         console.error(`pm-github: breaking stale comment-sync lock ${lockPath} (${staleReason})`);
