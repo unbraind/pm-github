@@ -743,6 +743,11 @@ export function composeBody(issue: GhIssue, comments: GhComment[]): string {
 //     payload and release() unlinks the file only while it still carries that
 //     token, so a holder whose lock was stale-broken (or swept by `pm gc`)
 //     can never unlink a successor's lock.
+//   - breaking  stale locks are removed under a breaker election (an O_EXCL
+//     `<lock>.break` sidecar): only the single election winner may unlink,
+//     and it re-verifies staleness under that mutex first — two concurrent
+//     breakers can therefore never double-break, and a breaker can never
+//     unlink a fresh lock that replaced the stale one it inspected.
 //   - contend   a live, fresh lock is waited out with jittered backoff up to a
 //     budget (default 30s). On timeout the caller reports "contended" and the
 //     comment sync for that item is SKIPPED (never run unlocked) — a wedged
@@ -876,6 +881,68 @@ function importLockStaleReason(
 const IMPORT_LOCK_INITIAL_BACKOFF_MS = 25;
 const IMPORT_LOCK_MAX_BACKOFF_MS = 200;
 const IMPORT_LOCK_MAX_STALE_BREAKS = 3;
+// A breaker's critical section is a handful of syscalls (re-stat, re-read,
+// unlink) — a crashed breaker's sidecar goes stale in seconds, not minutes.
+export const IMPORT_LOCK_BREAKER_TTL_MS = 10_000;
+
+// Break a stale lock under a breaker election so the unlink can never race
+// another breaker: two contenders may both judge the same file stale, but
+// without mutual exclusion the slower one would execute its unlink AFTER the
+// winner already re-created a fresh, live lock — silently unlinking that
+// replacement and letting both proceed (the exact double-acquire this module
+// exists to prevent). The election is an O_EXCL sidecar (`<lock>.break`):
+// only its single winner may unlink, and it re-verifies staleness under the
+// mutex first, so a lock that became live since the caller's check survives.
+// Returns true when the stale lock was removed (caller should retry acquire
+// immediately), false when the election was lost or the lock is live again
+// (caller should fall through to the normal wait/backoff).
+function breakStaleImportLock(lockPath: string, ttlMs: number, reason: string): boolean {
+  const breakerPath = `${lockPath}.break`;
+  let bfd: number | undefined;
+  try {
+    bfd = fs.openSync(breakerPath, "wx");
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException)?.code === "EEXIST") {
+      // Another breaker is active. If IT crashed mid-break, its sidecar is
+      // old — clear it and let the next iteration re-run the election.
+      try {
+        if (Date.now() - fs.statSync(breakerPath).mtimeMs > IMPORT_LOCK_BREAKER_TTL_MS) {
+          fs.unlinkSync(breakerPath);
+        }
+      } catch {
+        // Sidecar vanished (election finished) — retry normally.
+      }
+    }
+    return false;
+  }
+  try {
+    fs.closeSync(bfd);
+    // Re-verify under the mutex: the lock we judged stale may have been
+    // broken and re-acquired by a live owner since we looked at it.
+    let payload: ImportLockPayload | undefined;
+    let mtimeMs = Number.NaN;
+    try {
+      mtimeMs = fs.statSync(lockPath).mtimeMs;
+      payload = readImportLockPayload(lockPath);
+    } catch {
+      return true; // already gone — acquire can proceed immediately
+    }
+    if (!importLockStaleReason(lockPath, payload, mtimeMs, ttlMs)) return false;
+    console.error(`pm-github: breaking stale comment-sync lock ${lockPath} (${reason})`);
+    try {
+      fs.unlinkSync(lockPath);
+    } catch {
+      // Already gone.
+    }
+    return true;
+  } finally {
+    try {
+      fs.unlinkSync(breakerPath);
+    } catch {
+      // Best-effort: an aged-out sidecar may have been cleared by a peer.
+    }
+  }
+}
 
 // Acquire the cross-process comment-sync lock for one item. Never throws:
 // every failure mode maps to one of the three acquisition statuses so the
@@ -971,13 +1038,9 @@ export async function acquireImportLock(
       const staleReason = importLockStaleReason(lockPath, existing, mtimeMs, ttlMs);
       if (staleReason && staleBreaks < IMPORT_LOCK_MAX_STALE_BREAKS) {
         staleBreaks++;
-        console.error(`pm-github: breaking stale comment-sync lock ${lockPath} (${staleReason})`);
-        try {
-          fs.unlinkSync(lockPath);
-        } catch {
-          // Someone else broke it first — the retry below creates ours.
-        }
-        continue;
+        if (breakStaleImportLock(lockPath, ttlMs, staleReason)) continue;
+        // Lost the breaker election or the lock turned out live on re-check —
+        // fall through to the normal wait/backoff below.
       }
       const elapsedMs = Date.now() - startedAt;
       if (elapsedMs >= waitMs) return { status: "contended" };

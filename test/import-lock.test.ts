@@ -308,6 +308,65 @@ test("a fresh lock whose owner PID is dead is broken with a stderr warning", asy
   }
 });
 
+test("a stale lock is NOT broken while another breaker's fresh election sidecar exists", async () => {
+  const root = makeWorkspace();
+  try {
+    // Dead-owner lock (breakable) + a FRESH `.break` sidecar: some other
+    // process is mid-election, so we must lose the election and wait instead
+    // of double-breaking.
+    const dead = spawnSync(process.execPath, ["-e", ""]);
+    assert.ok(dead.pid && dead.pid > 0);
+    const lockPath = plantLock(root, "pm-break1", {
+      id: "pm-github.comment-sync.pm-break1",
+      pid: dead.pid,
+      owner: "pm-github",
+      token: "stale-owner",
+      created_at: new Date().toISOString(),
+      ttl_seconds: 300,
+    });
+    writeFileSync(`${lockPath}.break`, "");
+    const acq = await acquireImportLock(root, "pm-break1", { waitMs: 300 });
+    assert.strictEqual(acq.status, "contended", "an election in progress blocks a second breaker");
+    assert.ok(existsSync(lockPath), "the stale lock is left for the election winner");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a crashed breaker's aged-out sidecar is cleared and the stale lock is then broken", async () => {
+  const root = makeWorkspace();
+  try {
+    const dead = spawnSync(process.execPath, ["-e", ""]);
+    assert.ok(dead.pid && dead.pid > 0);
+    const lockPath = plantLock(root, "pm-break2", {
+      id: "pm-github.comment-sync.pm-break2",
+      pid: dead.pid,
+      owner: "pm-github",
+      token: "stale-owner",
+      created_at: new Date().toISOString(),
+      ttl_seconds: 300,
+    });
+    // A sidecar left behind by a breaker that crashed mid-election, well past
+    // the breaker TTL.
+    const sidecar = `${lockPath}.break`;
+    writeFileSync(sidecar, "");
+    const old = new Date(Date.now() - 30_000);
+    utimesSync(sidecar, old, old);
+    const messages = await captureStderr(async () => {
+      const acq = await acquireImportLock(root, "pm-break2", { waitMs: 2000 });
+      assert.strictEqual(acq.status, "acquired", "aged-out sidecar is cleared, then the stale lock is broken");
+      if (acq.status === "acquired") acq.lock.release();
+    });
+    assert.ok(
+      messages.some((m) => m.includes("breaking stale comment-sync lock")),
+      `expected a stale-break warning, got: ${messages.join(" | ")}`,
+    );
+    assert.ok(!existsSync(sidecar), "the election sidecar is cleaned up");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("an unparseable lock payload falls back to file mtime: fresh contends, old breaks", async () => {
   const root = makeWorkspace();
   try {
@@ -368,7 +427,15 @@ test(
       const comments = Array.from({ length: 20 }, (_, i) =>
         ghComment({ id: 9000 + i, user: { login: "racer" }, body: `cross-process race ${i}` }),
       );
-      const env = { ...process.env, FAKE_COMMENTS: JSON.stringify(comments) };
+      // Start barrier: both children are spawned first and only begin syncing
+      // once the barrier file appears, so the test deterministically exercises
+      // concurrent entry instead of an accidental sequential pass.
+      const barrierFile = join(root, "start-barrier");
+      const env = {
+        ...process.env,
+        FAKE_COMMENTS: JSON.stringify(comments),
+        BARRIER_FILE: barrierFile,
+      };
       const runChild = () =>
         new Promise<{ added: number; skipped: number }>((resolve, reject) => {
           execFile(
@@ -390,7 +457,9 @@ test(
           );
         });
 
-      const [r1, r2] = await Promise.all([runChild(), runChild()]);
+      const childrenDone = Promise.all([runChild(), runChild()]);
+      writeFileSync(barrierFile, "go\n");
+      const [r1, r2] = await childrenDone;
       assert.strictEqual(
         r1.added + r2.added,
         comments.length,
