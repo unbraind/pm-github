@@ -6,22 +6,24 @@ status: closed
 priority: 2
 tags[5]: 2026.7.20,atomic,concurrency,multi-agent-merge,sdk
 created_at: "2026-07-21T06:54:37.581Z"
-updated_at: "2026-07-21T07:41:39.157Z"
-closed_at: "2026-07-21T07:41:38.803Z"
+updated_at: "2026-07-21T07:49:21.926Z"
+closed_at: "2026-07-21T07:49:21.642Z"
 author: codex
 estimated_minutes: 300
-acceptance_criteria: "--atomic is available on both GitHub issue-import command surfaces and uses commitItemMutations; same fetched set resumes idempotently after interruption and is order-independent; a failed batch compensates all applied mutations with no partial committed state; default non-atomic and dry-run behavior remains compatible; tests, typecheck, package audit, pack check, changelog and Greptile pass"
+acceptance_criteria: "--atomic is available on both GitHub issue-import command surfaces and uses commitItemMutations; same fetched set resumes idempotently after interruption and is order-independent; transaction identity fingerprints the exact ordered mutation plan; ordinary failures compensate all applied mutations while incomplete compensation is reported as potentially partial; default non-atomic and dry-run behavior remains compatible; tests, typecheck, package audit, pack check, changelog and Greptile pass"
 risk: medium
 resolution: "Implemented SDK-backed atomic GitHub issue imports with deterministic transaction plans and field-aware merge support; verified compensation, recovery, TypeScript-only tests, packaging, dependency security, and real GitHub data."
 expected_result: GitHub issue imports can opt into one crash-resumable transaction with no partial tracker state or duplicate items under retries and concurrent agents.
-actual_result: Atomic create/update/close batches remain crash-resumable; atomic dry-run now truthfully distinguishes new and existing items without SDK mutation; shared preparation prevents legacy/atomic rendering drift; barrier timeout behavior is deterministic; 137 tests and the complete release gate pass.
+actual_result: Atomic batches and previews are deterministic and crash-resumable; transaction journals are keyed by exact ordered mutation plans; normal compensation restores creates/updates/closes while incomplete compensation is truthfully reported for retry/repair; all-skipped imports fail consistently; 139 tests and the complete release gate pass.
 fixed_version: next-daily-release
-notes[5]{created_at,author,text}:
+notes[7]{created_at,author,text}:
   "2026-07-21T07:08:43.197Z",codex,Privacy review scanned all 110 reachable commits for precise credential signatures (0 findings). Current-tree legacy absolute /home/user package paths in pm-github-0y40 and pm-github-9eei were redacted to /workspace/pm-github with history-chain verification. Accepted author email identities follow companion decision pm-cli-website-ikjv.
   "2026-07-21T07:17:36.721Z",codex,"Pre-push Greptile review a895c1d7-69a7-4b83-b679-e2ab9d022b71: fixed long-lived-host SDK retry poisoning; replaced misleading recovered create/update counts with recoveredItems; added mixed pre-existing update+close rollback integration coverage proving the SDK version-restore contract. Targeted atomic suite: 8/8 pass."
   "2026-07-21T07:22:31.167Z",codex,"Second pre-push Greptile review e7e6bbcc-8d7f-470f-85fd-ca677873e6ee completed at 5/5 confidence: safe to merge, no review comments, all prior concerns verified resolved."
   "2026-07-21T07:36:16.993Z",codex,"Sourcery first-round review identified four actionable improvements: atomic dry-run must use atomic matching without SDK mutation, add orchestration coverage proving the no-SDK result shape, cover the child barrier timeout, and clarify rollback wording. Shared issue preparation and SDK resolution will also be consolidated to prevent behavioral drift."
   "2026-07-21T07:41:38.161Z",codex,"Addressed all four Sourcery findings: atomic dry-run now shares the production preparation/matching path, reports create/update/skip counts, and cannot enter SDK commit; shared issue rendering and centralized atomic SDK loading remove drift; the barrier wait has deterministic success/timeout unit coverage; README rollback wording is explicit. Full release gate passes with 137/137 tests and zero production vulnerabilities."
+  "2026-07-21T07:48:29.731Z",codex,"Hosted Greptile review found three actionable edge cases (plus a duplicate prefix report): transaction IDs did not fingerprint mutation targets, all-skipped non-dry atomic imports returned success, and incomplete SDK compensation was described as clean. Fixes now hash the exact ordered mutation plan, preserve legacy failure parity for empty plans, distinguish interrupted/incomplete/normally compensated failures, and add focused regressions."
+  "2026-07-21T07:49:21.016Z",codex,"Greptile edge-case fixes verified: transaction identity changes when mutation targets change; all-skipped non-dry atomic imports fail before commit; AggregateError compensation failures warn that state may be partial and give a same-transaction recovery path; normal rollback tests still restore creates/updates/closes. Full release gate passes with 139/139 tests."
 learnings[2]{created_at,author,text}:
   "2026-07-21T07:17:36.994Z",codex,A resumable workspace transaction requires both a stable transaction id and a byte-equivalent ordered mutation plan. Sort by the external issue key and preserve create+update upsert steps when a partial retry discovers a deterministic ID created by the interrupted attempt.
   "2026-07-21T07:17:37.278Z",codex,commitItemMutations createCompensation only selects close/delete behavior for create steps; update and close steps are independently snapshot-restored by the SDK. Mixed-batch rollback tests should prove this contract.
@@ -36,5 +38,5 @@ tests[2]{command,scope,timeout_seconds}:
   npm test,project,600
 docs[1]{path,scope,note}:
   README.md,project,user-facing atomic import guidance
-close_reason: "Atomic GitHub import and all first-round review fixes verified by the complete release gate (137 tests, audit, pack, changelog)."
+close_reason: Atomic import plus Sourcery and Greptile review findings verified by 139 tests and the complete release gate.
 body: ""

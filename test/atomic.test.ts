@@ -132,18 +132,68 @@ test("atomic dry-run previews creates and updates without invoking the SDK", asy
 test("transaction identity is content-sensitive and independent of fetch order", () => {
   const first = entry(1, "First");
   const second = entry(2, "Second");
-  const id = deriveAtomicTransactionId("Acme/Widgets", [first, second]);
+  const plan = [
+    { op: "update" as const, id: "test-first", options: { title: "First" } },
+    { op: "update" as const, id: "test-second", options: { title: "Second" } },
+  ];
+  const id = deriveAtomicTransactionId("Acme/Widgets", [first, second], plan);
   assert.match(id, /^github-import-[0-9a-f]{16}$/);
   assert.strictEqual(
-    deriveAtomicTransactionId("acme/widgets", [second, first]),
+    deriveAtomicTransactionId("acme/widgets", [second, first], plan),
     id,
     "same rendered issues in another order resume the same transaction",
   );
   assert.notStrictEqual(
-    deriveAtomicTransactionId("acme/widgets", [first, entry(2, "Changed")]),
+    deriveAtomicTransactionId("acme/widgets", [first, entry(2, "Changed")], plan),
     id,
     "changed desired state starts a fresh transaction",
   );
+  assert.notStrictEqual(
+    deriveAtomicTransactionId("acme/widgets", [first, second], [
+      { ...plan[0]!, id: "other-prefix-first" },
+      plan[1]!,
+    ]),
+    id,
+    "changed mutation targets cannot collide with an incompatible recovery journal",
+  );
+});
+
+test("atomic all-skipped imports fail without invoking the SDK", async () => {
+  const blankIssue: GhIssue = {
+    number: 1,
+    title: "   ",
+    body: null,
+    state: "open",
+    labels: [],
+    assignee: null,
+    milestone: null,
+    created_at: "2026-07-21T00:00:00Z",
+    updated_at: "2026-07-21T00:00:00Z",
+    html_url: "https://github.com/acme/widgets/issues/1",
+  };
+  let sdkCalls = 0;
+  await assert.rejects(
+    () => runImport(
+      "acme/widgets",
+      "/unused-all-skipped-workspace",
+      parseImportOptions({ atomic: true }),
+      {
+        resolveToken: () => undefined,
+        fetchIssues: async () => [blankIssue],
+        readItems: () => [],
+        commitAtomic: async () => {
+          sdkCalls++;
+          throw new Error("must not commit an empty plan");
+        },
+      },
+    ),
+    (err: unknown) => {
+      assert.ok(err instanceof CommandError);
+      assert.match((err as Error).message, /Imported 0 issue\(s\); 1 failed/);
+      return true;
+    },
+  );
+  assert.strictEqual(sdkCalls, 0);
 });
 
 test("create ids are stable external-key ids and mutation planning handles transitions", () => {
@@ -272,7 +322,7 @@ test("a failed atomic batch compensates every applied create", async () => {
       (err: unknown) => {
         assert.ok(err instanceof CommandError);
         assert.strictEqual((err as CommandError).exitCode, EXIT_CODE.GENERIC_FAILURE);
-        assert.match((err as Error).message, /no partial committed state/);
+        assert.match((err as Error).message, /no new partial committed state is expected/);
         return true;
       },
     );
@@ -320,7 +370,7 @@ test("a failed mixed batch restores pre-existing updates and closes", async () =
         ],
         { commitItemMutations: wrappingCommit },
       ),
-      /no partial committed state/,
+      /no new partial committed state is expected/,
     );
 
     const items = listItems(root);
@@ -335,6 +385,32 @@ test("a failed mixed batch restores pre-existing updates and closes", async () =
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("incomplete compensation is reported as potentially partial and resumable", async () => {
+  const incomplete = new AggregateError(
+    [new Error("apply failed"), new Error("restore failed")],
+    "Workspace transaction failed and compensation failed: restore failed",
+  );
+  await assert.rejects(
+    () => importGithubAtomic(
+      "/unused-incomplete-compensation-workspace",
+      "acme/widgets",
+      [entry(50, "Needs repair")],
+      {
+        commitItemMutations: async () => { throw incomplete; },
+        normalizeItemId: (input, prefix) => `${prefix}${input}`,
+        readSettings: async () => ({ id_prefix: "test-" }),
+      },
+    ),
+    (err: unknown) => {
+      assert.ok(err instanceof CommandError);
+      assert.match((err as Error).message, /compensation was incomplete/);
+      assert.match((err as Error).message, /may contain partially applied state/);
+      assert.doesNotMatch((err as Error).message, /no new partial committed state/);
+      return true;
+    },
+  );
 });
 
 test("SDK resolution reports an actionable version error", async () => {
