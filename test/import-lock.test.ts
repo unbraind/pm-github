@@ -32,6 +32,7 @@ import {
   resolvePmDataDir,
   syncGithubCommentsToAnnotations,
 } from "../dist/index.js";
+import { waitForBarrier } from "./helpers/barrier.js";
 
 // Minimal factories + workspace helpers --------------------------------------
 
@@ -79,6 +80,39 @@ function firstItemId(root: string): string {
   if (!arr.length) throw new Error("no items in test workspace");
   return arr[0].id as string;
 }
+
+test("comment-sync child barrier proceeds when the file appears", async () => {
+  let checks = 0;
+  const exitCodes: number[] = [];
+  const errors: string[] = [];
+  await waitForBarrier("fixture-barrier", {
+    now: () => checks,
+    deadlineMs: 10,
+    exists: () => ++checks >= 3,
+    delayMs: async () => undefined,
+    logError: (message) => errors.push(message),
+    exit: (code) => exitCodes.push(code),
+  });
+  assert.deepEqual(exitCodes, []);
+  assert.deepEqual(errors, []);
+  assert.strictEqual(checks, 3);
+});
+
+test("comment-sync child barrier exits predictably when the file never appears", async () => {
+  let now = 0;
+  const exitCodes: number[] = [];
+  const errors: string[] = [];
+  await waitForBarrier("missing-barrier", {
+    now: () => now++,
+    deadlineMs: 1,
+    exists: () => false,
+    delayMs: async () => undefined,
+    logError: (message) => errors.push(message),
+    exit: (code) => exitCodes.push(code),
+  });
+  assert.deepEqual(exitCodes, [2]);
+  assert.deepEqual(errors, ["barrier file never appeared"]);
+});
 
 // Run fn with console.error captured; returns the messages it logged.
 async function captureStderr(fn: () => Promise<unknown>): Promise<string[]> {
