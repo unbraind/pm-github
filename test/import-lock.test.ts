@@ -51,7 +51,7 @@ const PM_BIN = fileURLToPath(
 );
 
 const CHILD_SCRIPT = fileURLToPath(
-  new URL("../test/helpers/comment-sync-child.mjs", import.meta.url),
+  new URL("./helpers/comment-sync-child.js", import.meta.url),
 );
 
 function makeWorkspace(): string {

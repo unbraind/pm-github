@@ -17,6 +17,6 @@ files[3]{path,scope,note}:
   test/smoke.test.ts,project,null
 tests[2]{command,scope,timeout_seconds}:
   "npm run release:check",project,3600
-  rm -rf /tmp/pm-realdata-github && mkdir -p /tmp/pm-realdata-github && cd /tmp/pm-realdata-github && pm init >/dev/null && pm install /home/steve/container/pm-sweep/pm-github --project >/dev/null && pm github validate --repo unbraind/pm-cli --json > github-validate.json && pm github import unbraind/pm-cli --state open --dry-run --json > github-import-dryrun.json,project,1200
+  rm -rf /tmp/pm-realdata-github && mkdir -p /tmp/pm-realdata-github && cd /tmp/pm-realdata-github && pm init >/dev/null && pm install /workspace/pm-github --project >/dev/null && pm github validate --repo unbraind/pm-cli --json > github-validate.json && pm github import unbraind/pm-cli --state open --dry-run --json > github-import-dryrun.json,project,1200
 close_reason: "Broad ecosystem-pass tracker from 2026-06-10; superseded by subsequent release waves. Package is at 2026.7.11, CI green, 0 alerts/issues. Closing stale tracker."
 body: ""
