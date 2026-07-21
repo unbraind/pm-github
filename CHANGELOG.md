@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.7.21 - 2026-07-21
+
+### Other
+
+- Make GitHub issue imports atomic and crash-resumable ([pm-github-1jez](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-1jez.toon))
+
 ## 2026.7.18-1 - 2026-07-18
 
 ### Other
