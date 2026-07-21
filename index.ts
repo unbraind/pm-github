@@ -20,6 +20,11 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 import type { defineExtension as defineExtensionType } from "@unbrained/pm-cli/sdk";
+import type {
+  BulkItemMutation,
+  CommitItemMutationsOptions,
+  CommitItemMutationsResult,
+} from "@unbrained/pm-cli/sdk";
 
 // The `comments()` annotation primitive is only exported from the public SDK
 // since pm CLI 2026.7.14. Load it lazily so hosts on older CLI versions still
@@ -64,7 +69,7 @@ const defineExtension: typeof defineExtensionType = ((extension: any) => extensi
 // Types
 // ---------------------------------------------------------------------------
 
-interface GhIssue {
+export interface GhIssue {
   number: number;
   title: string;
   body: string | null;
@@ -84,7 +89,7 @@ interface GhIssue {
   draft?: boolean;
 }
 
-interface GhComment {
+export interface GhComment {
   id: number;
   user: { login: string } | null;
   created_at: string;
@@ -107,7 +112,7 @@ type CommentsMode = "body" | "annotations" | "both";
 
 const COMMENTS_MODES: readonly CommentsMode[] = ["body", "annotations", "both"];
 
-interface ImportOptions {
+export interface ImportOptions {
   state: "open" | "closed" | "all";
   labels?: string;
   since?: string;
@@ -119,6 +124,37 @@ interface ImportOptions {
   commentsMode: CommentsMode;
   itemType: string;
   dryRun: boolean;
+  atomic: boolean;
+}
+
+type CommitItemMutations = (
+  options: CommitItemMutationsOptions,
+) => Promise<CommitItemMutationsResult>;
+
+type NormalizeItemId = (input: string, prefix: string) => string;
+type ReadSettings = (pmRoot: string) => Promise<{ id_prefix?: string }>;
+
+export interface AtomicImportOptions {
+  atomicAuthor?: string;
+  commitItemMutations?: CommitItemMutations;
+  normalizeItemId?: NormalizeItemId;
+  readSettings?: ReadSettings;
+}
+
+export interface ImportRunDependencies {
+  resolveToken?: () => string | undefined;
+  fetchIssues?: (
+    repo: string,
+    opts: ImportOptions,
+    token?: string,
+  ) => Promise<GhIssue[]>;
+  fetchIssueComments?: (
+    issue: GhIssue,
+    repo: string,
+    token?: string,
+  ) => Promise<GhComment[]>;
+  readItems?: (pmRoot: string) => PmItem[];
+  commitAtomic?: typeof importGithubAtomic;
 }
 
 // ---------------------------------------------------------------------------
@@ -565,7 +601,7 @@ export function authorTag(issue: GhIssue): string | undefined {
 // pm workspace I/O
 // ---------------------------------------------------------------------------
 
-interface PmItem {
+export interface PmItem {
   id?: string;
   title?: string;
   status?: string;
@@ -634,6 +670,313 @@ export function indexByProvenance(items: PmItem[]): Map<string, PmItem> {
     }
   }
   return index;
+}
+
+// ---------------------------------------------------------------------------
+// Atomic GitHub issue import (pm-cli >= 2026.7.20 commitItemMutations)
+// ---------------------------------------------------------------------------
+
+const ATOMIC_IMPORT_PREFIX = "github-import-";
+let cachedCommitItemMutations: CommitItemMutations | undefined;
+
+/** Fully rendered desired state for one GitHub issue import. */
+export interface PreparedGithubImport {
+  issueNumber: number;
+  title: string;
+  itemType: string;
+  status: string;
+  description: string;
+  body: string;
+  tags: string[];
+  assignee?: string;
+  milestone?: string;
+  comments: GhComment[];
+  syncAnnotations: boolean;
+  match?: PmItem;
+}
+
+function assertSdkFunction<F>(fn: unknown, exportName: string): F {
+  if (typeof fn !== "function") {
+    throw new CommandError(
+      `--atomic requires @unbrained/pm-cli>=2026.7.20 with the commitItemMutations SDK primitive, but the installed SDK does not export ${exportName} as a function. Upgrade @unbrained/pm-cli to >=2026.7.20.`,
+      EXIT_CODE.USAGE,
+    );
+  }
+  return fn as F;
+}
+
+async function loadAtomicSdk(
+  importSdk: () => Promise<Partial<typeof import("@unbrained/pm-cli/sdk")>> =
+    () => import("@unbrained/pm-cli/sdk"),
+): Promise<Partial<typeof import("@unbrained/pm-cli/sdk")>> {
+  try {
+    return await importSdk();
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new CommandError(
+      `--atomic requires @unbrained/pm-cli>=2026.7.20, but the SDK could not be imported: ${msg}. Install or upgrade @unbrained/pm-cli.`,
+      EXIT_CODE.USAGE,
+    );
+  }
+}
+
+/** Resolve the atomic bulk-mutation helper lazily so normal imports stay compatible. */
+export async function resolveCommitItemMutations(
+  importSdk?: () => Promise<Partial<typeof import("@unbrained/pm-cli/sdk")>>,
+): Promise<CommitItemMutations> {
+  if (importSdk) {
+    const mod = await loadAtomicSdk(importSdk);
+    return assertSdkFunction<CommitItemMutations>(mod.commitItemMutations, "commitItemMutations");
+  }
+  if (cachedCommitItemMutations) return cachedCommitItemMutations;
+  const mod = await loadAtomicSdk();
+  cachedCommitItemMutations = assertSdkFunction<CommitItemMutations>(
+    mod.commitItemMutations,
+    "commitItemMutations",
+  );
+  return cachedCommitItemMutations;
+}
+
+async function resolveAtomicSdkFunctions(opts: AtomicImportOptions): Promise<{
+  commitItemMutations: CommitItemMutations;
+  normalizeItemId: NormalizeItemId;
+  readSettings: ReadSettings;
+}> {
+  const needsSdk = !opts.commitItemMutations || !opts.normalizeItemId || !opts.readSettings;
+  const mod = needsSdk ? await loadAtomicSdk() : undefined;
+  return {
+    commitItemMutations: opts.commitItemMutations ?? assertSdkFunction<CommitItemMutations>(
+      mod?.commitItemMutations,
+      "commitItemMutations",
+    ),
+    normalizeItemId: opts.normalizeItemId ?? assertSdkFunction<NormalizeItemId>(
+      mod?.normalizeItemId,
+      "normalizeItemId",
+    ),
+    readSettings: opts.readSettings ?? assertSdkFunction<ReadSettings>(
+      mod?.readSettings,
+      "readSettings",
+    ),
+  };
+}
+
+/**
+ * Derive an order-independent transaction id from the desired import state and
+ * exact ordered mutation plan. Content or target changes produce a fresh
+ * transaction; a reordered retry of the same plan resumes the durable journal.
+ */
+export function deriveAtomicTransactionId(
+  repo: string,
+  entries: readonly PreparedGithubImport[],
+  mutations: readonly BulkItemMutation[],
+): string {
+  const canonical = [...entries]
+    .sort((a, b) => a.issueNumber - b.issueNumber)
+    .map((entry) => ({
+      issueNumber: entry.issueNumber,
+      title: entry.title,
+      itemType: entry.itemType,
+      status: entry.status,
+      description: entry.description,
+      body: entry.body,
+      tags: [...entry.tags].sort(),
+      assignee: entry.assignee ?? null,
+      milestone: entry.milestone ?? null,
+    }));
+  const digest = crypto
+    .createHash("sha256")
+    .update(repo.toLowerCase())
+    .update("\x1f")
+    .update(JSON.stringify(canonical))
+    .update("\x1f")
+    // Recovery requires the exact ordered step plan. Include targets and
+    // options so a changed id_prefix or provenance match gets a fresh journal
+    // instead of colliding with an incompatible prior attempt.
+    .update(JSON.stringify(mutations))
+    .digest("hex")
+    .slice(0, 16);
+  return `${ATOMIC_IMPORT_PREFIX}${digest}`;
+}
+
+/** Stable create id keyed by the external GitHub issue, never by fetch order. */
+export function deriveAtomicItemId(
+  repo: string,
+  issueNumber: number,
+  idPrefix: string,
+  normalizeItemId: (input: string, prefix: string) => string,
+): string {
+  const repoToken = crypto
+    .createHash("sha256")
+    .update(repo.toLowerCase())
+    .digest("hex")
+    .slice(0, 12);
+  return normalizeItemId(`github-${repoToken}-${issueNumber}`, idPrefix);
+}
+
+/** Map one rendered import entry to its reversible SDK mutation sequence. */
+export function buildAtomicImportMutations(
+  repo: string,
+  entry: PreparedGithubImport,
+  idPrefix: string,
+  normalizeItemId: (input: string, prefix: string) => string,
+): { itemId: string; mutations: BulkItemMutation[] } {
+  const sharedOptions: Record<string, unknown> = {
+    title: entry.title,
+    type: entry.itemType,
+    description: entry.description,
+    body: entry.body,
+    tags: entry.tags.join(","),
+    ...(entry.assignee ? { assignee: entry.assignee } : {}),
+    ...(entry.milestone ? { sprint: entry.milestone } : {}),
+  };
+
+  const managedItemId = deriveAtomicItemId(
+    repo,
+    entry.issueNumber,
+    idPrefix,
+    normalizeItemId,
+  );
+
+  // A missing match and a match at our deterministic external-key id use the
+  // SAME create+update upsert plan. This is essential for crash recovery: if a
+  // prior attempt stopped after create, the next provenance scan sees that
+  // item, but commitItemMutations must still receive the original plan. The
+  // create step treats an existing stable id as already applied; update then
+  // makes later content-bearing transactions refresh the item normally.
+  if (!entry.match?.id || entry.match.id === managedItemId) {
+    const createStatus = entry.status === "closed" ? "open" : entry.status;
+    const mutations: BulkItemMutation[] = [{
+      op: "create",
+      id: managedItemId,
+      options: { ...sharedOptions, status: createStatus },
+    }, {
+      op: "update",
+      id: managedItemId,
+      options: {
+        ...sharedOptions,
+        ...(entry.status !== "closed" ? { status: entry.status } : {}),
+      },
+    }];
+    if (entry.status === "closed") {
+      mutations.push({
+        op: "close",
+        id: managedItemId,
+        reason: `GitHub issue #${entry.issueNumber} closed`,
+      });
+    }
+    return {
+      itemId: managedItemId,
+      mutations,
+    };
+  }
+
+  const itemId = entry.match.id;
+  const updateOptions: Record<string, unknown> = { ...sharedOptions };
+  // close has a dedicated mutation so its reason is preserved. Every other
+  // transition (open/reopen/canceled) is safely reversible as part of update.
+  if (entry.status !== "closed") {
+    updateOptions.status = entry.status;
+  }
+  const mutations: BulkItemMutation[] = [{
+    op: "update",
+    id: itemId,
+    options: updateOptions,
+  }];
+  if (entry.status === "closed") {
+    mutations.push({
+      op: "close",
+      id: itemId,
+      reason: `GitHub issue #${entry.issueNumber} closed`,
+    });
+  }
+  return { itemId, mutations };
+}
+
+/** Commit a complete issue-import batch under one crash-resumable transaction. */
+export async function importGithubAtomic(
+  pmRoot: string,
+  repo: string,
+  entries: readonly PreparedGithubImport[],
+  opts: AtomicImportOptions = {},
+): Promise<{
+  transactionId: string;
+  recovered: boolean;
+  imported: number;
+  updated: number;
+  recoveredItems?: number;
+  itemIds: Map<number, string>;
+}> {
+  const {
+    commitItemMutations: commit,
+    normalizeItemId,
+    readSettings,
+  } = await resolveAtomicSdkFunctions(opts);
+
+  let idPrefix = "pm-";
+  try {
+    const settings = await readSettings(pmRoot);
+    if (settings?.id_prefix) idPrefix = String(settings.id_prefix);
+  } catch {
+    // Match normal import resilience: an unreadable optional setting falls
+    // back to the canonical prefix; the mutation still validates the tracker.
+  }
+
+  const mutations: BulkItemMutation[] = [];
+  const itemIds = new Map<number, string>();
+  // The transaction journal fingerprints the ordered step plan. Canonicalize
+  // by the stable GitHub issue number so a retry whose API page/order changed
+  // supplies the exact same plan as well as the same transaction id.
+  for (const entry of [...entries].sort((a, b) => a.issueNumber - b.issueNumber)) {
+    const planned = buildAtomicImportMutations(repo, entry, idPrefix, normalizeItemId);
+    itemIds.set(entry.issueNumber, planned.itemId);
+    mutations.push(...planned.mutations);
+  }
+  const transactionId = deriveAtomicTransactionId(repo, entries, mutations);
+
+  try {
+    const result = await commit({
+      pmRoot,
+      transactionId,
+      author: opts.atomicAuthor ?? "pm-github",
+      mutations,
+      // This option selects how CREATE steps are compensated. The SDK's
+      // commitItemMutations contract independently snapshots and version-
+      // restores every UPDATE and CLOSE step (covered by the mixed rollback
+      // integration test below this implementation).
+      createCompensation: "delete",
+    });
+    // A recovered journal may include work applied by the interrupted process
+    // as well as steps resumed now. The SDK intentionally returns the durable
+    // final results, not a per-invocation delta, so create/update counts cannot
+    // be reconstructed truthfully. Report the recovered batch separately.
+    const recovered = Boolean(result?.recovered);
+    return {
+      transactionId,
+      recovered,
+      imported: recovered ? 0 : entries.filter((entry) => !entry.match?.id).length,
+      updated: recovered ? 0 : entries.filter((entry) => Boolean(entry.match?.id)).length,
+      ...(recovered ? { recoveredItems: entries.length } : {}),
+      itemIds,
+    };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (err instanceof AggregateError || /compensation failed/i.test(msg)) {
+      throw new CommandError(
+        `Atomic GitHub import failed and compensation was incomplete. The tracker may contain partially applied state; retry the same import to resume transaction ${transactionId}, then inspect its durable journal if recovery still fails. Underlying error: ${msg}`,
+        EXIT_CODE.GENERIC_FAILURE,
+      );
+    }
+    if (err instanceof Error && err.name === "WorkspaceTransactionInterruptedError") {
+      throw new CommandError(
+        `Atomic GitHub import was interrupted. Its durable journal is resumable; retry the same import to continue transaction ${transactionId}. Underlying error: ${msg}`,
+        EXIT_CODE.GENERIC_FAILURE,
+      );
+    }
+    throw new CommandError(
+      `Atomic GitHub import failed after the SDK completed its normal compensation path; no new partial committed state is expected. Transaction id: ${transactionId}. Underlying error: ${msg}`,
+      EXIT_CODE.GENERIC_FAILURE,
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1244,6 +1587,7 @@ export function parseImportOptions(options: Record<string, unknown>): ImportOpti
     commentsMode,
     itemType: optionString(options, "type") || "Issue",
     dryRun: optionEnabled(options, "dry-run", "dryRun"),
+    atomic: optionEnabled(options, "atomic"),
   };
 }
 
@@ -1255,28 +1599,84 @@ function pmRun(args: string[]): { ok: boolean; stderr: string; stdout: string } 
   return { ok: result.status === 0, stderr: result.stderr || "", stdout: result.stdout || "" };
 }
 
+async function prepareGithubImport(
+  issue: GhIssue,
+  repo: string,
+  opts: ImportOptions,
+  token: string | undefined,
+  match: PmItem | undefined,
+  fetchIssueComments: ImportRunDependencies["fetchIssueComments"] = fetchComments,
+): Promise<PreparedGithubImport | undefined> {
+  const title = issue.title.trim();
+  if (!title) return undefined;
+
+  const kind = issue.pull_request ? "PR" : "issue";
+  const labels = issue.labels.map((label) => label.name).filter(Boolean);
+  const tag = provenanceTag(repo, issue.number);
+  const ghAuthorTag = authorTag(issue);
+  const author = issue.user?.login;
+  const syncAnnotations = opts.commentsMode === "annotations" || opts.commentsMode === "both";
+  const shouldFetchComments = opts.withComments || syncAnnotations;
+  const writeCommentsToBody = opts.commentsMode === "body" || opts.commentsMode === "both";
+  let comments: GhComment[] = [];
+  if (shouldFetchComments) {
+    try {
+      comments = await fetchIssueComments!(issue, repo, token);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`#${issue.number}: failed to fetch comments — ${msg}`);
+    }
+  }
+
+  return {
+    issueNumber: issue.number,
+    title,
+    itemType: opts.itemType,
+    status: mapState(issue.state, issue.state_reason),
+    description:
+      `GH ${kind} #${issue.number}: ${issue.html_url}` +
+      (author ? ` · author @${author}` : "") +
+      (issue.state_reason ? ` · state reason ${issue.state_reason}` : "") +
+      (issue.created_at ? ` · created ${issue.created_at}` : "") +
+      (issue.updated_at ? ` · updated ${issue.updated_at}` : ""),
+    body: writeCommentsToBody ? composeBody(issue, comments) : (issue.body || ""),
+    tags: [...labels, tag, ...(ghAuthorTag ? [ghAuthorTag] : [])],
+    assignee: issue.assignee?.login,
+    milestone: issue.milestone?.title,
+    comments,
+    syncAnnotations,
+    match,
+  };
+}
+
 // Run the full import flow. Idempotent: items already linked (provenance tag)
 // to a fetched issue are UPDATEd; new issues are created. Returns a structured
 // result; throws CommandError (with a semantic exitCode) on failure.
-async function runImport(repoArg: string | undefined, pmRoot: string, opts: ImportOptions) {
+export async function runImport(
+  repoArg: string | undefined,
+  pmRoot: string,
+  opts: ImportOptions,
+  dependencies: ImportRunDependencies = {},
+) {
   if (!repoArg || !repoArg.includes("/")) {
     throw new CommandError(
       "Usage: pm github import <owner/repo> [--all|--state open|closed|all] " +
         "[--labels bug,enhancement] [--since <iso>] [--assignee <login>] " +
-        "[--milestone <name>] [--include-prs] [--skip-drafts] [--with-comments] [--comments-mode body|annotations|both]",
+        "[--milestone <name>] [--include-prs] [--skip-drafts] [--with-comments] " +
+        "[--comments-mode body|annotations|both] [--atomic]",
       EXIT_CODE.USAGE,
     );
   }
   const repo = repoArg;
 
-  const token = resolveGitHubToken();
+  const token = (dependencies.resolveToken ?? resolveGitHubToken)();
   console.error(
     `Fetching issues from ${repo}…${token ? "" : " (unauthenticated — 60 req/hr)"}`,
   );
 
   let fetched: GhIssue[];
   try {
-    fetched = await fetchAllIssues(repo, opts, token);
+    fetched = await (dependencies.fetchIssues ?? fetchAllIssues)(repo, opts, token);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     const hint = !token && /HTTP 403/.test(msg)
@@ -1290,67 +1690,146 @@ async function runImport(repoArg: string | undefined, pmRoot: string, opts: Impo
 
   if (filtered.length === 0) {
     console.error("No issues found.");
+    if (opts.atomic && opts.dryRun) {
+      return {
+        dryRun: true,
+        wouldImport: 0,
+        wouldUpdate: 0,
+        wouldSkip: 0,
+        atomic: true,
+      };
+    }
     return { imported: 0, updated: 0, skipped: 0 };
   }
 
   console.error(`Found ${filtered.length} issue(s).`);
 
   // Build the idempotency index once up-front.
-  const existing = opts.dryRun ? new Map<string, PmItem>() : indexByProvenance(readPmItems(pmRoot));
+  const shouldMatchExisting = !opts.dryRun || opts.atomic;
+  const existing = shouldMatchExisting
+    ? indexByProvenance((dependencies.readItems ?? readPmItems)(pmRoot))
+    : new Map<string, PmItem>();
 
   let imported = 0;
   let updated = 0;
   let skipped = 0;
 
+  if (opts.atomic) {
+    const prepared: PreparedGithubImport[] = [];
+    for (const issue of filtered) {
+      const entry = await prepareGithubImport(
+        issue,
+        repo,
+        opts,
+        token,
+        existing.get(`${repo.toLowerCase()}#${issue.number}`),
+        dependencies.fetchIssueComments,
+      );
+      if (!entry) {
+        skipped++;
+        continue;
+      }
+      prepared.push(entry);
+    }
+
+    if (prepared.length === 0) {
+      if (opts.dryRun) {
+        console.error(`[dry-run] Atomic plan would import 0, update 0, skip ${skipped}.`);
+        return {
+          dryRun: true,
+          wouldImport: 0,
+          wouldUpdate: 0,
+          wouldSkip: skipped,
+          atomic: true,
+        };
+      }
+      throw new CommandError(
+        `Imported 0 issue(s); ${skipped} failed.`,
+        EXIT_CODE.GENERIC_FAILURE,
+      );
+    }
+
+    if (opts.dryRun) {
+      imported = prepared.filter((entry) => !entry.match?.id).length;
+      updated = prepared.length - imported;
+      for (const entry of prepared) {
+        const action = entry.match?.id ? "update" : "import";
+        console.error(`  [dry-run][atomic] #${entry.issueNumber} ${action} ${entry.title} (${entry.status})`);
+      }
+      console.error(
+        `[dry-run] Atomic plan would import ${imported}, update ${updated}, skip ${skipped}.`,
+      );
+      return {
+        dryRun: true,
+        wouldImport: imported,
+        wouldUpdate: updated,
+        wouldSkip: skipped,
+        atomic: true,
+      };
+    }
+
+    const result = await (dependencies.commitAtomic ?? importGithubAtomic)(pmRoot, repo, prepared);
+    for (const entry of prepared) {
+      if (!entry.syncAnnotations) continue;
+      const itemId = result.itemIds.get(entry.issueNumber);
+      if (itemId) {
+        await syncGithubCommentsToAnnotations(
+          itemId,
+          entry.comments,
+          pmRoot,
+          entry.issueNumber,
+        );
+      }
+    }
+    if (result.recovered) {
+      console.error(
+        `Atomic import recovered transaction ${result.transactionId} covering ${result.recoveredItems ?? prepared.length} item(s).`,
+      );
+    } else {
+      console.error(
+        `Atomically imported ${result.imported} new, updated ${result.updated} existing, skipped ${skipped}.`,
+      );
+    }
+    // itemIds is an internal post-commit routing map for native comments. Maps
+    // serialize as `{}` in JSON, so keep it out of the public command result.
+    return {
+      transactionId: result.transactionId,
+      recovered: result.recovered,
+      imported: result.imported,
+      updated: result.updated,
+      ...(result.recoveredItems !== undefined ? { recoveredItems: result.recoveredItems } : {}),
+      skipped,
+      atomic: true,
+    };
+  }
+
   for (const issue of filtered) {
-    const title = issue.title.trim();
-    if (!title) {
+    const prepared = await prepareGithubImport(
+      issue,
+      repo,
+      opts,
+      token,
+      existing.get(`${repo.toLowerCase()}#${issue.number}`),
+      dependencies.fetchIssueComments,
+    );
+    if (!prepared) {
       skipped++;
       continue;
     }
 
-    const kind = issue.pull_request ? "PR" : "issue";
     const labels = issue.labels.map((l) => l.name).filter(Boolean);
-    const tag = provenanceTag(repo, issue.number);
-    const ghAuthorTag = authorTag(issue);
-    const tags = [...labels, tag, ...(ghAuthorTag ? [ghAuthorTag] : [])];
-    const status = mapState(issue.state, issue.state_reason);
-    const assignee = issue.assignee?.login;
-    const milestone = issue.milestone?.title;
-    const key = `${repo.toLowerCase()}#${issue.number}`;
-    const match = existing.get(key);
-
-    // GitHub provenance lives in the description (human-readable) and the
-    // declared schema fields (github_url/github_number/github_state/
-    // github_author/github_created_at/github_updated_at). Author + timestamps
-    // are appended additively so a re-import keeps them current.
-    const author = issue.user?.login;
-    const description =
-      `GH ${kind} #${issue.number}: ${issue.html_url}` +
-      (author ? ` · author @${author}` : "") +
-      (issue.state_reason ? ` · state reason ${issue.state_reason}` : "") +
-      (issue.created_at ? ` · created ${issue.created_at}` : "") +
-      (issue.updated_at ? ` · updated ${issue.updated_at}` : "");
-
-    // Comments are fetched when --with-comments asks for the legacy body
-    // embedding OR when --comments-mode targets the native comments collection
-    // (annotations/both). In default mode (body + no --with-comments) nothing is
-    // fetched, keeping import output byte-identical to pre-2026.7.14 behavior.
-    const syncAnnotations = opts.commentsMode === "annotations" || opts.commentsMode === "both";
-    const shouldFetchComments = opts.withComments || syncAnnotations;
-    // Comments land in the body only in body/both mode (the historical path).
-    const writeCommentsToBody = opts.commentsMode === "body" || opts.commentsMode === "both";
-
-    let comments: GhComment[] = [];
-    if (shouldFetchComments) {
-      try {
-        comments = await fetchComments(issue, repo, token);
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.error(`#${issue.number}: failed to fetch comments — ${msg}`);
-      }
-    }
-    const body = writeCommentsToBody ? composeBody(issue, comments) : (issue.body || "");
+    const {
+      title,
+      status,
+      assignee,
+      milestone,
+      match,
+      description,
+      body,
+      tags,
+      comments,
+      syncAnnotations,
+    } = prepared;
 
     if (opts.dryRun) {
       console.error(`  [dry-run] #${issue.number} ${title} (${status}, ${labels.join(",")})`);
@@ -1434,7 +1913,12 @@ async function runImport(repoArg: string | undefined, pmRoot: string, opts: Impo
 
   if (opts.dryRun) {
     console.error(`[dry-run] Would import ${imported}, skip ${skipped}.`);
-    return { dryRun: true, wouldImport: imported, wouldSkip: skipped };
+    return {
+      dryRun: true,
+      wouldImport: imported,
+      wouldSkip: skipped,
+      ...(opts.atomic ? { atomic: true } : {}),
+    };
   }
 
   console.error(`Imported ${imported} new, updated ${updated} existing, skipped ${skipped}.`);
@@ -2825,6 +3309,7 @@ const IMPORT_FLAGS = [
   { long: "--with-comments", description: "Fetch issue comments and append them to the item body" },
   { long: "--include-comments", description: "Alias for --with-comments" },
   { long: "--comments-mode", value_name: "body|annotations|both", description: "How to persist fetched GitHub comments: `body` (default, embed in item body), `annotations` (sync to the pm item's native comments collection), or `both`. `annotations`/`both` are idempotent on re-import (dedupe by GitHub comment id)" },
+  { long: "--atomic", description: "Commit the complete import as one workspace-writer-locked, crash-resumable transaction (pm-cli >=2026.7.20); compensate applied mutations on failure and report incomplete compensation" },
   { long: "--dry-run", description: "Preview without writing" },
   { long: "--type", value_name: "type", description: "Override pm item type (default: Issue)" },
 ];
@@ -2933,6 +3418,7 @@ export default defineExtension({
         "pm github import owner/repo --since 7d",
         "pm github import owner/repo --include-comments",
         "pm github import owner/repo --comments-mode annotations",
+        "pm github import owner/repo --atomic",
         "pm github import owner/repo --dry-run",
       ],
       flags: IMPORT_FLAGS,
@@ -2940,6 +3426,7 @@ export default defineExtension({
         "Pass <owner/repo>, e.g. `pm github import unbraind/pm-cli`.",
         "Set GITHUB_TOKEN/GH_TOKEN or run `gh auth login` for private repos / 5000 req/hr.",
         "Re-running is safe: existing items are updated, not duplicated.",
+        "Use --atomic for a durable resumable journal with reverse compensation on ordinary failures.",
       ],
     });
 
@@ -3099,6 +3586,7 @@ export default defineExtension({
         "pm gh-issues import unbraind/pm-cli --since 2026-01-01T00:00:00Z",
         "pm github import owner/repo --with-comments",
         "pm github import owner/repo --comments-mode annotations",
+        "pm github import owner/repo --atomic",
         "pm github import owner/repo --dry-run",
       ],
       flags: IMPORT_FLAGS,
@@ -3106,6 +3594,7 @@ export default defineExtension({
         "Pass <owner/repo>, e.g. `pm gh-issues import unbraind/pm-cli`.",
         "Set GITHUB_TOKEN/GH_TOKEN or run `gh auth login` for private repos / 5000 req/hr.",
         "Re-running is safe: existing items are updated, not duplicated.",
+        "Use --atomic for a durable resumable journal with reverse compensation on ordinary failures.",
       ],
       async run(ctx: any) {
         return runImport(ctx.args[0], ctx.pm_root, parseImportOptions(ctx.options));

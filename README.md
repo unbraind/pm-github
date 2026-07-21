@@ -36,6 +36,7 @@ pm github import owner/repo --since 2026-01-01T00:00:00Z   # incremental sync
 pm github import owner/repo --assignee octocat
 pm github import owner/repo --milestone "v1.0"
 pm github import owner/repo --include-prs
+pm github import owner/repo --atomic
 pm github import owner/repo --dry-run
 ```
 
@@ -53,10 +54,13 @@ pm github import owner/repo --dry-run
 | `--skip-drafts` | boolean | Exclude draft pull requests (only meaningful with `--include-prs`) |
 | `--with-comments` | boolean | Fetch issue comments and append them to the item body |
 | `--comments-mode <mode>` | `body`\|`annotations`\|`both` | How fetched GitHub comments are persisted (default `body`). `annotations` syncs comments into the pm item's native comments collection via the SDK; `both` writes the body section AND native comments. `annotations`/`both` are idempotent on re-import (dedupe by GitHub comment id) |
+| `--atomic` | boolean | Commit every create, update, close, and reopen in one workspace-writer-locked, crash-resumable transaction (requires pm CLI/SDK >=2026.7.20). Normal failure compensation restores updated/closed items and deletes newly created items; an incomplete compensation is reported explicitly for retry or repair. |
 | `--dry-run` | boolean | Preview without writing |
 | `--type <type>` | string | Override pm item type (default: Issue) |
 
 Each imported item records GitHub provenance: the `gh:owner/repo#N` idempotency tag, a `github_author:<login>` tag, and an enriched description (`author @<login> · state reason <reason> · created <iso> · updated <iso>`). GitHub issues closed as `not_planned` import as pm `canceled` instead of `closed`, preserving the difference between completed work and deliberately dropped work. The integration declares the `github_url`, `github_number`, `github_state`, `github_author`, `github_created_at`, and `github_updated_at` schema fields.
+
+`--atomic` derives its durable transaction identity from the repository, complete rendered issue state, and exact ordered mutation plan (including target item ids), and derives each create id from the stable `owner/repo#number` external key rather than fetch position. Retrying the same response in a different order therefore resumes without duplicates; changed content, workspace prefixes, or resolved targets create a fresh compatible transaction. Native comment annotations run only after the item transaction commits and retain their cross-process deduplication lock.
 
 ### Native comment sync (`--comments-mode`)
 
