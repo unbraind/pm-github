@@ -14,8 +14,9 @@ import {
   importGithubAtomic,
   parseImportOptions,
   resolveCommitItemMutations,
+  runImport,
 } from "../dist/index.js";
-import type { PreparedGithubImport } from "../dist/index.js";
+import type { GhIssue, PreparedGithubImport } from "../dist/index.js";
 
 const PM_BIN = process.platform === "win32" ? "pm.cmd" : "pm";
 const PM_SPAWN_OPTS = {
@@ -78,6 +79,54 @@ test("parseImportOptions enables atomic mode without changing the default", () =
   assert.strictEqual(parseImportOptions({}).atomic, false);
   assert.strictEqual(parseImportOptions({ atomic: true }).atomic, true);
   assert.strictEqual(parseImportOptions({ atomic: "1" }).atomic, true);
+});
+
+test("atomic dry-run previews creates and updates without invoking the SDK", async () => {
+  const issue = (number: number, title: string): GhIssue => ({
+    number,
+    title,
+    body: `Body ${number}`,
+    state: "open",
+    labels: [{ name: "bug" }],
+    user: { login: "alice" },
+    assignee: null,
+    milestone: null,
+    created_at: "2026-07-21T00:00:00Z",
+    updated_at: "2026-07-21T00:00:00Z",
+    html_url: `https://github.com/acme/widgets/issues/${number}`,
+  });
+  let sdkCalls = 0;
+  const messages: string[] = [];
+  const originalError = console.error;
+  console.error = (...values: unknown[]) => messages.push(values.join(" "));
+  try {
+    const result = await runImport(
+      "acme/widgets",
+      "/unused-dry-run-workspace",
+      parseImportOptions({ atomic: true, dryRun: true }),
+      {
+        resolveToken: () => undefined,
+        fetchIssues: async () => [issue(1, "New"), issue(2, "Existing"), issue(3, "   ")],
+        readItems: () => [{ id: "existing-id", tags: ["gh:acme/widgets#2"] }],
+        commitAtomic: async () => {
+          sdkCalls++;
+          throw new Error("atomic dry-run must not call the SDK commit path");
+        },
+      },
+    );
+
+    assert.deepStrictEqual(result, {
+      dryRun: true,
+      wouldImport: 1,
+      wouldUpdate: 1,
+      wouldSkip: 1,
+      atomic: true,
+    });
+    assert.strictEqual(sdkCalls, 0);
+    assert.ok(messages.some((message) => /Atomic plan would import 1, update 1, skip 1/.test(message)));
+  } finally {
+    console.error = originalError;
+  }
 });
 
 test("transaction identity is content-sensitive and independent of fetch order", () => {

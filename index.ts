@@ -131,11 +131,30 @@ type CommitItemMutations = (
   options: CommitItemMutationsOptions,
 ) => Promise<CommitItemMutationsResult>;
 
+type NormalizeItemId = (input: string, prefix: string) => string;
+type ReadSettings = (pmRoot: string) => Promise<{ id_prefix?: string }>;
+
 export interface AtomicImportOptions {
   atomicAuthor?: string;
   commitItemMutations?: CommitItemMutations;
-  normalizeItemId?: (input: string, prefix: string) => string;
-  readSettings?: (pmRoot: string) => Promise<{ id_prefix?: string }>;
+  normalizeItemId?: NormalizeItemId;
+  readSettings?: ReadSettings;
+}
+
+export interface ImportRunDependencies {
+  resolveToken?: () => string | undefined;
+  fetchIssues?: (
+    repo: string,
+    opts: ImportOptions,
+    token?: string,
+  ) => Promise<GhIssue[]>;
+  fetchIssueComments?: (
+    issue: GhIssue,
+    repo: string,
+    token?: string,
+  ) => Promise<GhComment[]>;
+  readItems?: (pmRoot: string) => PmItem[];
+  commitAtomic?: typeof importGithubAtomic;
 }
 
 // ---------------------------------------------------------------------------
@@ -686,39 +705,59 @@ function assertSdkFunction<F>(fn: unknown, exportName: string): F {
   return fn as F;
 }
 
-/** Resolve the atomic bulk-mutation helper lazily so normal imports stay compatible. */
-export async function resolveCommitItemMutations(
-  importSdk?: () => Promise<Partial<typeof import("@unbrained/pm-cli/sdk")>>,
-): Promise<CommitItemMutations> {
-  if (importSdk) {
-    let mod: Partial<typeof import("@unbrained/pm-cli/sdk")>;
-    try {
-      mod = await importSdk();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new CommandError(
-        `--atomic requires @unbrained/pm-cli>=2026.7.20, but the SDK could not be imported: ${msg}. Install or upgrade @unbrained/pm-cli.`,
-        EXIT_CODE.USAGE,
-      );
-    }
-    return assertSdkFunction<CommitItemMutations>(mod.commitItemMutations, "commitItemMutations");
-  }
-  if (cachedCommitItemMutations) return cachedCommitItemMutations;
+async function loadAtomicSdk(
+  importSdk: () => Promise<Partial<typeof import("@unbrained/pm-cli/sdk")>> =
+    () => import("@unbrained/pm-cli/sdk"),
+): Promise<Partial<typeof import("@unbrained/pm-cli/sdk")>> {
   try {
-    const mod = await import("@unbrained/pm-cli/sdk");
-    cachedCommitItemMutations = assertSdkFunction<CommitItemMutations>(
-      mod.commitItemMutations,
-      "commitItemMutations",
-    );
-    return cachedCommitItemMutations;
+    return await importSdk();
   } catch (err: unknown) {
-    if (err instanceof CommandError) throw err;
     const msg = err instanceof Error ? err.message : String(err);
     throw new CommandError(
       `--atomic requires @unbrained/pm-cli>=2026.7.20, but the SDK could not be imported: ${msg}. Install or upgrade @unbrained/pm-cli.`,
       EXIT_CODE.USAGE,
     );
   }
+}
+
+/** Resolve the atomic bulk-mutation helper lazily so normal imports stay compatible. */
+export async function resolveCommitItemMutations(
+  importSdk?: () => Promise<Partial<typeof import("@unbrained/pm-cli/sdk")>>,
+): Promise<CommitItemMutations> {
+  if (importSdk) {
+    const mod = await loadAtomicSdk(importSdk);
+    return assertSdkFunction<CommitItemMutations>(mod.commitItemMutations, "commitItemMutations");
+  }
+  if (cachedCommitItemMutations) return cachedCommitItemMutations;
+  const mod = await loadAtomicSdk();
+  cachedCommitItemMutations = assertSdkFunction<CommitItemMutations>(
+    mod.commitItemMutations,
+    "commitItemMutations",
+  );
+  return cachedCommitItemMutations;
+}
+
+async function resolveAtomicSdkFunctions(opts: AtomicImportOptions): Promise<{
+  commitItemMutations: CommitItemMutations;
+  normalizeItemId: NormalizeItemId;
+  readSettings: ReadSettings;
+}> {
+  const needsSdk = !opts.commitItemMutations || !opts.normalizeItemId || !opts.readSettings;
+  const mod = needsSdk ? await loadAtomicSdk() : undefined;
+  return {
+    commitItemMutations: opts.commitItemMutations ?? assertSdkFunction<CommitItemMutations>(
+      mod?.commitItemMutations,
+      "commitItemMutations",
+    ),
+    normalizeItemId: opts.normalizeItemId ?? assertSdkFunction<NormalizeItemId>(
+      mod?.normalizeItemId,
+      "normalizeItemId",
+    ),
+    readSettings: opts.readSettings ?? assertSdkFunction<ReadSettings>(
+      mod?.readSettings,
+      "readSettings",
+    ),
+  };
 }
 
 /**
@@ -862,28 +901,11 @@ export async function importGithubAtomic(
   itemIds: Map<number, string>;
 }> {
   const transactionId = deriveAtomicTransactionId(repo, entries);
-  const commit = opts.commitItemMutations ?? await resolveCommitItemMutations();
-
-  let sdk: typeof import("@unbrained/pm-cli/sdk") | undefined;
-  const getSdk = async () => {
-    if (sdk) return sdk;
-    try {
-      sdk = await import("@unbrained/pm-cli/sdk");
-      return sdk;
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new CommandError(
-        `--atomic requires @unbrained/pm-cli>=2026.7.20, but the SDK could not be imported: ${msg}. Install or upgrade @unbrained/pm-cli.`,
-        EXIT_CODE.USAGE,
-      );
-    }
-  };
-  const normalizeItemId = opts.normalizeItemId ?? assertSdkFunction<
-    (input: string, prefix: string) => string
-  >((await getSdk()).normalizeItemId, "normalizeItemId");
-  const readSettings = opts.readSettings ?? assertSdkFunction<
-    (root: string) => Promise<{ id_prefix?: string }>
-  >((await getSdk()).readSettings, "readSettings");
+  const {
+    commitItemMutations: commit,
+    normalizeItemId,
+    readSettings,
+  } = await resolveAtomicSdkFunctions(opts);
 
   let idPrefix = "pm-";
   try {
@@ -1559,10 +1581,65 @@ function pmRun(args: string[]): { ok: boolean; stderr: string; stdout: string } 
   return { ok: result.status === 0, stderr: result.stderr || "", stdout: result.stdout || "" };
 }
 
+async function prepareGithubImport(
+  issue: GhIssue,
+  repo: string,
+  opts: ImportOptions,
+  token: string | undefined,
+  match: PmItem | undefined,
+  fetchIssueComments: ImportRunDependencies["fetchIssueComments"] = fetchComments,
+): Promise<PreparedGithubImport | undefined> {
+  const title = issue.title.trim();
+  if (!title) return undefined;
+
+  const kind = issue.pull_request ? "PR" : "issue";
+  const labels = issue.labels.map((label) => label.name).filter(Boolean);
+  const tag = provenanceTag(repo, issue.number);
+  const ghAuthorTag = authorTag(issue);
+  const author = issue.user?.login;
+  const syncAnnotations = opts.commentsMode === "annotations" || opts.commentsMode === "both";
+  const shouldFetchComments = opts.withComments || syncAnnotations;
+  const writeCommentsToBody = opts.commentsMode === "body" || opts.commentsMode === "both";
+  let comments: GhComment[] = [];
+  if (shouldFetchComments) {
+    try {
+      comments = await fetchIssueComments!(issue, repo, token);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`#${issue.number}: failed to fetch comments — ${msg}`);
+    }
+  }
+
+  return {
+    issueNumber: issue.number,
+    title,
+    itemType: opts.itemType,
+    status: mapState(issue.state, issue.state_reason),
+    description:
+      `GH ${kind} #${issue.number}: ${issue.html_url}` +
+      (author ? ` · author @${author}` : "") +
+      (issue.state_reason ? ` · state reason ${issue.state_reason}` : "") +
+      (issue.created_at ? ` · created ${issue.created_at}` : "") +
+      (issue.updated_at ? ` · updated ${issue.updated_at}` : ""),
+    body: writeCommentsToBody ? composeBody(issue, comments) : (issue.body || ""),
+    tags: [...labels, tag, ...(ghAuthorTag ? [ghAuthorTag] : [])],
+    assignee: issue.assignee?.login,
+    milestone: issue.milestone?.title,
+    comments,
+    syncAnnotations,
+    match,
+  };
+}
+
 // Run the full import flow. Idempotent: items already linked (provenance tag)
 // to a fetched issue are UPDATEd; new issues are created. Returns a structured
 // result; throws CommandError (with a semantic exitCode) on failure.
-async function runImport(repoArg: string | undefined, pmRoot: string, opts: ImportOptions) {
+export async function runImport(
+  repoArg: string | undefined,
+  pmRoot: string,
+  opts: ImportOptions,
+  dependencies: ImportRunDependencies = {},
+) {
   if (!repoArg || !repoArg.includes("/")) {
     throw new CommandError(
       "Usage: pm github import <owner/repo> [--all|--state open|closed|all] " +
@@ -1574,14 +1651,14 @@ async function runImport(repoArg: string | undefined, pmRoot: string, opts: Impo
   }
   const repo = repoArg;
 
-  const token = resolveGitHubToken();
+  const token = (dependencies.resolveToken ?? resolveGitHubToken)();
   console.error(
     `Fetching issues from ${repo}…${token ? "" : " (unauthenticated — 60 req/hr)"}`,
   );
 
   let fetched: GhIssue[];
   try {
-    fetched = await fetchAllIssues(repo, opts, token);
+    fetched = await (dependencies.fetchIssues ?? fetchAllIssues)(repo, opts, token);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     const hint = !token && /HTTP 403/.test(msg)
@@ -1595,74 +1672,83 @@ async function runImport(repoArg: string | undefined, pmRoot: string, opts: Impo
 
   if (filtered.length === 0) {
     console.error("No issues found.");
+    if (opts.atomic && opts.dryRun) {
+      return {
+        dryRun: true,
+        wouldImport: 0,
+        wouldUpdate: 0,
+        wouldSkip: 0,
+        atomic: true,
+      };
+    }
     return { imported: 0, updated: 0, skipped: 0 };
   }
 
   console.error(`Found ${filtered.length} issue(s).`);
 
   // Build the idempotency index once up-front.
-  const existing = opts.dryRun ? new Map<string, PmItem>() : indexByProvenance(readPmItems(pmRoot));
+  const shouldMatchExisting = !opts.dryRun || opts.atomic;
+  const existing = shouldMatchExisting
+    ? indexByProvenance((dependencies.readItems ?? readPmItems)(pmRoot))
+    : new Map<string, PmItem>();
 
   let imported = 0;
   let updated = 0;
   let skipped = 0;
 
-  if (opts.atomic && !opts.dryRun) {
+  if (opts.atomic) {
     const prepared: PreparedGithubImport[] = [];
     for (const issue of filtered) {
-      const title = issue.title.trim();
-      if (!title) {
+      const entry = await prepareGithubImport(
+        issue,
+        repo,
+        opts,
+        token,
+        existing.get(`${repo.toLowerCase()}#${issue.number}`),
+        dependencies.fetchIssueComments,
+      );
+      if (!entry) {
         skipped++;
         continue;
       }
-
-      const kind = issue.pull_request ? "PR" : "issue";
-      const labels = issue.labels.map((label) => label.name).filter(Boolean);
-      const tag = provenanceTag(repo, issue.number);
-      const ghAuthorTag = authorTag(issue);
-      const tags = [...labels, tag, ...(ghAuthorTag ? [ghAuthorTag] : [])];
-      const status = mapState(issue.state, issue.state_reason);
-      const author = issue.user?.login;
-      const description =
-        `GH ${kind} #${issue.number}: ${issue.html_url}` +
-        (author ? ` · author @${author}` : "") +
-        (issue.state_reason ? ` · state reason ${issue.state_reason}` : "") +
-        (issue.created_at ? ` · created ${issue.created_at}` : "") +
-        (issue.updated_at ? ` · updated ${issue.updated_at}` : "");
-      const syncAnnotations = opts.commentsMode === "annotations" || opts.commentsMode === "both";
-      const shouldFetchComments = opts.withComments || syncAnnotations;
-      const writeCommentsToBody = opts.commentsMode === "body" || opts.commentsMode === "both";
-      let comments: GhComment[] = [];
-      if (shouldFetchComments) {
-        try {
-          comments = await fetchComments(issue, repo, token);
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-          console.error(`#${issue.number}: failed to fetch comments — ${msg}`);
-        }
-      }
-      prepared.push({
-        issueNumber: issue.number,
-        title,
-        itemType: opts.itemType,
-        status,
-        description,
-        body: writeCommentsToBody ? composeBody(issue, comments) : (issue.body || ""),
-        tags,
-        assignee: issue.assignee?.login,
-        milestone: issue.milestone?.title,
-        comments,
-        syncAnnotations,
-        match: existing.get(`${repo.toLowerCase()}#${issue.number}`),
-      });
+      prepared.push(entry);
     }
 
     if (prepared.length === 0) {
+      if (opts.dryRun) {
+        console.error(`[dry-run] Atomic plan would import 0, update 0, skip ${skipped}.`);
+        return {
+          dryRun: true,
+          wouldImport: 0,
+          wouldUpdate: 0,
+          wouldSkip: skipped,
+          atomic: true,
+        };
+      }
       console.error(`Imported 0 new, updated 0 existing, skipped ${skipped}.`);
       return { imported: 0, updated: 0, skipped, atomic: true };
     }
 
-    const result = await importGithubAtomic(pmRoot, repo, prepared);
+    if (opts.dryRun) {
+      imported = prepared.filter((entry) => !entry.match?.id).length;
+      updated = prepared.length - imported;
+      for (const entry of prepared) {
+        const action = entry.match?.id ? "update" : "import";
+        console.error(`  [dry-run][atomic] #${entry.issueNumber} ${action} ${entry.title} (${entry.status})`);
+      }
+      console.error(
+        `[dry-run] Atomic plan would import ${imported}, update ${updated}, skip ${skipped}.`,
+      );
+      return {
+        dryRun: true,
+        wouldImport: imported,
+        wouldUpdate: updated,
+        wouldSkip: skipped,
+        atomic: true,
+      };
+    }
+
+    const result = await (dependencies.commitAtomic ?? importGithubAtomic)(pmRoot, repo, prepared);
     for (const entry of prepared) {
       if (!entry.syncAnnotations) continue;
       const itemId = result.itemIds.get(entry.issueNumber);
@@ -1698,54 +1784,32 @@ async function runImport(repoArg: string | undefined, pmRoot: string, opts: Impo
   }
 
   for (const issue of filtered) {
-    const title = issue.title.trim();
-    if (!title) {
+    const prepared = await prepareGithubImport(
+      issue,
+      repo,
+      opts,
+      token,
+      existing.get(`${repo.toLowerCase()}#${issue.number}`),
+      dependencies.fetchIssueComments,
+    );
+    if (!prepared) {
       skipped++;
       continue;
     }
 
-    const kind = issue.pull_request ? "PR" : "issue";
     const labels = issue.labels.map((l) => l.name).filter(Boolean);
-    const tag = provenanceTag(repo, issue.number);
-    const ghAuthorTag = authorTag(issue);
-    const tags = [...labels, tag, ...(ghAuthorTag ? [ghAuthorTag] : [])];
-    const status = mapState(issue.state, issue.state_reason);
-    const assignee = issue.assignee?.login;
-    const milestone = issue.milestone?.title;
-    const key = `${repo.toLowerCase()}#${issue.number}`;
-    const match = existing.get(key);
-
-    // GitHub provenance lives in the description (human-readable) and the
-    // declared schema fields (github_url/github_number/github_state/
-    // github_author/github_created_at/github_updated_at). Author + timestamps
-    // are appended additively so a re-import keeps them current.
-    const author = issue.user?.login;
-    const description =
-      `GH ${kind} #${issue.number}: ${issue.html_url}` +
-      (author ? ` · author @${author}` : "") +
-      (issue.state_reason ? ` · state reason ${issue.state_reason}` : "") +
-      (issue.created_at ? ` · created ${issue.created_at}` : "") +
-      (issue.updated_at ? ` · updated ${issue.updated_at}` : "");
-
-    // Comments are fetched when --with-comments asks for the legacy body
-    // embedding OR when --comments-mode targets the native comments collection
-    // (annotations/both). In default mode (body + no --with-comments) nothing is
-    // fetched, keeping import output byte-identical to pre-2026.7.14 behavior.
-    const syncAnnotations = opts.commentsMode === "annotations" || opts.commentsMode === "both";
-    const shouldFetchComments = opts.withComments || syncAnnotations;
-    // Comments land in the body only in body/both mode (the historical path).
-    const writeCommentsToBody = opts.commentsMode === "body" || opts.commentsMode === "both";
-
-    let comments: GhComment[] = [];
-    if (shouldFetchComments) {
-      try {
-        comments = await fetchComments(issue, repo, token);
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        console.error(`#${issue.number}: failed to fetch comments — ${msg}`);
-      }
-    }
-    const body = writeCommentsToBody ? composeBody(issue, comments) : (issue.body || "");
+    const {
+      title,
+      status,
+      assignee,
+      milestone,
+      match,
+      description,
+      body,
+      tags,
+      comments,
+      syncAnnotations,
+    } = prepared;
 
     if (opts.dryRun) {
       console.error(`  [dry-run] #${issue.number} ${title} (${status}, ${labels.join(",")})`);

@@ -4,11 +4,9 @@
 // concurrent `pm github import` runs do: separate processes, same workspace,
 // same item, and the same GitHub comments.
 
-import { existsSync } from "node:fs";
-import { setTimeout as delay } from "node:timers/promises";
-
 import { syncGithubCommentsToAnnotations } from "../../dist/index.js";
 import type { GhComment } from "../../dist/index.js";
+import { waitForBarrier } from "./barrier.js";
 
 const [itemId, pmRoot] = process.argv.slice(2);
 if (!itemId || !pmRoot) {
@@ -18,14 +16,7 @@ if (!itemId || !pmRoot) {
 
 const barrier = process.env.BARRIER_FILE;
 if (barrier) {
-  const deadline = Date.now() + 10_000;
-  while (!existsSync(barrier)) {
-    if (Date.now() > deadline) {
-      console.error("barrier file never appeared");
-      process.exit(2);
-    }
-    await delay(5);
-  }
+  await waitForBarrier(barrier);
 }
 
 const comments = JSON.parse(process.env.FAKE_COMMENTS || "[]") as GhComment[];

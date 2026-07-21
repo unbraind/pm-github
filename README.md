@@ -54,7 +54,7 @@ pm github import owner/repo --dry-run
 | `--skip-drafts` | boolean | Exclude draft pull requests (only meaningful with `--include-prs`) |
 | `--with-comments` | boolean | Fetch issue comments and append them to the item body |
 | `--comments-mode <mode>` | `body`\|`annotations`\|`both` | How fetched GitHub comments are persisted (default `body`). `annotations` syncs comments into the pm item's native comments collection via the SDK; `both` writes the body section AND native comments. `annotations`/`both` are idempotent on re-import (dedupe by GitHub comment id) |
-| `--atomic` | boolean | Commit every create, update, close, and reopen in one workspace-writer-locked, crash-resumable transaction (requires pm CLI/SDK >=2026.7.20). A failed batch restores all updated/closed items and deletes all creates, so agents never observe partial import state. |
+| `--atomic` | boolean | Commit every create, update, close, and reopen in one workspace-writer-locked, crash-resumable transaction (requires pm CLI/SDK >=2026.7.20). A failed batch restores all updated/closed items and deletes all newly created items, so agents never observe partial import state. |
 | `--dry-run` | boolean | Preview without writing |
 | `--type <type>` | string | Override pm item type (default: Issue) |
 
