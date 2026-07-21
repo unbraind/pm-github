@@ -761,13 +761,14 @@ async function resolveAtomicSdkFunctions(opts: AtomicImportOptions): Promise<{
 }
 
 /**
- * Derive an order-independent transaction id from the exact desired import
- * state. Content changes produce a fresh transaction; a reordered retry of the
- * same GitHub response resumes the durable journal.
+ * Derive an order-independent transaction id from the desired import state and
+ * exact ordered mutation plan. Content or target changes produce a fresh
+ * transaction; a reordered retry of the same plan resumes the durable journal.
  */
 export function deriveAtomicTransactionId(
   repo: string,
   entries: readonly PreparedGithubImport[],
+  mutations: readonly BulkItemMutation[],
 ): string {
   const canonical = [...entries]
     .sort((a, b) => a.issueNumber - b.issueNumber)
@@ -787,6 +788,11 @@ export function deriveAtomicTransactionId(
     .update(repo.toLowerCase())
     .update("\x1f")
     .update(JSON.stringify(canonical))
+    .update("\x1f")
+    // Recovery requires the exact ordered step plan. Include targets and
+    // options so a changed id_prefix or provenance match gets a fresh journal
+    // instead of colliding with an incompatible prior attempt.
+    .update(JSON.stringify(mutations))
     .digest("hex")
     .slice(0, 16);
   return `${ATOMIC_IMPORT_PREFIX}${digest}`;
@@ -900,7 +906,6 @@ export async function importGithubAtomic(
   recoveredItems?: number;
   itemIds: Map<number, string>;
 }> {
-  const transactionId = deriveAtomicTransactionId(repo, entries);
   const {
     commitItemMutations: commit,
     normalizeItemId,
@@ -926,6 +931,7 @@ export async function importGithubAtomic(
     itemIds.set(entry.issueNumber, planned.itemId);
     mutations.push(...planned.mutations);
   }
+  const transactionId = deriveAtomicTransactionId(repo, entries, mutations);
 
   try {
     const result = await commit({
@@ -954,8 +960,20 @@ export async function importGithubAtomic(
     };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
+    if (err instanceof AggregateError || /compensation failed/i.test(msg)) {
+      throw new CommandError(
+        `Atomic GitHub import failed and compensation was incomplete. The tracker may contain partially applied state; retry the same import to resume transaction ${transactionId}, then inspect its durable journal if recovery still fails. Underlying error: ${msg}`,
+        EXIT_CODE.GENERIC_FAILURE,
+      );
+    }
+    if (err instanceof Error && err.name === "WorkspaceTransactionInterruptedError") {
+      throw new CommandError(
+        `Atomic GitHub import was interrupted. Its durable journal is resumable; retry the same import to continue transaction ${transactionId}. Underlying error: ${msg}`,
+        EXIT_CODE.GENERIC_FAILURE,
+      );
+    }
     throw new CommandError(
-      `Atomic GitHub import failed and was rolled back — every applied create/update/close was compensated; the tracker has no partial committed state from this import. Transaction id: ${transactionId}. Underlying error: ${msg}`,
+      `Atomic GitHub import failed after the SDK completed its normal compensation path; no new partial committed state is expected. Transaction id: ${transactionId}. Underlying error: ${msg}`,
       EXIT_CODE.GENERIC_FAILURE,
     );
   }
@@ -1725,8 +1743,10 @@ export async function runImport(
           atomic: true,
         };
       }
-      console.error(`Imported 0 new, updated 0 existing, skipped ${skipped}.`);
-      return { imported: 0, updated: 0, skipped, atomic: true };
+      throw new CommandError(
+        `Imported 0 issue(s); ${skipped} failed.`,
+        EXIT_CODE.GENERIC_FAILURE,
+      );
     }
 
     if (opts.dryRun) {
@@ -3289,7 +3309,7 @@ const IMPORT_FLAGS = [
   { long: "--with-comments", description: "Fetch issue comments and append them to the item body" },
   { long: "--include-comments", description: "Alias for --with-comments" },
   { long: "--comments-mode", value_name: "body|annotations|both", description: "How to persist fetched GitHub comments: `body` (default, embed in item body), `annotations` (sync to the pm item's native comments collection), or `both`. `annotations`/`both` are idempotent on re-import (dedupe by GitHub comment id)" },
-  { long: "--atomic", description: "Commit the complete import as one workspace-writer-locked, crash-resumable transaction (pm-cli >=2026.7.20); compensate every applied mutation on failure" },
+  { long: "--atomic", description: "Commit the complete import as one workspace-writer-locked, crash-resumable transaction (pm-cli >=2026.7.20); compensate applied mutations on failure and report incomplete compensation" },
   { long: "--dry-run", description: "Preview without writing" },
   { long: "--type", value_name: "type", description: "Override pm item type (default: Issue)" },
 ];
@@ -3406,7 +3426,7 @@ export default defineExtension({
         "Pass <owner/repo>, e.g. `pm github import unbraind/pm-cli`.",
         "Set GITHUB_TOKEN/GH_TOKEN or run `gh auth login` for private repos / 5000 req/hr.",
         "Re-running is safe: existing items are updated, not duplicated.",
-        "Use --atomic to prevent partial tracker state when a bulk import is interrupted or fails.",
+        "Use --atomic for a durable resumable journal with reverse compensation on ordinary failures.",
       ],
     });
 
@@ -3574,7 +3594,7 @@ export default defineExtension({
         "Pass <owner/repo>, e.g. `pm gh-issues import unbraind/pm-cli`.",
         "Set GITHUB_TOKEN/GH_TOKEN or run `gh auth login` for private repos / 5000 req/hr.",
         "Re-running is safe: existing items are updated, not duplicated.",
-        "Use --atomic to prevent partial tracker state when a bulk import is interrupted or fails.",
+        "Use --atomic for a durable resumable journal with reverse compensation on ordinary failures.",
       ],
       async run(ctx: any) {
         return runImport(ctx.args[0], ctx.pm_root, parseImportOptions(ctx.options));
