@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Recommend pm merge reconcile (2026.7.22) over raw history-repair in Multi-agent merge safety docs ([pm-github-wpit](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-wpit.toon))
+
 ## 2026.7.21 - 2026-07-21
 
 ### Other
