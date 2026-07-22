@@ -297,6 +297,52 @@ test("de-duplicates cycle warnings emitted for multiple changed sources", async 
   assert.deepStrictEqual(result.orderingCycleWarnings, ["same-cycle-warning"]);
 });
 
+test("a pre-edge snapshot/SDK failure is reported, never thrown (import stays successful)", async () => {
+  const result = await linkImportedDependencies(
+    "acme/widgets",
+    [issue(2, "Blocked by #1")],
+    "/pm",
+    {
+      listItemMetadata: async () => {
+        throw new Error("SDK listAllItemMetadata missing");
+      },
+      applyDependencyLink: () => ({ ok: true, stderr: "" }),
+      collectOrderingCycleWarnings: () => [],
+    },
+  );
+  assert.strictEqual(result.linked, 0);
+  assert.strictEqual(result.orderingCycleWarnings.length, 0);
+  assert.strictEqual(result.failures.length, 1);
+  assert.match(result.failures[0], /dependency linking skipped: SDK listAllItemMetadata missing/);
+});
+
+test("an advisory (after-snapshot) failure preserves the edges already written", async () => {
+  let call = 0;
+  const applied: ResolvedDepEdge[] = [];
+  const result = await linkImportedDependencies(
+    "acme/widgets",
+    [issue(2, "Blocked by #1")],
+    "/pm",
+    {
+      listItemMetadata: async () => {
+        call++;
+        if (call === 1) return snapshot(); // before → ok
+        throw new Error("workspace read error"); // after → fails
+      },
+      applyDependencyLink: (edge) => {
+        applied.push(edge);
+        return { ok: true, stderr: "" };
+      },
+      collectOrderingCycleWarnings: () => ["unreached"],
+    },
+  );
+  assert.strictEqual(applied.length, 1);
+  assert.strictEqual(result.linked, 1); // edge NOT discarded
+  assert.deepStrictEqual(result.orderingCycleWarnings, []);
+  assert.strictEqual(result.failures.length, 1);
+  assert.match(result.failures[0], /ordering-cycle advisory skipped: workspace read error/);
+});
+
 test("countDependencyRefCandidates totals parsed refs across issues", () => {
   const n = countDependencyRefCandidates("acme/widgets", [
     issue(1, "Blocked by #2, #3"),

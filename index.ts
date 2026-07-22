@@ -1882,17 +1882,39 @@ export async function linkImportedDependencies(
   pmRoot: string,
   deps: ImportRunDependencies = {},
 ): Promise<DepLinkResult> {
-  const needsSdk = !deps.listItemMetadata || !deps.collectOrderingCycleWarnings;
-  const sdk = needsSdk ? await loadDepLinkSdk() : undefined;
-  const listMeta = deps.listItemMetadata ?? ((r: string) => sdk!.listAllItemMetadata(r));
-  const collect = deps.collectOrderingCycleWarnings ?? sdk!.collectNewOrderingCycleWarnings;
   const applyEdge = deps.applyDependencyLink ?? defaultApplyDependencyLink;
+  const failures: string[] = [];
 
-  const before = await listMeta(pmRoot);
+  // Resolve the SDK-backed helpers and take the pre-edge snapshot. This runs
+  // AFTER the import has already committed, so a failure here (a host whose CLI
+  // predates the required SDK exports, or an unreadable workspace) must never
+  // reject and discard the successful import result — degrade to a reported
+  // failure and skip linking, honoring the "a failure never fails the import"
+  // contract for infra errors, not just per-edge errors.
+  let listMeta: (pmRoot: string) => Promise<DepLinkSnapshotItem[]>;
+  let collect: (
+    before: readonly DepLinkSnapshotItem[],
+    after: readonly DepLinkSnapshotItem[],
+    changedItemId: string,
+  ) => string[];
+  let before: DepLinkSnapshotItem[];
+  try {
+    const needsSdk = !deps.listItemMetadata || !deps.collectOrderingCycleWarnings;
+    const sdk = needsSdk ? await loadDepLinkSdk() : undefined;
+    listMeta = deps.listItemMetadata ?? ((r: string) => sdk!.listAllItemMetadata(r));
+    collect = deps.collectOrderingCycleWarnings ?? sdk!.collectNewOrderingCycleWarnings;
+    before = await listMeta(pmRoot);
+  } catch (err: unknown) {
+    return {
+      linked: 0,
+      unresolved: 0,
+      orderingCycleWarnings: [],
+      failures: [`dependency linking skipped: ${err instanceof Error ? err.message : String(err)}`],
+    };
+  }
+
   const provenance = buildProvenanceIndexFromMetadata(before);
   const { edges, unresolved } = planDependencyLinks(repo, issues, provenance);
-
-  const failures: string[] = [];
   if (edges.length === 0) {
     return { linked: 0, unresolved, orderingCycleWarnings: [], failures };
   }
@@ -1909,11 +1931,18 @@ export async function linkImportedDependencies(
     }
   }
 
+  // The ordering-cycle advisory is likewise best-effort: a re-snapshot or
+  // detector failure must not discard the edges already written, so it degrades
+  // to a reported note rather than throwing.
   const warnings = new Set<string>();
   if (changedSources.size > 0) {
-    const after = await listMeta(pmRoot);
-    for (const id of changedSources) {
-      for (const w of collect(before, after, id)) warnings.add(w);
+    try {
+      const after = await listMeta(pmRoot);
+      for (const id of changedSources) {
+        for (const w of collect(before, after, id)) warnings.add(w);
+      }
+    } catch (err: unknown) {
+      failures.push(`ordering-cycle advisory skipped: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
   return { linked, unresolved, orderingCycleWarnings: [...warnings], failures };
