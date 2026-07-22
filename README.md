@@ -37,6 +37,7 @@ pm github import owner/repo --assignee octocat
 pm github import owner/repo --milestone "v1.0"
 pm github import owner/repo --include-prs
 pm github import owner/repo --atomic
+pm github import owner/repo --link-deps    # map issue-body dependencies to pm edges
 pm github import owner/repo --dry-run
 ```
 
@@ -55,6 +56,7 @@ pm github import owner/repo --dry-run
 | `--with-comments` | boolean | Fetch issue comments and append them to the item body |
 | `--comments-mode <mode>` | `body`\|`annotations`\|`both` | How fetched GitHub comments are persisted (default `body`). `annotations` syncs comments into the pm item's native comments collection via the SDK; `both` writes the body section AND native comments. `annotations`/`both` are idempotent on re-import (dedupe by GitHub comment id) |
 | `--atomic` | boolean | Commit every create, update, close, and reopen in one workspace-writer-locked, crash-resumable transaction (requires pm CLI/SDK >=2026.7.20). Normal failure compensation restores updated/closed items and deletes newly created items; an incomplete compensation is reported explicitly for retry or repair. |
+| `--link-deps` | boolean | After import, map dependency references in issue **bodies** (`Blocked by #N`, `Depends on owner/repo#N`, `Blocks #N`) to pm dependency edges between the linked items. Idempotent, best-effort, and re-runnable; see [Dependency linking](#dependency-linking---link-deps) below. |
 | `--dry-run` | boolean | Preview without writing |
 | `--type <type>` | string | Override pm item type (default: Issue) |
 
@@ -76,6 +78,37 @@ pm github import owner/repo --comments-mode both            # body section + nat
 pm github import owner/repo --with-comments                 # legacy body embedding (default shape)
 pm github import owner/repo --with-comments --comments-mode annotations  # same as --comments-mode both
 ```
+
+### Dependency linking (`--link-deps`)
+
+GitHub issue authors declare cross-issue dependencies in prose — `Blocked by #12`, `Depends on owner/repo#5`, `Blocks #9`. A flat import throws that structure away, leaving pm items with no blocker graph. `--link-deps` runs an opt-in second pass that parses those references from each issue's **body** and materializes them as pm dependency edges between the corresponding pm items, resolved through the same `gh:owner/repo#N` provenance tags the import writes.
+
+The effect is context you can act on: `pm next` and `pm deps` surface the real ready/blocked ordering instead of an undifferentiated list.
+
+```bash
+pm github import owner/repo --link-deps
+pm github import owner/repo --atomic --link-deps
+pm github import owner/repo --link-deps --dry-run   # reports candidate reference count only
+```
+
+**Reference grammar** (case-insensitive; `-`/`:` glue tolerated; multiple refs like `#1, #2 and #3`):
+
+| Phrase | pm edge on the source item |
+|---|---|
+| `Blocked by #N` | `blocked_by` → the referenced item |
+| `Depends on #N` | `blocked_by` → the referenced item |
+| `Blocks #N` | `blocks` → the referenced item |
+
+Both bare `#N` (resolved against the imported repo) and explicit `owner/repo#N` cross-repo references are supported, the latter only when that issue is also present in the workspace.
+
+**Guarantees**
+
+- **Idempotent** — edges dedupe by id + kind, so re-running import never duplicates them.
+- **Path-agnostic** — runs identically after the normal and `--atomic` import.
+- **Safe** — references inside fenced/inline code spans are ignored; self-references and references to issues not in the workspace are skipped (the latter counted as `unresolvedDependencyRefs`); a failed individual edge never fails the import (it is reported in `dependencyLinkFailures` and the pass is re-runnable).
+- **Cycle-aware, not cycle-blocking** — ordering cycles the mapped edges introduce are reported in `orderingCycleWarnings` (computed via the pm SDK `collectNewOrderingCycleWarnings` advisory over the workspace before/after the pass) rather than rejected, mirroring the SDK's warn-don't-reject contract for legacy graph debt.
+
+The import result gains `linkedDependencies`, `unresolvedDependencyRefs`, `orderingCycleWarnings` (and `dependencyLinkFailures` when non-empty); a `--dry-run --link-deps` result reports `wouldLinkDependencyCandidates`.
 
 ## Export (pm → GitHub)
 
