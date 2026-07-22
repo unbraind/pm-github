@@ -125,6 +125,7 @@ export interface ImportOptions {
   itemType: string;
   dryRun: boolean;
   atomic: boolean;
+  linkDeps: boolean;
 }
 
 type CommitItemMutations = (
@@ -155,6 +156,18 @@ export interface ImportRunDependencies {
   ) => Promise<GhComment[]>;
   readItems?: (pmRoot: string) => PmItem[];
   commitAtomic?: typeof importGithubAtomic;
+  // --link-deps second-pass hooks (all optional; defaults wire the real SDK /
+  // `pm` CLI). Injecting all three keeps the pass fully hermetic for tests.
+  /** Snapshot workspace item metadata for the ordering-cycle advisory. Defaults to the SDK `listAllItemMetadata`. */
+  listItemMetadata?: (pmRoot: string) => Promise<DepLinkSnapshotItem[]>;
+  /** Warnings for ordering cycles a mutation newly introduced. Defaults to the SDK `collectNewOrderingCycleWarnings`. */
+  collectOrderingCycleWarnings?: (
+    before: readonly DepLinkSnapshotItem[],
+    after: readonly DepLinkSnapshotItem[],
+    changedItemId: string,
+  ) => string[];
+  /** Apply one resolved dependency edge. Defaults to spawning `pm update --dep`. */
+  applyDependencyLink?: (edge: ResolvedDepEdge, pmRoot: string) => { ok: boolean; stderr: string };
 }
 
 // ---------------------------------------------------------------------------
@@ -1588,6 +1601,7 @@ export function parseImportOptions(options: Record<string, unknown>): ImportOpti
     itemType: optionString(options, "type") || "Issue",
     dryRun: optionEnabled(options, "dry-run", "dryRun"),
     atomic: optionEnabled(options, "atomic"),
+    linkDeps: optionEnabled(options, "link-deps", "linkDeps"),
   };
 }
 
@@ -1597,6 +1611,341 @@ export function parseImportOptions(options: Record<string, unknown>): ImportOpti
 function pmRun(args: string[]): { ok: boolean; stderr: string; stdout: string } {
   const result = spawnSync("pm", args, { encoding: "utf-8" });
   return { ok: result.status === 0, stderr: result.stderr || "", stdout: result.stdout || "" };
+}
+
+// ---------------------------------------------------------------------------
+// --link-deps — map GitHub issue-body dependency references to pm edges
+//
+// GitHub issue authors declare cross-issue dependencies in prose:
+// "Blocked by #12", "Depends on owner/repo#5", "Blocks #9". The flat import
+// drops these, leaving pm items with no blocker graph. This opt-in second pass
+// parses those references from the RAW issue body and materializes them as pm
+// dependency edges between the corresponding pm items (resolved through the
+// same `gh:owner/repo#N` provenance tags the import writes). Effect: agents see
+// the real ready/blocked ordering (`pm next`, `pm deps`) instead of a flat list
+// — project management = context management.
+//
+// The pass is idempotent (`pm update --dep` dedupes by id+kind), path-agnostic
+// (works after both the atomic and non-atomic import), best-effort (a failed
+// edge never fails the import; the pass is re-runnable), and it never invents
+// self-edges or edges to issues absent from the workspace. Ordering cycles the
+// mapped edges introduce are surfaced (not rejected) via the SDK export
+// `collectNewOrderingCycleWarnings`, whose whole-workspace before/after diff is
+// the authoritative advisory regardless of how the edges were written — the
+// `commitItemMutations` atomic path drops the per-item advisory the plain
+// `pm update` path prints, so recomputing it here restores parity.
+// ---------------------------------------------------------------------------
+
+/** pm dependency kinds a GitHub body reference can map to. */
+export type DepRefKind = "blocked_by" | "blocks";
+
+/** One dependency reference parsed out of an issue body. `repo` is lowercased. */
+export interface ParsedDepRef {
+  repo: string;
+  number: number;
+  kind: DepRefKind;
+  /** Normalized human phrase that produced this ref ("blocked by" | "depends on" | "blocks"). */
+  phrase: string;
+}
+
+/** A resolved, workspace-concrete edge ready to apply to the source pm item. */
+export interface ResolvedDepEdge {
+  sourceId: string;
+  targetId: string;
+  kind: DepRefKind;
+  /** GitHub issue number of the source item (for the audit message). */
+  sourceIssue: number;
+  phrase: string;
+}
+
+/** Minimal item-metadata shape the link pass reads (subset of the SDK `ItemMetadata`). */
+export interface DepLinkSnapshotItem {
+  id: string;
+  tags: string[];
+  dependencies?: Array<{ id: string; kind: string }>;
+}
+
+/** Structured outcome of the `--link-deps` pass, merged into the import result. */
+export interface DepLinkResult {
+  linked: number;
+  unresolved: number;
+  orderingCycleWarnings: string[];
+  failures: string[];
+}
+
+// Strip fenced (```…```) and inline (`…`) code so `#123` mentions inside code
+// samples never masquerade as declared dependencies.
+function stripCodeSpans(body: string): string {
+  return body
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`[^`]*`/g, " ");
+}
+
+// A dependency phrase at a word boundary, plus trailing separator. Global +
+// case-insensitive; each match anchors where the reference run begins.
+const DEP_PHRASE_RE = /\b(blocked[\s-]?by|depends[\s-]?on|blocks)\b[\s:]*/gi;
+// One `owner/repo#N` or bare `#N` reference, matched STICKILY (`y`) so it only
+// succeeds at the exact scan position — no scanning ahead, no backtracking.
+const DEP_REF_STICKY = /(?:([A-Za-z0-9._-]+\/[A-Za-z0-9._-]+))?#(\d+)/y;
+// Comma/whitespace glue with an optional "and" between consecutive refs
+// ("#1, #2 and #3"). Sticky and can match empty, so the ref loop always
+// terminates: the next sticky ref match is what decides whether to continue.
+const DEP_GLUE_STICKY = /[\s,]*(?:and\b[\s,]*)?/y;
+
+function phraseToKind(raw: string): { kind: DepRefKind; phrase: string } {
+  const compact = raw.toLowerCase().replace(/[\s-]/g, "");
+  if (compact === "blocks") return { kind: "blocks", phrase: "blocks" };
+  if (compact === "dependson") return { kind: "blocked_by", phrase: "depends on" };
+  return { kind: "blocked_by", phrase: "blocked by" };
+}
+
+/**
+ * Parse dependency references from one issue body. Pure. Bare `#N` refs resolve
+ * against `sourceRepo` (lowercased); `owner/repo#N` refs keep their explicit
+ * repo (lowercased). References are de-duplicated within the body by
+ * repo+number+kind so a body repeating a link yields one ref.
+ *
+ * Scanning is linear: each dependency phrase is found once, then references are
+ * consumed one at a time with sticky (`y`) regexes anchored at the exact scan
+ * position. There is no nested quantifier or look-ahead over unbounded input,
+ * so the parser cannot backtrack catastrophically on adversarial bodies.
+ */
+export function parseDependencyReferences(body: string, sourceRepo: string): ParsedDepRef[] {
+  if (!body) return [];
+  const text = stripCodeSpans(body);
+  const repoLc = sourceRepo.toLowerCase();
+  const out: ParsedDepRef[] = [];
+  const seen = new Set<string>();
+  for (const m of text.matchAll(DEP_PHRASE_RE)) {
+    const { kind, phrase } = phraseToKind(m[1]);
+    let pos = m.index + m[0].length;
+    // Consume the run of references immediately following the phrase.
+    for (;;) {
+      DEP_REF_STICKY.lastIndex = pos;
+      const ref = DEP_REF_STICKY.exec(text);
+      if (!ref) break;
+      const repo = (ref[1] ? ref[1] : repoLc).toLowerCase();
+      const number = Number.parseInt(ref[2], 10);
+      if (Number.isSafeInteger(number) && number > 0) {
+        const key = `${repo}#${number}|${kind}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          out.push({ repo, number, kind, phrase });
+        }
+      }
+      pos = DEP_REF_STICKY.lastIndex;
+      // Skip separator glue; if no further ref follows, the next iteration's
+      // sticky match fails at `pos` and the run ends.
+      DEP_GLUE_STICKY.lastIndex = pos;
+      DEP_GLUE_STICKY.exec(text);
+      pos = DEP_GLUE_STICKY.lastIndex;
+    }
+  }
+  return out;
+}
+
+/** Build a `repo#number` → pm item id index from an item-metadata snapshot. */
+export function buildProvenanceIndexFromMetadata(
+  items: readonly DepLinkSnapshotItem[],
+): Map<string, string> {
+  const index = new Map<string, string>();
+  for (const item of items) {
+    if (!item.id) continue;
+    for (const tag of item.tags ?? []) {
+      const p = parseProvenanceTag(tag);
+      // First writer wins: a provenance tag is a 1:1 issue↔item link, and the
+      // import guarantees uniqueness; guarding keeps a hand-edited duplicate
+      // deterministic rather than order-dependent.
+      if (p && !index.has(`${p.repo}#${p.number}`)) {
+        index.set(`${p.repo}#${p.number}`, item.id);
+      }
+    }
+  }
+  return index;
+}
+
+/**
+ * Resolve parsed references into concrete workspace edges. Skips references
+ * whose source or target issue is not present in the workspace (counted as
+ * `unresolved`), self-references, and duplicates. Pure.
+ */
+export function planDependencyLinks(
+  repo: string,
+  issues: readonly GhIssue[],
+  provenance: ReadonlyMap<string, string>,
+): { edges: ResolvedDepEdge[]; unresolved: number } {
+  const repoLc = repo.toLowerCase();
+  const edges: ResolvedDepEdge[] = [];
+  const seen = new Set<string>();
+  let unresolved = 0;
+  for (const issue of issues) {
+    const sourceKey = `${repoLc}#${issue.number}`;
+    const sourceId = provenance.get(sourceKey);
+    // Source not in the workspace (e.g. its own import was skipped): its edges
+    // have nowhere to attach; leave them for a later re-run rather than count
+    // them as unresolved targets.
+    if (!sourceId) continue;
+    for (const ref of parseDependencyReferences(issue.body ?? "", repoLc)) {
+      const targetKey = `${ref.repo}#${ref.number}`;
+      if (targetKey === sourceKey) continue; // self-reference by provenance
+      const targetId = provenance.get(targetKey);
+      if (!targetId) {
+        unresolved++;
+        continue;
+      }
+      if (targetId === sourceId) continue; // self-reference by resolved id
+      const dedupeKey = `${sourceId}|${targetId}|${ref.kind}`;
+      if (seen.has(dedupeKey)) continue;
+      seen.add(dedupeKey);
+      edges.push({ sourceId, targetId, kind: ref.kind, sourceIssue: issue.number, phrase: ref.phrase });
+    }
+  }
+  return { edges, unresolved };
+}
+
+/** Count candidate references across issues without resolving them (dry-run preview). */
+export function countDependencyRefCandidates(repo: string, issues: readonly GhIssue[]): number {
+  const repoLc = repo.toLowerCase();
+  let n = 0;
+  for (const issue of issues) n += parseDependencyReferences(issue.body ?? "", repoLc).length;
+  return n;
+}
+
+interface DepLinkSdk {
+  listAllItemMetadata: (pmRoot: string) => Promise<DepLinkSnapshotItem[]>;
+  collectNewOrderingCycleWarnings: (
+    before: readonly DepLinkSnapshotItem[],
+    after: readonly DepLinkSnapshotItem[],
+    changedItemId: string,
+  ) => string[];
+}
+
+// Lazy-load the two SDK primitives --link-deps needs. Mirrors loadPmComments /
+// loadAtomicSdk: a missing export degrades to a clear upgrade error instead of
+// killing extension load on older hosts.
+async function loadDepLinkSdk(): Promise<DepLinkSdk> {
+  let mod: Record<string, unknown>;
+  try {
+    mod = (await import("@unbrained/pm-cli/sdk")) as Record<string, unknown>;
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new CommandError(
+      `--link-deps requires @unbrained/pm-cli>=2026.7.20, but the SDK could not be imported: ${msg}.`,
+      EXIT_CODE.USAGE,
+    );
+  }
+  const listFn = mod.listAllItemMetadata;
+  const collectFn = mod.collectNewOrderingCycleWarnings;
+  if (typeof listFn !== "function" || typeof collectFn !== "function") {
+    throw new CommandError(
+      "--link-deps requires @unbrained/pm-cli>=2026.7.20 with the SDK exports " +
+        "listAllItemMetadata + collectNewOrderingCycleWarnings. Upgrade @unbrained/pm-cli.",
+      EXIT_CODE.USAGE,
+    );
+  }
+  return {
+    listAllItemMetadata: async (pmRoot: string) => {
+      const raw = (await (listFn as (r: string) => Promise<Array<Record<string, unknown>>>)(pmRoot));
+      return raw.map((i) => ({
+        id: String(i.id),
+        tags: Array.isArray(i.tags) ? (i.tags as string[]) : [],
+        dependencies: Array.isArray(i.dependencies)
+          ? (i.dependencies as Array<{ id: string; kind: string }>)
+          : undefined,
+      }));
+    },
+    // The SDK's cycle detector reads only id/tags/dependencies off each item;
+    // DepLinkSnapshotItem is that structural subset, so the cast is sound.
+    collectNewOrderingCycleWarnings: collectFn as DepLinkSdk["collectNewOrderingCycleWarnings"],
+  };
+}
+
+function defaultApplyDependencyLink(edge: ResolvedDepEdge, pmRoot: string): { ok: boolean; stderr: string } {
+  const res = pmRun([
+    "--path", pmRoot, "update", edge.sourceId,
+    "--dep", `id=${edge.targetId},kind=${edge.kind}`,
+    "--message", `Linked from GitHub #${edge.sourceIssue} body ("${edge.phrase}" reference)`,
+  ]);
+  return { ok: res.ok, stderr: res.stderr };
+}
+
+/**
+ * The `--link-deps` second pass. Snapshots the workspace, resolves body
+ * references to edges, applies them idempotently, then re-snapshots and asks the
+ * SDK which ordering cycles the batch newly introduced. Never throws for an
+ * individual edge; a resolution/SDK failure surfaces through the returned
+ * `failures`/warnings so the import result stays truthful.
+ */
+export async function linkImportedDependencies(
+  repo: string,
+  issues: readonly GhIssue[],
+  pmRoot: string,
+  deps: ImportRunDependencies = {},
+): Promise<DepLinkResult> {
+  const applyEdge = deps.applyDependencyLink ?? defaultApplyDependencyLink;
+  const failures: string[] = [];
+
+  // Resolve the SDK-backed helpers and take the pre-edge snapshot. This runs
+  // AFTER the import has already committed, so a failure here (a host whose CLI
+  // predates the required SDK exports, or an unreadable workspace) must never
+  // reject and discard the successful import result — degrade to a reported
+  // failure and skip linking, honoring the "a failure never fails the import"
+  // contract for infra errors, not just per-edge errors.
+  let listMeta: (pmRoot: string) => Promise<DepLinkSnapshotItem[]>;
+  let collect: (
+    before: readonly DepLinkSnapshotItem[],
+    after: readonly DepLinkSnapshotItem[],
+    changedItemId: string,
+  ) => string[];
+  let before: DepLinkSnapshotItem[];
+  try {
+    const needsSdk = !deps.listItemMetadata || !deps.collectOrderingCycleWarnings;
+    const sdk = needsSdk ? await loadDepLinkSdk() : undefined;
+    listMeta = deps.listItemMetadata ?? ((r: string) => sdk!.listAllItemMetadata(r));
+    collect = deps.collectOrderingCycleWarnings ?? sdk!.collectNewOrderingCycleWarnings;
+    before = await listMeta(pmRoot);
+  } catch (err: unknown) {
+    return {
+      linked: 0,
+      unresolved: 0,
+      orderingCycleWarnings: [],
+      failures: [`dependency linking skipped: ${err instanceof Error ? err.message : String(err)}`],
+    };
+  }
+
+  const provenance = buildProvenanceIndexFromMetadata(before);
+  const { edges, unresolved } = planDependencyLinks(repo, issues, provenance);
+  if (edges.length === 0) {
+    return { linked: 0, unresolved, orderingCycleWarnings: [], failures };
+  }
+
+  const changedSources = new Set<string>();
+  let linked = 0;
+  for (const edge of edges) {
+    const res = applyEdge(edge, pmRoot);
+    if (res.ok) {
+      linked++;
+      changedSources.add(edge.sourceId);
+    } else {
+      failures.push(`#${edge.sourceIssue} ${edge.sourceId} —(${edge.kind})→ ${edge.targetId}: ${res.stderr.trim()}`);
+    }
+  }
+
+  // The ordering-cycle advisory is likewise best-effort: a re-snapshot or
+  // detector failure must not discard the edges already written, so it degrades
+  // to a reported note rather than throwing.
+  const warnings = new Set<string>();
+  if (changedSources.size > 0) {
+    try {
+      const after = await listMeta(pmRoot);
+      for (const id of changedSources) {
+        for (const w of collect(before, after, id)) warnings.add(w);
+      }
+    } catch (err: unknown) {
+      failures.push(`ordering-cycle advisory skipped: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  return { linked, unresolved, orderingCycleWarnings: [...warnings], failures };
 }
 
 async function prepareGithubImport(
@@ -1759,12 +2108,19 @@ export async function runImport(
       console.error(
         `[dry-run] Atomic plan would import ${imported}, update ${updated}, skip ${skipped}.`,
       );
+      if (opts.linkDeps) {
+        console.error(
+          `[dry-run] --link-deps: ${countDependencyRefCandidates(repo, filtered)} candidate reference(s) parsed; ` +
+            `resolution + edge writes run only on a real import.`,
+        );
+      }
       return {
         dryRun: true,
         wouldImport: imported,
         wouldUpdate: updated,
         wouldSkip: skipped,
         atomic: true,
+        ...(opts.linkDeps ? { wouldLinkDependencyCandidates: countDependencyRefCandidates(repo, filtered) } : {}),
       };
     }
 
@@ -1790,6 +2146,10 @@ export async function runImport(
         `Atomically imported ${result.imported} new, updated ${result.updated} existing, skipped ${skipped}.`,
       );
     }
+    const atomicDepLink = opts.linkDeps
+      ? await linkImportedDependencies(repo, filtered, pmRoot, dependencies)
+      : undefined;
+    reportDepLink(atomicDepLink);
     // itemIds is an internal post-commit routing map for native comments. Maps
     // serialize as `{}` in JSON, so keep it out of the public command result.
     return {
@@ -1800,6 +2160,7 @@ export async function runImport(
       ...(result.recoveredItems !== undefined ? { recoveredItems: result.recoveredItems } : {}),
       skipped,
       atomic: true,
+      ...depLinkResultFields(atomicDepLink),
     };
   }
 
@@ -1913,11 +2274,18 @@ export async function runImport(
 
   if (opts.dryRun) {
     console.error(`[dry-run] Would import ${imported}, skip ${skipped}.`);
+    if (opts.linkDeps) {
+      console.error(
+        `[dry-run] --link-deps: ${countDependencyRefCandidates(repo, filtered)} candidate reference(s) parsed; ` +
+          `resolution + edge writes run only on a real import.`,
+      );
+    }
     return {
       dryRun: true,
       wouldImport: imported,
       wouldSkip: skipped,
       ...(opts.atomic ? { atomic: true } : {}),
+      ...(opts.linkDeps ? { wouldLinkDependencyCandidates: countDependencyRefCandidates(repo, filtered) } : {}),
     };
   }
 
@@ -1925,7 +2293,36 @@ export async function runImport(
   if (imported === 0 && updated === 0 && skipped > 0) {
     throw new CommandError(`Imported 0 issue(s); ${skipped} failed.`);
   }
-  return { imported, updated, skipped };
+  const depLink = opts.linkDeps
+    ? await linkImportedDependencies(repo, filtered, pmRoot, dependencies)
+    : undefined;
+  reportDepLink(depLink);
+  return { imported, updated, skipped, ...depLinkResultFields(depLink) };
+}
+
+// Emit the human-readable --link-deps summary to stderr (import writes its
+// progress there; stdout is reserved for the structured result).
+function reportDepLink(result: DepLinkResult | undefined): void {
+  if (!result) return;
+  const parts = [`linked ${result.linked} dependency edge(s)`];
+  if (result.unresolved > 0) parts.push(`${result.unresolved} unresolved ref(s)`);
+  console.error(`--link-deps: ${parts.join(", ")}.`);
+  for (const warning of result.orderingCycleWarnings) console.error(`  ⚠ ${warning}`);
+  for (const failure of result.failures) console.error(`  ✗ link failed: ${failure}`);
+}
+
+// The public, JSON-serializable slice of a --link-deps result. Kept flat and
+// omitted entirely when the pass did not run so the default result is unchanged.
+function depLinkResultFields(
+  result: DepLinkResult | undefined,
+): Record<string, unknown> {
+  if (!result) return {};
+  return {
+    linkedDependencies: result.linked,
+    unresolvedDependencyRefs: result.unresolved,
+    orderingCycleWarnings: result.orderingCycleWarnings,
+    ...(result.failures.length > 0 ? { dependencyLinkFailures: result.failures } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -3310,6 +3707,7 @@ const IMPORT_FLAGS = [
   { long: "--include-comments", description: "Alias for --with-comments" },
   { long: "--comments-mode", value_name: "body|annotations|both", description: "How to persist fetched GitHub comments: `body` (default, embed in item body), `annotations` (sync to the pm item's native comments collection), or `both`. `annotations`/`both` are idempotent on re-import (dedupe by GitHub comment id)" },
   { long: "--atomic", description: "Commit the complete import as one workspace-writer-locked, crash-resumable transaction (pm-cli >=2026.7.20); compensate applied mutations on failure and report incomplete compensation" },
+  { long: "--link-deps", description: "After import, map dependency references in issue bodies (`Blocked by #N`, `Depends on owner/repo#N`, `Blocks #N`) to pm dependency edges between the linked items. Idempotent; skips self- and unresolved references; ordering cycles are reported (via the SDK ordering-cycle advisory), not rejected" },
   { long: "--dry-run", description: "Preview without writing" },
   { long: "--type", value_name: "type", description: "Override pm item type (default: Issue)" },
 ];
@@ -3419,6 +3817,7 @@ export default defineExtension({
         "pm github import owner/repo --include-comments",
         "pm github import owner/repo --comments-mode annotations",
         "pm github import owner/repo --atomic",
+        "pm github import owner/repo --link-deps",
         "pm github import owner/repo --dry-run",
       ],
       flags: IMPORT_FLAGS,
@@ -3587,6 +3986,7 @@ export default defineExtension({
         "pm github import owner/repo --with-comments",
         "pm github import owner/repo --comments-mode annotations",
         "pm github import owner/repo --atomic",
+        "pm github import owner/repo --link-deps",
         "pm github import owner/repo --dry-run",
       ],
       flags: IMPORT_FLAGS,
