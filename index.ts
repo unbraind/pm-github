@@ -3762,7 +3762,7 @@ const PROJECT_SYNC_FLAGS = [
 
 export default defineExtension({
   name: "pm-github",
-  version: "2026.7.22",
+  version: "2026.7.23",
 
   activate(api: any) {
     // -----------------------------------------------------------------------
