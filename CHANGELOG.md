@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 2026.7.23 - 2026-07-23
+
+### Added
+
+- Import --link-deps: map GitHub issue-body dependency references (Blocked by/Depends on/Blocks \#N) into pm dependency edges + emit ordering-cycle advisory via collectNewOrderingCycleWarnings ([pm-github-hdai](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-hdai.toon))
 
 ### Fixed
 
