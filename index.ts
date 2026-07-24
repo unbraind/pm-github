@@ -651,6 +651,7 @@ export function scopeItemsByIds<TItem extends { id?: string }>(
 // Read every pm item (active + closed) via `pm list-all --full --include-body`
 // so the idempotency index never misses closed issues and re-creates them.
 function readPmItems(pmRoot: string): PmItem[] {
+  const maxBuffer = pmJsonMaxBuffer();
   // `list-all` (NOT `list`) so CLOSED items are included: `pm list` returns only
   // active items, which would make the idempotency index miss every closed
   // issue and re-create it as a DUPLICATE on re-import. `--full --include-body`
@@ -658,7 +659,7 @@ function readPmItems(pmRoot: string): PmItem[] {
   const result = spawnSync(
     "pm",
     ["--path", pmRoot, "--json", "list-all", "--full", "--include-body", "--limit", "10000"],
-    { encoding: "utf-8", maxBuffer: PM_JSON_MAX_BUFFER },
+    { encoding: "utf-8", maxBuffer },
   );
   // A buffer overrun kills the child with status null and no stderr, so name the
   // real cause instead of reporting an unexplained failure.
@@ -666,9 +667,9 @@ function readPmItems(pmRoot: string): PmItem[] {
     const code = (result.error as NodeJS.ErrnoException).code;
     if (code === "ENOBUFS") {
       throw new CommandError(
-        `pm list-all output exceeded the ${PM_JSON_MAX_BUFFER} byte read buffer. ` +
-          "The workspace is larger than this integration's read limit; narrow the import " +
-          "(for example --labels or --since) or raise PM_JSON_MAX_BUFFER in pm-github.",
+        `pm list-all output exceeded the ${maxBuffer} byte read buffer. ` +
+          "The workspace is larger than this read limit; narrow the import " +
+          "(for example --labels or --since) or raise the PM_JSON_MAX_BUFFER env var.",
       );
     }
     throw new CommandError(`pm list-all failed: ${result.error.message}`);
@@ -708,12 +709,11 @@ export function indexByProvenance(items: PmItem[]): Map<string, PmItem> {
 // surfaced as a bare "pm list-all failed" with nothing to diagnose. Reproduced on
 // a real 443-item workspace at 1,052,859 bytes. 64 MiB matches the cap the sibling
 // pm packages settled on (pm-changelog, pm-context, pm-brief).
-const PM_JSON_MAX_BUFFER = resolvePmJsonMaxBuffer();
-
-/** 64 MiB by default; override with the `PM_JSON_MAX_BUFFER` env var (bytes) for
- * workspaces larger than that. Invalid or non-positive values fall back to the
- * default rather than silently disabling the guard. */
-function resolvePmJsonMaxBuffer(): number {
+/** Read-buffer cap for `pm` output, in bytes. 64 MiB by default; override with the
+ * `PM_JSON_MAX_BUFFER` env var. Resolved per call so the override takes effect
+ * without an import-order dependency. Invalid or non-positive values fall back to
+ * the default rather than silently disabling the guard. */
+function pmJsonMaxBuffer(): number {
   const raw = Number.parseInt(process.env.PM_JSON_MAX_BUFFER ?? "", 10);
   return Number.isFinite(raw) && raw > 0 ? raw : 64 * 1024 * 1024;
 }
@@ -1638,7 +1638,8 @@ export function parseImportOptions(options: Record<string, unknown>): ImportOpti
 // result (ok = exit code 0). Centralizes every pm mutation so callers share one
 // error-handling shape.
 function pmRun(args: string[]): { ok: boolean; stderr: string; stdout: string } {
-  const result = spawnSync("pm", args, { encoding: "utf-8", maxBuffer: PM_JSON_MAX_BUFFER });
+  const maxBuffer = pmJsonMaxBuffer();
+  const result = spawnSync("pm", args, { encoding: "utf-8", maxBuffer });
   return { ok: result.status === 0, stderr: result.stderr || "", stdout: result.stdout || "" };
 }
 
@@ -3947,7 +3948,7 @@ export default defineExtension({
       const res = spawnSync(
         "pm",
         ["--path", ctx.pm_root, "--json", "show", id],
-        { encoding: "utf-8", maxBuffer: PM_JSON_MAX_BUFFER },
+        { encoding: "utf-8", maxBuffer: pmJsonMaxBuffer() },
       );
       if (res.status !== 0) return;
       let repo: string | undefined;
