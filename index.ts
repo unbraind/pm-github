@@ -708,7 +708,15 @@ export function indexByProvenance(items: PmItem[]): Map<string, PmItem> {
 // surfaced as a bare "pm list-all failed" with nothing to diagnose. Reproduced on
 // a real 443-item workspace at 1,052,859 bytes. 64 MiB matches the cap the sibling
 // pm packages settled on (pm-changelog, pm-context, pm-brief).
-const PM_JSON_MAX_BUFFER = 64 * 1024 * 1024;
+const PM_JSON_MAX_BUFFER = resolvePmJsonMaxBuffer();
+
+/** 64 MiB by default; override with the `PM_JSON_MAX_BUFFER` env var (bytes) for
+ * workspaces larger than that. Invalid or non-positive values fall back to the
+ * default rather than silently disabling the guard. */
+function resolvePmJsonMaxBuffer(): number {
+  const raw = Number.parseInt(process.env.PM_JSON_MAX_BUFFER ?? "", 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 64 * 1024 * 1024;
+}
 
 const ATOMIC_IMPORT_PREFIX = "github-import-";
 let cachedCommitItemMutations: CommitItemMutations | undefined;
