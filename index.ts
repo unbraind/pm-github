@@ -651,6 +651,7 @@ export function scopeItemsByIds<TItem extends { id?: string }>(
 // Read every pm item (active + closed) via `pm list-all --full --include-body`
 // so the idempotency index never misses closed issues and re-creates them.
 function readPmItems(pmRoot: string): PmItem[] {
+  const maxBuffer = pmJsonMaxBuffer();
   // `list-all` (NOT `list`) so CLOSED items are included: `pm list` returns only
   // active items, which would make the idempotency index miss every closed
   // issue and re-create it as a DUPLICATE on re-import. `--full --include-body`
@@ -658,8 +659,21 @@ function readPmItems(pmRoot: string): PmItem[] {
   const result = spawnSync(
     "pm",
     ["--path", pmRoot, "--json", "list-all", "--full", "--include-body", "--limit", "10000"],
-    { encoding: "utf-8" },
+    { encoding: "utf-8", maxBuffer },
   );
+  // A buffer overrun kills the child with status null and no stderr, so name the
+  // real cause instead of reporting an unexplained failure.
+  if (result.error) {
+    const code = (result.error as NodeJS.ErrnoException).code;
+    if (code === "ENOBUFS") {
+      throw new CommandError(
+        `pm list-all output exceeded the ${maxBuffer} byte read buffer. ` +
+          "The workspace is larger than this read limit; narrow the import " +
+          "(for example --labels or --since) or raise the PM_JSON_MAX_BUFFER env var.",
+      );
+    }
+    throw new CommandError(`pm list-all failed: ${result.error.message}`);
+  }
   if (result.status !== 0) {
     throw new CommandError(result.stderr || "pm list-all failed");
   }
@@ -688,6 +702,24 @@ export function indexByProvenance(items: PmItem[]): Map<string, PmItem> {
 // ---------------------------------------------------------------------------
 // Atomic GitHub issue import (pm-cli >= 2026.7.20 commitItemMutations)
 // ---------------------------------------------------------------------------
+
+// Node's spawnSync defaults to a 1 MiB stdout cap. A mature tracker's full JSON
+// dump (`pm list-all --full --include-body`) passes that at a few hundred items,
+// and the child is then killed with ENOBUFS, status null and EMPTY stderr — which
+// surfaced as a bare "pm list-all failed" with nothing to diagnose. Reproduced on
+// a real 443-item workspace at 1,052,859 bytes. 64 MiB matches the cap the sibling
+// pm packages settled on (pm-changelog, pm-context, pm-brief).
+/** Read-buffer cap for `pm` output, in bytes. 64 MiB by default; override with the
+ * `PM_JSON_MAX_BUFFER` env var. Resolved per call so the override takes effect
+ * without an import-order dependency. Invalid or non-positive values fall back to
+ * the default rather than silently disabling the guard. */
+function pmJsonMaxBuffer(): number {
+  // Number(), not parseInt(): parseInt("64MiB") silently yields 64, which would
+  // impose a 64-BYTE cap and break every ordinary read while appearing to honor
+  // the documented invalid-value fallback. Number() rejects the whole string.
+  const raw = Number(process.env.PM_JSON_MAX_BUFFER);
+  return Number.isSafeInteger(raw) && raw > 0 ? raw : 64 * 1024 * 1024;
+}
 
 const ATOMIC_IMPORT_PREFIX = "github-import-";
 let cachedCommitItemMutations: CommitItemMutations | undefined;
@@ -1609,7 +1641,8 @@ export function parseImportOptions(options: Record<string, unknown>): ImportOpti
 // result (ok = exit code 0). Centralizes every pm mutation so callers share one
 // error-handling shape.
 function pmRun(args: string[]): { ok: boolean; stderr: string; stdout: string } {
-  const result = spawnSync("pm", args, { encoding: "utf-8" });
+  const maxBuffer = pmJsonMaxBuffer();
+  const result = spawnSync("pm", args, { encoding: "utf-8", maxBuffer });
   return { ok: result.status === 0, stderr: result.stderr || "", stdout: result.stdout || "" };
 }
 
@@ -2053,11 +2086,12 @@ export async function runImport(
 
   console.error(`Found ${filtered.length} issue(s).`);
 
-  // Build the idempotency index once up-front.
-  const shouldMatchExisting = !opts.dryRun || opts.atomic;
-  const existing = shouldMatchExisting
-    ? indexByProvenance((dependencies.readItems ?? readPmItems)(pmRoot))
-    : new Map<string, PmItem>();
+  // Build the idempotency index once up-front — including for a dry run. Skipping
+  // it on a non-atomic dry run made every issue look like a create, so the preview
+  // reported "would import N, skip 0" where the real run performs updates for
+  // already-linked issues. A preview that overstates creates reads as "this will
+  // duplicate my whole tracker" and is the one thing --dry-run exists to rule out.
+  const existing = indexByProvenance((dependencies.readItems ?? readPmItems)(pmRoot));
 
   let imported = 0;
   let updated = 0;
@@ -2193,8 +2227,10 @@ export async function runImport(
     } = prepared;
 
     if (opts.dryRun) {
-      console.error(`  [dry-run] #${issue.number} ${title} (${status}, ${labels.join(",")})`);
-      imported++;
+      const action = match?.id ? "update" : "import";
+      console.error(`  [dry-run] #${issue.number} ${action} ${title} (${status}, ${labels.join(",")})`);
+      if (match?.id) updated++;
+      else imported++;
       continue;
     }
 
@@ -2273,7 +2309,7 @@ export async function runImport(
   }
 
   if (opts.dryRun) {
-    console.error(`[dry-run] Would import ${imported}, skip ${skipped}.`);
+    console.error(`[dry-run] Would import ${imported}, update ${updated}, skip ${skipped}.`);
     if (opts.linkDeps) {
       console.error(
         `[dry-run] --link-deps: ${countDependencyRefCandidates(repo, filtered)} candidate reference(s) parsed; ` +
@@ -2283,6 +2319,7 @@ export async function runImport(
     return {
       dryRun: true,
       wouldImport: imported,
+      wouldUpdate: updated,
       wouldSkip: skipped,
       ...(opts.atomic ? { atomic: true } : {}),
       ...(opts.linkDeps ? { wouldLinkDependencyCandidates: countDependencyRefCandidates(repo, filtered) } : {}),
@@ -3914,7 +3951,7 @@ export default defineExtension({
       const res = spawnSync(
         "pm",
         ["--path", ctx.pm_root, "--json", "show", id],
-        { encoding: "utf-8" },
+        { encoding: "utf-8", maxBuffer: pmJsonMaxBuffer() },
       );
       if (res.status !== 0) return;
       let repo: string | undefined;
