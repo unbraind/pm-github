@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- CHANGELOG omits the shipped --link-deps feature and mislabels 2026.7.23 work as Unreleased ([pm-github-px45](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-px45.toon))
+
 ## 2026.7.23 - 2026-07-23
 
 ### Added
