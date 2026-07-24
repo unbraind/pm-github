@@ -1,0 +1,16 @@
+id: pm-github-tn92
+title: "Import dies with an unexplained pm list-all failed on any tracker over 1 MiB, and non-atomic --dry-run previews every issue as a create"
+description: "Two defects found by running the importer against a real 443-item workspace instead of fixtures. (1) readPmItems() spawned pm list-all --full --include-body without maxBuffer, so Node's 1 MiB spawnSync default applied; that workspace dumps 1,052,859 bytes, so the child was killed with status null, error.code ENOBUFS and EMPTY stderr, and the code surfaced a bare 'pm list-all failed' with nothing to diagnose. Every import, atomic plan and sync against a mature tracker was dead with no actionable message. Sibling packages (pm-changelog, pm-context, pm-brief) already cap at 64 MiB. (2) The non-atomic --dry-run path skipped building the provenance index (shouldMatchExisting = !dryRun || atomic), so every issue previewed as a create: 'Would import 29, skip 0' where the real run performs updates for already-linked issues; --atomic --dry-run reported the split correctly, so the two paths disagreed about the same plan. A preview that overstates creates reads as 'this will duplicate my whole tracker', which is the one thing --dry-run exists to rule out. Fixing (2) makes dry runs read the tracker, so (1) had to be fixed in the same change or previews would newly hit ENOBUFS."
+type: Issue
+status: closed
+priority: 1
+tags[5]: dry-run,import,maxbuffer,production-readiness,real-data
+created_at: "2026-07-24T20:12:27.784Z"
+updated_at: "2026-07-24T20:12:38.775Z"
+closed_at: "2026-07-24T20:12:38.774Z"
+author: claude-opus-5
+resolution: "Capped the pm read buffer at 64 MiB across readPmItems(), the central pmRun() spawner and the afterCommand hook's pm show, with an explicit ENOBUFS diagnosis that names the overrun and suggests narrowing the import (--labels/--since). Built the provenance index for dry runs too, and made the non-atomic preview label each issue import/update and report 'Would import X, update Y, skip Z', returning wouldUpdate like the atomic path."
+expected_result: "Import/sync works on mature trackers instead of dying with an unexplained error, and --dry-run previews the same create/update split the real run will perform, identically in both the atomic and non-atomic paths."
+actual_result: "Against the real workspace: non-atomic dry-run reports 'Would import 24, update 5, skip 0' (was 'import 29, skip 0'); --atomic --dry-run, which previously died with ENOBUFS, completes and agrees exactly (24/5/0). 168/168 tests pass including two new tests covering the preview split and cross-path agreement."
+close_reason: Both fixed and verified against the same real 443-item workspace that exposed them
+body: ""
