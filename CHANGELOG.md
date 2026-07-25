@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Other
+
+- Enable governance duplicate-detection advisory mode and adopt pm-cli 2026.7.25 ([pm-github-suxt](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-suxt.toon))
+
 ## 2026.7.25 - 2026-07-25
 
 ### Added
