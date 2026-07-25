@@ -9,7 +9,7 @@ Import issues from any GitHub repo as pm items, export pm items back to GitHub (
 ## Installation
 
 ```bash
-pm install github.com/unbraind/pm-github --global
+pm install npm:pm-github --global
 ```
 
 ## Capabilities
