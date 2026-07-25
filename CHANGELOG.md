@@ -1,9 +1,10 @@
 # Changelog
 
-## Unreleased
+## 2026.7.25 - 2026-07-25
 
 ### Added
 
+- Search pm items in any public GitHub repo (gh-authenticated, semantic search) ([pm-github-r8y0](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-r8y0.toon))
 - CHANGELOG omits the shipped --link-deps feature and mislabels 2026.7.23 work as Unreleased ([pm-github-px45](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-px45.toon))
 
 ### Fixed
