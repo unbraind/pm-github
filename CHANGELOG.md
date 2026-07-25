@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Documented install command fails: pm install github.com/unbraind/pm-github cannot resolve an entry file ([pm-github-q6ql](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-q6ql.toon))
+
 ### Other
 
 - Enable governance duplicate-detection advisory mode and adopt pm-cli 2026.7.25 ([pm-github-suxt](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-suxt.toon))

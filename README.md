@@ -9,8 +9,13 @@ Import issues from any GitHub repo as pm items, export pm items back to GitHub (
 ## Installation
 
 ```bash
-pm install github.com/unbraind/pm-github --global
+pm install npm:pm-github --global
 ```
+
+> The `npm:` prefix is required. A bare `pm install pm-github` resolves only a local
+> directory or a bundled alias, never the registry, and a
+> `github.com/unbraind/pm-github` source cannot work either — pm copies a GitHub
+> source as-is without building it, and this repository does not commit `dist/`.
 
 ## Capabilities
 
