@@ -13,13 +13,13 @@
 // Issues use the REST API; Projects v2 is GraphQL-only (see the Projects v2
 // section below and the pure plan/mapping logic in ./projects.ts).
 
+import type { ExtensionApi, ExtensionModule } from "@unbrained/pm-cli/sdk/authoring";
 import https from "node:https";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-import type { defineExtension as defineExtensionType } from "@unbrained/pm-cli/sdk";
 import type {
   BulkItemMutation,
   CommitItemMutationsOptions,
@@ -63,7 +63,6 @@ import {
   projectItemTag,
 } from "./projects.js";
 
-const defineExtension: typeof defineExtensionType = ((extension: any) => extension) as any;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -3797,11 +3796,21 @@ const PROJECT_SYNC_FLAGS = [
   { long: "--dry-run", description: "Preview only (always wins over --apply)" },
 ];
 
+/**
+ * Local stand-in for the SDK's `defineExtension` identity helper.
+ *
+ * Declared here rather than imported so this package keeps a type-only
+ * dependency on `@unbrained/pm-cli` and adds no runtime module edge. The
+ * generic constraint is the SDK's own, so the extension object is contract-
+ * checked against {@link ExtensionModule} exactly as the imported helper would.
+ */
+const defineExtension = <TModule extends ExtensionModule>(module: TModule): TModule => module;
+
 export default defineExtension({
   name: "pm-github",
   version: "2026.7.26",
 
-  activate(api: any) {
+  activate(api: ExtensionApi) {
     // -----------------------------------------------------------------------
     // schema — declare the GitHub provenance fields so the workspace knows them
     // -----------------------------------------------------------------------
