@@ -24,6 +24,9 @@ import extension, {
   formatRateLimit,
   isDraftPr,
   listOwnerProjectsV2Nodes,
+  indexByProvenance,
+  searchDocumentToItem,
+  resolveSearchCorpus,
   mapSearchHits,
   mapState,
   sameOrigin,
@@ -1172,4 +1175,52 @@ test("runExport dry-run with global --json writes NO preview to either stream", 
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Regression: the search provider must survive RAW pm items in
+// `SearchProviderQueryContext.documents`.
+//
+// The SDK declares `documents: ItemDocument[]` with a REQUIRED `metadata`, so the
+// typing refactor replaced the pre-existing guard (`d?.metadata ? d.metadata : d`)
+// with a bare `d.metadata`. But `SearchProviderQueryContext` carries an
+// `[key: string]: unknown` index signature and the runtime hands raw pm items
+// straight through on some paths, so trusting the declared type yielded
+// `undefined` entries and crashed `indexByProvenance` with a TypeError.
+//
+// Greptile's T-Rex run reproduced exactly that: a wrapped document produced a
+// local hit while a raw document threw. These cases pin both shapes.
+// ---------------------------------------------------------------------------
+
+test("searchDocumentToItem unwraps a metadata-wrapped document", () => {
+  const item = { id: "pm-1", title: "Wrapped", tags: ["gh:acme/repo#7"] };
+  assert.deepEqual(searchDocumentToItem({ metadata: item, body: "" } as never), item);
+});
+
+test("searchDocumentToItem passes a RAW pm item through unchanged", () => {
+  const raw = { id: "pm-2", title: "Raw", tags: ["gh:acme/repo#8"] };
+  assert.deepEqual(searchDocumentToItem(raw as never), raw, "a raw item must be used as-is, not read through .metadata");
+});
+
+test("searchDocumentToItem skips values matching neither shape", () => {
+  for (const bad of [undefined, null, {}, "nope", 42]) {
+    assert.equal(searchDocumentToItem(bad as never), undefined, `${JSON.stringify(bad)} must be skipped, not indexed`);
+  }
+});
+
+test("resolveSearchCorpus (the provider's REAL mapping) handles wrapped, raw and junk documents", () => {
+  const wrapped = { id: "pm-1", title: "Wrapped", tags: ["gh:acme/repo#7"] };
+  const raw = { id: "pm-2", title: "Raw", tags: ["gh:acme/repo#8"] };
+  const documents = [{ metadata: wrapped, body: "" }, raw, undefined, null, {}];
+
+  // This is the exact function the search provider calls, so reverting the guard
+  // inside it fails this test — an inline expression at the call site could not be
+  // reached without stubbing the provider's network I/O.
+  const docs = resolveSearchCorpus(documents, ".agents/pm");
+  assert.equal(docs.length, 2, "junk entries must be skipped, not indexed as undefined");
+
+  const index = indexByProvenance(docs);
+  assert.equal(index.get("acme/repo#7")?.id, "pm-1", "the wrapped document must be indexed");
+  assert.equal(index.get("acme/repo#8")?.id, "pm-2", "the RAW document must be indexed, not dropped or thrown on");
+  assert.equal(index.size, 2);
 });

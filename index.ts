@@ -39,6 +39,7 @@ import {
   type CommentsResult,
   type CommitItemMutationsOptions,
   type CommitItemMutationsResult,
+  type ItemDocument,
   type ItemMetadata,
   type PmClientOptions,
 } from "@unbrained/pm-cli/sdk";
@@ -683,6 +684,43 @@ function readPmItems(pmRoot: string): PmItem[] {
 
 // Index existing pm items by their GitHub provenance tag for O(1) idempotent
 // matching on re-import.
+/**
+ * Narrow one runtime search document to a {@link PmItem}.
+ *
+ * The SDK declares `SearchProviderQueryContext.documents` as `ItemDocument[]`
+ * with a REQUIRED `metadata`, but the runtime also hands raw pm items straight
+ * through on some paths — `SearchProviderQueryContext` carries an
+ * `[key: string]: unknown` index signature, so its shape is looser than the
+ * declared type. Trusting `d.metadata` unconditionally therefore yields
+ * `undefined` entries and crashes `indexByProvenance` with a TypeError; the
+ * pre-typing code guarded this with `d?.metadata ? d.metadata : d`, and that
+ * guard is preserved here rather than dropped in the name of the declared type.
+ * Anything matching neither shape is skipped instead of poisoning the index.
+ */
+export function searchDocumentToItem(document: ItemDocument | PmItem | null | undefined): PmItem | undefined {
+  if (!document || typeof document !== "object") return undefined;
+  const wrapped = (document as ItemDocument).metadata;
+  if (wrapped && typeof wrapped === "object") return wrapped as PmItem;
+  return "id" in document ? (document as PmItem) : undefined;
+}
+
+/**
+ * Resolve the corpus the search provider matches remote hits against.
+ *
+ * Prefers the runtime-provided documents (already the current corpus) and falls
+ * back to a fresh workspace read when absent. This is the provider's REAL mapping,
+ * extracted so it is directly testable: the surrounding `query` handler performs
+ * network I/O first, so an end-to-end test cannot reach the mapping without
+ * stubbing internals, and an inline expression would be untestable in practice.
+ */
+export function resolveSearchCorpus(documents: unknown, pmRootValue: unknown): PmItem[] {
+  const pmRoot = typeof pmRootValue === "string" && pmRootValue ? pmRootValue : ".agents/pm";
+  if (!Array.isArray(documents)) return readPmItems(pmRoot);
+  return documents
+    .map((document) => searchDocumentToItem(document as ItemDocument | PmItem | null | undefined))
+    .filter((item): item is PmItem => item !== undefined);
+}
+
 export function indexByProvenance(items: PmItem[]): Map<string, PmItem> {
   const index = new Map<string, PmItem>();
   for (const item of items) {
@@ -4031,10 +4069,7 @@ export default defineExtension({
           // Map remote matches back to local items via provenance tags. Prefer
           // the runtime-provided documents (already the current corpus); fall
           // back to a fresh read if absent.
-          const pmRoot = typeof qctx.pm_root === "string" ? qctx.pm_root : ".agents/pm";
-          const docs: PmItem[] = Array.isArray(qctx.documents)
-            ? qctx.documents.map((d) => d.metadata)
-            : readPmItems(pmRoot);
+          const docs = resolveSearchCorpus(qctx.documents, qctx.pm_root);
           const index = indexByProvenance(docs);
           return mapSearchHits(matchedNumbers, repo, index);
         },
