@@ -1,0 +1,14 @@
+id: pm-github-iai5
+title: Adopt pm-cli 2026.7.27 in pm-github
+description: "Raises the pm-cli peerDependency to >=2026.7.27 and the devDependency to ^2026.7.27, refreshing the lockfile. The package version and manifest version were already 2026.7.27 from the daily release. An activation proof is mandatory rather than optional for this bump because 2026.7.27 hardened host-owned global flags and a collision aborts command registration at the offending command, dropping it and every later sibling. Proven: all five registered subcommands resolve, no host-owned global is declared anywhere in index.ts, and pm health reports extensions ok with no warnings."
+type: Chore
+status: closed
+priority: 2
+tags: []
+created_at: "2026-07-27T16:29:02.835Z"
+updated_at: "2026-07-27T16:29:04.381Z"
+closed_at: "2026-07-27T16:29:04.380Z"
+author: claude-code
+acceptance_criteria: peerDependencies >=2026.7.27 and devDependencies ^2026.7.27 with an updated lockfile; node_modules resolves 2026.7.27; all five pm-github subcommands register and resolve on the real CLI; flag-collision audit clean; pm health extensions ok.
+close_reason: Shipped with the activation proof the hardened 2026.7.27 host requires.
+body: ""

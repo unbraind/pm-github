@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { createExtensionTestHarness, type ExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+
 import extension, {
   CommandError,
   EXIT_CODE,
@@ -37,9 +39,49 @@ import extension, {
   resolveSearchRepo,
   scopeItemsByIds,
 } from "../dist/index.js";
+import type {
+  ExportPlanEntry,
+  GhIssue,
+  ImportOptions,
+  ProjectsV2Page,
+} from "../dist/index.js";
 
-// Minimal GhIssue factory for filter/field tests.
-function issue(overrides: Record<string, unknown> = {}): any {
+// The extension registers against six surfaces (commands, importers, schema,
+// hooks, preflight, search) — exactly the `capabilities` block in
+// manifest.json. `createExtensionTestHarness` runs pm's real activation engine
+// over that set, so every registration is validated (and a missing-capability
+// drop fails fast) instead of being silently swallowed by an `activate(api as
+// any)` test double that asserts against itself. The in-memory module export
+// carries no `.capabilities` field, so we mirror manifest.json here.
+const MANIFEST_CAPABILITIES = ["commands", "importers", "schema", "hooks", "preflight", "search"] as const;
+const harnessPromise: Promise<ExtensionTestHarness> =
+  createExtensionTestHarness(extension, { capabilities: [...MANIFEST_CAPABILITIES] });
+
+// Shape of the `runExport` dry-run return value — narrowed so the assertion
+// sites don't have to cast the `CommandHandlerResult.result` (typed `unknown`).
+interface RunExportDryRunResult {
+  dry_run: boolean;
+  plan: unknown[];
+  would_create: number;
+  would_update: number;
+  repo?: string;
+  label_map?: Record<string, unknown>;
+  scoped_ids?: string[];
+}
+
+// Structural stand-in for the unexported `PullPlanEntryLike` the buildPullEntry
+// tests construct. Fields mirror index.ts verbatim so structural typing lines up.
+interface TestPullEntry {
+  itemId: string;
+  pmId: string;
+  title: string;
+  fromStatus: string;
+  toStatus: string;
+}
+
+// Minimal GhIssue factory for filter/field tests — typed so a typo on an
+// override key fails the test compile instead of silently being dropped.
+function issue(overrides: Partial<GhIssue> = {}): GhIssue {
   return {
     number: 1,
     title: "t",
@@ -55,13 +97,19 @@ function issue(overrides: Record<string, unknown> = {}): any {
   };
 }
 
-const baseOpts: any = {
+// Base ImportOptions literal — applyClientFilters wants full ImportOptions, so
+// the literal supplies every field (commentsMode, atomic, linkDeps default to
+// their safe/no-op values, matching the import command's real defaults).
+const baseOpts: ImportOptions = {
   state: "all",
   includePrs: false,
   skipDrafts: false,
   withComments: false,
+  commentsMode: "body",
   itemType: "Issue",
   dryRun: false,
+  atomic: false,
+  linkDeps: false,
 };
 
 test("extension has required shape", () => {
@@ -72,39 +120,20 @@ test("extension has required shape", () => {
   assert.strictEqual(typeof extension.activate, "function", "activate should be a function");
 });
 
-test("extension registers at least one capability", () => {
-  const registered: string[] = [];
-  // Mirror the real ExtensionApi surface so activate() can register every
-  // capability the extension uses (commands, importers, exporters, schema
-  // fields, hooks).
-  const api = {
-    registerCommand: () => { registered.push("command"); },
-    registerParser: () => { registered.push("parser"); },
-    registerPreflight: () => { registered.push("preflight"); },
-    registerService: () => { registered.push("service"); },
-    registerFlags: () => { registered.push("flags"); },
-    registerItemFields: () => { registered.push("itemFields"); },
-    registerItemTypes: () => { registered.push("itemTypes"); },
-    registerMigration: () => { registered.push("migration"); },
-    registerRenderer: () => { registered.push("renderer"); },
-    registerImporter: () => { registered.push("importer"); },
-    registerExporter: () => { registered.push("exporter"); },
-    registerSearchProvider: () => { registered.push("search"); },
-    registerVectorStoreAdapter: () => { registered.push("vectorStore"); },
-    hooks: {
-      beforeCommand: () => { registered.push("hook:before"); },
-      afterCommand: () => { registered.push("hook:after"); },
-      onWrite: () => { registered.push("hook:onWrite"); },
-      onRead: () => { registered.push("hook:onRead"); },
-      onIndex: () => { registered.push("hook:onIndex"); },
-    },
-  };
-  extension.activate(api as any);
-  assert.ok(registered.includes("importer"), "should register the github importer");
-  assert.ok(registered.includes("exporter"), "should register the github exporter");
-  assert.ok(registered.includes("itemFields"), "should register github schema fields");
-  assert.ok(registered.includes("hook:after"), "should register an afterCommand hook");
-  assert.ok(registered.length > 0, `extension should register at least one capability, got: ${JSON.stringify(registered)}`);
+test("extension registers at least one capability", async () => {
+  // Running the real activation engine proves the manifest grants every
+  // capability the activate() registers against; the harness promotes any
+  // dropped registration (from a missing capability) into a hard failure.
+  const ext = await harnessPromise;
+  ext.assertImporter({ name: "github" });
+  ext.assertExporter({ name: "github" });
+  ext.assertItemField({ name: "github_url" });
+  ext.assertHook({ kind: "after_command" });
+  ext.assertSearchProvider({ name: "github" });
+  assert.ok(
+    ext.activation.registrations.commands.length > 0,
+    "extension should register commands",
+  );
 });
 
 test("parseNextLink extracts the rel=\"next\" page URL", () => {
@@ -247,38 +276,27 @@ test("resolveSearchRepo prefers --repo, then PM_GITHUB_REPO env", () => {
   }
 });
 
-test("extension registers the github search provider when supported", () => {
-  let searchProvider: any;
-  const noop = () => {};
-  const api: any = {
-    registerCommand: noop, registerParser: noop, registerPreflight: noop,
-    registerService: noop, registerFlags: noop, registerItemFields: noop,
-    registerItemTypes: noop, registerMigration: noop, registerRenderer: noop,
-    registerImporter: noop, registerExporter: noop,
-    registerSearchProvider: (def: any) => { searchProvider = def; },
-    registerVectorStoreAdapter: noop,
-    hooks: { beforeCommand: noop, afterCommand: noop, onWrite: noop, onRead: noop, onIndex: noop },
-  };
-  extension.activate(api);
-  assert.ok(searchProvider, "search provider should be registered");
-  assert.strictEqual(searchProvider.name, "github");
-  assert.strictEqual(typeof searchProvider.query, "function");
+test("extension registers the github search provider when supported", async () => {
+  const ext = await harnessPromise;
+  ext.assertSearchProvider({ name: "github" });
+  const provider = ext.activation.registrations.search_providers
+    .find((p) => p.definition.name === "github");
+  assert.ok(provider, "search provider should be registered");
+  assert.strictEqual(
+    typeof provider!.runtime_definition.query,
+    "function",
+    "search provider query must be a function",
+  );
 });
 
-test("github validate command is registered", () => {
-  let captured: any;
-  const noop = () => {};
-  const api: any = {
-    registerCommand: (def: any) => { if (def?.name === "github validate") captured = def; },
-    registerParser: noop, registerPreflight: noop, registerService: noop,
-    registerFlags: noop, registerItemFields: noop, registerItemTypes: noop,
-    registerMigration: noop, registerRenderer: noop, registerImporter: noop,
-    registerExporter: noop, registerSearchProvider: noop, registerVectorStoreAdapter: noop,
-    hooks: { beforeCommand: noop, afterCommand: noop, onWrite: noop, onRead: noop, onIndex: noop },
-  };
-  extension.activate(api);
-  assert.ok(captured, "github validate should be registered");
-  assert.strictEqual(typeof captured.run, "function");
+test("github validate command is registered", async () => {
+  const ext = await harnessPromise;
+  // `registrations.commands` carries the public metadata; `commands.handlers`
+  // is the dispatch registry that owns the live `run` function.
+  ext.assertCommandContract({ name: "github validate" });
+  const handler = ext.activation.commands.handlers.find((h) => h.command === "github validate");
+  assert.ok(handler, "github validate should be registered");
+  assert.strictEqual(typeof handler!.run, "function");
 });
 
 test("isDraftPr only flags draft pull requests, never plain issues", () => {
@@ -346,71 +364,45 @@ test("formatRateLimit renders a quota line, undefined when no quota present", ()
   assert.strictEqual(formatRateLimit({ low: false }), undefined, "no remaining → no line");
 });
 
-test("schema registers github_author / created_at / updated_at fields", () => {
-  let fields: any[] = [];
-  const noop = () => {};
-  const api: any = {
-    registerCommand: noop, registerParser: noop, registerPreflight: noop, registerService: noop,
-    registerFlags: noop, registerItemFields: (f: any[]) => { fields = f; }, registerItemTypes: noop,
-    registerMigration: noop, registerRenderer: noop, registerImporter: noop,
-    registerExporter: noop, registerSearchProvider: noop, registerVectorStoreAdapter: noop,
-    hooks: { beforeCommand: noop, afterCommand: noop, onWrite: noop, onRead: noop, onIndex: noop },
-  };
-  extension.activate(api);
-  const names = fields.map((f) => f.name);
-  for (const expected of ["github_url", "github_number", "github_state", "github_author", "github_created_at", "github_updated_at"]) {
-    assert.ok(names.includes(expected), `schema should declare ${expected}`);
+test("schema registers github_author / created_at / updated_at fields", async () => {
+  const ext = await harnessPromise;
+  // Assert each GitHub-provenance field is registered via the real schema
+  // surface; the assertion fails if a field is missing from the manifest's
+  // `schema` capability.
+  for (const expected of [
+    "github_url",
+    "github_number",
+    "github_state",
+    "github_author",
+    "github_created_at",
+    "github_updated_at",
+  ]) {
+    ext.assertItemField({ name: expected });
   }
 });
 
-test("import command advertises the --skip-drafts flag", () => {
-  let captured: any;
-  const noop = () => {};
-  const api: any = {
-    registerCommand: (def: any) => { if (def?.name === "gh-issues import") captured = def; },
-    registerParser: noop, registerPreflight: noop, registerService: noop, registerFlags: noop,
-    registerItemFields: noop, registerItemTypes: noop, registerMigration: noop, registerRenderer: noop,
-    registerImporter: noop, registerExporter: noop, registerSearchProvider: noop, registerVectorStoreAdapter: noop,
-    hooks: { beforeCommand: noop, afterCommand: noop, onWrite: noop, onRead: noop, onIndex: noop },
-  };
-  extension.activate(api);
-  assert.ok(captured?.flags?.some((f: any) => f.long === "--skip-drafts"), "import should expose --skip-drafts");
+test("import command advertises the --skip-drafts flag", async () => {
+  const ext = await harnessPromise;
+  ext.assertCommandContract({ name: "gh-issues import", flags: ["--skip-drafts"] });
 });
 
-test("sync command advertises the --ids flag", () => {
-  let captured: any;
-  const noop = () => {};
-  const api: any = {
-    registerCommand: (def: any) => { if (def?.name === "github sync") captured = def; },
-    registerParser: noop, registerPreflight: noop, registerService: noop, registerFlags: noop,
-    registerItemFields: noop, registerItemTypes: noop, registerMigration: noop, registerRenderer: noop,
-    registerImporter: noop, registerExporter: noop, registerSearchProvider: noop, registerVectorStoreAdapter: noop,
-    hooks: { beforeCommand: noop, afterCommand: noop, onWrite: noop, onRead: noop, onIndex: noop },
-  };
-  extension.activate(api);
-  assert.ok(captured?.flags?.some((f: any) => f.long === "--ids"), "sync should expose --ids");
+test("sync command advertises the --ids flag", async () => {
+  const ext = await harnessPromise;
+  ext.assertCommandContract({ name: "github sync", flags: ["--ids"] });
 });
 
 test("gh-issues import rejects a missing owner/repo argument", async () => {
-  let captured: { run: (ctx: any) => unknown } | undefined;
-  const noop = () => {};
-  const api = {
-    registerCommand: (def: any) => { if (def?.name === "gh-issues import") captured = def; },
-    registerParser: noop, registerPreflight: noop, registerService: noop,
-    registerFlags: noop, registerItemFields: noop, registerItemTypes: noop,
-    registerMigration: noop, registerRenderer: noop, registerImporter: noop,
-    registerExporter: noop, registerSearchProvider: noop, registerVectorStoreAdapter: noop,
-    hooks: { beforeCommand: noop, afterCommand: noop, onWrite: noop, onRead: noop, onIndex: noop },
-  };
-  extension.activate(api as any);
-  assert.ok(captured, "import command should be registered");
+  const ext = await harnessPromise;
+  // runRegisteredCommandForTest propagates any thrown error carrying a numeric
+  // `exitCode` — exactly how the runtime surfaces a `CommandError` — so the
+  // host dispatch path is identical to `pm gh-issues import` with no argv.
   await assert.rejects(
-    async () => captured!.run({ args: [], options: {}, pm_root: ".agents/pm" }),
+    () => ext.runCommand({ command: "gh-issues import", args: [] }),
     (err: unknown) => {
-      // The runtime only treats a thrown error as a cleanly handled non-zero
-      // exit (no second handler invocation) when it carries a numeric exitCode.
-      assert.match((err as Error).message, /owner\/repo/);
-      assert.strictEqual((err as CommandError).exitCode, EXIT_CODE.USAGE);
+      assert.match((err as Error).message, /owner\/repo/,
+        "missing argv should surface the actionable usage message");
+      assert.strictEqual((err as CommandError).exitCode, EXIT_CODE.USAGE,
+        "the handler must carry a numeric exitCode so pm treats it as a non-zero exit");
       return true;
     },
     "missing argument should throw a CommandError carrying a USAGE exit code",
@@ -426,12 +418,12 @@ test("gh-issues import rejects a missing owner/repo argument", async () => {
 // a summary instead of aborting mid-batch.
 // ---------------------------------------------------------------------------
 
-function exportEntry(overrides: Partial<{
-  id: string;
-  action: "create" | "update";
-  number: number;
-  title: string;
-}> = {}): any {
+function exportEntry(overrides: {
+  id?: string;
+  action?: "create" | "update";
+  number?: number;
+  title?: string;
+} = {}): ExportPlanEntry {
   const action = overrides.action ?? "create";
   return {
     id: overrides.id ?? "github-1",
@@ -623,12 +615,15 @@ test("parseSince rejects out-of-range relative durations without throwing", () =
 test("parseImportOptions parses relative --since into an ISO timestamp", () => {
   const now = Date.UTC(2026, 0, 10, 0, 0, 0);
   const orig = Date.now;
-  (Date as any).now = () => now;
+  // `Date.now` is a static-side readonly; we monkey-patch it via a cast on a
+  // writeable structural view (no `any`) so callers cannot see the swap as a
+  // type error and the cleanup in `finally` restores the original binding.
+  (Date as { now: () => number }).now = () => now;
   try {
     const opts = parseImportOptions({ since: "7d" });
     assert.strictEqual(opts.since, "2026-01-03T00:00:00.000Z");
   } finally {
-    (Date as any).now = orig;
+    (Date as { now: () => number }).now = orig;
   }
 });
 
@@ -660,7 +655,7 @@ test("parseImportOptions surfaces --dry-run", () => {
 test("parseImportOptions rejects malformed --since instead of silently removing the filter", () => {
   assert.throws(
     () => parseImportOptions({ since: "nonsense" }),
-    (err: any) => err?.name === "CommandError" && err?.exitCode === 2,
+    (err: unknown) => err instanceof CommandError && err.exitCode === EXIT_CODE.USAGE,
   );
 });
 
@@ -781,55 +776,27 @@ test("buildExportPlan strips both gh: and gh-project: provenance tags, keeps use
 // pm github export command registration (new --export mode surface)
 // ---------------------------------------------------------------------------
 
-test("native github exporter declares --label-map and --dry-run metadata", () => {
-  let captured: any;
-  let handler: unknown;
-  const noop = () => {};
-  const api: any = {
-    registerCommand: noop,
-    registerParser: noop, registerPreflight: noop, registerService: noop, registerFlags: noop,
-    registerItemFields: noop, registerItemTypes: noop, registerMigration: noop, registerRenderer: noop,
-    registerImporter: noop,
-    registerExporter: (name: string, fn: unknown, options: unknown) => {
-      if (name === "github") { handler = fn; captured = options; }
-    },
-    registerSearchProvider: noop, registerVectorStoreAdapter: noop,
-    hooks: { beforeCommand: noop, afterCommand: noop, onWrite: noop, onRead: noop, onIndex: noop },
-  };
-  extension.activate(api);
-  assert.ok(captured, "github exporter should declare command metadata");
-  assert.strictEqual(typeof handler, "function");
-  const longs = captured.flags.map((f: any) => f.long);
-  assert.ok(longs.includes("--label-map"), "export should advertise --label-map");
-  assert.ok(longs.includes("--dry-run"), "export should advertise --dry-run");
-  assert.ok(longs.includes("--apply"), "export should advertise --apply");
-  assert.ok(longs.includes("--repo"), "export should advertise --repo");
+test("native github exporter declares --label-map and --dry-run metadata", async () => {
+  const ext = await harnessPromise;
+  ext.assertExporter({ name: "github" });
+  // Importer/exporter-declared flags land in `registrations.flags` against the
+  // generated `"github export"` command path — assert them via that surface so
+  // the metadata is verified by the real host registration pipeline.
+  ext.assertFlags({ targetCommand: "github export", flags: ["--label-map", "--dry-run", "--apply", "--repo"] });
+  // The dispatch handler is the live function injected into commands.handlers.
+  const handler = ext.activation.commands.handlers.find((h) => h.command === "github export");
+  assert.ok(handler, "github exporter should register a command handler");
+  assert.strictEqual(typeof handler!.run, "function");
 });
 
-test("native github importer advertises --include-comments as an alias for --with-comments", () => {
-  let captured: any;
-  let handler: unknown;
-  const noop = () => {};
-  const api: any = {
-    registerCommand: noop,
-    registerParser: noop, registerPreflight: noop, registerService: noop, registerFlags: noop,
-    registerItemFields: noop, registerItemTypes: noop, registerMigration: noop, registerRenderer: noop,
-    registerImporter: (name: string, fn: unknown, options: unknown) => {
-      if (name === "github") { handler = fn; captured = options; }
-    },
-    registerExporter: noop, registerSearchProvider: noop, registerVectorStoreAdapter: noop,
-    hooks: { beforeCommand: noop, afterCommand: noop, onWrite: noop, onRead: noop, onIndex: noop },
-  };
-  extension.activate(api);
-  assert.ok(
-    captured?.flags?.some((f: any) => f.long === "--include-comments"),
-    "import should expose --include-comments as an alias",
-  );
-  assert.ok(
-    captured?.flags?.some((f: any) => f.long === "--since"),
-    "installed github import command should expose --since",
-  );
-  assert.strictEqual(typeof handler, "function");
+test("native github importer advertises --include-comments as an alias for --with-comments", async () => {
+  const ext = await harnessPromise;
+  ext.assertImporter({ name: "github" });
+  ext.assertFlags({ targetCommand: "github import", flags: ["--include-comments", "--since"] });
+  // The dispatch handler is the live function injected into commands.handlers.
+  const handler = ext.activation.commands.handlers.find((h) => h.command === "github import");
+  assert.ok(handler, "github importer should register a command handler");
+  assert.strictEqual(typeof handler!.run, "function");
 });
 
 test("manifest uses only runtime-supported capability names", async () => {
@@ -848,7 +815,8 @@ test("sameOrigin only treats identical hosts as same-origin (token forwarding gu
 });
 
 test("buildPullEntryArgs routes terminal statuses through the pm close lifecycle", () => {
-  const entry = (toStatus: string): any => ({ itemId: "PVTI_1", pmId: "pm-1", title: "t", fromStatus: "open", toStatus });
+  const entry = (toStatus: string): TestPullEntry =>
+    ({ itemId: "PVTI_1", pmId: "pm-1", title: "t", fromStatus: "open", toStatus });
   // `closed` uses `pm close`, which records closed_at + close_reason.
   assert.deepEqual(
     buildPullEntryArgs(entry("closed"), "/root"),
@@ -876,7 +844,12 @@ test("buildPullEntryArgs routes terminal statuses through the pm close lifecycle
 // (GitHub caps connections at 100/page) for both user and organization owners,
 // threading the endCursor through pageInfo and never silently truncating.
 
-function projNode(n: number): any {
+// Build a minimal ProjectsV2 node literal the pagination tests inject. We
+// derive the element type from `ProjectsV2Page.nodes` so the factory tracks
+// the (unexported) `GraphqlProjectsV2Node` the runtime contract expects.
+type ProjectsV2Node = NonNullable<NonNullable<ProjectsV2Page["nodes"]>[number]>;
+
+function projNode(n: number): ProjectsV2Node {
   return { number: n, title: `P${n}`, url: `https://github.com/orgs/o/projects/${n}`, closed: false, shortDescription: null };
 }
 
@@ -916,7 +889,7 @@ test("collectProjectsV2Pages stops when pageInfo is missing (defensive, no infin
   let calls = 0;
   const out = await collectProjectsV2Pages(async () => {
     calls++;
-    return { nodes: [projNode(1)] } as any; // no pageInfo
+    return { nodes: [projNode(1)] }; // no pageInfo, no infinite loop
   });
   assert.equal(calls, 1);
   assert.equal(out.length, 1);
@@ -926,14 +899,15 @@ test("collectProjectsV2Pages stops when hasNextPage=true but endCursor is absent
   let calls = 0;
   const out = await collectProjectsV2Pages(async () => {
     calls++;
-    return { nodes: [projNode(1)], pageInfo: { hasNextPage: true } as any };
+    return { nodes: [projNode(1)], pageInfo: { hasNextPage: true } };
   });
   assert.equal(calls, 1, "must not loop forever paging with the same (absent) cursor");
   assert.equal(out.length, 1);
 });
 
 test("collectProjectsV2Pages tolerates null nodes and a null/early-stop fetcher", async () => {
-  const out = await collectProjectsV2Pages(async () => ({ nodes: [null, projNode(1), undefined], pageInfo: { hasNextPage: false } } as any));
+  // The runtime contract accepts null nodes; the page filter drops them.
+  const out = await collectProjectsV2Pages(async () => ({ nodes: [null, projNode(1), null], pageInfo: { hasNextPage: false } }));
   assert.equal(out.length, 1, "null/undefined nodes are filtered out");
   const empty = await collectProjectsV2Pages(async () => undefined);
   assert.equal(empty.length, 0);
@@ -1015,7 +989,11 @@ test("listOwnerProjectsV2Nodes resolves the owner type on the first page and doe
     if (page === 2) {
       return { user: { projectsV2: { nodes: [projNode(2)], pageInfo: { hasNextPage: false, endCursor: "c2" } } }, organization: { projectsV2: { nodes: [projNode(999)] } } };
     }
-    return null as any;
+    // Page 3 is unreachable: `collectProjectsV2Pages` stops after page 2
+    // (hasNextPage=false). Return a graphQL-valid empty page so the transport's
+    // declared `Promise<GraphqlListOwnerProjectsData>` return type is satisfied
+    // without an `as any` cast.
+    return { user: null, organization: null };
   });
   assert.equal(nodes.length, 2, "organization node from page 2 must be ignored once user is pinned");
   assert.equal(nodes[1].number, 2);
@@ -1075,46 +1053,33 @@ function makeExportTestWorkspace(): string {
   }
 }
 
-function captureExporterHandler(): (ctx: any) => Promise<any> {
-  let handler: ((ctx: any) => Promise<any>) | undefined;
-  const noop = () => {};
-  const api: any = {
-    registerCommand: noop, registerParser: noop, registerPreflight: noop, registerService: noop,
-    registerFlags: noop, registerItemFields: noop, registerItemTypes: noop, registerMigration: noop,
-    registerRenderer: noop, registerImporter: noop,
-    registerExporter: (name: string, fn: any) => { if (name === "github") handler = fn; },
-    registerSearchProvider: noop, registerVectorStoreAdapter: noop,
-    hooks: { beforeCommand: noop, afterCommand: noop, onWrite: noop, onRead: noop, onIndex: noop },
-  };
-  extension.activate(api);
-  assert.ok(handler, "github exporter handler should be registered");
-  return handler!;
-}
-
 // Captures every console.log / console.error argument during `fn`. Returns the
-// flat list of joined string arguments written to each stream.
+// flat list of joined string arguments written to each stream. The override
+// functions are explicitly typed and assigned via a `typeof console.log` cast —
+// no `as any` — so the swap is type-checked (and the `unknown[]` arg signature
+// prevents an implicit `any` sneaking past `strict: true`).
 async function captureConsole<T>(fn: () => Promise<T>): Promise<{ stdout: string[]; stderr: string[]; result: T }> {
   const stdout: string[] = [];
   const stderr: string[] = [];
   const origLog = console.log;
   const origErr = console.error;
-  (console as any).log = (...a: any[]) => { stdout.push(a.map(String).join(" ")); };
-  (console as any).error = (...a: any[]) => { stderr.push(a.map(String).join(" ")); };
+  console.log = ((...args: unknown[]) => { stdout.push(args.map(String).join(" ")); }) as typeof console.log;
+  console.error = ((...args: unknown[]) => { stderr.push(args.map(String).join(" ")); }) as typeof console.error;
   try {
     const result = await fn();
     return { stdout, stderr, result };
   } finally {
-    (console as any).log = origLog;
-    (console as any).error = origErr;
+    console.log = origLog;
+    console.error = origErr;
   }
 }
 
 test("runExport dry-run routes the md preview to STDERR, never STDOUT", async () => {
-  const handler = captureExporterHandler();
+  const ext = await harnessPromise;
   const root = makeExportTestWorkspace();
   try {
     const { stdout, stderr, result } = await captureConsole(() =>
-      handler({ pm_root: root, options: { format: "md" }, global: { json: false } }),
+      ext.runExporter({ exporter: "github", pmRoot: root, options: { format: "md" }, global: { json: false } }),
     );
     // The whole point of the fix: the human preview must NOT touch stdout.
     assert.strictEqual(
@@ -1132,21 +1097,23 @@ test("runExport dry-run routes the md preview to STDERR, never STDOUT", async ()
       "the existing [dry-run] note should remain on stderr",
     );
     // The machine-readable return object is still intact.
-    assert.strictEqual(result.dry_run, true);
-    assert.ok(Array.isArray(result.plan), "return object should carry the plan array");
-    assert.strictEqual(result.would_create, 2, "both unlinked items are creates");
-    assert.strictEqual(result.would_update, 0);
+    assert.strictEqual(result.handled, true, "the exporter handler should run clean");
+    const exported = result.result as RunExportDryRunResult;
+    assert.strictEqual(exported.dry_run, true);
+    assert.ok(Array.isArray(exported.plan), "return object should carry the plan array");
+    assert.strictEqual(exported.would_create, 2, "both unlinked items are creates");
+    assert.strictEqual(exported.would_update, 0);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
 test("runExport dry-run routes the JSON preview to STDERR, never STDOUT", async () => {
-  const handler = captureExporterHandler();
+  const ext = await harnessPromise;
   const root = makeExportTestWorkspace();
   try {
     const { stdout, stderr, result } = await captureConsole(() =>
-      handler({ pm_root: root, options: {}, global: { json: false } }),
+      ext.runExporter({ exporter: "github", pmRoot: root, global: { json: false } }),
     );
     // Default format is JSON; the JSON.stringify(plan) preview must go to
     // stderr so stdout stays only the host render (valid JSON under --json).
@@ -1167,10 +1134,12 @@ test("runExport dry-run routes the JSON preview to STDERR, never STDOUT", async 
       "the [dry-run] note should still be on stderr",
     );
     // Return object still carries the plan for the host to render.
-    assert.strictEqual(result.dry_run, true);
-    assert.ok(Array.isArray(result.plan));
-    assert.strictEqual(result.plan.length, 2);
-    assert.strictEqual(result.would_create, 2);
+    assert.strictEqual(result.handled, true, "the exporter handler should run clean");
+    const exported = result.result as RunExportDryRunResult;
+    assert.strictEqual(exported.dry_run, true);
+    assert.ok(Array.isArray(exported.plan));
+    assert.strictEqual(exported.plan.length, 2);
+    assert.strictEqual(exported.would_create, 2);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1180,11 +1149,11 @@ test("runExport dry-run with global --json writes NO preview to either stream", 
   // In JSON mode the host renders the return object to stdout; the extension
   // must stay completely silent (no preview on either stream) so stdout is a
   // single valid JSON object.
-  const handler = captureExporterHandler();
+  const ext = await harnessPromise;
   const root = makeExportTestWorkspace();
   try {
     const { stdout, stderr, result } = await captureConsole(() =>
-      handler({ pm_root: root, options: { format: "md" }, global: { json: true } }),
+      ext.runExporter({ exporter: "github", pmRoot: root, options: { format: "md" }, global: { json: true } }),
     );
     assert.strictEqual(stdout.length, 0, "nothing should be written to stdout in JSON mode");
     // No human preview lines (only the host renders). The [dry-run] note is
@@ -1197,7 +1166,9 @@ test("runExport dry-run with global --json writes NO preview to either stream", 
       !stderr.some((l) => l.includes("[dry-run]")),
       "no human dry-run note should be emitted in JSON mode",
     );
-    assert.ok(Array.isArray(result.plan), "return object should carry the plan array");
+    assert.strictEqual(result.handled, true, "the exporter handler should run clean");
+    const exported = result.result as RunExportDryRunResult;
+    assert.ok(Array.isArray(exported.plan), "return object should carry the plan array");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

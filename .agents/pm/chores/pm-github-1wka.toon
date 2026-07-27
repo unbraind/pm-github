@@ -1,0 +1,17 @@
+id: pm-github-1wka
+title: Eliminate all 37 any usages from pm-github source with real GitHub Projects V2 GraphQL types and typed handler contexts
+description: "index.ts carried 37 any usages in two groups. Group A was untyped GitHub Projects V2 GraphQL responses: githubGraphQL<any> at every call site plus untyped map callbacks over nodes, fields and options. Replaced with 18 precise interfaces derived from the ACTUAL query strings next to each call site rather than guessed: project metadata, item connections with pageInfo and nodes, field lists with their option sets, the draft-issue and add-item mutation payloads, the owner-projects listing and the issue node-id resolution. GraphQL nullability is modelled honestly, so nodes is typed Array<T | null> because connections may include nulls for redacted or inaccessible items and the callers already filter them. Verified one type field-for-field against its query: fetchProjectItems selects pageInfo hasNextPage endCursor and nodes id fieldValueByName content, and the interfaces declare exactly those and nothing unselected. Group B was untyped extension handler and hook contexts across runSync, runExport, runValidate, the project commands, the seven registered run handlers, registerPreflight, registerImporter, registerExporter, hooks.afterCommand and the search query path; all now use the real SDK types. Source any count is 0, down from 37, and tests are 0 down from 52 (the two remaining grep hits are comments that mention as any, not usages)."
+type: Chore
+status: closed
+priority: 1
+tags: []
+created_at: "2026-07-27T16:28:44.867Z"
+updated_at: "2026-07-27T16:28:47.027Z"
+closed_at: "2026-07-27T16:28:47.026Z"
+author: claude-code
+acceptance_criteria: "grep for any patterns over index.ts and test/*.ts returns no real usages (was 37 source / 52 test); typecheck, check and 168 tests pass; behaviour unchanged; every GraphQL interface is derived from the query string at its call site with honest nullability; production proof shows install ok, all five subcommands registered, no flag collision and pm health extensions ok."
+notes[2]{created_at,author,text}:
+  "2026-07-27T16:28:45.882Z",claude-code,"Production proof with the built extension installed into a throwaway workspace holding two seeded items: install ok with no warnings, host commands unaffected (pm list renders items, pm list --json valid), all five registered subcommands export import project sync validate resolve, no host-owned global flag is declared, pm health reports extensions ok with no warnings, and github validate --help works. 168 tests pass."
+  "2026-07-27T16:28:46.285Z",claude-code,"Audited the camelCase multi-word flag contract that caused three defects in pm-ops, and pm-github was already correct: index.ts line 432 documents that flags may arrive kebab-case or camelCase, and every one of the eleven multi-word flags (comments-mode, dry-run, include-comments, include-prs, label-map, link-deps, no-add-missing, skip-drafts, status-map, with-comments) is read with BOTH forms via optionEnabled. No change needed."
+close_reason: "Shipped: 37 source any eliminated with real Projects V2 GraphQL types and SDK handler contexts, verified by production proof rather than tests alone."
+body: ""
