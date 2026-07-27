@@ -13,40 +13,37 @@
 // Issues use the REST API; Projects v2 is GraphQL-only (see the Projects v2
 // section below and the pure plan/mapping logic in ./projects.ts).
 
-import type { ExtensionApi, ExtensionModule } from "@unbrained/pm-cli/sdk/authoring";
+import type {
+  AfterCommandHookContext,
+  CommandHandlerContext,
+  ExtensionApi,
+  ExtensionModule,
+  ImportExportContext,
+  PreflightOverrideContext,
+  SearchProviderQueryContext,
+} from "@unbrained/pm-cli/sdk/authoring";
 import https from "node:https";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-import type {
-  BulkItemMutation,
-  CommitItemMutationsOptions,
-  CommitItemMutationsResult,
+import {
+  comments as pmCommentsFn,
+  commitItemMutations as sdkCommitItemMutations,
+  listAllItemMetadata as sdkListAllItemMetadata,
+  normalizeItemId as sdkNormalizeItemId,
+  readSettings as sdkReadSettings,
+  type BulkItemMutation,
+  type CommentsCommandOptions,
+  type CommentsResult,
+  type CommitItemMutationsOptions,
+  type CommitItemMutationsResult,
+  type ItemDocument,
+  type ItemMetadata,
+  type PmClientOptions,
 } from "@unbrained/pm-cli/sdk";
-
-// The `comments()` annotation primitive is only exported from the public SDK
-// since pm CLI 2026.7.14. Load it lazily so hosts on older CLI versions still
-// load the extension fine (this is ESM — a missing named export in a static
-// import kills the whole module at load time); only `--comments-mode
-// annotations|both` needs it, and it degrades with a clear error instead.
-type PmCommentsFn = (
-  itemId: string,
-  options: Record<string, unknown>,
-  ctx: { pmRoot: string },
-) => Promise<{ comments?: unknown[] } | undefined>;
-
-async function loadPmComments(): Promise<PmCommentsFn> {
-  const sdk = (await import("@unbrained/pm-cli/sdk")) as Record<string, unknown>;
-  const fn = sdk.comments;
-  if (typeof fn !== "function") {
-    throw new Error(
-      "the installed pm CLI does not export the SDK comments() primitive (requires pm CLI >= 2026.7.14)",
-    );
-  }
-  return fn as PmCommentsFn;
-}
+import { collectNewOrderingCycleWarnings as sdkCollectNewOrderingCycleWarnings } from "@unbrained/pm-cli/sdk/graph";
 
 import {
   type ProjectItem,
@@ -687,6 +684,43 @@ function readPmItems(pmRoot: string): PmItem[] {
 
 // Index existing pm items by their GitHub provenance tag for O(1) idempotent
 // matching on re-import.
+/**
+ * Narrow one runtime search document to a {@link PmItem}.
+ *
+ * The SDK declares `SearchProviderQueryContext.documents` as `ItemDocument[]`
+ * with a REQUIRED `metadata`, but the runtime also hands raw pm items straight
+ * through on some paths — `SearchProviderQueryContext` carries an
+ * `[key: string]: unknown` index signature, so its shape is looser than the
+ * declared type. Trusting `d.metadata` unconditionally therefore yields
+ * `undefined` entries and crashes `indexByProvenance` with a TypeError; the
+ * pre-typing code guarded this with `d?.metadata ? d.metadata : d`, and that
+ * guard is preserved here rather than dropped in the name of the declared type.
+ * Anything matching neither shape is skipped instead of poisoning the index.
+ */
+export function searchDocumentToItem(document: ItemDocument | PmItem | null | undefined): PmItem | undefined {
+  if (!document || typeof document !== "object") return undefined;
+  const wrapped = (document as ItemDocument).metadata;
+  if (wrapped && typeof wrapped === "object") return wrapped as PmItem;
+  return "id" in document ? (document as PmItem) : undefined;
+}
+
+/**
+ * Resolve the corpus the search provider matches remote hits against.
+ *
+ * Prefers the runtime-provided documents (already the current corpus) and falls
+ * back to a fresh workspace read when absent. This is the provider's REAL mapping,
+ * extracted so it is directly testable: the surrounding `query` handler performs
+ * network I/O first, so an end-to-end test cannot reach the mapping without
+ * stubbing internals, and an inline expression would be untestable in practice.
+ */
+export function resolveSearchCorpus(documents: unknown, pmRootValue: unknown): PmItem[] {
+  const pmRoot = typeof pmRootValue === "string" && pmRootValue ? pmRootValue : ".agents/pm";
+  if (!Array.isArray(documents)) return readPmItems(pmRoot);
+  return documents
+    .map((document) => searchDocumentToItem(document as ItemDocument | PmItem | null | undefined))
+    .filter((item): item is PmItem => item !== undefined);
+}
+
 export function indexByProvenance(items: PmItem[]): Map<string, PmItem> {
   const index = new Map<string, PmItem>();
   for (const item of items) {
@@ -749,33 +783,25 @@ function assertSdkFunction<F>(fn: unknown, exportName: string): F {
   return fn as F;
 }
 
-async function loadAtomicSdk(
-  importSdk: () => Promise<Partial<typeof import("@unbrained/pm-cli/sdk")>> =
-    () => import("@unbrained/pm-cli/sdk"),
-): Promise<Partial<typeof import("@unbrained/pm-cli/sdk")>> {
-  try {
-    return await importSdk();
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new CommandError(
-      `--atomic requires @unbrained/pm-cli>=2026.7.20, but the SDK could not be imported: ${msg}. Install or upgrade @unbrained/pm-cli.`,
-      EXIT_CODE.USAGE,
-    );
-  }
+/** Minimal shape of the SDK module the atomic import path reads. */
+interface AtomicSdkModule {
+  commitItemMutations?: CommitItemMutations;
 }
 
-/** Resolve the atomic bulk-mutation helper lazily so normal imports stay compatible. */
+/** Resolve the atomic bulk-mutation helper. Accepts an optional SDK override for
+ * tests that simulate a missing export; the default path uses the top-level
+ * imported `commitItemMutations` so normal imports never touch the dynamic
+ * loader. */
 export async function resolveCommitItemMutations(
-  importSdk?: () => Promise<Partial<typeof import("@unbrained/pm-cli/sdk")>>,
+  importSdk?: () => Promise<AtomicSdkModule>,
 ): Promise<CommitItemMutations> {
   if (importSdk) {
-    const mod = await loadAtomicSdk(importSdk);
+    const mod = await importSdk();
     return assertSdkFunction<CommitItemMutations>(mod.commitItemMutations, "commitItemMutations");
   }
   if (cachedCommitItemMutations) return cachedCommitItemMutations;
-  const mod = await loadAtomicSdk();
   cachedCommitItemMutations = assertSdkFunction<CommitItemMutations>(
-    mod.commitItemMutations,
+    sdkCommitItemMutations,
     "commitItemMutations",
   );
   return cachedCommitItemMutations;
@@ -787,18 +813,17 @@ async function resolveAtomicSdkFunctions(opts: AtomicImportOptions): Promise<{
   readSettings: ReadSettings;
 }> {
   const needsSdk = !opts.commitItemMutations || !opts.normalizeItemId || !opts.readSettings;
-  const mod = needsSdk ? await loadAtomicSdk() : undefined;
   return {
     commitItemMutations: opts.commitItemMutations ?? assertSdkFunction<CommitItemMutations>(
-      mod?.commitItemMutations,
+      needsSdk ? sdkCommitItemMutations : undefined,
       "commitItemMutations",
     ),
     normalizeItemId: opts.normalizeItemId ?? assertSdkFunction<NormalizeItemId>(
-      mod?.normalizeItemId,
+      needsSdk ? sdkNormalizeItemId : undefined,
       "normalizeItemId",
     ),
     readSettings: opts.readSettings ?? assertSdkFunction<ReadSettings>(
-      mod?.readSettings,
+      needsSdk ? sdkReadSettings : undefined,
       "readSettings",
     ),
   };
@@ -1526,12 +1551,10 @@ export async function syncGithubCommentsToAnnotations(
   }
   const release = acquisition.status === "acquired" ? () => acquisition.lock.release() : () => {};
   try {
-    let pmComments: PmCommentsFn;
     let existing: { text?: string }[] = [];
     try {
-      pmComments = await loadPmComments();
-      const list = await pmComments(itemId, {}, { pmRoot });
-      existing = (list?.comments ?? []) as { text?: string }[];
+      const list: CommentsResult = await pmCommentsFn(itemId, {}, { pmRoot });
+      existing = list.comments;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`#${issueNumber}: could not read existing comments for ${itemId} — ${msg}`);
@@ -1547,7 +1570,7 @@ export async function syncGithubCommentsToAnnotations(
       }
       const author = c.user?.login ?? "github";
       try {
-        await pmComments(itemId, { add: buildCommentText(c), author }, { pmRoot });
+        await pmCommentsFn(itemId, { add: buildCommentText(c), author }, { pmRoot });
         added++;
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -1852,43 +1875,24 @@ interface DepLinkSdk {
   ) => string[];
 }
 
-// Lazy-load the two SDK primitives --link-deps needs. Mirrors loadPmComments /
-// loadAtomicSdk: a missing export degrades to a clear upgrade error instead of
-// killing extension load on older hosts.
-async function loadDepLinkSdk(): Promise<DepLinkSdk> {
-  let mod: Record<string, unknown>;
-  try {
-    mod = (await import("@unbrained/pm-cli/sdk")) as Record<string, unknown>;
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new CommandError(
-      `--link-deps requires @unbrained/pm-cli>=2026.7.20, but the SDK could not be imported: ${msg}.`,
-      EXIT_CODE.USAGE,
-    );
-  }
-  const listFn = mod.listAllItemMetadata;
-  const collectFn = mod.collectNewOrderingCycleWarnings;
-  if (typeof listFn !== "function" || typeof collectFn !== "function") {
-    throw new CommandError(
-      "--link-deps requires @unbrained/pm-cli>=2026.7.20 with the SDK exports " +
-        "listAllItemMetadata + collectNewOrderingCycleWarnings. Upgrade @unbrained/pm-cli.",
-      EXIT_CODE.USAGE,
-    );
-  }
+// Build the default `DepLinkSdk` from the top-level SDK imports so the
+// --link-deps second pass never needs a dynamic import. `listAllItemMetadata`
+// returns full `ItemMetadata` objects; we project to the `DepLinkSnapshotItem`
+// structural subset the link pass actually reads. The SDK's cycle detector
+// reads only id/tags/dependencies off each item; `DepLinkSnapshotItem` is that
+// structural subset, so the cast on `collectNewOrderingCycleWarnings` is sound.
+function defaultDepLinkSdk(): DepLinkSdk {
   return {
     listAllItemMetadata: async (pmRoot: string) => {
-      const raw = (await (listFn as (r: string) => Promise<Array<Record<string, unknown>>>)(pmRoot));
+      const raw = await sdkListAllItemMetadata(pmRoot);
       return raw.map((i) => ({
-        id: String(i.id),
-        tags: Array.isArray(i.tags) ? (i.tags as string[]) : [],
-        dependencies: Array.isArray(i.dependencies)
-          ? (i.dependencies as Array<{ id: string; kind: string }>)
-          : undefined,
+        id: i.id,
+        tags: i.tags,
+        dependencies: i.dependencies,
       }));
     },
-    // The SDK's cycle detector reads only id/tags/dependencies off each item;
-    // DepLinkSnapshotItem is that structural subset, so the cast is sound.
-    collectNewOrderingCycleWarnings: collectFn as DepLinkSdk["collectNewOrderingCycleWarnings"],
+    collectNewOrderingCycleWarnings:
+      sdkCollectNewOrderingCycleWarnings as DepLinkSdk["collectNewOrderingCycleWarnings"],
   };
 }
 
@@ -1932,7 +1936,7 @@ export async function linkImportedDependencies(
   let before: DepLinkSnapshotItem[];
   try {
     const needsSdk = !deps.listItemMetadata || !deps.collectOrderingCycleWarnings;
-    const sdk = needsSdk ? await loadDepLinkSdk() : undefined;
+    const sdk = needsSdk ? defaultDepLinkSdk() : undefined;
     listMeta = deps.listItemMetadata ?? ((r: string) => sdk!.listAllItemMetadata(r));
     collect = deps.collectOrderingCycleWarnings ?? sdk!.collectNewOrderingCycleWarnings;
     before = await listMeta(pmRoot);
@@ -2407,7 +2411,7 @@ export function planSync(items: PmItem[], repo: string): SyncPlanEntry[] {
 
 // Command handler for `pm github sync`: preview or apply the pm → GitHub issue
 // sync plan, scoped by --ids and honoring --dry-run / --apply.
-async function runSync(ctx: any) {
+async function runSync(ctx: CommandHandlerContext) {
   const options = ctx.options || {};
   const repo = optionString(options, "repo") || (ctx.args?.[0] as string | undefined);
   const dryRun = optionEnabled(options, "dry-run", "dryRun");
@@ -2728,7 +2732,7 @@ export function applyOutcomeError(
 // stdout in JSON mode (pm renders the return value). Used by both the
 // `registerExporter("github", ...)` entry point and the `pm github export`
 // command so the surface stays consistent.
-async function runExport(ctx: any) {
+async function runExport(ctx: CommandHandlerContext) {
   const options = ctx.options || {};
   const jsonMode = ctx.global?.json === true;
   const format = optionString(options, "format") || "json";
@@ -2954,7 +2958,7 @@ function detectTokenSource(): "env" | "gh" | "none" {
 
 // Command handler for `pm github validate`: checks token source, gh CLI, rate
 // limit, and the reachable issue counts for the configured repo.
-async function runValidate(ctx: any): Promise<ValidateReport> {
+async function runValidate(ctx: CommandHandlerContext): Promise<ValidateReport> {
   const options = ctx.options || {};
   const repo = optionString(options, "repo") || (ctx.args?.[0] as string | undefined);
   const gh_cli = detectGhCli();
@@ -3041,6 +3045,136 @@ interface GraphQLResponse<T> {
   errors?: Array<{ message: string; type?: string }>;
 }
 
+// --- GraphQL response shapes (derived from the actual query strings below) ---
+
+/** The Status single-select field on a Project v2 board, as selected by
+ * `STATUS_FIELD_GQL`. The fragment spreads onto `ProjectV2SingleSelectField`,
+ * so every field is optional in the response (GitHub omits the fragment for
+ * projects whose Status field is a different type). */
+interface GraphqlStatusField {
+  id?: string;
+  name: string;
+  options?: Array<{ id: string; name: string }>;
+}
+
+/** A Project v2 node as returned by the `resolveProject` query (user or org).
+ * `title`/`url` are requested but may be null for redacted projects. */
+interface GraphqlProjectNode {
+  id: string;
+  title?: string;
+  url?: string;
+  statusField?: GraphqlStatusField | null;
+}
+
+/** Response shape of the `resolveProject` query — one of user/organization
+ * resolves, the other is null. */
+interface GraphqlResolveProjectData {
+  user?: { projectV2?: GraphqlProjectNode | null } | null;
+  organization?: { projectV2?: GraphqlProjectNode | null } | null;
+}
+
+/** The content polymorph of one project-item node: `DraftIssue`, `Issue`,
+ * `PullRequest`, or a redacted/unknown type. Only the fields the query selects
+ * are typed; everything is optional because GitHub may return null for
+ * redacted items. */
+interface GraphqlProjectItemContent {
+  __typename: "DraftIssue" | "Issue" | "PullRequest" | string;
+  title?: string;
+  body?: string;
+  number?: number;
+  url?: string;
+  state?: string;
+  stateReason?: string | null;
+  repository?: { nameWithOwner?: string } | null;
+}
+
+/** The `fieldValueByName("Status")` single-select value on a project item
+ * node. Both fields are optional (an item may have no Status set). */
+interface GraphqlFieldValueByName {
+  name?: string;
+  optionId?: string;
+}
+
+/** One node in the project-items connection. The id is the stable idempotency
+ * key; `content` and `fieldValueByName` are null when the item is redacted. */
+interface GraphqlProjectItemNode {
+  id?: string;
+  fieldValueByName?: GraphqlFieldValueByName | null;
+  content?: GraphqlProjectItemContent | null;
+}
+
+/** The items connection on a Project v2, as returned by `fetchProjectItems`.
+ * `nodes` is `(T | null)[]` because GraphQL connections may include nulls for
+ * redacted/inaccessible items; the caller `.filter(Boolean)`s them. */
+interface GraphqlProjectItemsConnection {
+  pageInfo?: { hasNextPage?: boolean; endCursor?: string };
+  nodes?: Array<GraphqlProjectItemNode | null>;
+}
+
+/** Response shape of the `fetchProjectItems` query. The node may be null when
+ * the project id is invalid or inaccessible. */
+interface GraphqlFetchProjectItemsData {
+  node?: { items?: GraphqlProjectItemsConnection } | null;
+}
+
+/** Response shape of the `addProjectV2DraftIssue` mutation. */
+interface GraphqlAddDraftData {
+  addProjectV2DraftIssue?: { projectItem?: { id?: string } } | null;
+}
+
+/** Response shape of the `addProjectV2ItemById` mutation. */
+interface GraphqlAddIssueData {
+  addProjectV2ItemById?: { item?: { id?: string } } | null;
+}
+
+/** Response shape of the `updateProjectV2ItemFieldValue` mutation. */
+interface GraphqlSetStatusData {
+  updateProjectV2ItemFieldValue?: { projectV2Item?: { id?: string } } | null;
+}
+
+/** Response shape of the `gqlResolveIssueNodeId` query. */
+interface GraphqlResolveIssueNodeIdData {
+  repository?: { issueOrPullRequest?: { id?: string } | null } | null;
+}
+
+/** One project-summary node in a `projectsV2` connection. */
+interface GraphqlProjectsV2Node {
+  number: number;
+  title?: string;
+  url?: string;
+  closed?: boolean;
+  shortDescription?: string | null;
+}
+
+/** A `projectsV2` connection (user or organization), as returned by the listing
+ * query. */
+interface GraphqlProjectsV2Connection {
+  pageInfo?: { hasNextPage?: boolean; endCursor?: string };
+  nodes?: Array<GraphqlProjectsV2Node | null>;
+}
+
+/** Response shape of the `listOwnerProjectsV2Nodes` query — one of
+ * user/organization resolves, the other is null. */
+interface GraphqlListOwnerProjectsData {
+  user?: { projectsV2?: GraphqlProjectsV2Connection | null } | null;
+  organization?: { projectsV2?: GraphqlProjectsV2Connection | null } | null;
+}
+
+/** One field node in the project-fields query. `__typename` distinguishes
+ * `ProjectV2FieldCommon` from `ProjectV2SingleSelectField`; `options` is only
+ * present on single-select fields. */
+interface GraphqlFieldNode {
+  __typename: string;
+  name?: string;
+  dataType?: string;
+  options?: Array<{ name: string }> | null;
+}
+
+/** Response shape of the `runProjectFields` query. */
+interface GraphqlProjectFieldsData {
+  node?: { fields?: { nodes?: Array<GraphqlFieldNode | null> } | null } | null;
+}
+
 // One GraphQL round-trip. GraphQL reports business errors as HTTP 200 with an
 // `errors` array, so we surface those explicitly. The combined user+org queries
 // below intentionally return a partial error for the wrong owner type while the
@@ -3087,7 +3221,7 @@ async function resolveProject(ref: ProjectRef, token: string | undefined): Promi
       user(login:$owner){ projectV2(number:$number){ id title url ${STATUS_FIELD_GQL} } }
       organization(login:$owner){ projectV2(number:$number){ id title url ${STATUS_FIELD_GQL} } }
     }`;
-  const data = await githubGraphQL<any>(token, query, { owner: ref.owner, number: ref.number });
+  const data = await githubGraphQL<GraphqlResolveProjectData>(token, query, { owner: ref.owner, number: ref.number });
   const userNode = data.user?.projectV2;
   const orgNode = data.organization?.projectV2;
   const node = userNode ?? orgNode;
@@ -3108,8 +3242,8 @@ async function resolveProject(ref: ProjectRef, token: string | undefined): Promi
 // Normalize a raw GraphQL project-item node into the ProjectItem model,
 // tolerating null/undefined nodes and missing content (defensive against
 // partial GraphQL errors / inaccessible items).
-function normalizeProjectItemNode(n: any): ProjectItem {
-  const c = n?.content ?? {};
+function normalizeProjectItemNode(n: GraphqlProjectItemNode): ProjectItem {
+  const c: GraphqlProjectItemContent = n?.content ?? { __typename: "Unknown" };
   const tn = c.__typename;
   let content: ProjectItemContent;
   if (tn === "DraftIssue") {
@@ -3170,7 +3304,7 @@ async function fetchProjectItems(projectId: string, token: string | undefined): 
   const items: ProjectItem[] = [];
   let cursor: string | undefined;
   for (;;) {
-    const data = await githubGraphQL<any>(token, query, { id: projectId, cursor: cursor ?? null });
+    const data = await githubGraphQL<GraphqlFetchProjectItemsData>(token, query, { id: projectId, cursor: cursor ?? null });
     const conn = data.node?.items;
     if (!conn) break;
     for (const n of conn.nodes ?? []) {
@@ -3193,7 +3327,7 @@ async function gqlAddDraft(
   token: string | undefined,
 ): Promise<string> {
   const q = `mutation($p:ID!,$t:String!,$b:String){ addProjectV2DraftIssue(input:{projectId:$p,title:$t,body:$b}){ projectItem{ id } } }`;
-  const d = await githubGraphQL<any>(token, q, { p: projectId, t: title, b: body ?? "" });
+  const d = await githubGraphQL<GraphqlAddDraftData>(token, q, { p: projectId, t: title, b: body ?? "" });
   const id = d.addProjectV2DraftIssue?.projectItem?.id;
   if (!id) throw new CommandError("addProjectV2DraftIssue returned no item id.");
   return id;
@@ -3203,7 +3337,7 @@ async function gqlAddDraft(
 // new project item id.
 async function gqlAddIssue(projectId: string, contentId: string, token: string | undefined): Promise<string> {
   const q = `mutation($p:ID!,$c:ID!){ addProjectV2ItemById(input:{projectId:$p,contentId:$c}){ item{ id } } }`;
-  const d = await githubGraphQL<any>(token, q, { p: projectId, c: contentId });
+  const d = await githubGraphQL<GraphqlAddIssueData>(token, q, { p: projectId, c: contentId });
   const id = d.addProjectV2ItemById?.item?.id;
   if (!id) throw new CommandError("addProjectV2ItemById returned no item id.");
   return id;
@@ -3218,7 +3352,7 @@ async function gqlSetStatus(
   token: string | undefined,
 ): Promise<void> {
   const q = `mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){ updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){ projectV2Item{ id } } }`;
-  await githubGraphQL<any>(token, q, { p: projectId, i: itemId, f: fieldId, o: optionId });
+  await githubGraphQL<GraphqlSetStatusData>(token, q, { p: projectId, i: itemId, f: fieldId, o: optionId });
 }
 
 // Resolve the GraphQL node id of a repo's issue or PR by number, returning
@@ -3231,7 +3365,7 @@ async function gqlResolveIssueNodeId(
   const [owner, name] = repo.split("/");
   if (!owner || !name) return undefined;
   const q = `query($o:String!,$n:String!,$num:Int!){ repository(owner:$o,name:$n){ issueOrPullRequest(number:$num){ ... on Issue { id } ... on PullRequest { id } } } }`;
-  const d = await githubGraphQL<any>(token, q, { o: owner, n: name, num: number });
+  const d = await githubGraphQL<GraphqlResolveIssueNodeIdData>(token, q, { o: owner, n: name, num: number });
   return d.repository?.issueOrPullRequest?.id ?? undefined;
 }
 
@@ -3250,7 +3384,7 @@ function projectItemDescription(ref: ProjectRef, c: ProjectItemContent): string 
 
 // A page of a projectsV2 connection as returned by GitHub GraphQL.
 export interface ProjectsV2Page {
-  nodes?: any[];
+  nodes?: Array<GraphqlProjectsV2Node | null>;
   pageInfo?: { hasNextPage?: boolean; endCursor?: string };
 }
 
@@ -3261,8 +3395,8 @@ export interface ProjectsV2Page {
 // is unit-testable without network I/O. Mirrors the fetchProjectItems loop.
 export async function collectProjectsV2Pages(
   fetchPage: (cursor: string | undefined) => Promise<ProjectsV2Page | null | undefined>,
-): Promise<any[]> {
-  const out: any[] = [];
+): Promise<GraphqlProjectsV2Node[]> {
+  const out: GraphqlProjectsV2Node[] = [];
   let cursor: string | undefined;
   for (;;) {
     const conn = await fetchPage(cursor);
@@ -3286,7 +3420,7 @@ export async function collectProjectsV2Pages(
 export type GraphQLTransport = (
   query: string,
   variables: Record<string, unknown>,
-) => Promise<any>;
+) => Promise<GraphqlListOwnerProjectsData>;
 
 // Resolve + paginate the projectsV2 connection for a user-or-org owner using an
 // injected GraphQL transport. A login is either a user or an organization,
@@ -3297,7 +3431,7 @@ export type GraphQLTransport = (
 export async function listOwnerProjectsV2Nodes(
   owner: string,
   graphQL: GraphQLTransport,
-): Promise<any[]> {
+): Promise<GraphqlProjectsV2Node[]> {
   let ownerType: "user" | "organization" | null = null;
   return collectProjectsV2Pages(async (cursor) => {
     const q = `
@@ -3314,7 +3448,7 @@ export async function listOwnerProjectsV2Nodes(
   });
 }
 
-async function runProjectList(ctx: any) {
+async function runProjectList(ctx: CommandHandlerContext) {
   const options = ctx.options || {};
   const owner = optionString(options, "owner") || (ctx.args?.[0] as string | undefined);
   if (!owner) {
@@ -3324,8 +3458,8 @@ async function runProjectList(ctx: any) {
     );
   }
   const token = resolveGitHubToken();
-  const nodes = await listOwnerProjectsV2Nodes(owner, (q, vars) => githubGraphQL<any>(token, q, vars));
-  const projects = nodes.map((n: any) => ({
+  const nodes = await listOwnerProjectsV2Nodes(owner, (q, vars) => githubGraphQL<GraphqlListOwnerProjectsData>(token, q, vars));
+  const projects = nodes.map((n) => ({
     number: n.number,
     title: n.title ?? "",
     url: n.url ?? "",
@@ -3347,7 +3481,7 @@ async function runProjectList(ctx: any) {
 
 // --- project fields --------------------------------------------------------
 
-async function runProjectFields(ctx: any) {
+async function runProjectFields(ctx: CommandHandlerContext) {
   const options = ctx.options || {};
   const ref = parseProjectRef(optionString(options, "project") || (ctx.args?.[0] as string | undefined));
   if (!ref) {
@@ -3366,11 +3500,11 @@ async function runProjectFields(ctx: any) {
         ... on ProjectV2SingleSelectField { name options{ name } }
       } }
     }}}`;
-  const d = await githubGraphQL<any>(token, q, { id: meta.id });
-  const fields = (d.node?.fields?.nodes ?? []).filter(Boolean).map((f: any) => ({
+  const d = await githubGraphQL<GraphqlProjectFieldsData>(token, q, { id: meta.id });
+  const fields = (d.node?.fields?.nodes ?? []).filter((f): f is GraphqlFieldNode => f !== null).map((f) => ({
     name: f.name,
     type: f.dataType ?? f.__typename,
-    options: Array.isArray(f.options) ? f.options.map((o: any) => o.name) : undefined,
+    options: Array.isArray(f.options) ? f.options.map((o) => o.name) : undefined,
   }));
   if (ctx.global?.json !== true) {
     console.error(`Project ${ref.owner}/${ref.number} — ${meta.title} (${meta.ownerType})`);
@@ -3386,7 +3520,7 @@ async function runProjectFields(ctx: any) {
 
 // --- project import --------------------------------------------------------
 
-async function runProjectImport(ctx: any) {
+async function runProjectImport(ctx: CommandHandlerContext) {
   const options = ctx.options || {};
   const ref = parseProjectRef(optionString(options, "project") || (ctx.args?.[0] as string | undefined));
   if (!ref) {
@@ -3574,7 +3708,7 @@ interface PullPlanEntryLike {
 
 // Command handler for `pm github project sync`: preview (default) or apply the
 // bidirectional Projects v2 sync plan, honoring --push/--pull/--apply/--ids.
-async function runProjectSync(ctx: any) {
+async function runProjectSync(ctx: CommandHandlerContext) {
   const options = ctx.options || {};
   const ref = parseProjectRef(optionString(options, "project") || (ctx.args?.[0] as string | undefined));
   if (!ref) {
@@ -3831,7 +3965,7 @@ export default defineExtension({
     // warning when a github mutation is requested without a resolvable token;
     // the authoritative validation + non-zero exit lives in the handlers.
     // -----------------------------------------------------------------------
-    api.registerPreflight((ctx: any) => {
+    api.registerPreflight((ctx: PreflightOverrideContext) => {
       if (isMutatingGithubCommand(ctx.command, ctx.options || {})) {
         if (!resolveGitHubToken()) {
           console.error(
@@ -3846,7 +3980,7 @@ export default defineExtension({
     // -----------------------------------------------------------------------
     // importer — `pm github import <owner/repo>` (idempotent native pipeline)
     // -----------------------------------------------------------------------
-    api.registerImporter("github", async (ctx: any) => {
+    api.registerImporter("github", async (ctx: ImportExportContext) => {
       return runImport(ctx.args?.[0], ctx.pm_root, parseImportOptions(ctx.options || {}));
     }, {
       description:
@@ -3884,7 +4018,7 @@ export default defineExtension({
     // (upsert) rather than duplicated. --json returns the plan object; we never
     // write our own stdout in JSON mode (pm renders the return value).
     // -----------------------------------------------------------------------
-    api.registerExporter("github", async (ctx: any) => runExport(ctx), {
+    api.registerExporter("github", async (ctx: ImportExportContext) => runExport(ctx), {
       description:
         "Export pm items as GitHub issues. SAFE BY DEFAULT: prints a create/update " +
         "plan and writes NOTHING. Use --apply --repo <owner/repo> to write to " +
@@ -3917,7 +4051,7 @@ export default defineExtension({
     if (typeof api.registerSearchProvider === "function") {
       api.registerSearchProvider({
         name: "github",
-        async query(qctx: any) {
+        async query(qctx: SearchProviderQueryContext) {
           const repo = resolveSearchRepo(qctx.options || {});
           if (!repo) return [];
           const token = resolveGitHubToken();
@@ -3935,9 +4069,7 @@ export default defineExtension({
           // Map remote matches back to local items via provenance tags. Prefer
           // the runtime-provided documents (already the current corpus); fall
           // back to a fresh read if absent.
-          const docs: PmItem[] = Array.isArray(qctx.documents)
-            ? qctx.documents.map((d: any) => (d?.metadata ? d.metadata : d))
-            : readPmItems(qctx.pm_root || ".agents/pm");
+          const docs = resolveSearchCorpus(qctx.documents, qctx.pm_root);
           const index = indexByProvenance(docs);
           return mapSearchHits(matchedNumbers, repo, index);
         },
@@ -3950,7 +4082,7 @@ export default defineExtension({
     // the exact command to run. Triggers only when a github-linked item (one
     // carrying a `gh:owner/repo#N` provenance tag) is closed/reopened.
     // -----------------------------------------------------------------------
-    api.hooks.afterCommand((ctx: any) => {
+    api.hooks.afterCommand((ctx: AfterCommandHookContext) => {
       if (!process.env.PM_GITHUB_SYNC) return;
       if (!ctx.ok) return;
       if (ctx.command !== "close" && ctx.command !== "update") return;
@@ -4004,7 +4136,7 @@ export default defineExtension({
         "Items must carry a `gh:owner/repo#N` tag — import with `pm github import` first.",
         "Use --dry-run to preview the close/reopen plan before pushing.",
       ],
-      async run(ctx: any) {
+      async run(ctx: CommandHandlerContext) {
         return runSync(ctx);
       },
     });
@@ -4042,7 +4174,7 @@ export default defineExtension({
         "Re-running is safe: existing items are updated, not duplicated.",
         "Use --atomic for a durable resumable journal with reverse compensation on ordinary failures.",
       ],
-      async run(ctx: any) {
+      async run(ctx: CommandHandlerContext) {
         return runImport(ctx.args[0], ctx.pm_root, parseImportOptions(ctx.options));
       },
     });
@@ -4068,7 +4200,7 @@ export default defineExtension({
         "Set GITHUB_TOKEN/GH_TOKEN or run `gh auth login` to raise the rate limit and reach private repos.",
         "Pass --repo <owner/repo> to verify a specific repo is reachable.",
       ],
-      async run(ctx: any) {
+      async run(ctx: CommandHandlerContext) {
         const report = await runValidate(ctx);
         const jsonMode = ctx.global?.json === true;
         if (!jsonMode) {
@@ -4103,7 +4235,7 @@ export default defineExtension({
         "Pass an owner login, e.g. `pm github project list unbraind`.",
         "Set GITHUB_TOKEN/GH_TOKEN or run `gh auth login` (private projects need `project` scope).",
       ],
-      async run(ctx: any) {
+      async run(ctx: CommandHandlerContext) {
         return runProjectList(ctx);
       },
     });
@@ -4125,7 +4257,7 @@ export default defineExtension({
         "Pass <owner/number>, e.g. `pm github project fields unbraind/5`.",
         "A project without a Status field cannot receive pushed statuses (items are still added).",
       ],
-      async run(ctx: any) {
+      async run(ctx: CommandHandlerContext) {
         return runProjectFields(ctx);
       },
     });
@@ -4156,7 +4288,7 @@ export default defineExtension({
         "Set GITHUB_TOKEN/GH_TOKEN or run `gh auth login` (needs `project`/`read:project`).",
         "Re-running is safe: linked items are updated, not duplicated.",
       ],
-      async run(ctx: any) {
+      async run(ctx: CommandHandlerContext) {
         return runProjectImport(ctx);
       },
     });
@@ -4192,7 +4324,7 @@ export default defineExtension({
         "Design a --status-map with `pm github project fields <owner/number>` first.",
         "Use --ids <pm-1,pm-2> to scope; unknown IDs fail fast.",
       ],
-      async run(ctx: any) {
+      async run(ctx: CommandHandlerContext) {
         return runProjectSync(ctx);
       },
     });
