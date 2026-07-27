@@ -23,10 +23,16 @@ import {
   parseImportOptions,
   syncGithubCommentsToAnnotations,
 } from "../dist/index.js";
+import type { GhComment, GhIssue } from "../dist/index.js";
 
 // Minimal factories -----------------------------------------------------------
+//
+// Override-typed against the real exported shape so a typo on an override key
+// fails the test compile instead of silently being dropped — these factories
+// drive `composeBody`, `buildCommentText`, and the annotations-mode sync path
+// which all expect a `GhComment`/`GhIssue`.
 
-function ghComment(overrides: Record<string, unknown> = {}): any {
+function ghComment(overrides: Partial<GhComment> = {}): GhComment {
   return {
     id: 1001,
     user: { login: "alice" },
@@ -36,7 +42,7 @@ function ghComment(overrides: Record<string, unknown> = {}): any {
   };
 }
 
-function ghIssue(overrides: Record<string, unknown> = {}): any {
+function ghIssue(overrides: Partial<GhIssue> = {}): GhIssue {
   return {
     number: 1,
     title: "t",
@@ -161,7 +167,10 @@ test("extractSyncedCommentIds collects ids from markers and ignores plain commen
   const ids = extractSyncedCommentIds(stored);
   assert.deepEqual([...ids].sort((a, b) => a - b), [7, 99]);
   assert.strictEqual(extractSyncedCommentIds([]).size, 0);
-  assert.strictEqual(extractSyncedCommentIds([{ text: undefined } as any]).size, 0);
+  // `text?: string` accepts `undefined`, so no cast is needed — the test still
+  // exercises the empty-text branch the live consumer hits when a comment body
+  // is missing/null.
+  assert.strictEqual(extractSyncedCommentIds([{ text: undefined }]).size, 0);
 });
 
 test("parseCreatedItemId reads the id from `pm create --json` stdout", () => {

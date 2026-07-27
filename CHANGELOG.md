@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Other
+
+- Adopt pm-cli 2026.7.27 in pm-github ([pm-github-iai5](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-iai5.toon))
+- Eliminate all 37 any usages from pm-github source with real GitHub Projects V2 GraphQL types and typed handler contexts ([pm-github-1wka](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-1wka.toon))
+
 ## 2026.7.27 - 2026-07-27
 
 ### Removed

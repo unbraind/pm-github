@@ -32,11 +32,12 @@ import {
   resolvePmDataDir,
   syncGithubCommentsToAnnotations,
 } from "../dist/index.js";
+import type { GhComment } from "../dist/index.js";
 import { waitForBarrier } from "./helpers/barrier.js";
 
 // Minimal factories + workspace helpers --------------------------------------
 
-function ghComment(overrides: Record<string, unknown> = {}): any {
+function ghComment(overrides: Partial<GhComment> = {}): GhComment {
   return {
     id: 1001,
     user: { login: "alice" },
