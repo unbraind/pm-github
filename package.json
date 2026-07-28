@@ -1,6 +1,6 @@
 {
   "name": "pm-github",
-  "version": "2026.7.27",
+  "version": "2026.7.28",
   "description": "GitHub Issues importer extension for pm-cli",
   "repository": {
     "type": "git",
@@ -38,11 +38,11 @@
     "merge:install": "pm merge install"
   },
   "peerDependencies": {
-    "@unbrained/pm-cli": ">=2026.7.27"
+    "@unbrained/pm-cli": ">=2026.7.28"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
-    "@unbrained/pm-cli": "^2026.7.27",
+    "@unbrained/pm-cli": "^2026.7.28",
     "pm-changelog": "^2026.7.25",
     "typescript": "^7.0.2"
   },
