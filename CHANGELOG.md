@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Other
+
+- Adopt --respect-item-release in changelog scripts and bump pm-changelog to 2026.7.24 ([pm-github-w7m7](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-w7m7.toon))
+
 ## 2026.7.28 - 2026-07-28
 
 ### Other
