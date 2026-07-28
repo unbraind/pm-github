@@ -35,6 +35,10 @@
 
 - Import dies with an unexplained pm list-all failed on any tracker over 1 MiB, and non-atomic --dry-run previews every issue as a create ([pm-github-tn92](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-tn92.toon))
 
+### Other
+
+- Adopt --respect-item-release in changelog scripts and bump pm-changelog to 2026.7.24 ([pm-github-w7m7](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-w7m7.toon))
+
 ## 2026.7.23 - 2026-07-23
 
 ### Added
