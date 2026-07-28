@@ -1,0 +1,20 @@
+id: pm-github-uv1a
+title: Enforce a real coverage gate by running tests against TypeScript sources
+description: ""
+type: Feature
+status: closed
+priority: 2
+tags: []
+created_at: "2026-07-28T23:32:24.103Z"
+updated_at: "2026-07-28T23:33:58.688Z"
+closed_at: "2026-07-28T23:33:58.687Z"
+author: pi-agent
+resolution: "Tests moved onto TypeScript sources and scripts/coverage-gate.ts wired into release:check and CI."
+expected_result: "A coverage gate runs in the release check and in CI on both supported Node lines, reports against TypeScript sources, and fails when a source file is untested or a threshold regresses."
+actual_result: "npm run check passes. npm run coverage passes with 172 tests, both source files present in the report, at 76.14 line, 78.93 branch and 75.74 function coverage. A negative control adding an untested source file made the gate exit 1 and name that file, so the presence check is not vacuous. Thresholds pinned at 76/78/75. The Node 22 CI leg is unobserved until the PR runs."
+comments[1]{created_at,author,text}:
+  "2026-07-28T23:33:19.033Z",pi-agent,"Negative control: added an untested __probe.ts source file to coverageGate.sources, ran node scripts/coverage-gate.ts, observed exit code 1 with the gate naming __probe.ts as never loaded. Removed the probe and re-ran: exit code 0, 2 source files reported. The presence check is not vacuous."
+learnings[1]{created_at,author,text}:
+  "2026-07-28T23:33:45.811Z",pi-agent,"Node omits never-loaded files from its coverage report rather than reporting them at zero, so a threshold flag alone is satisfiable by narrowing what the suite imports. Any coverage gate must reconcile the report against the source tree."
+close_reason: Coverage gate landed and locally verified; the Node 22 CI leg is unobserved until the pull request runs.
+body: "Baseline measured 2026-07-29 across two source files: index.ts at 73.08 line, 78.30 branch, 73.03 function; projects.ts at 97.00 line, 81.41 branch, 100.00 function. All files aggregate: 76.14 line, 78.93 branch, 75.74 function. Thresholds pinned at the measured floor (76/78/75) so the numbers can only ratchet up. 172 tests, 0 failures."

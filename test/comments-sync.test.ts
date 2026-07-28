@@ -22,8 +22,8 @@ import {
   parseCreatedItemId,
   parseImportOptions,
   syncGithubCommentsToAnnotations,
-} from "../dist/index.js";
-import type { GhComment, GhIssue } from "../dist/index.js";
+} from "../index.ts";
+import type { GhComment, GhIssue } from "../index.ts";
 
 // Minimal factories -----------------------------------------------------------
 //

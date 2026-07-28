@@ -18,7 +18,7 @@ import {
   type ProjectItem,
   type ProjectRef,
   type ProjectStatusField,
-} from "../dist/projects.js";
+} from "../projects.ts";
 
 const REF: ProjectRef = { owner: "unbraind", number: 5 };
 

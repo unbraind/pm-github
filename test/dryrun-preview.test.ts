@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseImportOptions, runImport } from "../dist/index.js";
-import type { GhIssue } from "../dist/index.js";
+import { parseImportOptions, runImport } from "../index.ts";
+import type { GhIssue } from "../index.ts";
 
 // A --dry-run preview exists to tell an agent what a real run will do. The
 // non-atomic path used to skip building the provenance index entirely, so every

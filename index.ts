@@ -58,7 +58,7 @@ import {
   parseProjectRef,
   parseStatusMap,
   projectItemTag,
-} from "./projects.js";
+} from "./projects.ts";
 
 
 // ---------------------------------------------------------------------------
