@@ -173,7 +173,11 @@ export interface ImportRunDependencies {
 
 /** A decoded GitHub HTTP response: status, body, headers, and the parsed
  * `Link` header (used for REST pagination). Now public so HTTP-boundary tests
- * can assert on the exact response the client observed. */
+ * can assert on the exact response the client observed.  *
+ * @internal Exported only so the HTTP-boundary tests can drive the real client.
+ * `stripInternal` keeps it out of the published `.d.ts`, so this is NOT a public API
+ * commitment and must not be relied on from outside this package.
+*/
 export interface FetchResult {
   status: number;
   body: string;
@@ -231,6 +235,13 @@ export function sameOrigin(fromUrl: string, toUrl: string): boolean {
 //   - `http:` ONLY for loopback, which cannot leave the machine.
 // Anything else throws rather than being silently ignored, so a misconfiguration
 // is loud instead of quietly redirecting traffic.
+/**
+ * Resolve the GitHub API origin, honouring a constrained test-only override.
+ *
+ * @internal Exported only so the HTTP-boundary tests can drive the real client.
+ * `stripInternal` keeps it out of the published `.d.ts`, so this is NOT a public API
+ * commitment and must not be relied on from outside this package.
+ */
 export function githubApiBase(): string {
   const raw = process.env.PM_GITHUB_API_BASE?.trim();
   if (!raw) return "https://api.github.com";
@@ -469,7 +480,11 @@ async function request(
 /** Fetch a single GitHub REST endpoint via GET and return the decoded
  * {@link FetchResult}. Runs the full retry/backoff/redirect stack (`request` →
  * `requestOnce`), so it is the public entry point the failure-surface tests use
- * to exercise that stack against a local server. */
+ * to exercise that stack against a local server.  *
+ * @internal Exported only so the HTTP-boundary tests can drive the real client.
+ * `stripInternal` keeps it out of the published `.d.ts`, so this is NOT a public API
+ * commitment and must not be relied on from outside this package.
+*/
 export function fetchJSON(url: string, token?: string): Promise<FetchResult> {
   return request("GET", url, token);
 }
@@ -1125,8 +1140,14 @@ export function buildIssuesUrl(repo: string, opts: ImportOptions): string {
   return url;
 }
 
-// Page through GitHub's issues REST endpoint, following the Link header,
-// applying the import filters, and returning the full issue list.
+/**
+ * Page through GitHub's issues REST endpoint, following the Link header, applying
+ * the import filters, and returning the full issue list.
+ *
+ * @internal Exported only so the HTTP-boundary tests can drive the real client.
+ * `stripInternal` keeps it out of the published `.d.ts`, so this is NOT a public API
+ * commitment and must not be relied on from outside this package.
+ */
 export async function fetchAllIssues(repo: string, opts: ImportOptions, token?: string): Promise<GhIssue[]> {
   const issues: GhIssue[] = [];
   let nextUrl: string | undefined = buildIssuesUrl(repo, opts);
@@ -1147,7 +1168,13 @@ export async function fetchAllIssues(repo: string, opts: ImportOptions, token?: 
   return issues;
 }
 
-// Fetch all review comments for a single issue/PR, paging through Link.
+/**
+ * Fetch all review comments for a single issue or PR, paging through the Link header.
+ *
+ * @internal Exported only so the HTTP-boundary tests can drive the real client.
+ * `stripInternal` keeps it out of the published `.d.ts`, so this is NOT a public API
+ * commitment and must not be relied on from outside this package.
+ */
 export async function fetchComments(issue: GhIssue, repo: string, token?: string): Promise<GhComment[]> {
   if (!issue.comments || issue.comments <= 0) return [];
   const comments: GhComment[] = [];
