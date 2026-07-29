@@ -36,7 +36,7 @@
     "release:notes": "pm-changelog --pm-root .agents/pm --stdout --since-previous-tag --until-release-tag --release-version-from-package --item-url-base https://github.com/unbraind/pm-github/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --github-step-summary",
     "prepare": "node scripts/prepare-merge-driver.mjs",
     "merge:install": "pm merge install",
-    "coverage": "npm run build && node scripts/coverage-gate.ts"
+    "coverage": "npm run build && npm run build:test && node scripts/coverage-gate.ts"
   },
   "peerDependencies": {
     "@unbrained/pm-cli": ">=2026.7.28"
@@ -96,15 +96,14 @@
   },
   "coverageGate": {
     "sources": [
-      "index.ts",
-      "projects.ts"
+      "."
     ],
     "tests": [
       "test/*.test.ts"
     ],
     "thresholds": {
       "lines": 76,
-      "branches": 78,
+      "branches": 79,
       "functions": 75
     },
     "ignore": []
