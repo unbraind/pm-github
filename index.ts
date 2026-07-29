@@ -22,6 +22,7 @@ import type {
   PreflightOverrideContext,
   SearchProviderQueryContext,
 } from "@unbrained/pm-cli/sdk/authoring";
+import http from "node:http";
 import https from "node:https";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -170,7 +171,14 @@ export interface ImportRunDependencies {
 // Helpers
 // ---------------------------------------------------------------------------
 
-interface FetchResult {
+/** A decoded GitHub HTTP response: status, body, headers, and the parsed
+ * `Link` header (used for REST pagination). Now public so HTTP-boundary tests
+ * can assert on the exact response the client observed.  *
+ * @internal Exported only so the HTTP-boundary tests can drive the real client.
+ * `stripInternal` keeps it out of the published `.d.ts`, so this is NOT a public API
+ * commitment and must not be relied on from outside this package.
+*/
+export interface FetchResult {
   status: number;
   body: string;
   headers: Record<string, string | string[] | undefined>;
@@ -209,6 +217,59 @@ export function sameOrigin(fromUrl: string, toUrl: string): boolean {
   }
 }
 
+// Resolve the GitHub REST/GraphQL API origin. Production always targets
+// `https://api.github.com`, but the whole HTTP stack must be exercisable against
+// a local server for the failure-surface tests (retry, backoff, pagination,
+// redirect token handling, mid-batch errors). Reading the override at CALL time
+// (not module-eval time) means a test can flip `PM_GITHUB_API_BASE` per-case
+// without import-order coupling, and production is unchanged when it is unset.
+//
+// SECURITY: every request built from this base carries the resolved GITHUB_TOKEN,
+// so an unvalidated override is a token-exfiltration and TLS-downgrade primitive:
+// anything able to set an env var for this process could point authenticated
+// traffic at an attacker host over plain HTTP. The same-origin redirect guard
+// below does NOT mitigate that, because the base *is* the origin — the very first
+// request already carries the bearer token. The override is therefore constrained
+// to what the tests actually need:
+//   - `https:` anywhere (no credential exposure on the wire), or
+//   - `http:` ONLY for loopback, which cannot leave the machine.
+// Anything else throws rather than being silently ignored, so a misconfiguration
+// is loud instead of quietly redirecting traffic.
+/**
+ * Resolve the GitHub API origin, honouring a constrained test-only override.
+ *
+ * @internal Exported only so the HTTP-boundary tests can drive the real client.
+ * `stripInternal` keeps it out of the published `.d.ts`, so this is NOT a public API
+ * commitment and must not be relied on from outside this package.
+ */
+export function githubApiBase(): string {
+  const raw = process.env.PM_GITHUB_API_BASE?.trim();
+  if (!raw) return "https://api.github.com";
+
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(`PM_GITHUB_API_BASE is not a valid absolute URL: ${raw}`);
+  }
+
+  const isLoopback =
+    parsed.hostname === "127.0.0.1" ||
+    parsed.hostname === "::1" ||
+    parsed.hostname === "[::1]" ||
+    parsed.hostname === "localhost";
+
+  if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && isLoopback)) {
+    throw new Error(
+      `PM_GITHUB_API_BASE must be https, or http on loopback for a local test server; got ${raw}. ` +
+        "Requests carry the GitHub token, so a plaintext non-loopback base would leak it.",
+    );
+  }
+
+  // Strip a trailing slash so `${base}/repos/...` cannot produce `//repos/...`.
+  return raw.replace(/\/+$/, "");
+}
+
 // One low-level request, no retry/backoff (that lives in `request`). Follows up
 // to `redirectsLeft` redirects; a cycle or an over-long chain rejects instead of
 // overflowing the stack, and the token is only forwarded to same-host targets.
@@ -230,7 +291,12 @@ function requestOnce(
       headers["Content-Type"] = "application/json";
       headers["Content-Length"] = String(Buffer.byteLength(payload));
     }
-    const req = https.request(url, { method, headers }, (res) => {
+    // Dispatch on the URL scheme: production URLs are `https://` (GitHub), but
+    // a `PM_GITHUB_API_BASE` override pointing at a local `http://` test server
+    // must reach it over plain HTTP so the real request/response code runs.
+    const target = new URL(url);
+    const transport = target.protocol === "http:" ? http : https;
+    const req = transport.request(target, { method, headers }, (res) => {
       const status = res.statusCode ?? 0;
       if (status >= 300 && status < 400 && res.headers.location) {
         // Drain the redirect response so the socket is returned to the pool.
@@ -240,16 +306,20 @@ function requestOnce(
           return;
         }
         // Resolve the (possibly relative) Location against the current URL, and
-        // only carry the token forward on a same-host redirect.
-        let target: string;
+        // only carry the token forward on a same-origin redirect. Named
+        // distinctly from the outer `target` URL: shadowing it here worked only
+        // because nothing read the outer binding first, so a later edit
+        // referencing the parsed URL would hit a TDZ ReferenceError at runtime
+        // rather than a type error at build time.
+        let redirectUrl: string;
         try {
-          target = new URL(res.headers.location, url).toString();
+          redirectUrl = new URL(res.headers.location, url).toString();
         } catch {
           reject(new Error(`invalid redirect Location from ${url}`));
           return;
         }
-        const forwardToken = sameOrigin(url, target) ? token : undefined;
-        requestOnce(method, target, forwardToken, payload, redirectsLeft - 1).then(resolve, reject);
+        const forwardToken = sameOrigin(url, redirectUrl) ? token : undefined;
+        requestOnce(method, redirectUrl, forwardToken, payload, redirectsLeft - 1).then(resolve, reject);
         return;
       }
       const chunks: Buffer[] = [];
@@ -407,8 +477,15 @@ async function request(
   }
 }
 
-// Fetch a single GitHub REST endpoint and return { body, linkHeader }.
-function fetchJSON(url: string, token?: string): Promise<FetchResult> {
+/** Fetch a single GitHub REST endpoint via GET and return the decoded
+ * {@link FetchResult}. Runs the full retry/backoff/redirect stack (`request` →
+ * `requestOnce`), so it is the public entry point the failure-surface tests use
+ * to exercise that stack against a local server.  *
+ * @internal Exported only so the HTTP-boundary tests can drive the real client.
+ * `stripInternal` keeps it out of the published `.d.ts`, so this is NOT a public API
+ * commitment and must not be relied on from outside this package.
+*/
+export function fetchJSON(url: string, token?: string): Promise<FetchResult> {
   return request("GET", url, token);
 }
 
@@ -1056,16 +1133,22 @@ export async function importGithubAtomic(
 // are honored server-side; `milestone` is filtered client-side (the REST API
 // keys milestones by number, not title).
 export function buildIssuesUrl(repo: string, opts: ImportOptions): string {
-  let url = `https://api.github.com/repos/${repo}/issues?state=${opts.state}&per_page=100`;
+  let url = `${githubApiBase()}/repos/${repo}/issues?state=${opts.state}&per_page=100`;
   if (opts.labels) url += `&labels=${encodeURIComponent(opts.labels)}`;
   if (opts.since) url += `&since=${encodeURIComponent(opts.since)}`;
   if (opts.assignee) url += `&assignee=${encodeURIComponent(opts.assignee)}`;
   return url;
 }
 
-// Page through GitHub's issues REST endpoint, following the Link header,
-// applying the import filters, and returning the full issue list.
-async function fetchAllIssues(repo: string, opts: ImportOptions, token?: string): Promise<GhIssue[]> {
+/**
+ * Page through GitHub's issues REST endpoint, following the Link header, applying
+ * the import filters, and returning the full issue list.
+ *
+ * @internal Exported only so the HTTP-boundary tests can drive the real client.
+ * `stripInternal` keeps it out of the published `.d.ts`, so this is NOT a public API
+ * commitment and must not be relied on from outside this package.
+ */
+export async function fetchAllIssues(repo: string, opts: ImportOptions, token?: string): Promise<GhIssue[]> {
   const issues: GhIssue[] = [];
   let nextUrl: string | undefined = buildIssuesUrl(repo, opts);
   while (nextUrl) {
@@ -1085,13 +1168,19 @@ async function fetchAllIssues(repo: string, opts: ImportOptions, token?: string)
   return issues;
 }
 
-// Fetch all review comments for a single issue/PR, paging through Link.
-async function fetchComments(issue: GhIssue, repo: string, token?: string): Promise<GhComment[]> {
+/**
+ * Fetch all review comments for a single issue or PR, paging through the Link header.
+ *
+ * @internal Exported only so the HTTP-boundary tests can drive the real client.
+ * `stripInternal` keeps it out of the published `.d.ts`, so this is NOT a public API
+ * commitment and must not be relied on from outside this package.
+ */
+export async function fetchComments(issue: GhIssue, repo: string, token?: string): Promise<GhComment[]> {
   if (!issue.comments || issue.comments <= 0) return [];
   const comments: GhComment[] = [];
   let nextUrl: string | undefined =
     issue.comments_url ||
-    `https://api.github.com/repos/${repo}/issues/${issue.number}/comments?per_page=100`;
+    `${githubApiBase()}/repos/${repo}/issues/${issue.number}/comments?per_page=100`;
   while (nextUrl) {
     const { body, linkHeader } = await fetchJSON(nextUrl, token);
     let page: unknown;
@@ -2472,7 +2561,7 @@ async function runSync(ctx: CommandHandlerContext) {
     let current: GhIssue;
     try {
       const { body } = await fetchJSON(
-        `https://api.github.com/repos/${repo}/issues/${entry.number}`,
+        `${githubApiBase()}/repos/${repo}/issues/${entry.number}`,
         token,
       );
       current = JSON.parse(body) as GhIssue;
@@ -2494,7 +2583,7 @@ async function runSync(ctx: CommandHandlerContext) {
     try {
       await request(
         "PATCH",
-        `https://api.github.com/repos/${repo}/issues/${entry.number}`,
+        `${githubApiBase()}/repos/${repo}/issues/${entry.number}`,
         token,
         JSON.stringify({ state: entry.to }),
       );
@@ -2657,7 +2746,7 @@ export async function applyExportPlan(
       if (entry.action === "update" && entry.number !== undefined) {
         await requestFn(
           "PATCH",
-          `https://api.github.com/repos/${repo}/issues/${entry.number}`,
+          `${githubApiBase()}/repos/${repo}/issues/${entry.number}`,
           token,
           JSON.stringify({ title: p.title, body: p.body, labels: p.labels, state: p.state }),
         );
@@ -2665,7 +2754,7 @@ export async function applyExportPlan(
       } else {
         await requestFn(
           "POST",
-          `https://api.github.com/repos/${repo}/issues`,
+          `${githubApiBase()}/repos/${repo}/issues`,
           token,
           JSON.stringify({ title: p.title, body: p.body, labels: p.labels }),
         );
@@ -2870,7 +2959,7 @@ async function runExport(ctx: CommandHandlerContext) {
 // query. Restricted to `type:issue repo:<repo>` so it never leaks across repos.
 export function buildSearchUrl(repo: string, query: string): string {
   const q = `${query} repo:${repo} type:issue`;
-  return `https://api.github.com/search/issues?q=${encodeURIComponent(q)}&per_page=100`;
+  return `${githubApiBase()}/search/issues?q=${encodeURIComponent(q)}&per_page=100`;
 }
 
 // Map GitHub search results to local pm-item hits. For every returned issue
@@ -2989,7 +3078,7 @@ async function runValidate(ctx: CommandHandlerContext): Promise<ValidateReport> 
     } else {
       report.repo = repo;
       try {
-        const res = await fetchJSON(`https://api.github.com/repos/${repo}`, token);
+        const res = await fetchJSON(`${githubApiBase()}/repos/${repo}`, token);
         report.repo_accessible = res.status >= 200 && res.status < 300;
         report.repo_status = res.status;
         const rate = parseRateLimit(res.headers);
@@ -3038,7 +3127,12 @@ async function runValidate(ctx: CommandHandlerContext): Promise<ValidateReport> 
 // The pure plan/mapping logic lives in ./projects.ts for unit-testability.
 // ===========================================================================
 
-const GRAPHQL_URL = "https://api.github.com/graphql";
+// GraphQL endpoint. Composed from the overridable API base so the HTTP
+// boundary tests can point the whole stack (REST + GraphQL) at one local
+// server; production always resolves to https://api.github.com/graphql.
+function graphqlUrl(): string {
+  return `${githubApiBase()}/graphql`;
+}
 
 interface GraphQLResponse<T> {
   data?: T | null;
@@ -3191,7 +3285,7 @@ async function githubGraphQL<T>(
     );
   }
   const payload = JSON.stringify({ query, variables });
-  const res = await request("POST", GRAPHQL_URL, token, payload);
+  const res = await request("POST", graphqlUrl(), token, payload);
   let parsed: GraphQLResponse<T>;
   try {
     parsed = JSON.parse(res.body) as GraphQLResponse<T>;
