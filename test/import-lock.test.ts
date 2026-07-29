@@ -31,9 +31,9 @@ import {
   importCommentSyncLockPath,
   resolvePmDataDir,
   syncGithubCommentsToAnnotations,
-} from "../dist/index.js";
-import type { GhComment } from "../dist/index.js";
-import { waitForBarrier } from "./helpers/barrier.js";
+} from "../index.ts";
+import type { GhComment } from "../index.ts";
+import { waitForBarrier } from "./helpers/barrier.ts";
 
 // Minimal factories + workspace helpers --------------------------------------
 
@@ -53,7 +53,7 @@ const PM_BIN = fileURLToPath(
 );
 
 const CHILD_SCRIPT = fileURLToPath(
-  new URL("./helpers/comment-sync-child.js", import.meta.url),
+  new URL("./helpers/comment-sync-child.ts", import.meta.url),
 );
 
 function makeWorkspace(): string {
