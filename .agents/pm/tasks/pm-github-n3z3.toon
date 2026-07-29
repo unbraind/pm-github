@@ -1,0 +1,12 @@
+id: pm-github-n3z3
+title: Raise pm-github sync coverage from 76% toward the 100% mandate
+description: "pm-github is the package the ecosystem relies on for two-way GitHub issue sync, so its correctness directly determines whether each repo's pm items can be trusted as the source of truth. Its whole implementation is a single 4332-line index.ts and the coverage gate passes at 76/78/75 only because coverageGate.thresholds were pinned to that measured floor rather than the 100/100/100/100 mandate, leaving roughly a quarter of the sync engine unexercised. The existing suite (atomic, comments-sync, dryrun-preview, import-lock, link-deps, projects, smoke) covers the main flows; the gap is the failure and edge surface, which for a sync tool is where the damage lives: partial syncs, API errors mid-batch, rate limiting, conflicting local and remote edits, and malformed issue bodies."
+type: Task
+status: open
+priority: 2
+tags: []
+created_at: "2026-07-29T20:27:57.914Z"
+updated_at: "2026-07-29T20:27:57.914Z"
+author: codex
+acceptance_criteria: "index.ts line, branch and function coverage all rise substantially with no threshold lowered and nothing added to coverageGate.ignore; new tests assert real sync behaviour including GitHub API failure mid-batch, rate-limit responses, malformed or missing issue bodies, and conflicting local/remote state rather than only happy paths; GitHub is stubbed at the HTTP boundary rather than by mocking the unit under test; no new any, no inline imports, erasable TypeScript only; npm run check and npm run coverage both exit 0"
+body: ""
