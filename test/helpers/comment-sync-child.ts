@@ -4,13 +4,13 @@
 // concurrent `pm github import` runs do: separate processes, same workspace,
 // same item, and the same GitHub comments.
 
-import { syncGithubCommentsToAnnotations } from "../../dist/index.js";
-import type { GhComment } from "../../dist/index.js";
-import { waitForBarrier } from "./barrier.js";
+import { syncGithubCommentsToAnnotations } from "../../index.ts";
+import type { GhComment } from "../../index.ts";
+import { waitForBarrier } from "./barrier.ts";
 
 const [itemId, pmRoot] = process.argv.slice(2);
 if (!itemId || !pmRoot) {
-  console.error("usage: comment-sync-child.js <itemId> <pmRoot>");
+  console.error("usage: comment-sync-child.ts <itemId> <pmRoot>");
   process.exit(2);
 }
 

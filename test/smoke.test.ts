@@ -41,13 +41,13 @@ import extension, {
   resolveGitHubToken,
   resolveSearchRepo,
   scopeItemsByIds,
-} from "../dist/index.js";
+} from "../index.ts";
 import type {
   ExportPlanEntry,
   GhIssue,
   ImportOptions,
   ProjectsV2Page,
-} from "../dist/index.js";
+} from "../index.ts";
 
 // The extension registers against six surfaces (commands, importers, schema,
 // hooks, preflight, search) — exactly the `capabilities` block in

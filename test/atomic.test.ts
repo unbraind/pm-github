@@ -15,8 +15,8 @@ import {
   parseImportOptions,
   resolveCommitItemMutations,
   runImport,
-} from "../dist/index.js";
-import type { GhIssue, PreparedGithubImport } from "../dist/index.js";
+} from "../index.ts";
+import type { GhIssue, PreparedGithubImport } from "../index.ts";
 
 const PM_BIN = process.platform === "win32" ? "pm.cmd" : "pm";
 const PM_SPAWN_OPTS = {

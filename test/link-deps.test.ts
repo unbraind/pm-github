@@ -12,13 +12,13 @@ import {
   parseDependencyReferences,
   planDependencyLinks,
   runImport,
-} from "../dist/index.js";
+} from "../index.ts";
 import type {
   DepLinkSnapshotItem,
   GhIssue,
   ImportOptions,
   ResolvedDepEdge,
-} from "../dist/index.js";
+} from "../index.ts";
 
 const PM_BIN = process.platform === "win32" ? "pm.cmd" : "pm";
 const PM_SPAWN_OPTS = {
