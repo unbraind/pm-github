@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Enforce a real coverage gate by running tests against TypeScript sources ([pm-github-uv1a](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-uv1a.toon))
+
+### Other
+
+- Adopt pm-cli 2026.7.29 ([pm-github-801z](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-801z.toon))
+
 ## 2026.7.28 - 2026-07-28
 
 ### Other
