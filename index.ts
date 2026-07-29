@@ -214,17 +214,49 @@ export function sameOrigin(fromUrl: string, toUrl: string): boolean {
 }
 
 // Resolve the GitHub REST/GraphQL API origin. Production always targets
-// `https://api.github.com`, but the whole HTTP stack must be exercisable
-// against a local server for the failure-surface tests (retry, backoff,
-// pagination, redirect token-forwarding, mid-batch errors). Reading the
-// override at CALL time (not module-eval time) means a test can flip
-// `PM_GITHUB_API_BASE` per-case without import-order coupling, and production
-// is unchanged when the var is unset. The base is scheme-sensitive: a test
-// server speaks `http://`, so `requestOnce` below dispatches on the URL
-// protocol rather than hard-coding `https`.
-function githubApiBase(): string {
-  const override = process.env.PM_GITHUB_API_BASE;
-  return override && override.trim() ? override.trim() : "https://api.github.com";
+// `https://api.github.com`, but the whole HTTP stack must be exercisable against
+// a local server for the failure-surface tests (retry, backoff, pagination,
+// redirect token handling, mid-batch errors). Reading the override at CALL time
+// (not module-eval time) means a test can flip `PM_GITHUB_API_BASE` per-case
+// without import-order coupling, and production is unchanged when it is unset.
+//
+// SECURITY: every request built from this base carries the resolved GITHUB_TOKEN,
+// so an unvalidated override is a token-exfiltration and TLS-downgrade primitive:
+// anything able to set an env var for this process could point authenticated
+// traffic at an attacker host over plain HTTP. The same-origin redirect guard
+// below does NOT mitigate that, because the base *is* the origin — the very first
+// request already carries the bearer token. The override is therefore constrained
+// to what the tests actually need:
+//   - `https:` anywhere (no credential exposure on the wire), or
+//   - `http:` ONLY for loopback, which cannot leave the machine.
+// Anything else throws rather than being silently ignored, so a misconfiguration
+// is loud instead of quietly redirecting traffic.
+export function githubApiBase(): string {
+  const raw = process.env.PM_GITHUB_API_BASE?.trim();
+  if (!raw) return "https://api.github.com";
+
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(`PM_GITHUB_API_BASE is not a valid absolute URL: ${raw}`);
+  }
+
+  const isLoopback =
+    parsed.hostname === "127.0.0.1" ||
+    parsed.hostname === "::1" ||
+    parsed.hostname === "[::1]" ||
+    parsed.hostname === "localhost";
+
+  if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && isLoopback)) {
+    throw new Error(
+      `PM_GITHUB_API_BASE must be https, or http on loopback for a local test server; got ${raw}. ` +
+        "Requests carry the GitHub token, so a plaintext non-loopback base would leak it.",
+    );
+  }
+
+  // Strip a trailing slash so `${base}/repos/...` cannot produce `//repos/...`.
+  return raw.replace(/\/+$/, "");
 }
 
 // One low-level request, no retry/backoff (that lives in `request`). Follows up
@@ -263,16 +295,20 @@ function requestOnce(
           return;
         }
         // Resolve the (possibly relative) Location against the current URL, and
-        // only carry the token forward on a same-host redirect.
-        let target: string;
+        // only carry the token forward on a same-origin redirect. Named
+        // distinctly from the outer `target` URL: shadowing it here worked only
+        // because nothing read the outer binding first, so a later edit
+        // referencing the parsed URL would hit a TDZ ReferenceError at runtime
+        // rather than a type error at build time.
+        let redirectUrl: string;
         try {
-          target = new URL(res.headers.location, url).toString();
+          redirectUrl = new URL(res.headers.location, url).toString();
         } catch {
           reject(new Error(`invalid redirect Location from ${url}`));
           return;
         }
-        const forwardToken = sameOrigin(url, target) ? token : undefined;
-        requestOnce(method, target, forwardToken, payload, redirectsLeft - 1).then(resolve, reject);
+        const forwardToken = sameOrigin(url, redirectUrl) ? token : undefined;
+        requestOnce(method, redirectUrl, forwardToken, payload, redirectsLeft - 1).then(resolve, reject);
         return;
       }
       const chunks: Buffer[] = [];

@@ -31,6 +31,7 @@ import {
   fetchAllIssues,
   fetchComments,
   fetchJSON,
+  githubApiBase,
   parseImportOptions,
   runImport,
 } from "../index.ts";
@@ -40,6 +41,7 @@ import {
   jsonResponse,
   nextLinkHeader,
   startMockGithub,
+  withEnv,
   withMockGithub,
 } from "./helpers/mock-github-server.ts";
 
@@ -438,5 +440,71 @@ test("runImport adds the token hint when an unauthenticated request hits a 403",
     assert.match(err.message, /HTTP 403/);
     assert.match(err.message, /set GITHUB_TOKEN/, "the actionable token hint must be appended");
     assert.equal(err.exitCode, EXIT_CODE.GENERIC_FAILURE);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// PM_GITHUB_API_BASE hardening
+//
+// The override exists so these tests can point the real client at a local
+// server, but every request built from the base carries the resolved
+// GITHUB_TOKEN. An unvalidated override would therefore be a token-exfiltration
+// and TLS-downgrade primitive: anything able to set an env var could redirect
+// authenticated traffic to an attacker host in plaintext. The same-origin
+// redirect guard does NOT mitigate that, because the base *is* the origin — the
+// first request already carries the bearer token. These tests pin the constraint
+// so the testability hook cannot regress into a credential leak.
+// ---------------------------------------------------------------------------
+
+test("githubApiBase defaults to the real API when the override is unset", async () => {
+  await withEnv({ PM_GITHUB_API_BASE: undefined }, async () => {
+    assert.strictEqual(githubApiBase(), "https://api.github.com");
+  });
+});
+
+test("githubApiBase allows http ONLY on loopback", async () => {
+  for (const base of [
+    "http://127.0.0.1:39291",
+    "http://localhost:39291",
+    "http://[::1]:39291",
+  ]) {
+    await withEnv({ PM_GITHUB_API_BASE: base }, async () => {
+      assert.strictEqual(githubApiBase(), base, `${base} is a local test server and must be allowed`);
+    });
+  }
+});
+
+test("githubApiBase REJECTS a plaintext non-loopback base (no token exfiltration)", async () => {
+  for (const base of [
+    "http://evil.example.com",
+    "http://169.254.169.254",
+    "http://127.0.0.1.evil.example.com",
+  ]) {
+    await withEnv({ PM_GITHUB_API_BASE: base }, async () => {
+      assert.throws(
+        () => githubApiBase(),
+        /must be https, or http on loopback/,
+        `${base} would send the GitHub token over plaintext to a remote host`,
+      );
+    });
+  }
+});
+
+test("githubApiBase allows an https base anywhere (GitHub Enterprise shape)", async () => {
+  await withEnv({ PM_GITHUB_API_BASE: "https://ghe.example.com/api/v3" }, async () => {
+    assert.strictEqual(githubApiBase(), "https://ghe.example.com/api/v3");
+  });
+});
+
+test("githubApiBase throws on a non-URL override instead of silently ignoring it", async () => {
+  await withEnv({ PM_GITHUB_API_BASE: "not a url" }, async () => {
+    assert.throws(() => githubApiBase(), /not a valid absolute URL/);
+  });
+});
+
+test("githubApiBase strips a trailing slash so paths cannot double up", async () => {
+  await withEnv({ PM_GITHUB_API_BASE: "http://127.0.0.1:39291/" }, async () => {
+    assert.strictEqual(githubApiBase(), "http://127.0.0.1:39291", "a trailing slash would yield //repos/...");
   });
 });

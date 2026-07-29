@@ -33,9 +33,10 @@ export interface RecordedRequest {
  * buffered body so handlers do not have to manage stream draining. `baseUrl` is
  * the server's own origin, so a handler can emit absolute `Link: rel="next"`
  * URLs exactly the way the real GitHub API does (the client requests those URLs
- * verbatim). Throwing from a handler fails the request with a 500 (and surfaces
- * the error to the test via the server's `error` event) rather than hanging the
- * socket.
+ * verbatim). Throwing from a handler answers the request with a 500 and destroys
+ * the socket rather than hanging it; the thrown error is NOT re-emitted, so a
+ * test cannot assert on it directly and a handler that throws after headers are
+ * sent will surface as an opaque socket error at the client.
  */
 export type MockGithubHandler = (
   req: IncomingMessage,
@@ -180,5 +181,37 @@ export async function captureStderr<T>(fn: () => Promise<T>): Promise<{ stderr: 
     return { stderr, result };
   } finally {
     console.error = original;
+  }
+}
+
+/**
+ * Set environment variables for the duration of `fn`, then restore them.
+ *
+ * Shared rather than duplicated per test file: several suites need to flip
+ * `GITHUB_TOKEN` or `PM_GITHUB_API_BASE` per case, and a second copy would drift
+ * from this one. Restores the previous value, deleting keys that were unset
+ * before, so a test cannot leak state into the next one in the same process.
+ *
+ * @param env Variables to set; an `undefined` value deletes the key.
+ * @param fn Callback run with the environment applied.
+ * @returns Whatever `fn` resolves to.
+ */
+export async function withEnv<T>(
+  env: Record<string, string | undefined>,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const previous: Record<string, string | undefined> = {};
+  for (const key of Object.keys(env)) previous[key] = process.env[key];
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  try {
+    return await fn();
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   }
 }

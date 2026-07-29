@@ -38,6 +38,7 @@ import extension, { parseImportOptions, runImport, type GhIssue } from "../index
 import {
   captureStderr,
   jsonResponse,
+  withEnv,
   withMockGithub,
 } from "./helpers/mock-github-server.ts";
 
@@ -47,6 +48,25 @@ const harnessPromise: Promise<ExtensionTestHarness> =
 
 const PM_BIN = process.platform === "win32" ? "pm.cmd" : "pm";
 const PM_SPAWN_OPTS = { encoding: "utf-8" as const, shell: process.platform === "win32" };
+/**
+ * Run a `pm` setup command and fail the test immediately when it does not exit 0.
+ *
+ * Unchecked setup calls make a later assertion fail for the wrong reason: if
+ * `pm create` silently fails, an export test reports "All 2 item(s) failed" and
+ * reads as a product bug rather than a broken fixture.
+ *
+ * @param root Tracker path passed through as `--path`.
+ * @param args Arguments following `--path <root>`.
+ */
+function pmSetup(root: string, args: readonly string[]): void {
+  const result = spawnSync(PM_BIN, ["--path", root, ...args], PM_SPAWN_OPTS);
+  assert.strictEqual(
+    result.status,
+    0,
+    `pm setup failed: pm ${args.join(" ")}\n${result.stderr ?? ""}`,
+  );
+}
+
 
 // A PATH that finds the local `pm` shim + `node` but NOT `gh`, so the
 // token-resolution fallback (`gh auth token`) deterministically fails while
@@ -54,24 +74,6 @@ const PM_SPAWN_OPTS = { encoding: "utf-8" as const, shell: process.platform === 
 // the tracker before checking the token.
 const PM_BIN_DIR = fileURLToPath(new URL("../node_modules/.bin", import.meta.url));
 const GH_FREE_PATH = `${PM_BIN_DIR}${path.delimiter}${path.dirname(process.execPath)}`;
-
-/** Set env vars for `fn`, restoring the prior values (or deleting them) after. */
-async function withEnv<T>(env: Record<string, string | undefined>, fn: () => Promise<T>): Promise<T> {
-  const prev: Record<string, string | undefined> = {};
-  for (const k of Object.keys(env)) prev[k] = process.env[k];
-  for (const [k, v] of Object.entries(env)) {
-    if (v === undefined) delete process.env[k];
-    else process.env[k] = v;
-  }
-  try {
-    return await fn();
-  } finally {
-    for (const [k, v] of Object.entries(prev)) {
-      if (v === undefined) delete process.env[k];
-      else process.env[k] = v;
-    }
-  }
-}
 
 /** Create a throwaway pm workspace (`pm init test`) and return its root. */
 function freshTracker(): string {
@@ -156,7 +158,18 @@ test("runValidate flags an inaccessible repo and exits non-zero (NOT_FOUND)", as
       // report is not ok — matching runtime semantics, the harness propagates it.
       await assert.rejects(
         ext.runCommand({ command: "github validate", args: ["a/b"], global: { json: true } }),
-        (err: unknown) => err instanceof Error && /returned HTTP 404/.test(err.message),
+        (err: unknown) => {
+          assert.ok(err instanceof Error, "a real Error is thrown");
+          assert.match(err.message, /returned HTTP 404/, "message names the upstream status");
+          // The test name promises NOT_FOUND, so assert the mapped exit code:
+          // matching only the message lets a regression that remaps exitCode pass.
+          assert.strictEqual(
+            (err as { exitCode?: number }).exitCode,
+            3,
+            "an inaccessible repo maps to NOT_FOUND (exit 3), not a generic failure",
+          );
+          return true;
+        },
       );
     });
   });
@@ -335,8 +348,8 @@ test("runExport --apply continues past a mid-batch 422 (partial success, exit 0)
   const ext = await harnessPromise;
   const root = freshTracker();
   try {
-    spawnSync(PM_BIN, ["--path", root, "create", "task", "First"], PM_SPAWN_OPTS);
-    spawnSync(PM_BIN, ["--path", root, "create", "task", "Second"], PM_SPAWN_OPTS);
+    pmSetup(root, ["create", "task", "First"]);
+    pmSetup(root, ["create", "task", "Second"]);
     await withEnv({ GITHUB_TOKEN: "tok", GH_TOKEN: undefined }, async () => {
       let posts = 0;
       await withMockGithub((req, res) => {
@@ -372,8 +385,8 @@ test("runExport --apply exits non-zero when a non-empty batch writes nothing", a
   const ext = await harnessPromise;
   const root = freshTracker();
   try {
-    spawnSync(PM_BIN, ["--path", root, "create", "task", "A"], PM_SPAWN_OPTS);
-    spawnSync(PM_BIN, ["--path", root, "create", "task", "B"], PM_SPAWN_OPTS);
+    pmSetup(root, ["create", "task", "A"]);
+    pmSetup(root, ["create", "task", "B"]);
     await withEnv({ GITHUB_TOKEN: "tok", GH_TOKEN: undefined }, async () => {
       await withMockGithub((_req, res) => {
         // Every create fails — the batch as a whole must report failure.
@@ -399,7 +412,7 @@ test("runExport --apply requires --repo <owner/repo>", async () => {
   const ext = await harnessPromise;
   const root = freshTracker();
   try {
-    spawnSync(PM_BIN, ["--path", root, "create", "task", "X"], PM_SPAWN_OPTS);
+    pmSetup(root, ["create", "task", "X"]);
     await withEnv({ GITHUB_TOKEN: "tok", GH_TOKEN: undefined }, async () => {
       await assert.rejects(
         ext.runCommand({
@@ -693,7 +706,7 @@ test("runSync reports planned:0 when no pm items link to the repo", async () => 
   const ext = await harnessPromise;
   const root = freshTracker();
   try {
-    spawnSync(PM_BIN, ["--path", root, "create", "task", "Unrelated"], PM_SPAWN_OPTS);
+    pmSetup(root, ["create", "task", "Unrelated"]);
     await withEnv({ GITHUB_TOKEN: "tok", GH_TOKEN: undefined }, async () => {
       const { result } = await ext.runCommand({
         command: "github sync",
@@ -714,7 +727,7 @@ test("runExport --apply emits a human summary to stderr in non-JSON mode", async
   const ext = await harnessPromise;
   const root = freshTracker();
   try {
-    spawnSync(PM_BIN, ["--path", root, "create", "task", "Solo"], PM_SPAWN_OPTS);
+    pmSetup(root, ["create", "task", "Solo"]);
     await withEnv({ GITHUB_TOKEN: "tok", GH_TOKEN: undefined }, async () => {
       await withMockGithub((_req, res) => {
         jsonResponse(res, 200, { number: 1, state: "open" });
@@ -739,7 +752,7 @@ test("runExport --apply requires a resolvable token", async () => {
   const ext = await harnessPromise;
   const root = freshTracker();
   try {
-    spawnSync(PM_BIN, ["--path", root, "create", "task", "X"], PM_SPAWN_OPTS);
+    pmSetup(root, ["create", "task", "X"]);
     // `gh` is hidden (and no env token) so resolveGitHubToken() returns
     // nothing. readPmItems still runs first, so PATH must keep `pm` reachable.
     await withEnv({ GITHUB_TOKEN: undefined, GH_TOKEN: undefined, PATH: GH_FREE_PATH }, async () => {
