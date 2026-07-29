@@ -1,0 +1,17 @@
+id: pm-github-801z
+title: Adopt pm-cli 2026.7.29
+description: "Bump pm-cli dependency to 2026.7.29, update peerDependency, audit for removed --all flag, audit for fixed upstream workarounds (GH-651, GH-672, GH-676, GH-785/792, GH-794), pass all quality gates."
+type: Chore
+status: closed
+priority: 2
+tags: []
+created_at: "2026-07-29T04:28:18.636Z"
+updated_at: "2026-07-29T04:31:04.389Z"
+closed_at: "2026-07-29T04:31:04.338Z"
+completed_at: "2026-07-29T04:31:04.338Z"
+author: pi-agent
+comments[2]{created_at,author,text}:
+  "2026-07-29T04:28:43.666Z",pi-agent,"Bumped @unbrained/pm-cli devDependency to 2026.7.29, set peerDependency to >=2026.7.29. Audited for 'list --all' and 'list -a' across .ts/.md/.json/.yml (excluding node_modules/dist): no hits found."
+  "2026-07-29T04:29:00.103Z",pi-agent,"Upstream workaround audit: GH-651 (signed activity window) - no hits. GH-672 (context low_level blocked state) - 'blocked' references are this package's own link-deps dependency parsing, not pm context workarounds. GH-676 (list --tag CSV) - package uses --tags on pm create/update (tag mutations, CSV shape) but never calls pm list --tag. GH-785/792 (pm health runtime dirs) - no hits. GH-794 (output_format override) - no hits. No workarounds to remove."
+close_reason: "Bumped @unbrained/pm-cli to 2026.7.29 (devDep + peerDep >=2026.7.29). No 'list --all' hits found. No upstream workarounds applicable. All quality gates pass: 172 tests, coverage lines 76.72% (threshold 76), branches 79.55% (threshold 78), functions 75.74% (threshold 75). Changelog check and audit:prod clean."
+body: ""
