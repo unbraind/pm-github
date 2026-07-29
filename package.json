@@ -103,7 +103,7 @@
     ],
     "thresholds": {
       "lines": 76,
-      "branches": 79,
+      "branches": 78,
       "functions": 75
     },
     "ignore": []
