@@ -90,7 +90,7 @@ function createLinkedItem(root: string, title: string, tag: string, status: stri
   );
   assert.strictEqual(r.status, 0, `pm create failed: ${r.error?.message ?? r.stderr}`);
   // Re-read to get the assigned id.
-  const list = spawnSync(PM_BIN, ["--path", root, "--json", "list-all", "--full"], { encoding: "utf-8" });
+  const list = spawnSync(PM_BIN, ["--path", root, "--json", "list-all", "--full"], PM_SPAWN_OPTS);
   const parsed = JSON.parse(list.stdout) as { items?: Array<{ id: string; tags?: string[] }> };
   const item = (parsed.items ?? []).find((i) => (i.tags ?? []).includes(tag));
   assert.ok(item, `created item carrying ${tag} should be listable`);
@@ -946,7 +946,7 @@ function upstreamIssue(number: number, title: string, state: "open" | "closed"):
 
 /** Read a pm item's status by its provenance tag (for reconciliation asserts). */
 function statusForTag(root: string, tag: string): string | undefined {
-  const r = spawnSync(PM_BIN, ["--path", root, "--json", "list-all", "--full"], { encoding: "utf-8" });
+  const r = spawnSync(PM_BIN, ["--path", root, "--json", "list-all", "--full"], PM_SPAWN_OPTS);
   const parsed = JSON.parse(r.stdout) as { items?: Array<{ status?: string; tags?: string[] }> };
   return (parsed.items ?? []).find((i) => (i.tags ?? []).includes(tag))?.status;
 }
@@ -995,7 +995,7 @@ test("runImport reopens a linked item whose upstream issue was reopened", async 
 
 /** List the titles of every pm item in a workspace (for apply assertions). */
 function listTitles(root: string): string[] {
-  const r = spawnSync(PM_BIN, ["--path", root, "--json", "list", "--full"], { encoding: "utf-8" });
+  const r = spawnSync(PM_BIN, ["--path", root, "--json", "list", "--full"], PM_SPAWN_OPTS);
   const parsed = JSON.parse(r.stdout);
   const arr = Array.isArray(parsed) ? parsed : (parsed.items ?? parsed.results ?? []);
   return (arr as Array<{ title?: string }>).map((i) => i.title ?? "");
