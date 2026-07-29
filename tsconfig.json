@@ -7,6 +7,10 @@
     "outDir": "./dist",
     "rootDir": ".",
     "declaration": true,
+    // Keep @internal-marked test seams out of the published dist/index.d.ts, so
+    // exporting them for the HTTP-boundary tests does not create a public API
+    // compatibility commitment.
+    "stripInternal": true,
     "declarationMap": true,
     "sourceMap": true,
     "esModuleInterop": true,
