@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.7.30 - 2026-07-30
+
+### Other
+
+- Raise pm-github sync coverage from 76% toward the 100% mandate ([pm-github-n3z3](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-n3z3.toon))
+
 ## 2026.7.29 - 2026-07-29
 
 ### Added
