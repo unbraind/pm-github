@@ -35,6 +35,7 @@ import { createExtensionTestHarness, type ExtensionTestHarness } from "@unbraine
 import type { SearchProviderQueryContext } from "@unbrained/pm-cli/sdk/authoring";
 
 import extension, { parseImportOptions, runImport, type GhIssue } from "../index.ts";
+import { projectItemTag } from "../projects.ts";
 import {
   captureStderr,
   jsonResponse,
@@ -83,11 +84,20 @@ function freshTracker(): string {
   return root;
 }
 
-/** Create a pm item carrying a GitHub provenance tag and the given status. */
+/**
+ * Create a pm item carrying a GitHub provenance tag and the given status.
+ *
+ * A `closed` fixture cannot be set at create time once governance
+ * `require_close_reason` is enforced (pm-cli >= 2026.8.3 rejects
+ * `pm create --status closed`), so the item is created open and then closed
+ * through `pm close` with a factual reason. The resulting item still carries
+ * the requested tag and status — only the mechanism changed.
+ */
 function createLinkedItem(root: string, title: string, tag: string, status: string): string {
+  const createStatus = status === "closed" ? "open" : status;
   const r = spawnSync(
     PM_BIN,
-    ["--path", root, "create", "task", title, "--status", status, "--tags", tag],
+    ["--path", root, "create", "task", title, "--status", createStatus, "--tags", tag],
     PM_SPAWN_OPTS,
   );
   assert.strictEqual(r.status, 0, `pm create failed: ${r.error?.message ?? r.stderr}`);
@@ -96,6 +106,14 @@ function createLinkedItem(root: string, title: string, tag: string, status: stri
   const parsed = JSON.parse(list.stdout) as { items?: Array<{ id: string; tags?: string[] }> };
   const item = (parsed.items ?? []).find((i) => (i.tags ?? []).includes(tag));
   assert.ok(item, `created item carrying ${tag} should be listable`);
+  if (status === "closed") {
+    const close = spawnSync(
+      PM_BIN,
+      ["--path", root, "close", item!.id, "--reason", `Test fixture: linked item for ${tag} closed`],
+      PM_SPAWN_OPTS,
+    );
+    assert.strictEqual(close.status, 0, `pm close failed: ${close.error?.message ?? close.stderr}`);
+  }
   return item!.id;
 }
 
@@ -909,6 +927,128 @@ test("github project import --apply creates pm items for unlinked board items", 
   }
 });
 
+// pm-cli 2026.8.3 enforces governance.require_close_reason: `pm create
+// --status closed` and `pm update --status closed` are hard errors. A project
+// board item wrapping a closed GitHub issue must be created open then closed
+// through `pm close --reason`, not born closed.
+test("github project import --apply routes a closed upstream issue through pm close (create path)", async () => {
+  const ext = await harnessPromise;
+  const root = freshTracker();
+  try {
+    await withEnv({ GITHUB_TOKEN: "tok", GH_TOKEN: undefined }, async () => {
+      let call = 0;
+      await withMockGithub((_req, res) => {
+        call++;
+        if (call === 1) {
+          graphqlOk(res, {
+            user: {
+              projectV2: {
+                id: "PVT_proj",
+                title: "Board",
+                url: "u",
+                statusField: { id: "F", name: "Status", options: [{ id: "o_todo", name: "Todo" }] },
+              },
+            },
+            organization: null,
+          });
+        } else {
+          graphqlOk(res, {
+            node: {
+              items: {
+                pageInfo: { hasNextPage: false },
+                nodes: [{
+                  id: "PVTI_closed",
+                  // No board Status selected — the status comes from the wrapped issue.
+                  content: { __typename: "Issue", title: "Shipped Feature", state: "closed", stateReason: "completed", repository: { nameWithOwner: "a/b" }, number: 42 },
+                }],
+              },
+            },
+          });
+        }
+      }, async () => {
+        const { result } = await ext.runCommand({
+          command: "github project import",
+          args: ["u/5"],
+          pmRoot: root,
+          global: { json: true },
+        });
+        const r = result as { imported: number; updated: number; skipped: number };
+        assert.strictEqual(r.imported, 1, "the closed issue is imported (create + close)");
+        assert.strictEqual(r.skipped, 0, "nothing skipped — the close path succeeded");
+        const items = listAllStatuses(root);
+        const item = items.find((i) => i.title === "Shipped Feature");
+        assert.ok(item, "the item landed in the tracker");
+        assert.strictEqual(item!.status, "closed", "the item is genuinely closed");
+        assert.match(item!.close_reason ?? "", /a\/b#42/, "the close reason carries the upstream issue provenance");
+      });
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Re-importing a board item whose Status option maps to `closed` (e.g. "Done")
+// must update the existing pm item WITHOUT `--status closed` and then close
+// through `pm close --reason`, not `pm update --status closed`.
+test("github project import --apply routes a closed board-status mapping through pm close (update path)", async () => {
+  const ext = await harnessPromise;
+  const root = freshTracker();
+  try {
+    // Pre-create a linked open pm item so the plan resolves to "update".
+    const tag = projectItemTag({ owner: "u", number: 5 }, "PVTI_done");
+    pmSetup(root, ["create", "task", "Old Title", "--status", "open", "--tags", tag]);
+    await withEnv({ GITHUB_TOKEN: "tok", GH_TOKEN: undefined }, async () => {
+      let call = 0;
+      await withMockGithub((_req, res) => {
+        call++;
+        if (call === 1) {
+          graphqlOk(res, {
+            user: {
+              projectV2: {
+                id: "PVT_proj",
+                title: "Board",
+                url: "u",
+                statusField: { id: "F", name: "Status", options: [{ id: "o_todo", name: "Todo" }, { id: "o_done", name: "Done" }] },
+              },
+            },
+            organization: null,
+          });
+        } else {
+          graphqlOk(res, {
+            node: {
+              items: {
+                pageInfo: { hasNextPage: false },
+                nodes: [{
+                  id: "PVTI_done",
+                  fieldValueByName: { name: "Done", optionId: "o_done" },
+                  content: { __typename: "DraftIssue", title: "Old Title", body: "b" },
+                }],
+              },
+            },
+          });
+        }
+      }, async () => {
+        const { result } = await ext.runCommand({
+          command: "github project import",
+          args: ["u/5"],
+          pmRoot: root,
+          global: { json: true },
+        });
+        const r = result as { imported: number; updated: number; skipped: number };
+        assert.strictEqual(r.updated, 1, "the linked item was updated and closed");
+        assert.strictEqual(r.skipped, 0, "nothing skipped — the close path succeeded");
+        const items = listAllStatuses(root);
+        const item = items.find((i) => i.title === "Old Title");
+        assert.ok(item, "the item is still present after re-import");
+        assert.strictEqual(item!.status, "closed", "the item is genuinely closed");
+        assert.match(item!.close_reason ?? "", /project u\/5/, "the close reason carries the project provenance");
+      });
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // `resolveProject` queries BOTH user and organization in one request and keeps
 // whichever resolves. An organization-owned project must take the org branch
 // (ownerType === "organization") — this is the symmetric counterpart to the
@@ -988,6 +1128,39 @@ test("runImport closes a linked item whose upstream issue was closed", async () 
   }
 });
 
+// End-to-end guard for the create-then-close path — a closed issue that has NO
+// existing pm item, so runImport must `pm create` it open and then `pm close` it
+// by the id it parses back out of `pm create --json`.
+//
+// This is the path that silently broke: `parseCreatedItemId` read a `{item:{id}}`
+// wrapper the CLI has never emitted, so the id was always undefined, the close
+// never ran, and every newly-imported closed issue landed OPEN while the import
+// still reported success. The reconciliation tests above could not catch it
+// because they pre-create the item and take the `match` branch, which closes by
+// an id it already knows. Asserting the final STATUS here (not just the counts)
+// is what makes the regression visible.
+test("runImport creates and closes an unlinked issue that is already closed upstream", async () => {
+  const root = freshTracker();
+  try {
+    await withEnv({ GITHUB_TOKEN: "tok", GH_TOKEN: undefined }, async () => {
+      await withMockGithub((_req, res) => {
+        jsonResponse(res, 200, [upstreamIssue(7, "Born closed", "closed")]);
+      }, async () => {
+        const result = (await runImport("a/b", root, parseImportOptions({}))) as Record<string, unknown>;
+        assert.strictEqual(result.imported, 1, "the new issue is imported");
+        assert.strictEqual(result.skipped, 0, "importing it is not a skip");
+        assert.strictEqual(
+          statusForTag(root, "gh:a/b#7"),
+          "closed",
+          "an issue closed upstream must land closed, not open",
+        );
+      });
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("runImport reopens a linked item whose upstream issue was reopened", async () => {
   const root = freshTracker();
   try {
@@ -1012,6 +1185,14 @@ function listTitles(root: string): string[] {
   const parsed = JSON.parse(r.stdout);
   const arr = Array.isArray(parsed) ? parsed : (parsed.items ?? parsed.results ?? []);
   return (arr as Array<{ title?: string }>).map((i) => i.title ?? "");
+}
+
+/** Read every pm item (including closed) with its status and close_reason. */
+function listAllStatuses(root: string): Array<{ id: string; title: string; status: string; close_reason?: string }> {
+  const r = spawnSync(PM_BIN, ["--path", root, "--json", "list-all", "--full"], PM_SPAWN_OPTS);
+  const parsed = JSON.parse(r.stdout);
+  const arr = Array.isArray(parsed) ? parsed : (parsed.items ?? parsed.results ?? []);
+  return (arr as Array<{ id: string; title: string; status: string; close_reason?: string }>);
 }
 
 // (The helper's own throw → 500 path is intentionally not asserted here: a
