@@ -83,11 +83,20 @@ function freshTracker(): string {
   return root;
 }
 
-/** Create a pm item carrying a GitHub provenance tag and the given status. */
+/**
+ * Create a pm item carrying a GitHub provenance tag and the given status.
+ *
+ * A `closed` fixture cannot be set at create time once governance
+ * `require_close_reason` is enforced (pm-cli >= 2026.8.3 rejects
+ * `pm create --status closed`), so the item is created open and then closed
+ * through `pm close` with a factual reason. The resulting item still carries
+ * the requested tag and status — only the mechanism changed.
+ */
 function createLinkedItem(root: string, title: string, tag: string, status: string): string {
+  const createStatus = status === "closed" ? "open" : status;
   const r = spawnSync(
     PM_BIN,
-    ["--path", root, "create", "task", title, "--status", status, "--tags", tag],
+    ["--path", root, "create", "task", title, "--status", createStatus, "--tags", tag],
     PM_SPAWN_OPTS,
   );
   assert.strictEqual(r.status, 0, `pm create failed: ${r.error?.message ?? r.stderr}`);
@@ -96,6 +105,14 @@ function createLinkedItem(root: string, title: string, tag: string, status: stri
   const parsed = JSON.parse(list.stdout) as { items?: Array<{ id: string; tags?: string[] }> };
   const item = (parsed.items ?? []).find((i) => (i.tags ?? []).includes(tag));
   assert.ok(item, `created item carrying ${tag} should be listable`);
+  if (status === "closed") {
+    const close = spawnSync(
+      PM_BIN,
+      ["--path", root, "close", item!.id, "--reason", `Test fixture: linked item for ${tag} closed`],
+      PM_SPAWN_OPTS,
+    );
+    assert.strictEqual(close.status, 0, `pm close failed: ${close.error?.message ?? close.stderr}`);
+  }
   return item!.id;
 }
 

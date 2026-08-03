@@ -1,0 +1,18 @@
+id: pm-github-rwq9
+title: Fix terminal transitions for pm-cli 2026.8.3 close_reason enforcement
+description: "Upgrading @unbrained/pm-cli from 2026.7.29 to 2026.8.3 makes pm update --status closed a hard error (close_reason_required) because governance.require_close_reason is enforced. This package relied on the old auto-route bypass in its import and sync reconciliation paths. Route terminal transitions through pm close with real provenance reasons, pass completed-at where the source carries a timestamp, and bump the pm-cli pin to 2026.8.3."
+type: Issue
+status: closed
+priority: 2
+tags: []
+created_at: "2026-08-03T21:59:35.068Z"
+updated_at: "2026-08-03T22:21:03.479Z"
+closed_at: "2026-08-03T22:21:03.466Z"
+completed_at: "2026-08-03T22:21:03.466Z"
+claim_principal: pi-agent
+author: pi-agent
+acceptance_criteria: "npm run typecheck, npm run build, npm test, npm run coverage and npm run changelog:check all pass with @unbrained/pm-cli pinned at ^2026.8.3; the previously failing tests runImport reopens a linked item whose upstream issue was reopened and runSync --apply PATCHes GitHub to match pm status pass without editing test intent; no governance policy is disabled or weakened."
+notes[1]{created_at,author,text}:
+  "2026-08-03T22:20:57.760Z",pi-agent,"Root cause: two defects surfaced under pm-cli 2026.8.3 close_reason enforcement. (1) SOURCE: runImport's non-atomic create path issued `pm create --status closed` for new closed GitHub issues, which is now a hard close_reason_required error. Fixed by creating closed issues as open then closing via `pm close --reason`, mirroring the already-correct atomic path and the reconciliation path. (2) FIXTURE: the test helper createLinkedItem used the same `pm create --status closed` pattern; switched to create-then-close so the closed linked-item fixture still represents a genuinely closed item. Also threaded GitHub `closed_at` through GhIssue -> PreparedGithubImport -> every close site (create path, reconciliation, atomic close op) as --completed-at / completedAt so imported items keep their real completion time instead of import time."
+close_reason: "Shipped: index.ts create path now routes new closed issues through create(open)+pm close --reason [--completed-at]; reconciliation close and atomic close op carry completedAt from GitHub closed_at; createLinkedItem fixture uses create-then-close. Verified: npm run typecheck (ok), npm run build (ok), npm test (239/239 pass incl. the two previously-failing tests), npm run coverage (index.ts 88.18% lines / 79.63% branches / 89.94% funcs, all thresholds met). No governance policy weakened; closed_at is read-only provenance from the source record."
+body: ""
