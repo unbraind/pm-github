@@ -1128,6 +1128,39 @@ test("runImport closes a linked item whose upstream issue was closed", async () 
   }
 });
 
+// End-to-end guard for the create-then-close path — a closed issue that has NO
+// existing pm item, so runImport must `pm create` it open and then `pm close` it
+// by the id it parses back out of `pm create --json`.
+//
+// This is the path that silently broke: `parseCreatedItemId` read a `{item:{id}}`
+// wrapper the CLI has never emitted, so the id was always undefined, the close
+// never ran, and every newly-imported closed issue landed OPEN while the import
+// still reported success. The reconciliation tests above could not catch it
+// because they pre-create the item and take the `match` branch, which closes by
+// an id it already knows. Asserting the final STATUS here (not just the counts)
+// is what makes the regression visible.
+test("runImport creates and closes an unlinked issue that is already closed upstream", async () => {
+  const root = freshTracker();
+  try {
+    await withEnv({ GITHUB_TOKEN: "tok", GH_TOKEN: undefined }, async () => {
+      await withMockGithub((_req, res) => {
+        jsonResponse(res, 200, [upstreamIssue(7, "Born closed", "closed")]);
+      }, async () => {
+        const result = (await runImport("a/b", root, parseImportOptions({}))) as Record<string, unknown>;
+        assert.strictEqual(result.imported, 1, "the new issue is imported");
+        assert.strictEqual(result.skipped, 0, "importing it is not a skip");
+        assert.strictEqual(
+          statusForTag(root, "gh:a/b#7"),
+          "closed",
+          "an issue closed upstream must land closed, not open",
+        );
+      });
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("runImport reopens a linked item whose upstream issue was reopened", async () => {
   const root = freshTracker();
   try {

@@ -1598,17 +1598,29 @@ export function extractSyncedCommentIds(stored: { text?: string }[]): Set<number
   return ids;
 }
 
-// Parse the newly-created item id out of `pm create --json` stdout, which
-// returns `{ "item": { "id": "pm-xxxx", ... } }`. Returns undefined when the
-// output cannot be parsed (e.g. an unexpected/older shape) so callers can fall
+// Parse the newly-created item id out of `pm create --json` stdout, which is a
+// FLAT envelope — `{ "id": "pm-xxxx", "status": "open", "changed_field_count": N }`
+// — with no `item` wrapper.
+//
+// This function previously read `parsed.item.id`, a shape the CLI has never
+// emitted (mutations return a flat receipt; only queries like `pm read`/`pm list`
+// wrap, see upstream pm-cli#888). Because it returns undefined rather than
+// throwing, the effect was invisible: every closed-issue import was left open and
+// every comment sync was skipped, while unit tests that fed the fabricated
+// `{item:{id}}` shape kept passing.
+//
+// No `item` fallback is kept. A fallback for a shape the host has never emitted
+// is dead code that cannot be exercised by any real CLI, and a test asserting it
+// would re-create the original failure mode: a parser and a test agreeing with
+// each other rather than with the CLI. The regression test instead parses the
+// output of a REAL `pm create --json` run, so the envelope cannot drift unnoticed.
+//
+// Returns undefined when the output genuinely cannot be parsed, so callers fall
 // back to a safe skip-with-warning instead of crashing the whole import.
 export function parseCreatedItemId(stdout: string): string | undefined {
   try {
     const parsed = JSON.parse(stdout);
-    // pm-cli emits `{ "id": "...", ... }` from `pm create --json`. An older
-    // emit shape nested the id under `item`; accept both so a future format
-    // change does not silently break the close-after-create path.
-    const id = parsed?.id ?? parsed?.item?.id;
+    const id = parsed?.id;
     return typeof id === "string" ? id : undefined;
   } catch {
     return undefined;
@@ -2331,6 +2343,23 @@ export async function runImport(
       closedAt,
     } = prepared;
 
+    /**
+     * Build the `pm close` argv for this issue's pm item.
+     *
+     * Two paths below close an item for the same reason — reconciling an
+     * already-matched item whose upstream issue is now closed, and closing an
+     * item that was just created `open` because pm-cli 2026.8.3 refuses a
+     * terminal `create --status closed`. Both must carry identical provenance
+     * (the reason) and identical completion evidence (GitHub's own `closed_at`,
+     * when it recorded one), so the argv is built once here rather than
+     * duplicated at each site where the two could silently drift apart.
+     */
+    const githubCloseArgs = (id: string): string[] => {
+      const args = ["--path", pmRoot, "close", id, "--reason", `GitHub issue #${issue.number} closed`];
+      if (closedAt) args.push("--completed-at", closedAt);
+      return args;
+    };
+
     if (opts.dryRun) {
       const action = match?.id ? "update" : "import";
       console.error(`  [dry-run] #${issue.number} ${action} ${title} (${status}, ${labels.join(",")})`);
@@ -2362,9 +2391,7 @@ export async function runImport(
       if (status === "closed" && match.status !== "closed") {
         // Close through `pm close` so the reason is real provenance; pass the
         // source completion time as --completed-at when GitHub recorded one.
-        const closeArgs = ["--path", pmRoot, "close", match.id, "--reason", `GitHub issue #${issue.number} closed`];
-        if (closedAt) closeArgs.push("--completed-at", closedAt);
-        const close = pmRun(closeArgs);
+        const close = pmRun(githubCloseArgs(match.id));
         if (!close.ok) {
           console.error(`#${issue.number}: close reconciliation failed — ${close.stderr}`);
           skipped++;
@@ -2415,16 +2442,20 @@ export async function runImport(
     const createdId = (mustClose || syncAnnotations) ? parseCreatedItemId(created.stdout) : undefined;
     if (mustClose) {
       if (createdId) {
-        const closeArgs = ["--path", pmRoot, "close", createdId, "--reason", `GitHub issue #${issue.number} closed`];
-        if (closedAt) closeArgs.push("--completed-at", closedAt);
-        const close = pmRun(closeArgs);
+        const close = pmRun(githubCloseArgs(createdId));
         if (!close.ok) {
           console.error(`#${issue.number}: close after import failed — ${close.stderr}`);
           skipped++;
           continue;
         }
       } else {
+        // The item exists but is still open, and without its id nothing here can
+        // close it. Counting it as imported would report a closed GitHub issue as
+        // a successfully imported *open* item, so it is reported as skipped —
+        // the same accounting the close-failure branch above already uses.
         console.error(`#${issue.number}: could not parse created item id — left open`);
+        skipped++;
+        continue;
       }
     }
     if (syncAnnotations) {
