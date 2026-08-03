@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Fix terminal transitions for pm-cli 2026.8.3 close_reason enforcement ([pm-github-rwq9](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-rwq9.toon))
+
+### Other
+
+- Resolve pm-changelog to the release that derives release dates in UTC ([pm-github-9m6j](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-9m6j.toon))
+
 ## 2026.7.30 - 2026-07-30
 
 ### Other

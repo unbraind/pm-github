@@ -6,10 +6,11 @@ status: closed
 priority: 2
 tags: []
 created_at: "2026-08-03T21:59:35.068Z"
-updated_at: "2026-08-03T23:09:31.421Z"
+updated_at: "2026-08-03T23:54:56.259Z"
 closed_at: "2026-08-03T22:21:03.466Z"
 completed_at: "2026-08-03T22:21:03.466Z"
-claim_principal: pi-agent
+assignee: claude-code
+claim_principal: claude-code
 author: pi-agent
 acceptance_criteria: "npm run typecheck, npm run build, npm test, npm run coverage and npm run changelog:check all pass with @unbrained/pm-cli pinned at ^2026.8.3; the previously failing tests runImport reopens a linked item whose upstream issue was reopened and runSync --apply PATCHes GitHub to match pm status pass without editing test intent; no governance policy is disabled or weakened."
 notes[2]{created_at,author,text}:
