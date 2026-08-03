@@ -174,10 +174,20 @@ test("extractSyncedCommentIds collects ids from markers and ignores plain commen
 });
 
 test("parseCreatedItemId reads the id from `pm create --json` stdout", () => {
-  assert.strictEqual(parseCreatedItemId(JSON.stringify({ item: { id: "pm-ab12" } })), "pm-ab12");
+  // The real envelope is FLAT — no `item` wrapper. The contract test below pins
+  // this literal against actual CLI output.
+  assert.strictEqual(
+    parseCreatedItemId(JSON.stringify({ id: "pm-ab12", status: "open", changed_field_count: 10 })),
+    "pm-ab12",
+  );
   assert.strictEqual(parseCreatedItemId("not json"), undefined);
-  assert.strictEqual(parseCreatedItemId(JSON.stringify({ item: {} })), undefined);
   assert.strictEqual(parseCreatedItemId(JSON.stringify({})), undefined);
+  assert.strictEqual(parseCreatedItemId(JSON.stringify({ id: 42 })), undefined);
+  // The wrapper shape this parser used to read is NOT what the CLI emits, and no
+  // fallback for it is kept: accepting it would be dead code that no real CLI can
+  // exercise, and asserting it here would restore the exact failure mode that hid
+  // the original bug — a parser and a test agreeing with each other, not the CLI.
+  assert.strictEqual(parseCreatedItemId(JSON.stringify({ item: { id: "pm-ab12" } })), undefined);
 });
 
 // Workspace integration: real SDK comments() primitive + dedupe -------------
@@ -212,6 +222,46 @@ function firstItemId(root: string): string {
   if (!arr.length) throw new Error("no items in test workspace");
   return arr[0].id as string;
 }
+
+// Contract test: parseCreatedItemId against a REAL `pm create --json` run.
+//
+// The parser previously read `parsed.item.id`, a shape the CLI has never
+// emitted. Because it returns undefined instead of throwing, the damage was
+// silent — closed issues imported as open, comment sync skipped — and the unit
+// test above kept passing because it asserted the same fabricated shape the
+// parser expected. Asserting against real CLI stdout is the only formulation
+// that can catch that class of drift, so this test must never be replaced with
+// a hand-written literal.
+test("parseCreatedItemId parses the envelope a real `pm create --json` actually emits", () => {
+  const root = mkdtempSync(join(tmpdir(), "pm-github-create-envelope-"));
+  try {
+    const env = { ...process.env, PM_AUTHOR: "tester" };
+    const opts = { stdio: "ignore" as const, env, shell: process.platform === "win32" };
+    try {
+      execFileSync(PM_BIN, ["init", "-y", "--force", "--workspace", root, "--author", "tester"], opts);
+    } catch {
+      execFileSync(PM_BIN, ["init", "-y", "--force", root, "--author", "tester"], opts);
+    }
+    const stdout = execFileSync(
+      PM_BIN,
+      ["--pm-path", root, "create", "task", "Envelope probe", "--json"],
+      { encoding: "utf-8", env, shell: process.platform === "win32" },
+    );
+
+    const parsed = parseCreatedItemId(stdout);
+    assert.ok(parsed, "the id must be recoverable from real `pm create --json` stdout");
+    // Cross-check against the workspace itself: the parsed id must be the item
+    // the CLI actually created, not merely some string-valued field.
+    assert.strictEqual(parsed, firstItemId(root));
+    // Pin the envelope shape the parser depends on, so a host change that moves
+    // the id fails HERE with a clear message rather than silently downstream.
+    const envelope = JSON.parse(stdout);
+    assert.strictEqual(typeof envelope.id, "string", "`id` is a top-level string");
+    assert.strictEqual(envelope.item, undefined, "there is no `item` wrapper");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("syncGithubCommentsToAnnotations populates the native comments collection via the SDK", async () => {
   const root = makeCommentsTestWorkspace();
