@@ -1605,7 +1605,10 @@ export function extractSyncedCommentIds(stored: { text?: string }[]): Set<number
 export function parseCreatedItemId(stdout: string): string | undefined {
   try {
     const parsed = JSON.parse(stdout);
-    const id = parsed?.item?.id;
+    // pm-cli emits `{ "id": "...", ... }` from `pm create --json`. An older
+    // emit shape nested the id under `item`; accept both so a future format
+    // change does not silently break the close-after-create path.
+    const id = parsed?.id ?? parsed?.item?.id;
     return typeof id === "string" ? id : undefined;
   } catch {
     return undefined;
@@ -3499,6 +3502,14 @@ async function gqlResolveIssueNodeId(
 
 // Compose a human-readable + provenance-bearing description for an imported
 // project item (parallels the issue-import description).
+/** Build a factual close reason for a project-import item entering `closed`. */
+function projectImportCloseReason(ref: ProjectRef, c: ProjectItemContent): string {
+  if (c.repo && typeof c.number === "number") {
+    return `GitHub ${c.repo}#${c.number} closed (project ${ref.owner}/${ref.number})`;
+  }
+  return `GitHub project ${ref.owner}/${ref.number} item closed`;
+}
+
 function projectItemDescription(ref: ProjectRef, c: ProjectItemContent): string {
   const parts = [`GH project item ${ref.owner}/${ref.number}`];
   if (c.typename === "DraftIssue") parts.push("· draft issue");
@@ -3696,24 +3707,45 @@ async function runProjectImport(ctx: CommandHandlerContext) {
       // skipped (no --status) so we never overwrite a real pm state with a guess
       // (no data loss). `entry.status` carries a fallback for the create path;
       // `entry.mappedStatus` is set only for an explicit, resolvable mapping.
-      if (entry.mappedStatus) updArgs.push("--status", entry.mappedStatus);
+      // A `closed` mapping cannot go through `pm update --status closed`
+      // (governance require_close_reason rejects it since pm-cli 2026.8.3);
+      // the update omits --status and a separate `pm close` records the reason.
+      const closeAfterUpdate = entry.mappedStatus === "closed";
+      if (entry.mappedStatus && !closeAfterUpdate) updArgs.push("--status", entry.mappedStatus);
       const upd = pmRun(updArgs);
       if (!upd.ok) { console.error(`  ${entry.title}: update failed — ${upd.stderr}`); skipped++; continue; }
+      if (closeAfterUpdate) {
+        const close = pmRun(["--path", ctx.pm_root, "close", entry.pmId, "--reason", projectImportCloseReason(ref, entry.content)]);
+        if (!close.ok) { console.error(`  ${entry.title}: close failed — ${close.stderr}`); skipped++; continue; }
+      }
       updated++;
       continue;
     }
+    // A `closed` upstream item cannot be born closed: governance
+    // `require_close_reason` rejects `pm create --status closed` (pm-cli
+    // 2026.8.3+). Create open, then close through `pm close` with factual
+    // provenance. `--json` is needed to read the assigned id for the close.
+    const createStatus = entry.status === "closed" ? "open" : entry.status;
+    const mustClose = entry.status === "closed";
     const createArgs = [
       "--path", ctx.pm_root, "create",
       "--title", entry.title,
       "--type", itemType,
-      "--status", entry.status,
+      "--status", createStatus,
       "--description", description,
       "--tags", entry.tags.join(","),
       "--message", `Imported from GitHub project ${ref.owner}/${ref.number}`,
     ];
     if (entry.body) createArgs.push("--body", entry.body);
+    if (mustClose) createArgs.push("--json");
     const created = pmRun(createArgs);
     if (!created.ok) { console.error(`  ${entry.title}: create failed — ${created.stderr}`); skipped++; continue; }
+    if (mustClose) {
+      const createdId = parseCreatedItemId(created.stdout);
+      if (!createdId) { console.error(`  ${entry.title}: close failed — could not read created item id`); skipped++; continue; }
+      const close = pmRun(["--path", ctx.pm_root, "close", createdId, "--reason", projectImportCloseReason(ref, entry.content)]);
+      if (!close.ok) { console.error(`  ${entry.title}: close failed — ${close.stderr}`); skipped++; continue; }
+    }
     imported++;
   }
 

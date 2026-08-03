@@ -174,6 +174,9 @@ test("extractSyncedCommentIds collects ids from markers and ignores plain commen
 });
 
 test("parseCreatedItemId reads the id from `pm create --json` stdout", () => {
+  // Current pm-cli emit: `{ "id": "...", ... }`.
+  assert.strictEqual(parseCreatedItemId(JSON.stringify({ id: "pm-ab12", status: "open", changed_field_count: 10 })), "pm-ab12");
+  // Legacy nested shape is still accepted.
   assert.strictEqual(parseCreatedItemId(JSON.stringify({ item: { id: "pm-ab12" } })), "pm-ab12");
   assert.strictEqual(parseCreatedItemId("not json"), undefined);
   assert.strictEqual(parseCreatedItemId(JSON.stringify({ item: {} })), undefined);
