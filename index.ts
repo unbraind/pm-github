@@ -4133,7 +4133,7 @@ const defineExtension = <TModule extends ExtensionModule>(module: TModule): TMod
 
 export default defineExtension({
   name: "pm-github",
-  version: "2026.8.1",
+  version: "2026.8.4",
 
   activate(api: ExtensionApi) {
     // -----------------------------------------------------------------------
