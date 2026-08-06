@@ -4,7 +4,7 @@
 
 ### Other
 
-- Gate CI on pm health so a silently discarded peer edit cannot merge ([pm-github-eh1h](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-eh1h.toon))
+- Gate CI on strict tracked pm project health ([pm-github-eh1h](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-eh1h.toon))
 
 ## 2026.8.4 - 2026-08-04
 
