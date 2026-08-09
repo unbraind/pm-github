@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- The mandatory docstring gate could skip its own scan and still exit zero ([pm-github-wxob](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-wxob.toon))
+
+### Other
+
+- Adopt the canonical pm-ops docstring gate ([pm-github-pbxd](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-pbxd.toon))
+
 ## 2026.8.7 - 2026-08-07
 
 ### Other
