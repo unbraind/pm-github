@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Converge changelog generation and verification on replace mode ([pm-github-8f60](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-8f60.toon))
 - The mandatory docstring gate could skip its own scan and still exit zero ([pm-github-wxob](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-wxob.toon))
 
 ### Other
