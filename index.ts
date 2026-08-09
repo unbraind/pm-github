@@ -66,25 +66,48 @@ import {
 // Types
 // ---------------------------------------------------------------------------
 
+/**
+ * One GitHub issue or pull request as returned by the REST issues endpoint.
+ *
+ * The REST issues endpoint lists PRs alongside issues (a PR is an issue that
+ * also carries a `pull_request` object); {@link isDraftPr} and the
+ * `includePrs` / `skipDrafts` filters decide which of those survive into an
+ * import.
+ */
 export interface GhIssue {
+  /** Issue/PR number within its repo (the `N` in `gh:owner/repo#N` provenance). */
   number: number;
+  /** One-line issue title, imported as the pm item title. */
   title: string;
+  /** Markdown body, imported as the pm item body (`null` when GitHub stored none). */
   body: string | null;
+  /** GitHub lifecycle state; mapped to a pm status by {@link mapState}. */
   state: "open" | "closed";
+  /** Why a closed issue was closed; `not_planned` maps to `canceled`, not `closed`. */
   state_reason?: "completed" | "not_planned" | "reopened" | null;
+  /** Labels on the issue, imported verbatim as pm tags (before any `--label-map`). */
   labels: Array<{ name: string }>;
+  /** Author login, surfaced as a `github_author:` tag when present. */
   user?: { login: string } | null;
+  /** Assigned user, or `null` (imported as the item assignee when set). */
   assignee: { login: string } | null;
+  /** Milestone title, or `null` (filtered client-side by `--milestone`). */
   milestone: { title: string } | null;
+  /** ISO 8601 creation timestamp. */
   created_at: string;
+  /** ISO 8601 last-update timestamp, used by the `--since` incremental filter. */
   updated_at: string;
   /** GitHub completion timestamp (`null` while the issue is open); carried as `--completed-at` on close. */
   closed_at?: string | null;
+  /** Browser URL of the issue, embedded in the imported description. */
   html_url: string;
+  /** Comment count GitHub reports; drives whether comments are fetched at all. */
   comments?: number;
+  /** REST URL of the issue's comments collection (paginated when present). */
   comments_url?: string;
+  /** Present (opaque) when the issue is actually a pull request; its presence is the PR signal. */
   pull_request?: unknown;
-  // GitHub sets `draft: true` on issues that are draft pull requests.
+  /** `true` when the issue is a draft pull request (GitHub sets this only on draft PRs). */
   draft?: boolean;
 }
 
@@ -111,19 +134,38 @@ type CommentsMode = "body" | "annotations" | "both";
 
 const COMMENTS_MODES: readonly CommentsMode[] = ["body", "annotations", "both"];
 
+/**
+ * Normalized options governing one GitHub issue import.
+ *
+ * Produced by {@link parseImportOptions} from the raw CLI flag bag so the rest
+ * of the import path consumes a typed shape rather than re-parsing strings.
+ */
 export interface ImportOptions {
+  /** GitHub issue state to fetch: `open`, `closed`, or `all`. */
   state: "open" | "closed" | "all";
+  /** Comma-separated label filter applied server-side. */
   labels?: string;
+  /** ISO timestamp; only issues updated after it are fetched (server-side). */
   since?: string;
+  /** Assignee login filter applied server-side. */
   assignee?: string;
+  /** Milestone title filter applied client-side (the API keys milestones by number, not title). */
   milestone?: string;
+  /** Whether pull requests are included (filtered out by default). */
   includePrs: boolean;
+  /** Whether draft pull requests are excluded (only meaningful with {@link includePrs}). */
   skipDrafts: boolean;
+  /** Whether fetched comments are also embedded in the item body (legacy behavior). */
   withComments: boolean;
+  /** How fetched comments are persisted: body, native annotations, or both. */
   commentsMode: CommentsMode;
+  /** pm item type assigned to every created item (default `Issue`). */
   itemType: string;
+  /** When true, preview the plan without writing to the tracker or GitHub. */
   dryRun: boolean;
+  /** When true, commit the batch as one crash-resumable SDK transaction. */
   atomic: boolean;
+  /** When true, run the `--link-deps` dependency-edge second pass after import. */
   linkDeps: boolean;
 }
 
@@ -134,10 +176,21 @@ type CommitItemMutations = (
 type NormalizeItemId = (input: string, prefix: string) => string;
 type ReadSettings = (pmRoot: string) => Promise<{ id_prefix?: string }>;
 
+/**
+ * Injectable collaborators for the atomic import path.
+ *
+ * Lets the crash-resumable transaction be exercised hermetically against fake
+ * SDK functions. Every member is optional because production wires the real SDK
+ * defaults; a test overrides only the ones it needs.
+ */
 export interface AtomicImportOptions {
+  /** Author identity stamped onto the transaction's mutations (default `pm-github`). */
   atomicAuthor?: string;
+  /** SDK bulk-mutation primitive that applies and journals the transaction. */
   commitItemMutations?: CommitItemMutations;
+  /** SDK id normalizer that derives each item's stable external-key id. */
   normalizeItemId?: NormalizeItemId;
+  /** SDK settings reader used to resolve the workspace's id prefix. */
   readSettings?: ReadSettings;
 }
 
@@ -207,10 +260,16 @@ export function resolveGitHubToken(): string | undefined {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// Decide whether the Authorization token may be forwarded to a redirect target.
-// Only same-origin (scheme + host + port) redirects keep the credential; any
-// origin change drops it to avoid leaking the token. Exported for
-// unit testing.
+/**
+ * Decide whether the Authorization token may be forwarded across a redirect.
+ *
+ * Only same-origin (scheme + host + port) redirects keep the credential; any
+ * origin change drops it so the bearer token can never leak to a third party.
+ *
+ * @param fromUrl - The URL the redirect originated from.
+ * @param toUrl - The redirect target URL.
+ * @returns True when both URLs share an origin.
+ */
 export function sameOrigin(fromUrl: string, toUrl: string): boolean {
   try {
     return new URL(fromUrl).origin.toLowerCase() === new URL(toUrl).origin.toLowerCase();
@@ -272,9 +331,14 @@ export function githubApiBase(): string {
   return raw.replace(/\/+$/, "");
 }
 
-// One low-level request, no retry/backoff (that lives in `request`). Follows up
-// to `redirectsLeft` redirects; a cycle or an over-long chain rejects instead of
-// overflowing the stack, and the token is only forwarded to same-host targets.
+/**
+ * One low-level HTTP request, with no retry or backoff.
+ *
+ * That orchestration lives in the surrounding {@link request} wrapper. This
+ * function follows up to `redirectsLeft` redirects, rejecting on a cycle or an
+ * over-long chain rather than overflowing the stack, and forwards the bearer
+ * token only to same-origin targets via {@link sameOrigin}.
+ */
 function requestOnce(
   method: string,
   url: string,
@@ -344,10 +408,20 @@ function requestOnce(
   });
 }
 
-// How long (ms) to wait before retrying a rate-limited / transient response.
-// Honors Retry-After (seconds) and the primary-rate-limit reset window
-// (X-RateLimit-Remaining: 0 + X-RateLimit-Reset epoch), then falls back to
-// exponential backoff. Capped so we never hang a CLI run indefinitely.
+/**
+ * Compute how long (ms) to wait before retrying a rate-limited or transient
+ * response.
+ *
+ * Honors `Retry-After` (seconds) and the primary rate-limit reset window
+ * (`X-RateLimit-Remaining: 0` + `X-RateLimit-Reset` epoch), then falls back to
+ * exponential backoff. The result is capped so a CLI run is never hung
+ * indefinitely.
+ *
+ * @param headers - Response headers to read the retry hints from.
+ * @param attempt - Zero-based retry index feeding the exponential backoff floor.
+ * @param nowMs - Current epoch ms, used to measure the reset window's remaining time.
+ * @returns The capped wait in milliseconds.
+ */
 export function computeBackoffMs(
   headers: Record<string, string | string[] | undefined>,
   attempt: number,
@@ -376,13 +450,19 @@ export function computeBackoffMs(
   return Math.min(1000 * 2 ** attempt, cap);
 }
 
-// Parse GitHub's rate-limit headers (X-RateLimit-Remaining/Limit/Reset) off a
-// response, case-insensitively. Returns undefined fields when a header is
-// absent or non-numeric so callers can degrade gracefully. `reset` is the epoch
-// seconds at which the window resets.
+/**
+ * Structured view of GitHub's rate-limit headers off one response.
+ *
+ * Fields are `undefined` when the corresponding header is absent or non-numeric
+ * so callers can degrade gracefully; `reset` is the epoch-second timestamp at
+ * which the current window reopens.
+ */
 export interface RateLimitInfo {
+  /** Remaining requests in the current window. */
   remaining?: number;
+  /** Total requests permitted per window. */
   limit?: number;
+  /** Epoch seconds at which the window resets. */
   reset?: number;
   /** True when the remaining quota is at/under the low-water mark. */
   low: boolean;
@@ -647,7 +727,17 @@ export const EXIT_CODE = {
   NOT_FOUND: 3,
 } as const;
 
+/**
+ * Error that carries a semantic process exit code.
+ *
+ * pm's command runtime treats a thrown error as a cleanly handled non-zero exit
+ * only when it exposes a numeric `exitCode`; a plain `Error` instead falls
+ * through to the "unhandled" path, which re-invokes the handler (doubling side
+ * effects such as a second GitHub fetch) and exits with a generic code. Throwing
+ * this routes a failure to a clean, single exit at the chosen code.
+ */
 export class CommandError extends Error {
+  /** Numeric exit code the runtime propagates to the shell (one of {@link EXIT_CODE}). */
   exitCode: number;
   constructor(message: string, exitCode: number = EXIT_CODE.GENERIC_FAILURE) {
     super(message);
@@ -660,25 +750,47 @@ export class CommandError extends Error {
 // Provenance — link a pm item back to a specific GitHub issue
 // ---------------------------------------------------------------------------
 
-// Provenance lives in a machine-parseable tag (`gh:owner/repo#123`) AND in the
-// declared schema fields/description. The tag is the idempotency key: it
-// round-trips losslessly through `pm create --tags` / `pm list --json`, so a
-// re-import can find the existing item and UPDATE it instead of duplicating.
+/**
+ * Build the `gh:owner/repo#N` provenance tag linking a pm item to a GitHub issue.
+ *
+ * The tag is the idempotency key: it round-trips losslessly through
+ * `pm create --tags` / `pm list --json`, so a re-import can find the existing
+ * item and UPDATE it instead of duplicating. Provenance also rides on declared
+ * schema fields and the description, but the tag is what matching keys on.
+ *
+ * @param repo - `owner/repo`, lowercased into the tag.
+ * @param issueNumber - The issue/PR number.
+ * @returns The provenance tag string.
+ */
 export function provenanceTag(repo: string, issueNumber: number): string {
   return `gh:${repo.toLowerCase()}#${issueNumber}`;
 }
 
-// Parse a `gh:owner/repo#number` provenance tag into its repo + issue number;
-// returns undefined for non-provenance tags.
+/**
+ * Parse a `gh:owner/repo#N` provenance tag back into its repo and issue number.
+ *
+ * Returns `undefined` for anything that is not a provenance tag, so a caller
+ * scanning a tag list can skip foreign tags without a try/catch.
+ *
+ * @param tag - The candidate tag string.
+ * @returns The parsed repo (lowercased) and number, or `undefined`.
+ */
 export function parseProvenanceTag(tag: string): { repo: string; number: number } | undefined {
   const m = /^gh:([^#\s]+)#(\d+)$/.exec(tag.trim());
   if (!m) return undefined;
   return { repo: m[1].toLowerCase(), number: Number(m[2]) };
 }
 
-// Surface the GitHub issue author as a machine-readable tag (`github_author:login`)
-// — consistent with how provenance rides on tags. Returns undefined when the
-// API did not include a usable login (so we never emit an empty tag).
+/**
+ * Build the `github_author:login` tag recording who opened a GitHub issue.
+ *
+ * Mirrors how provenance rides on tags so the author survives a round-trip.
+ * Returns `undefined` when the API supplied no usable login, so an empty tag is
+ * never emitted.
+ *
+ * @param issue - The issue whose author to tag.
+ * @returns The author tag, or `undefined`.
+ */
 export function authorTag(issue: GhIssue): string | undefined {
   const login = issue.user?.login?.trim();
   if (!login) return undefined;
@@ -689,12 +801,25 @@ export function authorTag(issue: GhIssue): string | undefined {
 // pm workspace I/O
 // ---------------------------------------------------------------------------
 
+/**
+ * The slice of a pm item this package reads and writes.
+ *
+ * A deliberately loose projection of the full tracker item: only the fields the
+ * import / export / sync paths touch, so JSON from `pm list-all` parses without
+ * depending on every SDK field.
+ */
 export interface PmItem {
+  /** Stable item id (absent for items not yet created). */
   id?: string;
+  /** One-line title. */
   title?: string;
+  /** Lifecycle status (`open`, `in_progress`, `closed`, `canceled`, …). */
   status?: string;
+  /** Long-form markdown body. */
   body?: string;
+  /** Short summary shown in listings. */
   description?: string;
+  /** Tag set, carrying provenance and labels. */
   tags?: string[];
 }
 
@@ -1267,18 +1392,27 @@ export function composeBody(issue: GhIssue, comments: GhComment[]): string {
 //     pre-lock best-effort behavior.
 
 export const IMPORT_LOCK_TTL_MS_DEFAULT = 5 * 60_000;
+/** Default total budget a caller waits to acquire a contended comment-sync lock before giving up and skipping that item's sync. */
 export const IMPORT_LOCK_WAIT_MS_DEFAULT = 30_000;
 
-// Payload written into the lock file. Mirrors the pm CLI's own lock payload so
-// the CLI's `pm gc` lock sweep (which reads ttl_seconds) treats our locks
-// exactly like its own.
+/**
+ * Payload JSON written into a comment-sync lock file.
+ *
+ * Mirrors the pm CLI's own lock payload so the CLI's `pm gc` lock sweep (which
+ * reads `ttl_seconds`) treats these locks exactly like its own.
+ */
 export interface ImportLockPayload {
+  /** Lock identity (the lock file's basename without `.lock`). */
   id: string;
+  /** OS process id of the holder, used to detect a dead owner. */
   pid: number;
+  /** Human-readable holder label (always `pm-github`). */
   owner: string;
   /** Unique per acquisition; release() only unlinks a file carrying it. */
   token: string;
+  /** ISO timestamp recorded at acquisition, the staleness age base. */
   created_at: string;
+  /** Lock lifetime in seconds, read by `pm gc` to sweep abandoned locks. */
   ttl_seconds: number;
 }
 
@@ -1296,10 +1430,17 @@ export type ImportLockAcquisition =
   // The lock mechanism itself failed (fs error) — caller may proceed unlocked.
   | { status: "degraded" };
 
-// Resolve the pm data dir (the dir holding settings.json and locks/) from the
-// pmRoot the extension host hands the command, which may be either the
-// workspace root (the dir containing .agents/pm) or the data dir itself — the
-// pm CLI accepts both for --path, and tests pass the workspace root.
+/**
+ * Resolve the pm data dir from the `pmRoot` a command handler receives.
+ *
+ * The host may hand either the workspace root (the dir containing `.agents/pm`)
+ * or the data dir itself — the pm CLI accepts both for `--path`. This returns
+ * the dir that actually holds `settings.json` and `locks/`, defaulting to
+ * `pmRoot` unchanged when no nested `.agents/pm` exists.
+ *
+ * @param pmRoot - The path supplied by the extension host.
+ * @returns The resolved pm data directory.
+ */
 export function resolvePmDataDir(pmRoot: string): string {
   const nested = path.join(pmRoot, ".agents", "pm");
   try {
@@ -1310,14 +1451,32 @@ export function resolvePmDataDir(pmRoot: string): string {
   return pmRoot;
 }
 
-// Absolute lock file path for one item's comment-sync critical section. The
-// item id is sanitized defensively (pm ids are already filename-safe, but the
-// lock path must never become a traversal vector if that ever changes).
+/**
+ * Absolute lock file path for one item's comment-sync critical section.
+ *
+ * The item id is sanitized defensively: pm ids are already filename-safe, but
+ * the lock path must never become a directory-traversal vector if that ever
+ * changes.
+ *
+ * @param pmRoot - Workspace root or pm data dir.
+ * @param itemId - The pm item id to serialize.
+ * @returns Absolute path under the data dir's `locks/` directory.
+ */
 export function importCommentSyncLockPath(pmRoot: string, itemId: string): string {
   const safe = itemId.replace(/[^A-Za-z0-9._-]/g, "_");
   return path.join(resolvePmDataDir(pmRoot), "locks", `pm-github.comment-sync.${safe}.lock`);
 }
 
+/**
+ * Read and parse a lock file's payload.
+ *
+ * Returns `undefined` when the file is absent or holds non-JSON / non-object
+ * content (e.g. caught mid-write then abandoned), so the caller treats an
+ * unreadable lock as owner-less rather than crashing.
+ *
+ * @param lockPath - Absolute lock file path.
+ * @returns The parsed payload, or `undefined`.
+ */
 function readImportLockPayload(lockPath: string): ImportLockPayload | undefined {
   let raw: string;
   try {
@@ -1334,6 +1493,16 @@ function readImportLockPayload(lockPath: string): ImportLockPayload | undefined 
   }
 }
 
+/**
+ * Whether the process holding a lock is still running.
+ *
+ * Signals the PID with signal 0 (no effect); `EPERM` means the process exists
+ * but belongs to another user (still alive), while `ESRCH` means it is gone.
+ * Non-numeric or non-positive PIDs are treated as not-alive.
+ *
+ * @param pid - The recorded owner PID (untyped at the call site).
+ * @returns True when the PID names a live process.
+ */
 function isLockOwnerAlive(pid: unknown): boolean {
   if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return false;
   try {
@@ -1361,6 +1530,22 @@ function isLockOwnerAlive(pid: unknown): boolean {
 // from a leftover written by a dead process whose PID we inherited (→ break).
 const heldImportLocks = new Set<string>();
 
+/**
+ * Decide whether a held lock is stale and why.
+ *
+ * Returns a human-readable reason when the lock should be broken, or
+ * `undefined` when it is still legitimately held. A lock is stale only when its
+ * owner is provably gone: the recorded PID is dead, or it equals our own PID on
+ * a path this process does not hold (a recycled PID). A LIVE owner is never
+ * age-broken; only a missing/unparseable payload falls back to the TTL, aged
+ * from `created_at` or the file mtime.
+ *
+ * @param lockPath - Absolute lock file path (also tracked in {@link heldImportLocks}).
+ * @param payload - Parsed lock payload, or `undefined` when unreadable.
+ * @param mtimeMs - File mtime, the age fallback base.
+ * @param ttlMs - Maximum age before an owner-less lock is considered stale.
+ * @returns The staleness reason, or `undefined` when the lock is live.
+ */
 function importLockStaleReason(
   lockPath: string,
   payload: ImportLockPayload | undefined,
@@ -1390,21 +1575,30 @@ function importLockStaleReason(
 const IMPORT_LOCK_INITIAL_BACKOFF_MS = 25;
 const IMPORT_LOCK_MAX_BACKOFF_MS = 200;
 const IMPORT_LOCK_MAX_STALE_BREAKS = 3;
-// A breaker's critical section is a handful of syscalls (re-stat, re-read,
-// unlink) — a crashed breaker's sidecar goes stale in seconds, not minutes.
+/**
+ * Staleness TTL for a breaker election sidecar, in ms.
+ *
+ * A breaker's critical section is a handful of syscalls (re-stat, re-read,
+ * unlink), so a crashed breaker's sidecar goes stale in seconds, not minutes;
+ * this short window lets a contender clear and re-run a dead election.
+ */
 export const IMPORT_LOCK_BREAKER_TTL_MS = 10_000;
 
-// Break a stale lock under a breaker election so the unlink can never race
-// another breaker: two contenders may both judge the same file stale, but
-// without mutual exclusion the slower one would execute its unlink AFTER the
-// winner already re-created a fresh, live lock — silently unlinking that
-// replacement and letting both proceed (the exact double-acquire this module
-// exists to prevent). The election is an O_EXCL sidecar (`<lock>.break`):
-// only its single winner may unlink, and it re-verifies staleness under the
-// mutex first, so a lock that became live since the caller's check survives.
-// Returns true when the stale lock was removed (caller should retry acquire
-// immediately), false when the election was lost or the lock is live again
-// (caller should fall through to the normal wait/backoff).
+/**
+ * Break a stale lock under a breaker election.
+ *
+ * Two contenders may both judge the same file stale; without mutual exclusion
+ * the slower unlink would remove a fresh, live lock the winner had just
+ * re-created — the exact double-acquire this module exists to prevent. The
+ * election is an O_EXCL sidecar (`<lock>.break`): only its single winner may
+ * unlink, and it re-verifies staleness under that mutex first, so a lock that
+ * became live since the caller's check survives.
+ *
+ * @param lockPath - Absolute path of the lock judged stale.
+ * @param ttlMs - Staleness TTL handed to {@link importLockStaleReason} on re-check.
+ * @param reason - Human-readable staleness reason, surfaced in the break warning.
+ * @returns True when the stale lock was removed (retry acquire now); false when the election was lost or the lock is live again.
+ */
 function breakStaleImportLock(lockPath: string, ttlMs: number, reason: string): boolean {
   const breakerPath = `${lockPath}.break`;
   let bfd: number | undefined;
@@ -1453,9 +1647,19 @@ function breakStaleImportLock(lockPath: string, ttlMs: number, reason: string): 
   }
 }
 
-// Acquire the cross-process comment-sync lock for one item. Never throws:
-// every failure mode maps to one of the three acquisition statuses so the
-// caller can decide how to degrade. `ttlMs`/`waitMs` are injectable for tests.
+/**
+ * Acquire the cross-process comment-sync lock for one item.
+ *
+ * Never throws: every failure mode maps to one of the three acquisition
+ * statuses (`acquired`, `contended`, `degraded`) so the caller decides how to
+ * degrade. `ttlMs`/`waitMs` are injectable so the wait and staleness windows
+ * can be exercised without real timing in tests.
+ *
+ * @param pmRoot - Workspace root or pm data dir passed to {@link resolvePmDataDir}.
+ * @param itemId - The pm item whose comment critical section is serialized.
+ * @param opts - Optional overrides for the staleness TTL and wait budget.
+ * @returns The acquisition outcome.
+ */
 export async function acquireImportLock(
   pmRoot: string,
   itemId: string,
@@ -1574,20 +1778,37 @@ export async function acquireImportLock(
 // already-synced ids are read back and skipped, so re-running import never
 // duplicates a comment.
 
-// Hidden HTML comment marker carrying the GitHub comment id. HTML comments are
-// invisible in rendered markdown but survive `pm comments` storage verbatim.
+/**
+ * Matches the hidden HTML-comment marker carrying a synced GitHub comment id.
+ *
+ * HTML comments are invisible in rendered markdown but survive `pm comments`
+ * storage verbatim, so the id embedded in the marker is the stable dedupe key.
+ */
 export const COMMENT_MARKER_REGEX = /<!--\s*pm-github:comment:(\d+)\s*-->/;
 
-// Build the text for a single native pm comment from a GitHub comment. The
-// marker is appended so re-sync can de-duplicate on the GitHub comment id.
+/**
+ * Build the text for one native pm comment from a GitHub comment.
+ *
+ * Appends the marker so a later re-sync can de-duplicate on the GitHub comment
+ * id (see {@link COMMENT_MARKER_REGEX}).
+ *
+ * @param comment - The GitHub comment to render.
+ * @returns The comment text with the trailing id marker.
+ */
 export function buildCommentText(comment: GhComment): string {
   const body = (comment.body || "").trim() || "(empty comment)";
   return `${body}\n\n<!-- pm-github:comment:${comment.id} -->`;
 }
 
-// Read the GitHub comment ids already synced into an item's native comments,
-// by scanning each stored comment's text for the stable marker. Returns the set
-// of synced ids (empty when none match, e.g. for hand-written pm comments).
+/**
+ * Collect the GitHub comment ids already synced into an item's native comments.
+ *
+ * Scans each stored comment's text for the stable marker. Returns the set of
+ * synced ids (empty when none match, e.g. for hand-written pm comments).
+ *
+ * @param stored - The item's existing native comments (each may carry marker text).
+ * @returns The set of already-synced GitHub comment ids.
+ */
 export function extractSyncedCommentIds(stored: { text?: string }[]): Set<number> {
   const ids = new Set<number>();
   for (const entry of stored) {
@@ -1617,6 +1838,17 @@ export function extractSyncedCommentIds(stored: { text?: string }[]): Set<number
 //
 // Returns undefined when the output genuinely cannot be parsed, so callers fall
 // back to a safe skip-with-warning instead of crashing the whole import.
+/**
+ * Extract the newly-created item id from `pm create --json` stdout.
+ *
+ * The CLI emits a FLAT envelope (`{ "id": "pm-xxxx", … }`) with no `item`
+ * wrapper, so this reads `parsed.id` directly. Returns `undefined` when the
+ * output genuinely cannot be parsed, so callers skip-with-warning instead of
+ * crashing the whole import.
+ *
+ * @param stdout - Raw `pm create --json` output.
+ * @returns The created item id, or `undefined`.
+ */
 export function parseCreatedItemId(stdout: string): string | undefined {
   try {
     const parsed = JSON.parse(stdout);
@@ -1646,6 +1878,21 @@ export function parseCreatedItemId(stdout: string): string | undefined {
 // (never run unlocked, so a wedged peer can cost a sync — recoverable on the
 // next import — but never cause a duplicate); if the lock mechanism itself is
 // unavailable the sync proceeds unlocked as before, also with a warning.
+/**
+ * Sync GitHub issue comments into a pm item's native comments collection.
+ *
+ * Idempotent: comments already present (matched by their marker id) are skipped,
+ * so re-running import never duplicates. Each GitHub comment becomes one pm
+ * comment authored by the GitHub login. Failures are logged and never abort the
+ * import; a contended or unavailable lock degrades gracefully (see
+ * {@link acquireImportLock}).
+ *
+ * @param itemId - The pm item to append comments to.
+ * @param comments - The GitHub comments to sync.
+ * @param pmRoot - Workspace root or pm data dir.
+ * @param issueNumber - The source issue number (for log prefixes).
+ * @returns How many comments were added and how many skipped as duplicates.
+ */
 export async function syncGithubCommentsToAnnotations(
   itemId: string,
   comments: GhComment[],
@@ -1695,13 +1942,30 @@ export async function syncGithubCommentsToAnnotations(
   }
 }
 
-// A draft PR is an issue that is both a pull request and flagged `draft: true`.
-// (Plain issues are never drafts.)
+/**
+ * Whether a GitHub issue node is a draft pull request.
+ *
+ * A draft PR is an issue that is BOTH a pull request and flagged `draft: true`;
+ * plain issues are never drafts.
+ *
+ * @param issue - The issue node to test.
+ * @returns True only for draft pull requests.
+ */
 export function isDraftPr(issue: GhIssue): boolean {
   return Boolean(issue.pull_request) && issue.draft === true;
 }
 
-// Apply the client-side filters (PRs, drafts, milestone-by-title).
+/**
+ * Apply the client-side import filters the REST API cannot express.
+ *
+ * Drops pull requests (unless `includePrs`), draft PRs (when `skipDrafts`), and
+ * items whose milestone title does not match (the API keys milestones by number,
+ * not title). Returns the surviving issues in input order.
+ *
+ * @param issues - Fetched issues to narrow.
+ * @param opts - Import options carrying the filter flags.
+ * @returns The filtered issue list.
+ */
 export function applyClientFilters(issues: GhIssue[], opts: ImportOptions): GhIssue[] {
   let result = issues;
   if (!opts.includePrs) result = result.filter((i) => !i.pull_request);
@@ -1714,8 +1978,17 @@ export function applyClientFilters(issues: GhIssue[], opts: ImportOptions): GhIs
   return result;
 }
 
-// Normalize CLI options into ImportOptions (state filter, labels, assignee,
-// milestone, since-window, PR inclusion, draft skipping, comment fetching).
+/**
+ * Normalize the raw CLI flag bag into a typed {@link ImportOptions}.
+ *
+ * Resolves the state filter, labels, assignee, milestone, the `--since` window,
+ * PR inclusion, draft skipping, and the comment-fetching mode, throwing a
+ * {@link CommandError} with a usage code on a malformed `--since` or
+ * `--comments-mode`.
+ *
+ * @param options - The raw option object from the command handler.
+ * @returns The normalized import options.
+ */
 export function parseImportOptions(options: Record<string, unknown>): ImportOptions {
   // --state takes precedence; --all is the legacy shorthand for "all".
   const stateOpt = optionString(options, "state") as ImportOptions["state"] | undefined;
@@ -1859,6 +2132,16 @@ const DEP_REF_STICKY = /(?:([A-Za-z0-9._-]+\/[A-Za-z0-9._-]+))?#(\d+)/y;
 // terminates: the next sticky ref match is what decides whether to continue.
 const DEP_GLUE_STICKY = /[\s,]*(?:and\b[\s,]*)?/y;
 
+/**
+ * Map a dependency phrase captured from an issue body to its pm edge kind.
+ *
+ * Collapses spacing/hyphen variants and returns both the canonical
+ * {@link DepRefKind} and a normalized human phrase ("blocks", "depends on", or
+ * "blocked by") for audit messages.
+ *
+ * @param raw - The raw phrase matched by the dependency-phrase regex.
+ * @returns The resolved kind and normalized phrase.
+ */
 function phraseToKind(raw: string): { kind: DepRefKind; phrase: string } {
   const compact = raw.toLowerCase().replace(/[\s-]/g, "");
   if (compact === "blocks") return { kind: "blocks", phrase: "blocks" };
@@ -1987,12 +2270,17 @@ interface DepLinkSdk {
   ) => string[];
 }
 
-// Build the default `DepLinkSdk` from the top-level SDK imports so the
-// --link-deps second pass never needs a dynamic import. `listAllItemMetadata`
-// returns full `ItemMetadata` objects; we project to the `DepLinkSnapshotItem`
-// structural subset the link pass actually reads. The SDK's cycle detector
-// reads only id/tags/dependencies off each item; `DepLinkSnapshotItem` is that
-// structural subset, so the cast on `collectNewOrderingCycleWarnings` is sound.
+/**
+ * Build the default SDK-backed dependency-link collaborators.
+ *
+ * Wires the `--link-deps` second pass to the top-level SDK imports so it never
+ * needs a dynamic import. `listAllItemMetadata` returns full `ItemMetadata`
+ * objects, projected here to the {@link DepLinkSnapshotItem} structural subset
+ * the link pass reads; the SDK cycle detector reads only id/tags/dependencies,
+ * so the cast on `collectNewOrderingCycleWarnings` is sound.
+ *
+ * @returns The default SDK collaborators.
+ */
 function defaultDepLinkSdk(): DepLinkSdk {
   return {
     listAllItemMetadata: async (pmRoot: string) => {
@@ -2008,6 +2296,17 @@ function defaultDepLinkSdk(): DepLinkSdk {
   };
 }
 
+/**
+ * Default edge applier: spawn `pm update --dep` for one resolved edge.
+ *
+ * Records the source issue and the matching phrase in the mutation message so
+ * the resulting dependency is auditable. Returns the ok/stderr shape every edge
+ * applier shares, never throwing.
+ *
+ * @param edge - The resolved workspace edge to write.
+ * @param pmRoot - Workspace root for the `pm` invocation.
+ * @returns Whether the write succeeded and any stderr.
+ */
 function defaultApplyDependencyLink(edge: ResolvedDepEdge, pmRoot: string): { ok: boolean; stderr: string } {
   const res = pmRun([
     "--path", pmRoot, "update", edge.sourceId,
@@ -2096,6 +2395,21 @@ export async function linkImportedDependencies(
   return { linked, unresolved, orderingCycleWarnings: [...warnings], failures };
 }
 
+/**
+ * Render one GitHub issue into the import-ready desired state.
+ *
+ * Computes the title, status, provenance/author tags, description, body (with
+ * optional embedded comments), and the comment list for native sync. Returns
+ * `undefined` for an issue with no usable title so the caller counts it skipped.
+ *
+ * @param issue - The fetched issue to render.
+ * @param repo - `owner/repo`, baked into the provenance tag.
+ * @param opts - Import options governing body/comments.
+ * @param token - GitHub token for the comment fetch.
+ * @param match - The existing pm item linked to this issue, if any (drives update vs create).
+ * @param fetchIssueComments - Injectable comment fetcher (defaults to {@link fetchComments}).
+ * @returns The prepared import entry, or `undefined` when the issue has no title.
+ */
 async function prepareGithubImport(
   issue: GhIssue,
   repo: string,
@@ -2147,9 +2461,20 @@ async function prepareGithubImport(
   };
 }
 
-// Run the full import flow. Idempotent: items already linked (provenance tag)
-// to a fetched issue are UPDATEd; new issues are created. Returns a structured
-// result; throws CommandError (with a semantic exitCode) on failure.
+/**
+ * Run the full GitHub issue import flow.
+ *
+ * Idempotent: items already linked (by provenance tag) to a fetched issue are
+ * UPDATEd; new issues are created. Honors `--atomic` (one crash-resumable
+ * transaction) versus the per-item `pm` mutation path, optional `--link-deps`,
+ * and `--dry-run`. Returns a structured result and throws {@link CommandError}
+ * (with a semantic exit code) on failure.
+ *
+ * @param repoArg - The `owner/repo` to import from.
+ * @param pmRoot - Workspace root or pm data dir.
+ * @param opts - Normalized import options.
+ * @param deps - Injectable collaborators (token resolver, fetchers, etc.) for tests.
+ */
 export async function runImport(
   repoArg: string | undefined,
   pmRoot: string,
@@ -2497,8 +2822,13 @@ export async function runImport(
   return { imported, updated, skipped, ...depLinkResultFields(depLink) };
 }
 
-// Emit the human-readable --link-deps summary to stderr (import writes its
-// progress there; stdout is reserved for the structured result).
+/**
+ * Emit the human-readable `--link-deps` summary to stderr.
+ *
+ * Import progress is written to stderr so stdout stays reserved for the
+ * structured result; this prints the linked-edge count, unresolved refs, and
+ * any ordering-cycle warnings or per-edge failures.
+ */
 function reportDepLink(result: DepLinkResult | undefined): void {
   if (!result) return;
   const parts = [`linked ${result.linked} dependency edge(s)`];
@@ -2508,8 +2838,12 @@ function reportDepLink(result: DepLinkResult | undefined): void {
   for (const failure of result.failures) console.error(`  ✗ link failed: ${failure}`);
 }
 
-// The public, JSON-serializable slice of a --link-deps result. Kept flat and
-// omitted entirely when the pass did not run so the default result is unchanged.
+/**
+ * The public, JSON-serializable slice of a `--link-deps` result.
+ *
+ * Kept flat and omitted entirely when the pass did not run, so the default
+ * import result is unchanged.
+ */
 function depLinkResultFields(
   result: DepLinkResult | undefined,
 ): Record<string, unknown> {
@@ -2530,14 +2864,22 @@ function pmStatusToGithubState(status: string | undefined): "open" | "closed" {
   return status === "closed" || status === "canceled" ? "closed" : "open";
 }
 
-// For every pm item that carries a provenance tag for `repo`, compute whether
-// the linked GitHub issue's state should change to match the pm status, and
-// (unless dry-run) PATCH it. Guarded by token + explicit --repo upstream.
+/**
+ * One pm → GitHub issue state-change proposed by {@link planSync}.
+ *
+ * `from`/`to` are GitHub issue states; the executor only PATCHes when GitHub's
+ * live state disagrees with `to`.
+ */
 export interface SyncPlanEntry {
+  /** pm item id driving the proposed change. */
   id: string;
+  /** GitHub issue number to PATCH. */
   number: number;
+  /** Item title, surfaced in progress output. */
   title: string;
+  /** GitHub state assumed before the write (the inverse of `to`; re-checked live). */
   from: "open" | "closed";
+  /** Desired GitHub state derived from the pm status. */
   to: "open" | "closed";
 }
 
@@ -2786,13 +3128,15 @@ export type ExportRequestFn = (
   payload?: string,
 ) => Promise<unknown>;
 
-// Apply a (already-built) export plan to GitHub, one issue at a time.
-//
-// CRITICAL: each create/update is isolated. A single failed write (e.g. a 422
-// for a label that does not exist on the repo) is recorded and the loop
-// CONTINUES with the remaining items — it never abandons the rest of the batch.
-// This mirrors the per-item isolation already used by the import/sync paths.
-// Pure aside from the injected `requestFn`, so it is directly unit-testable.
+/**
+ * Apply an already-built export plan to GitHub, one issue at a time.
+ *
+ * Each create/update is isolated: a single failed write (e.g. a 422 for a label
+ * that does not exist on the repo) is recorded and the loop CONTINUES with the
+ * remaining items — it never abandons the rest of the batch. Pure aside from the
+ * injected `requestFn`, so the per-item isolation is directly unit-testable
+ * without real network I/O.
+ */
 export async function applyExportPlan(
   plan: ExportPlanEntry[],
   repo: string,
@@ -2861,6 +3205,19 @@ export async function applyExportPlan(
 //   - any creates/updates landed (partial or full)     → success (per-item
 //     failures are already reported; the batch still wrote real changes)
 //   - non-empty plan, nothing written, >=1 failure     → GENERIC_FAILURE
+/**
+ * Decide the exit status of a completed `export --apply` batch.
+ *
+ * Per-item continuation is intentional (one bad item never aborts the batch),
+ * but the batch as a whole must still report honestly: a non-empty plan that
+ * wrote NOTHING while recording at least one failure is a total failure, so it
+ * returns a {@link CommandError} to throw; otherwise `undefined` (exit 0).
+ *
+ * @param plan - The plan that was applied.
+ * @param result - What the apply loop actually wrote.
+ * @param repo - Target repo, included in the failure message.
+ * @returns A `CommandError` to throw on total failure, else `undefined`.
+ */
 export function applyOutcomeError(
   plan: ExportPlanEntry[],
   result: ExportApplyResult,
@@ -2889,6 +3246,14 @@ export function applyOutcomeError(
 // stdout in JSON mode (pm renders the return value). Used by both the
 // `registerExporter("github", ...)` entry point and the `pm github export`
 // command so the surface stays consistent.
+/**
+ * Shared handler for the `pm github export` exporter and command.
+ *
+ * Export is SAFE BY DEFAULT: it previews the create/update plan and writes
+ * nothing unless the user opts in with `--apply` (plus a token and `--repo`).
+ * Items already linked to an issue in `--repo` are upserted rather than
+ * duplicated; `--label-map` translates pm tags to GitHub labels.
+ */
 async function runExport(ctx: CommandHandlerContext) {
   const options = ctx.options || {};
   const jsonMode = ctx.global?.json === true;
@@ -3023,17 +3388,33 @@ async function runExport(ctx: CommandHandlerContext) {
 // imported from those issues (matched by the `gh:repo#N` provenance tag).
 // Semantics: "find my imported pm items whose upstream GitHub issue matches Q".
 
-// Build the GitHub Search-API URL for issues in a repo matching the free-text
-// query. Restricted to `type:issue repo:<repo>` so it never leaks across repos.
+/**
+ * Build the GitHub Search-API URL for issues in one repo matching a free-text query.
+ *
+ * Restricted to `type:issue repo:<repo>` so a search never leaks across repos.
+ *
+ * @param repo - The `owner/repo` to search within.
+ * @param query - Free-text query string.
+ * @returns The encoded search URL.
+ */
 export function buildSearchUrl(repo: string, query: string): string {
   const q = `${query} repo:${repo} type:issue`;
   return `${githubApiBase()}/search/issues?q=${encodeURIComponent(q)}&per_page=100`;
 }
 
-// Map GitHub search results to local pm-item hits. For every returned issue
-// number we look up the pm item carrying the matching `gh:repo#N` provenance
-// tag; only locally-present items become hits (the runtime would drop the rest
-// anyway). Score is GitHub's relevance score, normalized into a sane range.
+/**
+ * Map GitHub search result numbers to local pm-item hits.
+ *
+ * For every returned issue number, looks up the pm item carrying the matching
+ * `gh:repo#N` provenance tag; only locally-present items become hits (the
+ * runtime would drop the rest anyway). Score preserves GitHub's ranking,
+ * normalized into `(0, 1]` so hits clear pm's default threshold.
+ *
+ * @param matchedNumbers - Issue numbers GitHub returned, best-first.
+ * @param repo - The repo the search ran against.
+ * @param itemsByProvenance - Local items keyed `owner/repo#N`.
+ * @returns One hit per locally-present matching item.
+ */
 export function mapSearchHits(
   matchedNumbers: number[],
   repo: string,
@@ -3066,8 +3447,15 @@ interface GhSearchResponse {
   items?: Array<{ number?: number }>;
 }
 
-// Resolve the search target repo: an explicit option wins, then the
-// PM_GITHUB_REPO env var (so a workspace can pin its upstream).
+/**
+ * Resolve the search target repo for the GitHub search provider.
+ *
+ * An explicit option wins, then the `PM_GITHUB_REPO` env var so a workspace can
+ * pin its upstream. Returns `undefined` when neither yields an `owner/repo`.
+ *
+ * @param options - The raw option object from the search context.
+ * @returns The resolved `owner/repo`, or `undefined`.
+ */
 export function resolveSearchRepo(options: Record<string, unknown>): string | undefined {
   const opt = optionString(options, "repo", "github-repo", "githubRepo");
   if (opt && opt.includes("/")) return opt;
@@ -3080,18 +3468,37 @@ export function resolveSearchRepo(options: Record<string, unknown>): string | un
 // Validate — diagnose gh/token availability + repo accessibility
 // ---------------------------------------------------------------------------
 
+/**
+ * Structured result of `pm github validate`.
+ *
+ * Reports the resolved token source, whether the `gh` CLI is installed, the
+ * current rate-limit snapshot, and (when a repo is given) its reachability.
+ * `ok` is the overall pass/fail; `messages` carries the human-readable detail.
+ */
 export interface ValidateReport {
+  /** Overall pass/fail for the validation. */
   ok: boolean;
+  /** Whether the `gh` CLI was found on PATH. */
   gh_cli: boolean;
+  /** Whether any GitHub token was resolvable. */
   token: boolean;
+  /** Where the token came from: `env`, `gh`, or `none`. */
   token_source: "env" | "gh" | "none";
+  /** The repo examined, when one was supplied. */
   repo?: string;
+  /** Whether the repo responded 2xx. */
   repo_accessible?: boolean;
+  /** Raw HTTP status the repo check returned. */
   repo_status?: number;
+  /** Remaining requests in the current rate-limit window. */
   rate_limit_remaining?: number;
+  /** Total requests permitted per window. */
   rate_limit_limit?: number;
+  /** Epoch seconds at which the window resets. */
   rate_limit_reset?: number;
+  /** Whether the remaining quota is at/under the low-water mark. */
   rate_limit_low?: boolean;
+  /** Human-readable diagnostic lines. */
   messages: string[];
 }
 
@@ -3374,9 +3781,18 @@ const STATUS_FIELD_GQL = `
     ... on ProjectV2SingleSelectField { id name options { id name } }
   }`;
 
-// Resolve owner/number → project id + Status field. The owner may be a user or
-// an org and GraphQL requires us to pick, so we ask both in one request and use
-// whichever resolves.
+/**
+ * Resolve a project reference into its GraphQL id and Status field.
+ *
+ * The owner may be a user or an org, and GraphQL requires us to pick which
+ * owner-type field to query, so this asks both in one request and keeps
+ * whichever connection resolves. Throws {@link CommandError} (NOT_FOUND) when
+ * neither resolves (wrong owner, wrong number, or missing project scope).
+ *
+ * @param ref - The `owner/number` board reference.
+ * @param token - GitHub token (the GraphQL call requires one).
+ * @returns The board metadata including its Status field, if any.
+ */
 async function resolveProject(ref: ProjectRef, token: string | undefined): Promise<ProjectMeta> {
   const query = `
     query($owner:String!,$number:Int!){
@@ -3401,9 +3817,16 @@ async function resolveProject(ref: ProjectRef, token: string | undefined): Promi
   return { id: node.id, title: node.title ?? "", url: node.url ?? "", ownerType, statusField };
 }
 
-// Normalize a raw GraphQL project-item node into the ProjectItem model,
-// tolerating null/undefined nodes and missing content (defensive against
-// partial GraphQL errors / inaccessible items).
+/**
+ * Normalize a raw GraphQL project-item node into the {@link ProjectItem} model.
+ *
+ * Tolerates null/undefined nodes and missing content, returning a placeholder
+ * `Unknown` content for redacted or unmodeled item types so they are counted but
+ * never mutated.
+ *
+ * @param n - The raw GraphQL node (may be null).
+ * @returns The normalized project item.
+ */
 function normalizeProjectItemNode(n: GraphqlProjectItemNode): ProjectItem {
   const c: GraphqlProjectItemContent = n?.content ?? { __typename: "Unknown" };
   const tn = c.__typename;
@@ -3443,7 +3866,17 @@ function normalizeProjectItemNode(n: GraphqlProjectItemNode): ProjectItem {
   };
 }
 
-// Fetch every item on the board (paginated, 100/page).
+/**
+ * Fetch every item on a board, paging through the connection at 100/page.
+ *
+ * Walks the GraphQL cursor until `hasNextPage` is false, normalizing each node
+ * via {@link normalizeProjectItemNode}. Stops cleanly when a page reports no
+ * connection so the loop never truncates silently nor spins on a missing cursor.
+ *
+ * @param projectId - GraphQL node id of the board.
+ * @param token - GitHub token.
+ * @returns Every item on the board, in page order.
+ */
 async function fetchProjectItems(projectId: string, token: string | undefined): Promise<ProjectItem[]> {
   const query = `
     query($id:ID!,$cursor:String){
@@ -3481,7 +3914,15 @@ async function fetchProjectItems(projectId: string, token: string | undefined): 
   return items;
 }
 
-// Add a DraftIssue to a Projects v2 board and return the new project item id.
+/**
+ * Add a draft issue to a Projects v2 board and return the new project-item id.
+ *
+ * @param projectId - GraphQL node id of the board.
+ * @param title - Draft issue title.
+ * @param body - Draft issue body (empty string when absent).
+ * @param token - GitHub token.
+ * @returns The newly created project-item id.
+ */
 async function gqlAddDraft(
   projectId: string,
   title: string,
@@ -3495,8 +3936,14 @@ async function gqlAddDraft(
   return id;
 }
 
-// Link an existing repository issue/PR to a Projects v2 board and return the
-// new project item id.
+/**
+ * Link an existing repo issue/PR to a board and return the new project-item id.
+ *
+ * @param projectId - GraphQL node id of the board.
+ * @param contentId - GraphQL node id of the issue/PR to attach.
+ * @param token - GitHub token.
+ * @returns The newly created project-item id.
+ */
 async function gqlAddIssue(projectId: string, contentId: string, token: string | undefined): Promise<string> {
   const q = `mutation($p:ID!,$c:ID!){ addProjectV2ItemById(input:{projectId:$p,contentId:$c}){ item{ id } } }`;
   const d = await githubGraphQL<GraphqlAddIssueData>(token, q, { p: projectId, c: contentId });
@@ -3517,8 +3964,14 @@ async function gqlSetStatus(
   await githubGraphQL<GraphqlSetStatusData>(token, q, { p: projectId, i: itemId, f: fieldId, o: optionId });
 }
 
-// Resolve the GraphQL node id of a repo's issue or PR by number, returning
-// undefined when the item is not found or the repo ref is malformed.
+/**
+ * Resolve the GraphQL node id of a repo's issue or PR by number.
+ *
+ * @param repo - `owner/repo` to look up in.
+ * @param number - The issue/PR number.
+ * @param token - GitHub token.
+ * @returns The node id, or `undefined` when not found or the repo ref is malformed.
+ */
 async function gqlResolveIssueNodeId(
   repo: string,
   number: number,
@@ -3531,8 +3984,6 @@ async function gqlResolveIssueNodeId(
   return d.repository?.issueOrPullRequest?.id ?? undefined;
 }
 
-// Compose a human-readable + provenance-bearing description for an imported
-// project item (parallels the issue-import description).
 /** Build a factual close reason for a project-import item entering `closed`. */
 function projectImportCloseReason(ref: ProjectRef, c: ProjectItemContent): string {
   if (c.repo && typeof c.number === "number") {
@@ -3541,6 +3992,17 @@ function projectImportCloseReason(ref: ProjectRef, c: ProjectItemContent): strin
   return `GitHub project ${ref.owner}/${ref.number} item closed`;
 }
 
+/**
+ * Compose a human-readable, provenance-bearing description for an imported
+ * project item.
+ *
+ * Parallels the issue-import description: joins the board ref, item kind, issue
+ * link, URL, and state into one summary string written to the pm item.
+ *
+ * @param ref - The board the item came from.
+ * @param c - The item's resolved content.
+ * @returns The composed description line.
+ */
 function projectItemDescription(ref: ProjectRef, c: ProjectItemContent): string {
   const parts = [`GH project item ${ref.owner}/${ref.number}`];
   if (c.typename === "DraftIssue") parts.push("· draft issue");
@@ -3552,9 +4014,15 @@ function projectItemDescription(ref: ProjectRef, c: ProjectItemContent): string 
 
 // --- project list ----------------------------------------------------------
 
-// A page of a projectsV2 connection as returned by GitHub GraphQL.
+/**
+ * One page of a `projectsV2` connection as returned by GitHub GraphQL.
+ *
+ * Carries the page's nodes and the cursor threading needed to fetch the rest.
+ */
 export interface ProjectsV2Page {
+  /** Project-summary nodes on this page (null entries are redacted/inaccessible). */
   nodes?: Array<GraphqlProjectsV2Node | null>;
+  /** Relay pagination info for the next page. */
   pageInfo?: { hasNextPage?: boolean; endCursor?: string };
 }
 
@@ -3592,12 +4060,18 @@ export type GraphQLTransport = (
   variables: Record<string, unknown>,
 ) => Promise<GraphqlListOwnerProjectsData>;
 
-// Resolve + paginate the projectsV2 connection for a user-or-org owner using an
-// injected GraphQL transport. A login is either a user or an organization,
-// never both; querying both in one request lets us resolve the owner type
-// without a round-trip, then we keep paginating the connection that actually
-// exists so owners with more than 50/100 projects are fully listed instead of
-// silently truncated (Greptile 2006f478). Returns raw connection nodes.
+/**
+ * Resolve and paginate the `projectsV2` connection for a user-or-org owner.
+ *
+ * A login is either a user or an organization, never both; querying both in one
+ * request resolves the owner type without an extra round-trip, then this keeps
+ * paginating the connection that actually exists so owners with more than 100
+ * projects are fully listed instead of silently truncated.
+ *
+ * @param owner - The user or org login.
+ * @param graphQL - Injectable transport (query + variables → data), for tests.
+ * @returns Every project-summary node for the owner.
+ */
 export async function listOwnerProjectsV2Nodes(
   owner: string,
   graphQL: GraphQLTransport,
@@ -3618,6 +4092,11 @@ export async function listOwnerProjectsV2Nodes(
   });
 }
 
+/**
+ * Command handler for `pm github project list`: list a user/org's Projects v2.
+ *
+ * @param ctx - The command-handler context.
+ */
 async function runProjectList(ctx: CommandHandlerContext) {
   const options = ctx.options || {};
   const owner = optionString(options, "owner") || (ctx.args?.[0] as string | undefined);
@@ -3651,6 +4130,14 @@ async function runProjectList(ctx: CommandHandlerContext) {
 
 // --- project fields --------------------------------------------------------
 
+/**
+ * Command handler for `pm github project fields`: show a board's fields.
+ *
+ * Resolves the board, then lists its fields and (for the Status single-select)
+ * its option names so the caller can build a `--status-map`.
+ *
+ * @param ctx - The command-handler context.
+ */
 async function runProjectFields(ctx: CommandHandlerContext) {
   const options = ctx.options || {};
   const ref = parseProjectRef(optionString(options, "project") || (ctx.args?.[0] as string | undefined));
@@ -3690,6 +4177,15 @@ async function runProjectFields(ctx: CommandHandlerContext) {
 
 // --- project import --------------------------------------------------------
 
+/**
+ * Command handler for `pm github project import`: import board items as pm items.
+ *
+ * Idempotent: items already linked (by project tag or wrapped issue) are updated,
+ * the rest are created. Status is refreshed only from an explicit, resolvable
+ * board mapping (never a guess), honoring the no-data-loss invariant.
+ *
+ * @param ctx - The command-handler context.
+ */
 async function runProjectImport(ctx: CommandHandlerContext) {
   const options = ctx.options || {};
   const ref = parseProjectRef(optionString(options, "project") || (ctx.args?.[0] as string | undefined));
@@ -3793,8 +4289,21 @@ async function runProjectImport(ctx: CommandHandlerContext) {
 
 // --- project sync (bidirectional) ------------------------------------------
 
-// Push a pm item's status onto its (existing) board item, tolerating a missing
-// target option. Returns true on a real change.
+/**
+ * Push one pm item's status onto its board item.
+ *
+ * Tolerates a missing target option (writes the item but skips the Status set).
+ * Returns whether a real change was made and an optional error string so the
+ * caller can continue the batch per-item.
+ *
+ * @param entry - The push-plan entry to execute.
+ * @param meta - The board metadata (id, Status field).
+ * @param ref - The board reference (for the provenance tag).
+ * @param pmById - Local pm items keyed by id (for body lookup and tagging).
+ * @param pmRoot - Workspace root for the `pm` tag write.
+ * @param token - GitHub token for the GraphQL calls.
+ * @returns Whether the item changed, plus an optional error message.
+ */
 async function applyPushEntry(
   entry: ReturnType<typeof buildProjectPushPlan>["entries"][number],
   meta: ProjectMeta,
@@ -3860,6 +4369,18 @@ async function applyPushEntry(
 // and fail for terminal→canceled transitions. Recording `--close-reason` on the
 // `pm update` keeps the distinction AND the lifecycle metadata, and works for
 // active→canceled and terminal→canceled alike.
+/**
+ * Build the `pm` CLI argv that applies one pull (project → pm) status transition.
+ *
+ * Pure so the pm lifecycle contract is unit-testable without spawning `pm`:
+ * `closed` goes through `pm close`; `canceled` keeps its distinct terminal state
+ * via `pm update --status canceled` with `--close-reason`; everything else is a
+ * plain `pm update --status`. See the long note above for the pm CLI contracts.
+ *
+ * @param entry - The pull-plan entry to render argv for.
+ * @param pmRoot - Workspace root for the `pm` invocation.
+ * @returns The argv array.
+ */
 export function buildPullEntryArgs(entry: PullPlanEntryLike, pmRoot: string): string[] {
   const reason = `GitHub project status → ${entry.toStatus}`;
   if (entry.toStatus === "closed") {
@@ -3897,8 +4418,15 @@ interface PullPlanEntryLike {
   toStatus: string;
 }
 
-// Command handler for `pm github project sync`: preview (default) or apply the
-// bidirectional Projects v2 sync plan, honoring --push/--pull/--apply/--ids.
+/**
+ * Command handler for `pm github project sync`: preview or apply the
+ * bidirectional Projects v2 sync plan.
+ *
+ * Honors `--push`/`--pull` (default previews both), `--apply`, `--ids`, and the
+ * `--prefer` conflict winner when both directions touch the same linked item.
+ *
+ * @param ctx - The command-handler context.
+ */
 async function runProjectSync(ctx: CommandHandlerContext) {
   const options = ctx.options || {};
   const ref = parseProjectRef(optionString(options, "project") || (ctx.args?.[0] as string | undefined));
@@ -4034,8 +4562,16 @@ async function runProjectSync(ctx: CommandHandlerContext) {
   return result;
 }
 
-// Report whether a github subcommand mutates GitHub (for the host CLI's
-// "mutating command" guard), accounting for --dry-run / --apply overrides.
+/**
+ * Report whether a github subcommand will mutate GitHub.
+ *
+ * Feeds the host CLI's "mutating command" guard, accounting for the `--dry-run`
+ * and `--apply` overrides that turn an otherwise-mutating command into a preview.
+ *
+ * @param command - The subcommand string (e.g. `github sync`).
+ * @param options - The raw option object from the command handler.
+ * @returns True when the command will perform real GitHub writes.
+ */
 export function isMutatingGithubCommand(command: string, options: Record<string, unknown>): boolean {
   const cmd = (command || "").toLowerCase();
   const dryRun = optionEnabled(options, "dry-run", "dryRun");

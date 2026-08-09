@@ -17,8 +17,17 @@
 // Types
 // ---------------------------------------------------------------------------
 
+/**
+ * Identifies one GitHub Projects v2 board by its owner and project number.
+ *
+ * This is the human-facing handle used across the CLI (`--project owner/number`)
+ * and parsed from board URLs by {@link parseProjectRef}; the board's stable
+ * GraphQL node id lives separately in {@link ProjectMeta}.
+ */
 export interface ProjectRef {
+  /** Login of the user or organization that owns the board. */
   owner: string;
+  /** The board's project number, as it appears in the URL path after `/projects/` (not a database id). */
   number: number;
 }
 
@@ -35,10 +44,20 @@ export interface ProjectStatusField {
 
 export type ProjectOwnerType = "user" | "organization";
 
+/**
+ * Lightweight metadata describing one Projects v2 board.
+ *
+ * Fetched up front (before any item-level work) so `project list` can render a
+ * chooser and the command handlers can decide whether a Status field exists.
+ */
 export interface ProjectMeta {
+  /** GraphQL node id of the project (`PVT_…`), used as a stable key. */
   id: string;
+  /** Human-readable board title shown by `project list`. */
   title: string;
+  /** Browser URL of the board, surfaced in command output. */
   url: string;
+  /** Whether the board is owned by a user account or an organization. */
   ownerType: ProjectOwnerType;
   /** The single-select "Status" field, if the project has one. */
   statusField?: ProjectStatusField;
@@ -180,10 +199,17 @@ export const DEFAULT_STATUS_CANDIDATES: Record<string, string[]> = {
   canceled: ["Cancelled", "Canceled", "Won't Do", "Wont Do", "Not Planned", "Dropped"],
 };
 
-// Parse a `--status-map` option into a forward table (pm status → exact Status
-// option name). Accepts `pm=OptionName` pairs, comma-separated or repeated.
-// Entries without a `=` or an empty side are skipped. Returns undefined when no
-// usable mapping was supplied so callers keep the default behavior.
+/**
+ * Parse a `--status-map` option into a forward table (pm status → exact Status
+ * option name).
+ *
+ * Accepts `pm=OptionName` pairs, comma-separated or repeated. Entries without a
+ * `=` or with an empty side are skipped. Returns `undefined` when no usable
+ * mapping was supplied so callers keep the default candidate-list behavior.
+ *
+ * @param raw - The raw string array handed to the `--status-map` CLI option.
+ * @returns The parsed forward mapping, or `undefined` if nothing usable was supplied.
+ */
 export function parseStatusMap(
   raw: string[],
 ): Map<string, string> | undefined {
@@ -202,10 +228,20 @@ export function parseStatusMap(
 
 const normalizeName = (s: string): string => s.trim().toLowerCase();
 
-// Resolve the Status option a given pm status should be set to, against the
-// project's real options. An explicit override (`--status-map`) wins; otherwise
-// the default candidate list is tried in order. Returns undefined when nothing
-// matches — the caller must SKIP rather than guess (no data loss).
+/**
+ * Resolve which board Status option a given pm status should be written to,
+ * measured against the project's real single-select options.
+ *
+ * An explicit `--status-map` override wins; otherwise the default candidate
+ * list is tried in order. Returns `undefined` when nothing matches — the caller
+ * must SKIP the write rather than guess, so a real state is never overwritten
+ * with a wrong one (the module's no-data-loss invariant).
+ *
+ * @param pmStatus - The pm status to place on the board (defaults to "open").
+ * @param options - The board's actual Status options to match against.
+ * @param override - Optional forward map from `--status-map`; takes precedence.
+ * @returns The matching option, or `undefined` on a hard miss.
+ */
 export function resolveOptionForStatus(
   pmStatus: string | undefined,
   options: Array<ProjectStatusOption | null | undefined>,
@@ -234,10 +270,18 @@ export function resolveOptionForStatus(
   return undefined;
 }
 
-// Reverse map: a Project Status option name → a pm status. Used by pull. An
-// explicit forward `--status-map` is inverted first (option name → pm status);
-// otherwise a keyword heuristic is applied. Returns undefined for names we do
-// not recognize so pull SKIPS them instead of forcing a wrong pm status.
+/**
+ * Reverse-map a board Status option name back to a pm status (used by pull).
+ *
+ * An explicit forward `--status-map` is inverted first (option name → pm
+ * status); otherwise a keyword heuristic classifies the name. Returns
+ * `undefined` for names that match no bucket so pull SKIPS them instead of
+ * forcing a wrong pm status onto the item.
+ *
+ * @param optionName - The Status option name read from the board.
+ * @param override - Optional forward map from `--status-map`; inverted first.
+ * @returns The pm status, or `undefined` when the name is unrecognized.
+ */
 export function mapOptionNameToPmStatus(
   optionName: string | undefined,
   override?: Map<string, string>,
@@ -270,7 +314,17 @@ export function mapOptionNameToPmStatus(
 // Indexing helpers
 // ---------------------------------------------------------------------------
 
-// Index pm items by the project-item id they are linked to (for THIS project).
+/**
+ * Index pm items by the project-item id they are linked to, scoped to one board.
+ *
+ * Scans each item's tags for a {@link projectItemTag} whose owner/number match
+ * `ref`, so a sync can find the existing pm item behind a given board item in
+ * O(1) rather than re-scanning the whole list.
+ *
+ * @param items - The pm items to index (nullish entries are ignored).
+ * @param ref - The board whose project-item linkage is wanted.
+ * @returns A map from decoded project-item id to the linked pm item.
+ */
 export function indexPmByProjectItem(
   items: Array<PmItemLike | null | undefined>,
   ref: ProjectRef,
@@ -289,9 +343,16 @@ export function indexPmByProjectItem(
   return index;
 }
 
-// Index pm items by `owner/repo#number` issue provenance so a push can link an
-// already-imported pm item to the existing issue's project item (rather than
-// adding a duplicate draft).
+/**
+ * Index pm items by their `owner/repo#number` issue-provenance tag.
+ *
+ * Lets a push attach an already-imported pm item to the existing issue's project
+ * item (via {@link indexProjectItemsByIssue}) rather than creating a duplicate
+ * draft on the board.
+ *
+ * @param items - The pm items to index (nullish entries are ignored).
+ * @returns A map keyed `owner/repo#number` (lowercased owner) to the pm item.
+ */
 export function indexPmByIssue(items: Array<PmItemLike | null | undefined>): Map<string, PmItemLike> {
   const index = new Map<string, PmItemLike>();
   for (const item of items) {
@@ -304,9 +365,15 @@ export function indexPmByIssue(items: Array<PmItemLike | null | undefined>): Map
   return index;
 }
 
-// Index project items by the issue they wrap (`owner/repo#number`) so a push
-// can find the project item for a pm item that is issue-linked but not yet
-// project-tagged.
+/**
+ * Index board items by the issue they wrap (`owner/repo#number`).
+ *
+ * Pairs with {@link indexPmByIssue} so a push can locate the existing board item
+ * for a pm item that is issue-linked but not yet carrying a project-item tag.
+ *
+ * @param projectItems - The board items to index (nullish entries are ignored).
+ * @returns A map keyed `owner/repo#number` (lowercased owner) to the board item.
+ */
 export function indexProjectItemsByIssue(
   projectItems: Array<ProjectItem | null | undefined>,
 ): Map<string, ProjectItem> {
@@ -325,8 +392,27 @@ export function indexProjectItemsByIssue(
 // Push plan (pm items -> project)
 // ---------------------------------------------------------------------------
 
+/**
+ * The write operation one push-plan entry asks the executor to perform.
+ *
+ * - `add-draft` — create a new draft issue on the board for a pm item with no
+ *   existing issue link.
+ * - `add-issue` — attach an already-linked GitHub issue to the board instead of
+ *   duplicating it as a draft.
+ * - `set-status` — change the Status single-select of an item already on the
+ *   board.
+ * - `noop` — no write needed; carried so dry-run output can show why.
+ */
 export type PushAction = "add-draft" | "add-issue" | "set-status" | "noop";
 
+/**
+ * One pm item's resolved fate under the push plan, produced by
+ * {@link buildProjectPushPlan}.
+ *
+ * Exactly one entry exists per pm item processed; the optional fields carry the
+ * context each {@link PushAction} variant needs to execute or to explain itself
+ * in `--dry-run` output.
+ */
 export interface PushPlanEntry {
   action: PushAction;
   pmId: string;
