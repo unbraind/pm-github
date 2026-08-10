@@ -1,0 +1,13 @@
+id: pm-github-v2kt
+title: Fix release publish ordering ahead of protected main push
+description: "The daily release workflow published to npm and then pushed the version bump straight to a protected main branch. Branch protection rejected that push with GH006, and the job's fail-fast shell mode killed it before the tag push, so npm ended up ahead of git: main stayed on an older version with no matching tag. The release metadata is now merged through a protected PR before npm publish runs, and only the release tag is pushed after a successful publish. Ported from the verified fix in pm-beads."
+type: Issue
+status: open
+priority: 2
+tags: []
+created_at: "2026-08-10T15:27:52.482Z"
+updated_at: "2026-08-10T15:27:52.883Z"
+author: pi-agent
+notes[1]{created_at,author,text}:
+  "2026-08-10T15:27:52.883Z",pi-agent,"Applied the pm-beads release ordering fix to .github/workflows/release.yml: added pull-requests write permission, captured base_sha in the decide step, and replaced the publish-then-push-to-main steps with a protected-PR merge, a verify-merged-release check, the npm publish (with idempotence guard), and a tag-only push. dist is gitignored here so it is excluded from the verify diff. Gates npm ci, build, test, release:check and yaml all pass."
+body: ""
