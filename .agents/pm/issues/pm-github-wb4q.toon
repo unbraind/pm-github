@@ -6,7 +6,7 @@ status: closed
 priority: 2
 tags[2]: docstrings,gate
 created_at: "2026-08-10T05:53:22.197Z"
-updated_at: "2026-08-10T05:53:31.847Z"
+updated_at: "2026-08-10T06:31:01.671Z"
 closed_at: "2026-08-10T05:53:31.831Z"
 completed_at: "2026-08-10T05:53:31.831Z"
 author: pi-agent
@@ -15,8 +15,9 @@ expected_result: "npm run docstring with an unresolvable argv[1] throws ENOENT a
 actual_result: "npm run docstring with an unresolvable argv[1] previously exited 0 having scanned nothing"
 comments[1]{created_at,author,text}:
   "2026-08-10T05:53:28.150Z",pi-agent,"Verified: node --experimental-strip-types -e with an unresolvable argv[1] now throws ENOENT instead of returning false. The gate fails loudly."
-notes[1]{created_at,author,text}:
+notes[2]{created_at,author,text}:
   "2026-08-10T05:53:25.011Z",pi-agent,"The isMainInvocation function in scripts/docstring-gate.ts wrapped realpathSync in a try/catch that returned false on ENOENT. When argv[1] could not be resolved, the top-level selector called the no-op placeholder instead of main, so npm run docstring exited 0 having scanned nothing. A required release check reported success without doing its job. The corrected implementation propagates the realpathSync error: a broken environment must not silently satisfy a gate."
+  "2026-08-10T06:31:01.671Z",pi-agent,"Greptile (P2 on pm-beads) and CodeRabbit (Major on pm-slack) independently flagged the one-sided comparison in isMainInvocation: pathToFileURL(realpathSync(entry)).href === moduleUrl resolves only argv[1], leaving moduleUrl holding the symlink under --preserve-symlinks. Canonicalising both sides through realpathSync fixes it. Verified by measurement: with moduleUrl holding the symlink path, both-sides (new) returns true while one-sided (old) returns false."
 files[2]{path,scope}:
   scripts/docstring-gate.ts,project
   test/docstring-gate.test.ts,project
