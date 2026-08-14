@@ -1,0 +1,19 @@
+id: pm-github-yhhz
+title: Scope preflight override to pm-github's owned commands
+description: "registerPreflight used the bare-function (global) form, which collides pairwise with every other installed package's preflight override (pm health reports extension_preflight_override_collision). Rewrite it to the scoped object form declaring exactly the mutating github/gh-issues command paths the override guards, so it no longer contends with other packages. The runtime matches a command against the commands array by exact normalized path, so the array lists the full command paths (github sync, github export, github import, gh-issues import, github project import, github project sync) — not a bare top-level name, which would never match and silently disable the early warning. The authoritative credential gate stays in the command handlers; this only narrows the override's scope."
+type: Issue
+status: closed
+priority: 2
+tags: []
+created_at: "2026-08-14T05:58:22.786Z"
+updated_at: "2026-08-14T06:03:30.132Z"
+closed_at: "2026-08-14T06:03:30.121Z"
+completed_at: "2026-08-14T06:03:30.121Z"
+author: pi-agent
+files[2]{path,scope}:
+  index.ts,project
+  test/smoke.test.ts,project
+tests[1]{command,path,scope,note}:
+  npm test,test/smoke.test.ts,project,"Asserts registerPreflight is a scoped object whose commands array equals pm-github's owned mutating command paths (github sync, github export, github import, gh-issues import, github project import, github project sync) and run is a function. Test title: preflight override is scoped to pm-github's owned command paths"
+close_reason: completed
+body: ""
