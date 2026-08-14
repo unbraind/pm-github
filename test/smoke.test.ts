@@ -139,6 +139,39 @@ test("extension registers at least one capability", async () => {
   );
 });
 
+test("preflight override is scoped to pm-github's owned command paths", async () => {
+  // The override MUST register as a scoped object (commands + run), not a bare
+  // function: a global (unscoped) override collides pairwise with every other
+  // installed package's preflight override (pm health reports
+  // extension_preflight_override_collision). The runtime matches a command
+  // against `commands` by exact normalized path, so the array must list the
+  // full command paths pm-github mutates — not a bare top-level `github` (which
+  // never matches `github sync` and would silently disable the early warning).
+  const ext = await harnessPromise;
+  const override = ext.assertPreflightOverride();
+  assert.ok(
+    Array.isArray(override.commands) && override.commands.length > 0,
+    "preflight override must register as a scoped object with a non-empty commands array",
+  );
+  assert.equal(
+    typeof override.run,
+    "function",
+    "scoped preflight override must expose a run function",
+  );
+  assert.deepEqual(
+    override.commands,
+    [
+      "github sync",
+      "github export",
+      "github import",
+      "gh-issues import",
+      "github project import",
+      "github project sync",
+    ],
+    "preflight override must be scoped to exactly pm-github's owned mutating command paths",
+  );
+});
+
 test("parseNextLink extracts the rel=\"next\" page URL", () => {
   const header = '<https://api.github.com/repositories/1/issues?page=2>; rel="next", '
     + '<https://api.github.com/repositories/1/issues?page=5>; rel="last"';

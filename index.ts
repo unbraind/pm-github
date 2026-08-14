@@ -4685,23 +4685,38 @@ export default defineExtension({
     ]);
 
     // -----------------------------------------------------------------------
-    // preflight — safe, local guard for mutating github commands.
-    // Runs before pm core commands; it does NOT make network calls (that would
-    // be a surprise side effect on every command) and cannot hard-block (the
-    // runtime swallows preflight throws). It only surfaces a clear, early
-    // warning when a github mutation is requested without a resolvable token;
-    // the authoritative validation + non-zero exit lives in the handlers.
+    // preflight — safe, local guard for mutating github commands. Scoped to
+    // the command paths pm-github owns (the mutating github/gh-issues paths
+    // isMutatingGithubCommand recognizes) so it cannot contend with another
+    // package's preflight override; an unscoped (global) override collides
+    // pairwise with every other installed package's override (pm health reports
+    // extension_preflight_override_collision). It runs before those commands;
+    // it does NOT make network calls (that would be a surprise side effect on
+    // every command) and cannot hard-block (the runtime swallows preflight
+    // throws). It only surfaces a clear, early warning when a github mutation
+    // is requested without a resolvable token; the authoritative validation +
+    // non-zero exit lives in the handlers.
     // -----------------------------------------------------------------------
-    api.registerPreflight((ctx: PreflightOverrideContext) => {
-      if (isMutatingGithubCommand(ctx.command, ctx.options || {})) {
-        if (!resolveGitHubToken()) {
-          console.error(
-            "[pm-github preflight] this github command mutates remote state but no GitHub " +
-              "token is resolvable (GITHUB_TOKEN/GH_TOKEN or `gh auth login`). It will fail.",
-          );
+    api.registerPreflight({
+      commands: [
+        "github sync",
+        "github export",
+        "github import",
+        "gh-issues import",
+        "github project import",
+        "github project sync",
+      ],
+      run: (ctx: PreflightOverrideContext) => {
+        if (isMutatingGithubCommand(ctx.command, ctx.options || {})) {
+          if (!resolveGitHubToken()) {
+            console.error(
+              "[pm-github preflight] this github command mutates remote state but no GitHub " +
+                "token is resolvable (GITHUB_TOKEN/GH_TOKEN or `gh auth login`). It will fail.",
+            );
+          }
         }
-      }
-      return {};
+        return {};
+      },
     });
 
     // -----------------------------------------------------------------------
