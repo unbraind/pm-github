@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Scope preflight override to pm-github's owned commands ([pm-github-yhhz](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-yhhz.toon))
+
 ## 2026.8.10 - 2026-08-10
 
 ### Fixed
