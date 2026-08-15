@@ -23,6 +23,7 @@ import extension, {
   exportWillApply,
   formatRateLimit,
   isDraftPr,
+  isMutatingGithubCommand,
   listOwnerProjectsV2Nodes,
   indexByProvenance,
   searchDocumentToItem,
@@ -170,6 +171,41 @@ test("preflight override is scoped to pm-github's owned command paths", async ()
     ],
     "preflight override must be scoped to exactly pm-github's owned mutating command paths",
   );
+  // Bind the scope to the classifier. Narrowing the override to a command list
+  // means an entry missing on either side is a command that silently loses
+  // its credential gate, so every scoped path must be one isMutatingGithubCommand
+  // treats as mutating. The two apply-gated paths (`github export`,
+  // `github project sync`) only mutate with an explicit apply, so they are
+  // checked under that configuration rather than skipped.
+  for (const command of override.commands ?? []) {
+    const mutatingOptions =
+      command === "github export" || command === "github project sync" ? { apply: true } : {};
+    assert.strictEqual(
+      isMutatingGithubCommand(command, mutatingOptions),
+      true,
+      `${command} is in the preflight scope but the classifier does not treat it as mutating`,
+    );
+  }
+  // Conversely, every command path pm-github declares that the scope omits
+  // must be read-only — a justified exclusion, not an accidental gap that
+  // silently dropped a gate. (Commands are declared via registerCommand plus
+  // the `github` importer/exporter aliases.)
+  const DECLARED_READ_ONLY_COMMANDS = [
+    "github validate",
+    "github project list",
+    "github project fields",
+  ] as const;
+  for (const command of DECLARED_READ_ONLY_COMMANDS) {
+    assert.ok(
+      !(override.commands ?? []).includes(command),
+      `${command} is read-only and must not claim a preflight scope entry`,
+    );
+    assert.strictEqual(
+      isMutatingGithubCommand(command, { apply: true, push: true }),
+      false,
+      `${command} is outside the preflight scope but the classifier treats it as mutating`,
+    );
+  }
 });
 
 test("parseNextLink extracts the rel=\"next\" page URL", () => {
