@@ -85,11 +85,11 @@
 ### Added
 
 - Search pm items in any public GitHub repo (gh-authenticated, semantic search) ([pm-github-r8y0](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-r8y0.toon))
-- CHANGELOG omits the shipped --link-deps feature and mislabels 2026.7.23 work as Unreleased ([pm-github-px45](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-px45.toon))
 
 ### Fixed
 
 - Import dies with an unexplained pm list-all failed on any tracker over 1 MiB, and non-atomic --dry-run previews every issue as a create ([pm-github-tn92](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-tn92.toon))
+- CHANGELOG omits the shipped --link-deps feature and mislabels 2026.7.23 work as Unreleased ([pm-github-px45](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-px45.toon))
 
 ### Other
 
