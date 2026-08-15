@@ -23,6 +23,7 @@ import extension, {
   exportWillApply,
   formatRateLimit,
   isDraftPr,
+  isMutatingGithubCommand,
   listOwnerProjectsV2Nodes,
   indexByProvenance,
   searchDocumentToItem,
@@ -139,7 +140,7 @@ test("extension registers at least one capability", async () => {
   );
 });
 
-test("preflight override is scoped to pm-github's owned command paths", async () => {
+test("preflight override scope equals the mutating class of the declared command set", async () => {
   // The override MUST register as a scoped object (commands + run), not a bare
   // function: a global (unscoped) override collides pairwise with every other
   // installed package's preflight override (pm health reports
@@ -158,18 +159,120 @@ test("preflight override is scoped to pm-github's owned command paths", async ()
     "function",
     "scoped preflight override must expose a run function",
   );
+
+  // ---------------------------------------------------------------------
+  // Derive the declared command set from the REAL registration above — never
+  // from a hand-maintained literal. Every path declared through
+  // registerCommand, registerImporter and registerExporter is collected:
+  // registerImporter/registerExporter wrap their handlers into "<name>
+  // import"/"<name> export" command paths, exactly how the runtime names
+  // them. This derived set is the single source of truth for the rest of the
+  // test, so a newly registered command shows up here whether or not anyone
+  // remembered to classify it (PR #42 review: Greptile 3789172153, CodeRabbit
+  // 3789173850 — a guard that enumerates a literal cannot detect the drift it
+  // was written for).
+  // ---------------------------------------------------------------------
+  const registrations = ext.activation.registrations;
+  const declaredPaths = [...new Set([
+    ...registrations.commands.map((c) => c.command),
+    ...registrations.importers.map((i) => `${i.importer} import`),
+    ...registrations.exporters.map((e) => `${e.exporter} export`),
+  ])].sort();
+  assert.ok(declaredPaths.length > 0, "activation should declare command paths");
+
+  // Cross-check the registration metadata against the dispatch registry: the
+  // paths that actually execute (commands.handlers — which is where importer
+  // and exporter handlers land too) must equal the declared set. If a future
+  // registration surface stopped landing in one of the two, the derived set
+  // would be silently incomplete and every assertion below would narrow with
+  // it — so the two derivations are required to agree.
+  const dispatchedPaths = [...new Set(ext.activation.commands.handlers.map((h) => h.command))].sort();
   assert.deepEqual(
-    override.commands,
-    [
-      "github sync",
-      "github export",
-      "github import",
-      "gh-issues import",
-      "github project import",
-      "github project sync",
-    ],
-    "preflight override must be scoped to exactly pm-github's owned mutating command paths",
+    dispatchedPaths,
+    declaredPaths,
+    "dispatch handler paths must equal the registration-derived declared command set",
   );
+
+  // ---------------------------------------------------------------------
+  // Partition the declared set with the SAME predicate production uses — the
+  // preflight run() itself consults isMutatingGithubCommand — never a second
+  // copy of the knowledge. The predicate is monotone in its option flags:
+  // dry-run only ever disables a mutation branch, and apply/no-dry-run/push
+  // only ever enable one, so a single maximally-mutating probe is exhaustive:
+  // if the predicate can return true for a command under ANY option object,
+  // it returns true under this one. "Can mutate GitHub at all" is therefore
+  // derived from the classifier, not listed by hand.
+  // ---------------------------------------------------------------------
+  const MAXIMALLY_MUTATING_OPTIONS: Record<string, unknown> = {
+    apply: true,
+    "no-dry-run": true,
+    push: true,
+  };
+  const canMutate = (command: string) =>
+    isMutatingGithubCommand(command, MAXIMALLY_MUTATING_OPTIONS);
+  const mutatingPaths = declaredPaths.filter(canMutate);
+  const readOnlyPaths = declaredPaths.filter((command) => !canMutate(command));
+
+  // Total partition: every declared path lands in exactly one class and the
+  // two classes reconstruct the declared set EXACTLY. This is the assertion
+  // that keeps the guard honest — a declared path that escapes both classes
+  // (an unclassified new command, a normalization mismatch between the
+  // registration and classification surfaces) fails here BY NAME instead of
+  // passing unnoticed while it silently loses its credential gate.
+  assert.deepEqual(
+    [...mutatingPaths, ...readOnlyPaths].sort(),
+    declaredPaths,
+    "the mutating and read-only classes must reconstruct the declared command set exactly",
+  );
+  for (const command of mutatingPaths) {
+    assert.ok(
+      !readOnlyPaths.includes(command),
+      `${command} landed in both the mutating and read-only classes`,
+    );
+  }
+  assert.ok(
+    mutatingPaths.length > 0 && readOnlyPaths.length > 0,
+    "partition should classify commands on both sides (all-one-sided means the probe is broken)",
+  );
+
+  // The scope must EQUAL the derived mutating class — set equality in both
+  // directions, each failing with a command-naming message:
+  //   1. a declared path the classifier treats as mutating but the scope
+  //      omits loses its early credential gate (the runtime matches by exact
+  //      normalized path and simply never runs the override for it);
+  //   2. a scope entry that is not a declared pm-github path, or that the
+  //      classifier treats as read-only, is dead weight or a misclassification.
+  const scopedPaths = [...(override.commands ?? [])].sort();
+  assert.deepEqual(
+    scopedPaths,
+    mutatingPaths,
+    "preflight override scope must equal the mutating class of the declared command set exactly",
+  );
+  for (const command of mutatingPaths) {
+    assert.ok(
+      scopedPaths.includes(command),
+      `${command} is declared and isMutatingGithubCommand treats it as mutating, ` +
+        "but it is missing from the preflight override's commands — it would execute " +
+        "with no early credential warning",
+    );
+  }
+  for (const command of scopedPaths) {
+    assert.ok(
+      declaredPaths.includes(command),
+      `${command} is in the preflight override scope but is not a command path pm-github ` +
+        "declares (registerCommand/registerImporter/registerExporter)",
+    );
+    assert.ok(
+      canMutate(command),
+      `${command} is in the preflight override scope but isMutatingGithubCommand treats it as read-only`,
+    );
+  }
+  for (const command of readOnlyPaths) {
+    assert.ok(
+      !scopedPaths.includes(command),
+      `${command} is read-only (isMutatingGithubCommand) and must not claim a preflight scope entry`,
+    );
+  }
 });
 
 test("parseNextLink extracts the rel=\"next\" page URL", () => {
