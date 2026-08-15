@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- A github command can silently lose its preflight credential gate when the override scope drifts from the mutating command set ([pm-github-4ga9](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-4ga9.toon))
+
 ## 2026.8.15 - 2026-08-15
 
 ### Fixed

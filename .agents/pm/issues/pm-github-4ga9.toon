@@ -1,0 +1,24 @@
+id: pm-github-4ga9
+title: A github command can silently lose its preflight credential gate when the override scope drifts from the mutating command set
+description: "registerPreflight is scoped to a fixed six-entry commands array (PR #36). That array and isMutatingGithubCommand are maintained by hand with nothing binding them: the legacy gh-issues alias already showed how easily a hand-maintained command list drifts from the real mutating set. If a command is added or reclassified as mutating on one side only, the override stops running for it (the runtime matches by exact normalized path) and the command executes with no early credential warning — silently, because the runtime swallows preflight throws and the authoritative handler gate only fires once the command actually runs and fails. A test must bind the scope to the classifier: every scoped path has to be one isMutatingGithubCommand treats as mutating (the apply-gated github export and github project sync under their apply configuration), and every declared-but-omitted path has to be read-only, so the two lists cannot drift apart again."
+type: Issue
+status: closed
+priority: 2
+tags: []
+created_at: "2026-08-15T09:59:58.137Z"
+updated_at: "2026-08-15T11:37:53.946Z"
+closed_at: "2026-08-15T11:37:53.931Z"
+completed_at: "2026-08-15T11:37:53.931Z"
+claim_principal: pi-agent
+author: pi-agent
+resolution: "The smoke test now derives the declared command set from real activation registrations (registerCommand, registerImporter, registerExporter) instead of a hand-maintained literal, asserts the dispatch handler paths equal that derived set, partitions it with the same isMutatingGithubCommand predicate production uses, and asserts the mutating and read-only classes reconstruct the declared set exactly. A declared path that escapes both classes therefore fails the test."
+expected_result: "Declaring a new mutating github command without adding it to the preflight override scope fails the test, naming that command, rather than leaving every assertion green."
+actual_result: "Verified by declaring a scratch mutating command github scratch drift through registerCommand and adding it to isMutatingGithubCommand without touching the override scope: the suite failed 1 of 251 with preflight override scope must equal the mutating class of the declared command set exactly, and the diff named github scratch drift. The scratch command was then removed and the suite is 251 of 251 green."
+comments[1]{created_at,author,text}:
+  "2026-08-15T10:01:21.491Z",pi-agent,"Manifest-vs-scope audit (the check CodeRabbit asked for on pm-linear #67). Commands pm-github declares: github sync, gh-issues import (legacy command alias), github validate, github project list, github project fields, github project import, github project sync (registerCommand), plus github import (registerImporter) and github export (registerExporter). Preflight scope after PR #36: github sync, github export, github import, gh-issues import, github project import, github project sync. Diff: every scoped path is a declared command; the three omitted commands (github validate, github project list, github project fields) are read-only diagnostics and were never gated — isMutatingGithubCommand returned false for them under the old global registration too, so no gate was lost. Notably the legacy alias gh-issues import was already in scope (the gap CodeRabbit caught in pm-linear/pm-jira does not exist here). Remaining defect: nothing binds the two lists, which this item fixes with a drift test."
+files[1]{path,scope}:
+  test/smoke.test.ts,project
+tests[1]{command,path,scope,note}:
+  npm test,test/smoke.test.ts,project,"Asserts the preflight override stays scoped to exactly pm-github's owned mutating command paths and binds the scope to isMutatingGithubCommand: every scoped path must be classified mutating (github export and github project sync under their apply configuration) and every declared-but-omitted path must be read-only. Test title: preflight override is scoped to pm-github's owned command paths"
+close_reason: "The smoke test now derives the declared command set from real activation registrations (registerCommand, registerImporter, registerExporter) instead of a hand-maintained literal, asserts the dispatch handler paths equal that derived set, partitions it with the same isMutatingGithubCommand predicate production uses, and asserts the mutating and read-only classes reconstruct the declared set exactly. A declared path that escapes both classes therefore fails the test."
+body: ""
