@@ -1,24 +1,25 @@
 id: pm-github-7d1h
-title: "The pm CLI compatibility floor was declared only in peerDependencies, which only npm enforces, and not in manifest.json pm_min_version, which is the field the CLI enforces"
-description: "package.json peerDependencies declares >=2026.8.3 and npm enforces that at install time. The pm CLI enforces a different declaration: a top-level pm_min_version in manifest.json. Verified against 2026.8.15 by installing an extension whose manifest declared 2099.1.1: install returned ok false, the command never registered, and pm health reported extension_pm_min_version_unmet. A floor written anywhere else is inert. Declare 2026.8.3 in manifest.json to match the peer floor, exact-pin the development CLI so a working copy and CI resolve the same binary, and add a regression test that fails if any of the three drift apart."
+title: "The manifest declared a pm CLI floor of 2026.7.28 while peerDependencies required 2026.8.3, so the CLI enforced a weaker minimum than npm"
+description: "package.json peerDependencies declares >=2026.8.3 and npm enforces that at install time, but npm never sees a globally installed host CLI. The pm CLI enforces a different declaration: a top-level pm_min_version in manifest.json, which here read 2026.7.28. The two systems therefore enforced different minimums, and the one that applies to a globally installed CLI was the weaker of the two. Verified against 2026.8.15 by installing an extension whose manifest declared 2099.1.1: install returned ok false, the command never registered, and pm health reported extension_pm_min_version_unmet."
 type: Issue
 status: closed
 priority: 2
 tags: []
 created_at: "2026-08-16T00:35:13.077Z"
-updated_at: "2026-08-16T02:19:32.917Z"
+updated_at: "2026-08-16T02:31:51.656Z"
 closed_at: "2026-08-16T01:32:11.608Z"
 completed_at: "2026-08-16T01:32:11.608Z"
 author: claude-code
 acceptance_criteria: "manifest.json declares a top-level pm_min_version equal to the peerDependencies floor; the devDependency on the CLI is an exact pin at or above that floor; removing the manifest floor, loosening the pin to a caret range, or changing either floor independently each fail the test"
 resolution: "manifest.json declares pm_min_version 2026.8.3, equal to the peerDependencies floor, and devDependencies exact-pins the CLI at 2026.8.15. compatibility-floor.test.ts asserts three properties and each now has its own failing mutation: rewriting the peer range to an exact pin, removing or changing the manifest floor, and loosening the dev pin to a caret range. A fourth mutation covers the parse guard added during review."
 expected_result: "A host CLI older than the package's declared floor is refused before the extension loads, on every install path — including a globally installed CLI that npm never sees."
-actual_result: "Only npm enforced anything, and only for a locally resolved dependency. The pm CLI read manifest.json pm_min_version, which was set below the peer floor, so an older host CLI activated the extension with no floor check."
+actual_result: "npm refused a locally resolved dependency below 2026.8.3, while the pm CLI accepted any host at or above 2026.7.28 — a span of releases in which the package loaded against a CLI its own peer declaration says it does not support."
 comments[2]{created_at,author,text}:
   "2026-08-16T01:32:10.991Z",claude-code,"Revert-proof run against this exact tree: baseline exit 0; manifest pm_min_version removed exit 1; dev pin loosened to a caret range exit 1; manifest floor set to a version other than the peer floor exit 1; restored exit 0. Enforcement was verified directly against pm-cli 2026.8.15 rather than assumed: an extension declaring pm_min_version 2099.1.1 was refused at install with ok false, its command never registered, and pm health reported extension_pm_min_version_unmet."
   "2026-08-16T02:18:40.576Z",claude-code,"Complete revert-proof, one mutation per assertion, run against this exact tree. Baseline exit 0. Assertion one, the peer dependency must be a >= floor rather than an exact pin: rewriting the peer range to an exact pin exits 1. Assertion two, the manifest must declare a pm_min_version equal to the peer floor: removing it exits 1 and setting it to a different version exits 1. Assertion three, the development dependency must be an exact pin at or above the floor: loosening it to a caret range exits 1. The parse guard added in the review round: setting the manifest floor to a two-part version exits 1. Restored exit 0. Every assertion in the file now has a mutation that fails it, which was not true when this item was first closed: the peer-range assertion was asserted but never proved, and CodeRabbit caught the gap between the close-reason claim and the recorded evidence."
-notes[1]{created_at,author,text}:
+notes[2]{created_at,author,text}:
   "2026-08-16T02:19:32.917Z",claude-code,"Correction, appended rather than rewritten: the title of this item was changed twice after it was closed, and the close reason was corrected once. The first title stated the defect in the present tense, which pm-changelog emits verbatim and which therefore read in a shipped changelog as though the release still carried the defect. The second named each field only by its enforcer, which a reviewer read backwards. The close reason originally claimed all three assertions were proved to fail on revert; only two were, because the peer-range assertion was asserted but never mutated. Each of those corrections is an appended event in this item's history stream, so the record of what was claimed and when remains readable."
+  "2026-08-16T02:31:51.656Z",claude-code,"Correction appended after review: the earlier title said this package declared no pm_min_version at all. That was true of eight packages in this wave but not of this one, which declared 2026.7.28 — below its own peer floor of 2026.8.3. CodeRabbit caught the discrepancy between the title and the diff."
 files[4]{path,scope}:
   manifest.json,project
   package-lock.json,project

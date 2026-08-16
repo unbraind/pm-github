@@ -38,6 +38,28 @@ const EXACT_VERSION = /^\d+\.\d+\.\d+$/;
  * These tests bind the two declarations to the same version so that whichever
  * enforcement path a consumer takes, it applies the same floor.
  */
+/**
+ * Whether `pinned` is the same version as `floor` or a later one.
+ *
+ * Fleet versions are `YYYY.M.D` with unpadded month and day, so a
+ * lexicographic comparison is wrong in a way that reads as correct:
+ * `"2026.8.15" < "2026.8.7"` is `true` as strings. Each component is therefore
+ * compared as a number, at the first position where the two differ.
+ *
+ * Both arguments must already match {@link EXACT_VERSION}; the callers assert
+ * that first, so no part can be `NaN` here.
+ *
+ * @param pinned - The exact version pinned in `devDependencies`.
+ * @param floor - The exact version declared as the compatibility floor.
+ * @returns `true` when `pinned` is at or above `floor`.
+ */
+function atOrAbove(pinned: string, floor: string): boolean {
+  const floorParts = floor.split(".").map(Number);
+  const pinnedParts = pinned.split(".").map(Number);
+  const differing = floorParts.findIndex((part, index) => pinnedParts[index] !== part);
+  return differing === -1 || pinnedParts[differing]! > floorParts[differing]!;
+}
+
 test("the peer dependency declares the CLI floor as a minimum, not an exact pin", () => {
   const peer = packageJson.peerDependencies?.[CLI];
   assert.ok(peer, `package.json peerDependencies must declare ${CLI}`);
@@ -78,13 +100,24 @@ test("the development dependency is an exact pin at or above the declared floor"
     EXACT_VERSION,
     `manifest.json pm_min_version must be an exact three-part version to be comparable, got ${declared}`,
   );
-  // Fleet versions are YYYY.M.D, so "2026.8.15" sorts BELOW "2026.8.7" lexicographically.
-  // Both operands are known to match EXACT_VERSION here, so every part parses.
-  const floor = declared.split(".").map(Number);
-  const pinned = dev.split(".").map(Number);
-  const compared = floor.findIndex((part, index) => pinned[index] !== part);
   assert.ok(
-    compared === -1 || pinned[compared] > floor[compared],
+    atOrAbove(dev, declared),
     `the pinned development CLI ${dev} is below the declared floor ${declared}`,
   );
+});
+
+test("the version comparison orders YYYY.M.D numerically, not lexicographically", () => {
+  // In the repository as it stands the pin equals the floor, so the
+  // greater-than branch of atOrAbove is never reached by the assertion above.
+  // A comparison whose ordering branch is never executed is not verified by
+  // the suite passing — V8 does not even report a branch it never reaches —
+  // so the ordering is exercised here directly.
+  assert.ok(atOrAbove("2026.8.15", "2026.8.15"), "an equal pin satisfies the floor");
+  assert.ok(atOrAbove("2026.8.15", "2026.8.7"), "a later day satisfies an earlier floor");
+  assert.ok(!atOrAbove("2026.8.14", "2026.8.15"), "an earlier day must not satisfy a later floor");
+  assert.ok(!atOrAbove("2026.8.7", "2026.8.15"), "the lexicographic trap: 2026.8.7 is BELOW 2026.8.15");
+  assert.ok(atOrAbove("2026.9.1", "2026.8.31"), "a later month outranks any day of an earlier one");
+  assert.ok(!atOrAbove("2026.7.31", "2026.8.1"), "an earlier month never satisfies a later one");
+  assert.ok(atOrAbove("2027.1.1", "2026.12.31"), "a later year outranks any date of an earlier one");
+  assert.ok(!atOrAbove("2025.12.31", "2026.1.1"), "an earlier year never satisfies a later one");
 });
