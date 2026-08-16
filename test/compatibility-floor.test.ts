@@ -11,6 +11,13 @@ interface PackageManifest {
 }
 
 interface ExtensionManifest {
+  /**
+   * Declared as `unknown` deliberately: `manifest.json` is untrusted JSON, and
+   * typing this `string | undefined` would assert the very shape these tests
+   * exist to verify. Each test narrows it explicitly before use, so a manifest
+   * carrying a number, an object, or nothing at all fails with a message that
+   * names the actual type rather than being coerced into a plausible string.
+   */
   readonly pm_min_version?: unknown;
 }
 
@@ -94,15 +101,20 @@ test("the development dependency is an exact pin at or above the declared floor"
     EXACT_VERSION,
     `devDependencies["${CLI}"] must be an exact pin so CI and a working copy resolve the same CLI, got ${dev}`,
   );
-  const declared = String(extensionManifest.pm_min_version);
+  const declared = extensionManifest.pm_min_version;
+  assert.strictEqual(
+    typeof declared,
+    "string",
+    `manifest.json pm_min_version must be a string to be comparable, got ${typeof declared}`,
+  );
   assert.match(
-    declared,
+    declared as string,
     EXACT_VERSION,
-    `manifest.json pm_min_version must be an exact three-part version to be comparable, got ${declared}`,
+    `manifest.json pm_min_version must be an exact three-part version to be comparable, got ${String(declared)}`,
   );
   assert.ok(
-    atOrAbove(dev, declared),
-    `the pinned development CLI ${dev} is below the declared floor ${declared}`,
+    atOrAbove(dev, declared as string),
+    `the pinned development CLI ${dev} is below the declared floor ${String(declared)}`,
   );
 });
 
