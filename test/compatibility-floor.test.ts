@@ -55,7 +55,7 @@ test("the extension manifest declares the same floor the CLI actually enforces",
   assert.strictEqual(
     typeof declared,
     "string",
-    "manifest.json must declare a top-level pm_min_version — it is the only floor the pm CLI reads, and an absent one means no floor is enforced at all",
+    "manifest.json must declare a top-level pm_min_version — it is the only floor the pm CLI reads, so without it the CLI enforces no floor. npm still enforces the peerDependencies floor, but only for a locally resolved dependency, never for a globally installed host CLI",
   );
   assert.strictEqual(
     declared,
@@ -72,14 +72,19 @@ test("the development dependency is an exact pin at or above the declared floor"
     EXACT_VERSION,
     `devDependencies["${CLI}"] must be an exact pin so CI and a working copy resolve the same CLI, got ${dev}`,
   );
-  const floor = String(extensionManifest.pm_min_version).split(".").map(Number);
+  const declared = String(extensionManifest.pm_min_version);
+  assert.match(
+    declared,
+    EXACT_VERSION,
+    `manifest.json pm_min_version must be an exact three-part version to be comparable, got ${declared}`,
+  );
+  // Fleet versions are YYYY.M.D, so "2026.8.15" sorts BELOW "2026.8.7" lexicographically.
+  // Both operands are known to match EXACT_VERSION here, so every part parses.
+  const floor = declared.split(".").map(Number);
   const pinned = dev.split(".").map(Number);
-  const atOrAbove =
-    pinned[0] > floor[0] ||
-    (pinned[0] === floor[0] && pinned[1] > floor[1]) ||
-    (pinned[0] === floor[0] && pinned[1] === floor[1] && pinned[2] >= floor[2]);
+  const compared = floor.findIndex((part, index) => pinned[index] !== part);
   assert.ok(
-    atOrAbove,
-    `the pinned development CLI ${dev} is below the declared floor ${String(extensionManifest.pm_min_version)}`,
+    compared === -1 || pinned[compared] > floor[compared],
+    `the pinned development CLI ${dev} is below the declared floor ${declared}`,
   );
 });
