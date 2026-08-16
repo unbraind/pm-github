@@ -1,0 +1,29 @@
+id: pm-github-7d1h
+title: The pm CLI compatibility floor is declared where npm enforces it and absent from the field the CLI actually reads
+description: "package.json peerDependencies declares >=2026.8.3 and npm enforces that at install time. The pm CLI enforces a different declaration: a top-level pm_min_version in manifest.json. Verified against 2026.8.15 by installing an extension whose manifest declared 2099.1.1: install returned ok false, the command never registered, and pm health reported extension_pm_min_version_unmet. A floor written anywhere else is inert. Declare 2026.8.3 in manifest.json to match the peer floor, exact-pin the development CLI so a working copy and CI resolve the same binary, and add a regression test that fails if any of the three drift apart."
+type: Issue
+status: closed
+priority: 2
+tags: []
+created_at: "2026-08-16T00:35:13.077Z"
+updated_at: "2026-08-16T01:32:11.632Z"
+closed_at: "2026-08-16T01:32:11.608Z"
+completed_at: "2026-08-16T01:32:11.608Z"
+author: claude-code
+acceptance_criteria: "manifest.json declares a top-level pm_min_version equal to the peerDependencies floor; the devDependency on the CLI is an exact pin at or above that floor; removing the manifest floor, loosening the pin to a caret range, or changing either floor independently each fail the test"
+comments[1]{created_at,author,text}:
+  "2026-08-16T01:32:10.991Z",claude-code,"Revert-proof run against this exact tree: baseline exit 0; manifest pm_min_version removed exit 1; dev pin loosened to a caret range exit 1; manifest floor set to a version other than the peer floor exit 1; restored exit 0. Enforcement was verified directly against pm-cli 2026.8.15 rather than assumed: an extension declaring pm_min_version 2099.1.1 was refused at install with ok false, its command never registered, and pm health reported extension_pm_min_version_unmet."
+files[4]{path,scope}:
+  manifest.json,project
+  package-lock.json,project
+  package.json,project
+  test/compatibility-floor.test.ts,project
+tests[1]:
+  - command: PM_PATH=/tmp/pm-cf-pm-github PM_GLOBAL_PATH=/tmp/pm-cf-g-pm-github node --test test/compatibility-floor.test.ts
+    path: test/compatibility-floor.test.ts
+    scope: project
+    timeout_seconds: 120
+    assert_stdout_regex[1]: "the peer dependency declares the CLI floor as a minimum, not an exact pin[\\s\\S]*the extension manifest declares the same floor the CLI actually enforces[\\s\\S]*the development dependency is an exact pin at or above the declared floor"
+    note: "Binds the three compatibility-floor assertions to their real node:test titles so a renamed or deleted test fails this linked check instead of passing silently."
+close_reason: "manifest.json now declares pm_min_version 2026.8.3, identical to the peerDependencies floor, and the development CLI is exact-pinned at 2026.8.15. Three assertions bind the declarations together and each was proved to fail on revert."
+body: ""
