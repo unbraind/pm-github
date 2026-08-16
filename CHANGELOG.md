@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- The pm CLI compatibility floor is declared where npm enforces it and absent from the field the CLI actually reads ([pm-github-7d1h](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-7d1h.toon))
+- The pm CLI compatibility floor was declared only where npm enforces it, and absent from the field the CLI actually reads ([pm-github-7d1h](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-7d1h.toon))
 - A github command can silently lose its preflight credential gate when the override scope drifts from the mutating command set ([pm-github-4ga9](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-4ga9.toon))
 
 ## 2026.8.15 - 2026-08-15

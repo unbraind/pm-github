@@ -1,12 +1,12 @@
 id: pm-github-7d1h
-title: The pm CLI compatibility floor is declared where npm enforces it and absent from the field the CLI actually reads
+title: "The pm CLI compatibility floor was declared only where npm enforces it, and absent from the field the CLI actually reads"
 description: "package.json peerDependencies declares >=2026.8.3 and npm enforces that at install time. The pm CLI enforces a different declaration: a top-level pm_min_version in manifest.json. Verified against 2026.8.15 by installing an extension whose manifest declared 2099.1.1: install returned ok false, the command never registered, and pm health reported extension_pm_min_version_unmet. A floor written anywhere else is inert. Declare 2026.8.3 in manifest.json to match the peer floor, exact-pin the development CLI so a working copy and CI resolve the same binary, and add a regression test that fails if any of the three drift apart."
 type: Issue
 status: closed
 priority: 2
 tags: []
 created_at: "2026-08-16T00:35:13.077Z"
-updated_at: "2026-08-16T01:32:11.632Z"
+updated_at: "2026-08-16T01:45:29.625Z"
 closed_at: "2026-08-16T01:32:11.608Z"
 completed_at: "2026-08-16T01:32:11.608Z"
 author: claude-code
