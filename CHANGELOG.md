@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- The manifest declared a pm CLI floor of 2026.7.28 while peerDependencies required 2026.8.3, so the CLI enforced a weaker minimum than npm ([pm-github-7d1h](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-7d1h.toon))
 - A github command can silently lose its preflight credential gate when the override scope drifts from the mutating command set ([pm-github-4ga9](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-4ga9.toon))
 
 ## 2026.8.15 - 2026-08-15
