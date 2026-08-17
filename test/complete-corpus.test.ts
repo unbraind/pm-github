@@ -5,7 +5,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { completePmListArgs, decodeCompletePmItems, readPmItems } from "../index.ts";
+import {
+  completePmListArgs,
+  decodeCompletePmItems,
+  pmListSpawnOptions,
+  readPmItems,
+} from "../index.ts";
 
 /** Current complete `pm list-all --json` envelope, with caller overrides. */
 function completeEnvelope(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -83,6 +88,19 @@ test("whole-corpus argv requests strict full unbounded output without an arbitra
     "unbounded",
   ]);
   assert.ok(!args.includes("--limit"), "a list-all row ceiling makes the corpus incomplete by construction");
+});
+
+test("production pm reads enable the npm command shim only on Windows", () => {
+  assert.deepEqual(pmListSpawnOptions(64, "linux"), {
+    encoding: "utf-8",
+    maxBuffer: 64,
+    shell: false,
+  });
+  assert.deepEqual(pmListSpawnOptions(128, "win32"), {
+    encoding: "utf-8",
+    maxBuffer: 128,
+    shell: true,
+  });
 });
 
 test("decoder preserves every pm field consumed by GitHub import, export, sync, project, and search paths", () => {

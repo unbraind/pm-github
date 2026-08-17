@@ -27,7 +27,7 @@ import https from "node:https";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncOptionsWithStringEncoding } from "node:child_process";
 
 import {
   comments as pmCommentsFn,
@@ -900,6 +900,27 @@ export function completePmListArgs(pmRoot: string): string[] {
 }
 
 /**
+ * Build process options for the installed pm CLI whole-workspace read.
+ *
+ * npm exposes package executables as `.cmd` shims on Windows, which Node cannot
+ * launch directly through `spawnSync` without its platform shell. Other
+ * platforms keep direct execution so arguments never pass through a shell.
+ *
+ * @param maxBuffer - Maximum stdout/stderr bytes accepted from the pm process.
+ * @param platform - Runtime platform; injectable only for the cross-platform
+ * contract test.
+ * @returns UTF-8 spawn options with Windows npm-shim handling.
+ * @internal Exported for a production-invocation regression test and stripped
+ * from the published declaration surface.
+ */
+export function pmListSpawnOptions(
+  maxBuffer: number,
+  platform: NodeJS.Platform = process.platform,
+): SpawnSyncOptionsWithStringEncoding {
+  return { encoding: "utf-8", maxBuffer, shell: platform === "win32" };
+}
+
+/**
  * Decode only a complete, unbounded `pm list-all` response.
  *
  * The subprocess JSON is untrusted. This gate independently verifies every
@@ -1065,7 +1086,7 @@ export function readPmItems(pmRoot: string): PmItem[] {
   const result = spawnSync(
     "pm",
     completePmListArgs(pmRoot),
-    { encoding: "utf-8", maxBuffer },
+    pmListSpawnOptions(maxBuffer),
   );
   // A buffer overrun kills the child with status null and no stderr, so name the
   // real cause instead of reporting an unexplained failure.
