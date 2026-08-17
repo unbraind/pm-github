@@ -28,7 +28,6 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { createRequire } from "node:module";
 
 import {
   comments as pmCommentsFn,
@@ -861,13 +860,23 @@ function describeJsonValue(value: unknown): string {
 }
 
 /** Require one exact field value from the `pm list-all` truthfulness envelope. */
-function requireCompletePmField(actual: unknown, expected: unknown, field: string): void {
+function requireCompletePmField(
+  actual: unknown,
+  expected: string | number | boolean | null,
+  field: string,
+): void {
   if (actual !== expected) {
     throw new CommandError(
       `Refusing unverifiable pm list-all output: ${field} must be ${describeJsonValue(expected)}; received ${describeJsonValue(actual)}.`,
     );
   }
 }
+
+/** Installed CLI receipt version and command accepted by the complete reader. */
+const COMPLETE_PM_READ_CONTRACT = {
+  version: 1,
+  command: "list",
+} as const;
 
 /**
  * Build the canonical installed-CLI invocation for a whole-workspace read.
@@ -957,8 +966,16 @@ export function decodeCompletePmItems(parsed: unknown): PmItem[] {
   requireCompletePmField(projection.mode, "full", "projection.mode");
 
   const readOutput = isJsonRecord(parsed.read_output) ? parsed.read_output : {};
-  requireCompletePmField(readOutput.contract_version, 1, "read_output.contract_version");
-  requireCompletePmField(readOutput.command, "list", "read_output.command");
+  requireCompletePmField(
+    readOutput.contract_version,
+    COMPLETE_PM_READ_CONTRACT.version,
+    "read_output.contract_version",
+  );
+  requireCompletePmField(
+    readOutput.command,
+    COMPLETE_PM_READ_CONTRACT.command,
+    "read_output.command",
+  );
   requireCompletePmField(readOutput.within_budget, true, "read_output.within_budget");
   requireCompletePmField(readOutput.strings_compacted, false, "read_output.strings_compacted");
   requireCompletePmField(readOutput.rows_compacted, false, "read_output.rows_compacted");
@@ -1059,6 +1076,8 @@ export function decodeCompletePmItems(parsed: unknown): PmItem[] {
  * @param pmRoot - Workspace or tracker root accepted by the pm CLI.
  * @param platform - Runtime platform; injectable only to exercise the secure
  * Windows launcher strategy on non-Windows CI.
+ * @param pmPackageRoot - Host pm CLI package root from `PM_CLI_PACKAGE_ROOT`;
+ * injectable only to reproduce installed-extension layout in tests.
  * @returns The complete runtime-validated item corpus.
  * @throws {@link CommandError} On process, buffer, JSON, or completeness failure.
  * @internal Exported for installed-CLI acceptance and stripped from the public declaration.
@@ -1066,13 +1085,20 @@ export function decodeCompletePmItems(parsed: unknown): PmItem[] {
 export function readPmItems(
   pmRoot: string,
   platform: NodeJS.Platform = process.platform,
+  pmPackageRoot: string | undefined = process.env.PM_CLI_PACKAGE_ROOT,
 ): PmItem[] {
   const maxBuffer = pmJsonMaxBuffer();
   const listArgs = completePmListArgs(pmRoot);
   let command = "pm";
   let args = listArgs;
   if (platform === "win32") {
-    const packageJsonPath = createRequire(import.meta.url).resolve("@unbrained/pm-cli/package.json");
+    if (typeof pmPackageRoot !== "string" || pmPackageRoot.trim().length === 0) {
+      throw new CommandError(
+        "The pm host did not publish PM_CLI_PACKAGE_ROOT for a secure Windows CLI relaunch.",
+      );
+    }
+    const hostRoot = path.resolve(pmPackageRoot.trim());
+    const packageJsonPath = path.join(hostRoot, "package.json");
     let packageMetadata: unknown;
     try {
       packageMetadata = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as unknown;
@@ -1085,8 +1111,13 @@ export function readPmItems(
     if (typeof bin !== "string" || bin.trim().length === 0) {
       throw new CommandError("The installed pm CLI package does not declare its pm executable.");
     }
+    const cliEntry = path.resolve(hostRoot, bin);
+    const relativeEntry = path.relative(hostRoot, cliEntry);
+    if (relativeEntry.startsWith("..") || path.isAbsolute(relativeEntry)) {
+      throw new CommandError("The installed pm CLI package declares an executable outside its package root.");
+    }
     command = process.execPath;
-    args = [path.resolve(path.dirname(packageJsonPath), bin), ...listArgs];
+    args = [cliEntry, ...listArgs];
   }
   const result = spawnSync(
     command,
@@ -1157,6 +1188,16 @@ export function resolveSearchCorpus(documents: unknown, pmRootValue: unknown): P
     .filter((item): item is PmItem => item !== undefined);
 }
 
+/**
+ * Index complete pm items by their normalized GitHub issue provenance.
+ *
+ * Items without a stable local id or a valid `gh:owner/repo#N` tag are skipped.
+ * When legacy data contains duplicate provenance, the last corpus row wins;
+ * the complete reader prevents duplicate local item ids separately.
+ *
+ * @param items - Complete runtime-validated pm item corpus.
+ * @returns Map keyed by lowercase `owner/repo#N` provenance.
+ */
 export function indexByProvenance(items: PmItem[]): Map<string, PmItem> {
   const index = new Map<string, PmItem>();
   for (const item of items) {

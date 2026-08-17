@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 import {
@@ -104,7 +105,11 @@ test("Windows strategy keeps shell metacharacters inside the pm workspace argume
     ]);
 
     assert.deepEqual(
-      readPmItems(workspace, "win32").map((item) => item.title),
+      readPmItems(
+        workspace,
+        "win32",
+        dirname(createRequire(import.meta.url).resolve("@unbrained/pm-cli/package.json")),
+      ).map((item) => item.title),
       ["Metacharacter path"],
     );
   } finally {
@@ -138,16 +143,20 @@ test("decoder refuses every independent incomplete, omitted, paginated, compacte
     ["has more", completeEnvelope({ has_more: true }), /has_more must be false/],
     ["cursor", completeEnvelope({ next_cursor: "next" }), /next_cursor must be null/],
     ["missing completeness", withoutField("completeness"), /completeness.status must be "complete"/],
+    ["null completeness", completeEnvelope({ completeness: null }), /completeness.status must be "complete"/],
     ["partial completeness", completeEnvelope({ completeness: { status: "partial", unreadable_item_count: 1, unreadable_directory_count: 0 } }), /completeness.status must be "complete"/],
     ["unreadable item", completeEnvelope({ completeness: { status: "complete", unreadable_item_count: 1, unreadable_directory_count: 0 } }), /unreadable_item_count must be 0/],
     ["unreadable directory", completeEnvelope({ completeness: { status: "complete", unreadable_item_count: 0, unreadable_directory_count: 1 } }), /unreadable_directory_count must be 0/],
     ["missing omission receipt", withoutField("omission_receipt"), /omission_receipt.has_omissions must be false/],
+    ["array omission receipt", completeEnvelope({ omission_receipt: [] }), /omission_receipt.has_omissions must be false/],
     ["omitted fields", completeEnvelope({ omission_receipt: { has_omissions: true, omitted_field_group_count: 1, omitted_field_groups: ["body"] } }), /has_omissions must be false/],
     ["contradictory omission count", completeEnvelope({ omission_receipt: { has_omissions: false, omitted_field_group_count: 1, omitted_field_groups: [] } }), /omitted_field_group_count must be 0/],
     ["contradictory omission groups", completeEnvelope({ omission_receipt: { has_omissions: false, omitted_field_group_count: 0, omitted_field_groups: ["body"] } }), /omitted_field_groups must be empty/],
+    ["non-array omission groups", completeEnvelope({ omission_receipt: { has_omissions: false, omitted_field_group_count: 0, omitted_field_groups: "body" } }), /omitted_field_groups must be empty/],
     ["missing projection", withoutField("projection"), /projection.mode must be "full"/],
     ["brief projection", completeEnvelope({ projection: { mode: "brief" } }), /projection.mode must be "full"/],
     ["missing read receipt", withoutField("read_output"), /read_output.contract_version must be 1/],
+    ["future contract version", completeEnvelope({ read_output: { ...completeReadOutput, contract_version: 2 } }), /read_output.contract_version must be 1/],
     ["wrong command", completeEnvelope({ read_output: { ...completeReadOutput, command: "context" } }), /read_output.command must be "list"/],
     ["over budget", completeEnvelope({ read_output: { ...completeReadOutput, within_budget: false } }), /within_budget must be true/],
     ["strings compacted", completeEnvelope({ read_output: { ...completeReadOutput, strings_compacted: true } }), /strings_compacted must be false/],
