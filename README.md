@@ -29,6 +29,21 @@ pm install npm:pm-github --global
 | `preflight` | early warning when a mutating github command lacks a token |
 | `search` | `github` search provider — `pm search` reaches GitHub for imported items |
 
+### Whole-workspace read safety
+
+Import idempotency, export, status sync, Projects v2 sync, and search fallback
+all depend on seeing every pm item, including closed and canceled work. Before
+any of those paths plans or performs a GitHub operation, pm-github requests a
+strict, full, unbounded `pm list-all` response and verifies its completeness,
+omission, pagination, output-budget, count, identity, and consumed-field
+contracts. An incomplete or unverifiable response fails closed; it is never
+treated as an empty or partial workspace.
+
+The subprocess still has a 64 MiB byte safety cap. Set
+`PM_JSON_MAX_BUFFER=<bytes>` to a larger positive safe integer for an unusually
+large tracker. Raising that transport cap does not weaken the completeness
+checks.
+
 ## Import
 
 ### `pm github import <owner/repo>` (or `pm gh-issues import`)

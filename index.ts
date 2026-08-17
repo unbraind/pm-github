@@ -848,17 +848,280 @@ export function scopeItemsByIds<TItem extends { id?: string }>(
   return { selected, missing };
 }
 
-// Read every pm item (active + closed) via `pm list-all --full --include-body`
-// so the idempotency index never misses closed issues and re-creates them.
-function readPmItems(pmRoot: string): PmItem[] {
+/** True only for a JSON object, excluding arrays and `null`. */
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Render an untrusted JSON value compactly inside a read-contract error. */
+function describeJsonValue(value: unknown): string {
+  const rendered = JSON.stringify(value);
+  return rendered === undefined ? String(value) : rendered;
+}
+
+/** Require one exact field value from the `pm list-all` truthfulness envelope. */
+function requireCompletePmField(
+  actual: unknown,
+  expected: string | number | boolean | null,
+  field: string,
+): void {
+  if (actual !== expected) {
+    throw new CommandError(
+      `Refusing unverifiable pm list-all output: ${field} must be ${describeJsonValue(expected)}; received ${describeJsonValue(actual)}.`,
+    );
+  }
+}
+
+/** Installed CLI receipt version and command accepted by the complete reader. */
+const COMPLETE_PM_READ_CONTRACT = {
+  version: 1,
+  command: "list",
+} as const;
+
+/**
+ * Build the canonical installed-CLI invocation for a whole-workspace read.
+ *
+ * The output controls are deliberately explicit. `list-all` includes terminal
+ * items, `--output-include full` plus `--include-body` retains every field this
+ * integration consumes, `--strict-read` rejects unreadable records, and both
+ * amount and cost are unbounded. An arbitrary `--limit` must never be added:
+ * callers use this corpus to prevent duplicate imports and missing syncs.
+ *
+ * @param pmRoot - Workspace or tracker root accepted by the pm CLI `--path` flag.
+ * @returns Argument vector passed to the installed `pm` executable.
+ * @internal Exported so the acceptance test can bind the safety contract to the
+ * exact production invocation; it is removed from the published declaration.
+ */
+export function completePmListArgs(pmRoot: string): string[] {
+  return [
+    "--path",
+    pmRoot,
+    "list-all",
+    "--json",
+    "--include-body",
+    "--output-include",
+    "full",
+    "--strict-read",
+    "--output-limit",
+    "unbounded",
+    "--output-budget",
+    "unbounded",
+  ];
+}
+
+/**
+ * Decode only a complete, unbounded `pm list-all` response.
+ *
+ * The subprocess JSON is untrusted. This gate independently verifies every
+ * completeness signal emitted by the current CLI, reconciles envelope counts,
+ * rejects duplicate identities, and validates each field consumed by GitHub
+ * import, export, state sync, Projects v2 sync, and search fallback paths.
+ * Missing receipts fail closed because an unverifiable read is not a whole
+ * workspace read.
+ *
+ * @param parsed - JSON decoded from the installed pm CLI.
+ * @returns Fresh runtime-validated item objects.
+ * @throws {@link CommandError} When a receipt, count, identity, or consumed row
+ * field is absent, incomplete, or contradictory.
+ * @internal Exported for direct adversarial contract tests and stripped from
+ * the published declaration surface.
+ */
+export function decodeCompletePmItems(parsed: unknown): PmItem[] {
+  if (!isJsonRecord(parsed)) {
+    throw new CommandError(
+      "Refusing unverifiable pm list-all output: the response must be a top-level object with completeness receipts.",
+    );
+  }
+  if (!Array.isArray(parsed.items)) {
+    throw new CommandError("Refusing unverifiable pm list-all output: items must be an array.");
+  }
+
+  requireCompletePmField(parsed.truncated, false, "truncated");
+  requireCompletePmField(parsed.has_more, false, "has_more");
+  requireCompletePmField(parsed.next_cursor, null, "next_cursor");
+
+  const completeness = isJsonRecord(parsed.completeness) ? parsed.completeness : {};
+  requireCompletePmField(completeness.status, "complete", "completeness.status");
+  requireCompletePmField(completeness.unreadable_item_count, 0, "completeness.unreadable_item_count");
+  requireCompletePmField(
+    completeness.unreadable_directory_count,
+    0,
+    "completeness.unreadable_directory_count",
+  );
+
+  const omission = isJsonRecord(parsed.omission_receipt) ? parsed.omission_receipt : {};
+  requireCompletePmField(omission.has_omissions, false, "omission_receipt.has_omissions");
+  requireCompletePmField(
+    omission.omitted_field_group_count,
+    0,
+    "omission_receipt.omitted_field_group_count",
+  );
+  if (!Array.isArray(omission.omitted_field_groups) || omission.omitted_field_groups.length !== 0) {
+    throw new CommandError(
+      "Refusing unverifiable pm list-all output: omission_receipt.omitted_field_groups must be empty.",
+    );
+  }
+
+  const projection = isJsonRecord(parsed.projection) ? parsed.projection : {};
+  requireCompletePmField(projection.mode, "full", "projection.mode");
+
+  const readOutput = isJsonRecord(parsed.read_output) ? parsed.read_output : {};
+  requireCompletePmField(
+    readOutput.contract_version,
+    COMPLETE_PM_READ_CONTRACT.version,
+    "read_output.contract_version",
+  );
+  requireCompletePmField(
+    readOutput.command,
+    COMPLETE_PM_READ_CONTRACT.command,
+    "read_output.command",
+  );
+  requireCompletePmField(readOutput.within_budget, true, "read_output.within_budget");
+  requireCompletePmField(readOutput.strings_compacted, false, "read_output.strings_compacted");
+  requireCompletePmField(readOutput.rows_compacted, false, "read_output.rows_compacted");
+  requireCompletePmField(readOutput.result_omitted, false, "read_output.result_omitted");
+  if (
+    !Array.isArray(readOutput.requested_dimensions)
+    || !readOutput.requested_dimensions.includes("include")
+    || !readOutput.requested_dimensions.includes("amount")
+    || !readOutput.requested_dimensions.includes("cost")
+  ) {
+    throw new CommandError(
+      "Refusing unverifiable pm list-all output: read_output.requested_dimensions must include include, amount, and cost.",
+    );
+  }
+  if ("output_budget_truncation" in parsed || "output_budget_exceeded" in parsed) {
+    throw new CommandError(
+      "Refusing unverifiable pm list-all output: a budget truncation or omission disclosure was present.",
+    );
+  }
+
+  if (!Number.isSafeInteger(parsed.count) || (parsed.count as number) < 0) {
+    throw new CommandError(
+      `Refusing unverifiable pm list-all output: count must be a non-negative safe integer; received ${describeJsonValue(parsed.count)}.`,
+    );
+  }
+  if (!Number.isSafeInteger(parsed.total) || (parsed.total as number) < 0) {
+    throw new CommandError(
+      `Refusing unverifiable pm list-all output: total must be a non-negative safe integer; received ${describeJsonValue(parsed.total)}.`,
+    );
+  }
+  if (parsed.items.length !== parsed.count) {
+    throw new CommandError(
+      `Refusing unverifiable pm list-all output: items.length ${parsed.items.length} must equal count ${String(parsed.count)}.`,
+    );
+  }
+  if (parsed.count !== parsed.total) {
+    throw new CommandError(
+      `Refusing incomplete pm list-all output: count ${String(parsed.count)} must equal total ${String(parsed.total)}.`,
+    );
+  }
+
+  const ids = new Set<string>();
+  const items: PmItem[] = [];
+  for (const [index, item] of parsed.items.entries()) {
+    if (!isJsonRecord(item)) {
+      throw new CommandError(`Refusing unverifiable pm list-all output: item ${index} must be an object.`);
+    }
+    if (typeof item.id !== "string" || item.id.trim().length === 0) {
+      throw new CommandError(`Refusing unverifiable pm list-all output: item ${index} must have a non-empty id.`);
+    }
+    if (ids.has(item.id)) {
+      throw new CommandError(`Refusing unverifiable pm list-all output: duplicate item id ${item.id}.`);
+    }
+    const title = item.title;
+    const status = item.status;
+    const body = item.body;
+    const description = item.description;
+    if (typeof title !== "string") {
+      throw new CommandError(`Refusing unverifiable pm list-all output: item ${item.id} title must be a string.`);
+    }
+    if (typeof status !== "string") {
+      throw new CommandError(`Refusing unverifiable pm list-all output: item ${item.id} status must be a string.`);
+    }
+    if (typeof body !== "string") {
+      throw new CommandError(`Refusing unverifiable pm list-all output: item ${item.id} body must be a string.`);
+    }
+    if (typeof description !== "string") {
+      throw new CommandError(
+        `Refusing unverifiable pm list-all output: item ${item.id} description must be a string.`,
+      );
+    }
+    if (!Array.isArray(item.tags) || item.tags.some((tag) => typeof tag !== "string")) {
+      throw new CommandError(
+        `Refusing unverifiable pm list-all output: item ${item.id} tags must be an array of strings.`,
+      );
+    }
+    ids.add(item.id);
+    items.push({
+      id: item.id,
+      title,
+      status,
+      body,
+      description,
+      tags: [...item.tags],
+    });
+  }
+  return items;
+}
+
+/**
+ * Read every pm item, including terminal items, through a proven-complete CLI response.
+ *
+ * The enlarged byte buffer prevents Node's default 1 MiB cap from killing a
+ * mature tracker, while {@link decodeCompletePmItems} refuses any successful
+ * process response that does not prove the entire item corpus and every
+ * consumed field were returned intact.
+ *
+ * @param pmRoot - Workspace or tracker root accepted by the pm CLI.
+ * @param platform - Runtime platform; injectable only to exercise the secure
+ * Windows launcher strategy on non-Windows CI.
+ * @param pmPackageRoot - Host pm CLI package root from `PM_CLI_PACKAGE_ROOT`;
+ * injectable only to reproduce installed-extension layout in tests.
+ * @returns The complete runtime-validated item corpus.
+ * @throws {@link CommandError} On process, buffer, JSON, or completeness failure.
+ * @internal Exported for installed-CLI acceptance and stripped from the public declaration.
+ */
+export function readPmItems(
+  pmRoot: string,
+  platform: NodeJS.Platform = process.platform,
+  pmPackageRoot: string | undefined = process.env.PM_CLI_PACKAGE_ROOT,
+): PmItem[] {
   const maxBuffer = pmJsonMaxBuffer();
-  // `list-all` (NOT `list`) so CLOSED items are included: `pm list` returns only
-  // active items, which would make the idempotency index miss every closed
-  // issue and re-create it as a DUPLICATE on re-import. `--full --include-body`
-  // so tags and body survive the read instead of the brief projection.
+  const listArgs = completePmListArgs(pmRoot);
+  let command = "pm";
+  let args = listArgs;
+  if (platform === "win32") {
+    if (typeof pmPackageRoot !== "string" || pmPackageRoot.trim().length === 0) {
+      throw new CommandError(
+        "The pm host did not publish PM_CLI_PACKAGE_ROOT for a secure Windows CLI relaunch.",
+      );
+    }
+    const hostRoot = path.resolve(pmPackageRoot.trim());
+    const packageJsonPath = path.join(hostRoot, "package.json");
+    let packageMetadata: unknown;
+    try {
+      packageMetadata = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as unknown;
+    } catch {
+      throw new CommandError("Could not read the installed pm CLI package metadata.");
+    }
+    const bin = isJsonRecord(packageMetadata) && isJsonRecord(packageMetadata.bin)
+      ? packageMetadata.bin.pm
+      : undefined;
+    if (typeof bin !== "string" || bin.trim().length === 0) {
+      throw new CommandError("The installed pm CLI package does not declare its pm executable.");
+    }
+    const cliEntry = path.resolve(hostRoot, bin);
+    const relativeEntry = path.relative(hostRoot, cliEntry);
+    if (relativeEntry.startsWith("..") || path.isAbsolute(relativeEntry)) {
+      throw new CommandError("The installed pm CLI package declares an executable outside its package root.");
+    }
+    command = process.execPath;
+    args = [cliEntry, ...listArgs];
+  }
   const result = spawnSync(
-    "pm",
-    ["--path", pmRoot, "--json", "list-all", "--full", "--include-body", "--limit", "10000"],
+    command,
+    args,
     { encoding: "utf-8", maxBuffer },
   );
   // A buffer overrun kills the child with status null and no stderr, so name the
@@ -877,13 +1140,13 @@ function readPmItems(pmRoot: string): PmItem[] {
   if (result.status !== 0) {
     throw new CommandError(result.stderr || "pm list-all failed");
   }
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(result.stdout);
-    const items = Array.isArray(parsed) ? parsed : parsed.items ?? parsed.results ?? [];
-    return items as PmItem[];
+    parsed = JSON.parse(result.stdout) as unknown;
   } catch {
     throw new CommandError("Could not parse `pm list-all --json` output.");
   }
+  return decodeCompletePmItems(parsed);
 }
 
 // Index existing pm items by their GitHub provenance tag for O(1) idempotent
@@ -925,6 +1188,16 @@ export function resolveSearchCorpus(documents: unknown, pmRootValue: unknown): P
     .filter((item): item is PmItem => item !== undefined);
 }
 
+/**
+ * Index complete pm items by their normalized GitHub issue provenance.
+ *
+ * Items without a stable local id or a valid `gh:owner/repo#N` tag are skipped.
+ * When legacy data contains duplicate provenance, the last corpus row wins;
+ * the complete reader prevents duplicate local item ids separately.
+ *
+ * @param items - Complete runtime-validated pm item corpus.
+ * @returns Map keyed by lowercase `owner/repo#N` provenance.
+ */
 export function indexByProvenance(items: PmItem[]): Map<string, PmItem> {
   const index = new Map<string, PmItem>();
   for (const item of items) {
