@@ -8,7 +8,6 @@ import test from "node:test";
 import {
   completePmListArgs,
   decodeCompletePmItems,
-  pmListSpawnOptions,
   readPmItems,
 } from "../index.ts";
 
@@ -90,17 +89,27 @@ test("whole-corpus argv requests strict full unbounded output without an arbitra
   assert.ok(!args.includes("--limit"), "a list-all row ceiling makes the corpus incomplete by construction");
 });
 
-test("production pm reads enable the npm command shim only on Windows", () => {
-  assert.deepEqual(pmListSpawnOptions(64, "linux"), {
-    encoding: "utf-8",
-    maxBuffer: 64,
-    shell: false,
-  });
-  assert.deepEqual(pmListSpawnOptions(128, "win32"), {
-    encoding: "utf-8",
-    maxBuffer: 128,
-    shell: true,
-  });
+test("Windows strategy keeps shell metacharacters inside the pm workspace argument", () => {
+  const workspace = mkdtempSync(join(tmpdir(), "pm-github-&()-"));
+  try {
+    runPm(["init", "-y", "--force", "--workspace", workspace]);
+    runPm([
+      "--path",
+      workspace,
+      "create",
+      "Task",
+      "Metacharacter path",
+      "--description",
+      "Argument-vector acceptance",
+    ]);
+
+    assert.deepEqual(
+      readPmItems(workspace, "win32").map((item) => item.title),
+      ["Metacharacter path"],
+    );
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
 });
 
 test("decoder preserves every pm field consumed by GitHub import, export, sync, project, and search paths", () => {
