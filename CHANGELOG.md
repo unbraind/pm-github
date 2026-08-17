@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Refuse incomplete pm item corpora before GitHub imports, exports, and syncs ([pm-github-ep0u](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-ep0u.toon))
+
 ## 2026.8.16 - 2026-08-16
 
 ### Fixed

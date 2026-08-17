@@ -1,0 +1,26 @@
+id: pm-github-9cjx
+title: Reach exact all-source coverage and include every operational script
+description: "The current gate measures index.ts and projects.ts but explicitly skips scripts, and its thresholds are 88/79/89. The latest measured corpus after the complete-read work is 91.83% lines, 82.14% branches, and 91.75% functions across two production files, so a green release check is not the mandated exact 100/100/100/100 all-source result."
+type: Task
+status: open
+priority: 1
+tags[5]: all-source,coverage,quality-gate,scripts,tdd
+created_at: "2026-08-17T07:32:29.666Z"
+updated_at: "2026-08-17T07:35:10.745Z"
+author: codex
+estimated_minutes: 960
+acceptance_criteria: "Automatically discover every executable TypeScript production and operational source; require exact 100% statements, branches, functions, and lines; prohibit ignore pragmas, source allowlist blind spots, threshold weakening, vacuous tests, and mocks of the unit under test; exercise GitHub behavior at the HTTP boundary, pm behavior through real SDK/installed-CLI boundaries, and operational scripts through real filesystem/process behavior; prove the gate fails when a new uncovered source or branch is introduced."
+expected_result: "Every executable TypeScript source and operational script is automatically included in measurement and exact statements, branches, functions, and lines all reach 100% through behavioral tests."
+actual_result: The source walker skips scripts and aggregate coverage remains 91.83/82.14/91.75 with thresholds fixed at 88/79/89.
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-github-n3z3,related,"2026-08-17T07:32:29.666Z",codex,"cli:create:dep",detected
+files[3]{path,scope}:
+  scripts/coverage-gate.ts,project
+  package.json,project
+  test,project
+tests[1]{command,path,scope,timeout_seconds,note}:
+  npm run coverage,scripts/coverage-gate.ts,project,900,Current ratcheted gate; this item remains open until it measures all executable sources at exact 100/100/100/100.
+docs[2]{path,scope,note}:
+  "https://github.com/unbraind/pm-cli-companion/blob/main/.agents/pm/epics/pm-cli-website-ktip.toon",global,Fleet exact coverage mandate
+  "https://github.com/unbraind/pm-cli-companion/blob/main/.agents/pm/issues/pm-cli-website-odki.toon",global,Fleet operational script coverage gap
+body: ""
