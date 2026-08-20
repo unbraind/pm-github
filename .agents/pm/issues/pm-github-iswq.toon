@@ -1,0 +1,46 @@
+id: pm-github-iswq
+title: Use canonical unbounded pm list reads with the 2026.8.20 host contract
+description: "pm-github already fail-closes complete-corpus receipts, but its production argv and user-facing diagnostics still use the deprecated list-all alias and its declared pm CLI/SDK floors predate 2026.8.20."
+type: Issue
+status: closed
+priority: 1
+tags[5]: agents,cli-ux,complete-corpus,latest-cli,tdd
+created_at: "2026-08-20T21:28:31.109Z"
+updated_at: "2026-08-20T21:45:25.861Z"
+closed_at: "2026-08-20T21:40:41.284Z"
+completed_at: "2026-08-20T21:40:41.284Z"
+author: codex
+estimated_minutes: 180
+acceptance_criteria: "Create failing exact-argv and alias-free real installed-CLI tests first; replace only the deprecated invocation and terminology; retain strict full unbounded fail-closed receipt validation; use top-level TypeScript imports and no any/dynamic imports; pin dev CLI/SDK and set peer/manifest floors to 2026.8.20; run release:check, exact measured-source coverage, pm health, reconcile, validate, npm/bun packed acceptance, dependency/vulnerability/privacy checks; document exact evidence and link the package PR plus companion item pm-cli-website-cbyb; do not merge or publish while pm-github-zqad or pm-github-v2kt blocks release"
+risk: medium
+confidence: 95
+reporter: codex
+severity: medium
+repro_steps: "Run the production completePmListArgs vector with pm CLI 2026.8.20 and inspect stderr; scan index.ts, README.md, and complete-corpus tests for list-all."
+resolution: "Migrated the existing strict whole-corpus reader to canonical pm CLI 2026.8.20 argv without weakening its completeness decoder, added exact and real packed acceptance, aligned compatibility declarations, updated terminology, and preserved separate privacy, release-order, and exact-coverage blockers."
+expected_result: "Production invokes explicit unbounded canonical pm list --all --json with full/body/strict receipts; no alias deprecation reaches stderr; source, tests, docs, generated output, package dependency, peer floor, and manifest floor agree on pm CLI/SDK 2026.8.20."
+actual_result: "Implemented canonical host-owned --pm-path plus --output-include full, unbounded amount/cost, then list --all --json --include-body --strict-read; all production errors/docs and direct test fixtures use canonical terminology. Pinned local CLI/SDK 2026.8.20, set peer and manifest floors to 2026.8.20, and removed the ignored manifest pm.compatibility envelope. TDD failed 2/6 before source edits, then passed 6/6. Full suite passed 261 tests. Current measured-source coverage passed at 92.40% lines, 82.58% branches, 91.75% functions across index.ts/projects.ts; this is not 100/100/100/100 and remains independently open as pm-github-9cjx. Docstring gate documented 92 declarations; production audit found 0 vulnerabilities; pack dry-run contained 13 intended files. Clean packed npm and Bun clients each read two open/closed items with items.length=count=total, no truncation/pagination/list-all receipt, and empty child stderr. A packed npm extension authenticated through gh, validated public repo access HTTP 200, and a retry dry-ran a real GitHub import against unbraind/pm-github with no writes and a complete empty tracker; one earlier pm-changelog import attempt timed out at 30 seconds and was not counted as a pass. pm CLI receipt issue #1070 records canonical --output-include full being misreported as legacy --full. Delivery is complete but merge/publication remain blocked by pm-github-zqad and pm-github-v2kt."
+affected_version: pm-github 2026.8.18 with pm CLI 2026.8.20
+component: whole-tracker pm CLI integration
+customer_impact: Deprecated diagnostics can pollute machine stderr and stale compatibility floors allow hosts that do not provide the canonical contract this package now requires.
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-github-ep0u,related,"2026-08-20T21:28:31.109Z",codex,"cli:create:dep",detected
+notes[2]{created_at,author,text}:
+  "2026-08-20T21:33:00.194Z",codex,"2026-08-20 TDD: before the source edit, node --test test/complete-corpus.test.ts failed 2 of 6 tests because completePmListArgs still emitted --path/list-all and the real CLI wrote the deprecation diagnostic to stderr. After canonical argv, the stale local 2026.8.15 runtime rejected list --all as ambiguous while the host 2026.8.20 runtime passed; npm install updated the exact local @unbrained/pm-cli pin to 2026.8.20 and all 6 tests passed. Full npm test then passed 261 tests. Canonical --output-include full is currently misreported as legacy --full in the receipt, tracked upstream as pm-cli #1070; the acceptance rejects only actual list-all use until that CLI bug is fixed."
+  "2026-08-20T21:44:42.154Z",codex,"2026-08-20 final gates before review: npm run release:check passed 261 tests and the current 92.40/82.58/91.75 three-metric measured-source gate, 92 documented declarations, zero production audit vulnerabilities, clean 13-file pack, and current changelog. pm health --strict-exit passed with three provenance advisories; pm merge reconcile --dry-run found 82 clean streams and no pending decisions; pm validate remained structurally valid with pre-existing legacy metadata/resolution/file warnings; duplicates reported one pre-existing closed exact-title cluster. GitHub Dependabot and secret-scanning open alerts were empty; code-scanning has no analysis, and Trivy is not installed, so neither is represented as green. Public pm-changelog 2026.8.17 first refused a bounded 5-of-82 read; explicit unbounded pm-arg controls restored all 289 changelog lines. The tool still invokes its deprecated internal alias until privacy-gated pm-changelog PR #148 can merge and release. Historical privacy/identity findings remain open under pm-github-zqad and publication order remains open under pm-github-v2kt."
+files[5]{path,scope,note}:
+  index.ts,project,Canonical complete-corpus argv and diagnostics
+  manifest.json,project,Runtime-enforced host floor
+  package.json,project,Peer and exact development CLI SDK floors
+  test/compatibility-floor.test.ts,project,Exact 2026.8.20 host floor and manifest contract
+  test/complete-corpus.test.ts,project,Exact argv and installed CLI completeness acceptance
+tests[2]{command,path,scope,timeout_seconds,note}:
+  "npm run release:check",package.json,project,1200,Full package release gate
+  npm test,test/complete-corpus.test.ts,project,900,261-test suite includes red-green canonical argv and real installed-CLI receipt acceptance
+docs[4]{path,scope,note}:
+  "https://github.com/unbraind/pm-changelog/pull/148",global,Canonical unbounded changelog reader awaiting privacy-gated merge and publication
+  "https://github.com/unbraind/pm-cli-companion/blob/docs/record-pm-rl-pm-csv-cli-2026-8-20/.agents/pm/issues/pm-cli-website-cbyb.toon",global,Companion fleet canonical-command migration owner
+  "https://github.com/unbraind/pm-cli/issues/1070",global,Upstream receipt bug found during installed-CLI acceptance
+  README.md,project,Canonical complete-corpus contract and copyable invocation
+close_reason: Canonical whole-corpus reader delivery is implemented and verified; package merge/publication remain separately blocked by pm-github-zqad and pm-github-v2kt.
+body: ""

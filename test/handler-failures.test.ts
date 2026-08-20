@@ -71,7 +71,7 @@ function pmSetup(root: string, args: readonly string[]): void {
 
 // A PATH that finds the local `pm` shim + `node` but NOT `gh`, so the
 // token-resolution fallback (`gh auth token`) deterministically fails while
-// `pm list-all` still works. Used for the no-token guards whose handlers read
+// `pm list --all` still works. Used for the no-token guards whose handlers read
 // the tracker before checking the token.
 const PM_BIN_DIR = fileURLToPath(new URL("../node_modules/.bin", import.meta.url));
 const GH_FREE_PATH = `${PM_BIN_DIR}${path.delimiter}${path.dirname(process.execPath)}`;
@@ -102,7 +102,11 @@ function createLinkedItem(root: string, title: string, tag: string, status: stri
   );
   assert.strictEqual(r.status, 0, `pm create failed: ${r.error?.message ?? r.stderr}`);
   // Re-read to get the assigned id.
-  const list = spawnSync(PM_BIN, ["--path", root, "--json", "list-all", "--full"], PM_SPAWN_OPTS);
+  const list = spawnSync(
+    PM_BIN,
+    ["--pm-path", root, "--json", "--output-include", "full", "list", "--all"],
+    PM_SPAWN_OPTS,
+  );
   const parsed = JSON.parse(list.stdout) as { items?: Array<{ id: string; tags?: string[] }> };
   const item = (parsed.items ?? []).find((i) => (i.tags ?? []).includes(tag));
   assert.ok(item, `created item carrying ${tag} should be listable`);
@@ -1099,7 +1103,11 @@ function upstreamIssue(number: number, title: string, state: "open" | "closed"):
 
 /** Read a pm item's status by its provenance tag (for reconciliation asserts). */
 function statusForTag(root: string, tag: string): string | undefined {
-  const r = spawnSync(PM_BIN, ["--path", root, "--json", "list-all", "--full"], PM_SPAWN_OPTS);
+  const r = spawnSync(
+    PM_BIN,
+    ["--pm-path", root, "--json", "--output-include", "full", "list", "--all"],
+    PM_SPAWN_OPTS,
+  );
   const parsed = JSON.parse(r.stdout) as { items?: Array<{ status?: string; tags?: string[] }> };
   return (parsed.items ?? []).find((i) => (i.tags ?? []).includes(tag))?.status;
 }
@@ -1189,7 +1197,11 @@ function listTitles(root: string): string[] {
 
 /** Read every pm item (including closed) with its status and close_reason. */
 function listAllStatuses(root: string): Array<{ id: string; title: string; status: string; close_reason?: string }> {
-  const r = spawnSync(PM_BIN, ["--path", root, "--json", "list-all", "--full"], PM_SPAWN_OPTS);
+  const r = spawnSync(
+    PM_BIN,
+    ["--pm-path", root, "--json", "--output-include", "full", "list", "--all"],
+    PM_SPAWN_OPTS,
+  );
   const parsed = JSON.parse(r.stdout);
   const arr = Array.isArray(parsed) ? parsed : (parsed.items ?? parsed.results ?? []);
   return (arr as Array<{ id: string; title: string; status: string; close_reason?: string }>);

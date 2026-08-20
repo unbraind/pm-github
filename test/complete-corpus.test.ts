@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -12,7 +12,7 @@ import {
   readPmItems,
 } from "../index.ts";
 
-/** Current complete `pm list-all --json` envelope, with caller overrides. */
+/** Current complete `pm list --all --json` envelope, with caller overrides. */
 function completeEnvelope(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     items: [
@@ -74,20 +74,25 @@ function runPm(args: string[], cwd?: string): string {
 test("whole-corpus argv requests strict full unbounded output without an arbitrary row ceiling", () => {
   const args = completePmListArgs("/workspace/.agents/pm");
   assert.deepEqual(args, [
-    "--path",
+    "--pm-path",
     "/workspace/.agents/pm",
-    "list-all",
-    "--json",
-    "--include-body",
     "--output-include",
     "full",
-    "--strict-read",
     "--output-limit",
     "unbounded",
     "--output-budget",
     "unbounded",
+    "list",
+    "--all",
+    "--json",
+    "--include-body",
+    "--strict-read",
   ]);
-  assert.ok(!args.includes("--limit"), "a list-all row ceiling makes the corpus incomplete by construction");
+  assert.ok(
+    !args.includes("--limit"),
+    "a canonical whole-corpus row ceiling makes the read incomplete by construction",
+  );
+  assert.ok(!args.includes("list-all"), "production must not invoke the deprecated list-all alias");
 });
 
 test("Windows strategy keeps shell metacharacters inside the pm workspace argument", () => {
@@ -236,6 +241,36 @@ test("real installed CLI returns a complete open-and-closed corpus from a fresh 
       "--description",
       "Open acceptance task",
     ]);
+
+    const result = spawnSync("pm", completePmListArgs(workspace), {
+      encoding: "utf8",
+      env: { ...process.env, PM_AUTHOR: "pm-github-acceptance" },
+      shell: process.platform === "win32",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(
+      result.stderr,
+      "",
+      "the canonical installed-CLI read must not emit deprecation diagnostics",
+    );
+    const envelope = JSON.parse(result.stdout) as {
+      items: Array<{ id?: unknown }>;
+      count: number;
+      total: number;
+      truncated: boolean;
+      has_more: boolean;
+      read_output: { command: string; legacy_aliases_used?: unknown[] };
+    };
+    assert.equal(envelope.items.length, envelope.count);
+    assert.equal(envelope.count, envelope.total);
+    assert.equal(envelope.truncated, false);
+    assert.equal(envelope.has_more, false);
+    assert.equal(envelope.read_output.command, "list");
+    assert.ok(
+      !envelope.read_output.legacy_aliases_used?.includes("list-all"),
+      "the real receipt must not report the deprecated list-all alias",
+    );
+    assert.ok(envelope.items.some((item) => item.id === created.id));
 
     const items = readPmItems(workspace);
     assert.equal(items.length, 2);

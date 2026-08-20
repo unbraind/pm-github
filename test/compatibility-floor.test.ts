@@ -19,6 +19,8 @@ interface ExtensionManifest {
    * names the actual type rather than being coerced into a plausible string.
    */
   readonly pm_min_version?: unknown;
+  /** Obsolete compatibility envelope retained only to prove it is absent. */
+  readonly pm?: unknown;
 }
 
 const packageJson = JSON.parse(
@@ -30,6 +32,7 @@ const extensionManifest = JSON.parse(
 
 const CLI = "@unbrained/pm-cli";
 const EXACT_VERSION = /^\d+\.\d+\.\d+$/;
+const CANONICAL_LIST_FLOOR = "2026.8.20";
 
 /**
  * Two independent systems enforce the pm CLI compatibility floor, and each reads
@@ -91,6 +94,15 @@ test("the extension manifest declares the same floor the CLI actually enforces",
     peer.slice(">=".length),
     "manifest.json pm_min_version must equal the peerDependencies floor, or npm and the pm CLI enforce different minimums",
   );
+  assert.strictEqual(
+    declared,
+    CANONICAL_LIST_FLOOR,
+    "the canonical list --all invocation requires the pm CLI 2026.8.20 host contract",
+  );
+  assert.ok(
+    !Object.hasOwn(extensionManifest, "pm"),
+    "manifest.json must not carry the ignored legacy pm.compatibility envelope",
+  );
 });
 
 test("the development dependency is an exact pin at or above the declared floor", () => {
@@ -115,6 +127,11 @@ test("the development dependency is an exact pin at or above the declared floor"
   assert.ok(
     atOrAbove(dev, declared as string),
     `the pinned development CLI ${dev} is below the declared floor ${String(declared)}`,
+  );
+  assert.strictEqual(
+    dev,
+    CANONICAL_LIST_FLOOR,
+    "development must test the exact required host contract",
   );
 });
 

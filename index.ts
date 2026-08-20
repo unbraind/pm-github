@@ -805,7 +805,7 @@ export function authorTag(issue: GhIssue): string | undefined {
  * The slice of a pm item this package reads and writes.
  *
  * A deliberately loose projection of the full tracker item: only the fields the
- * import / export / sync paths touch, so JSON from `pm list-all` parses without
+ * import / export / sync paths touch, so JSON from `pm list --all` parses without
  * depending on every SDK field.
  */
 export interface PmItem {
@@ -859,7 +859,7 @@ function describeJsonValue(value: unknown): string {
   return rendered === undefined ? String(value) : rendered;
 }
 
-/** Require one exact field value from the `pm list-all` truthfulness envelope. */
+/** Require one exact field value from the `pm list --all` truthfulness envelope. */
 function requireCompletePmField(
   actual: unknown,
   expected: string | number | boolean | null,
@@ -867,7 +867,7 @@ function requireCompletePmField(
 ): void {
   if (actual !== expected) {
     throw new CommandError(
-      `Refusing unverifiable pm list-all output: ${field} must be ${describeJsonValue(expected)}; received ${describeJsonValue(actual)}.`,
+      `Refusing unverifiable pm list --all output: ${field} must be ${describeJsonValue(expected)}; received ${describeJsonValue(actual)}.`,
     );
   }
 }
@@ -881,36 +881,37 @@ const COMPLETE_PM_READ_CONTRACT = {
 /**
  * Build the canonical installed-CLI invocation for a whole-workspace read.
  *
- * The output controls are deliberately explicit. `list-all` includes terminal
+ * The output controls are deliberately explicit. `list --all` includes terminal
  * items, `--output-include full` plus `--include-body` retains every field this
  * integration consumes, `--strict-read` rejects unreadable records, and both
  * amount and cost are unbounded. An arbitrary `--limit` must never be added:
  * callers use this corpus to prevent duplicate imports and missing syncs.
  *
- * @param pmRoot - Workspace or tracker root accepted by the pm CLI `--path` flag.
+ * @param pmRoot - Workspace or tracker root accepted by the pm CLI `--pm-path` flag.
  * @returns Argument vector passed to the installed `pm` executable.
  * @internal Exported so the acceptance test can bind the safety contract to the
  * exact production invocation; it is removed from the published declaration.
  */
 export function completePmListArgs(pmRoot: string): string[] {
   return [
-    "--path",
+    "--pm-path",
     pmRoot,
-    "list-all",
-    "--json",
-    "--include-body",
     "--output-include",
     "full",
-    "--strict-read",
     "--output-limit",
     "unbounded",
     "--output-budget",
     "unbounded",
+    "list",
+    "--all",
+    "--json",
+    "--include-body",
+    "--strict-read",
   ];
 }
 
 /**
- * Decode only a complete, unbounded `pm list-all` response.
+ * Decode only a complete, unbounded `pm list --all` response.
  *
  * The subprocess JSON is untrusted. This gate independently verifies every
  * completeness signal emitted by the current CLI, reconciles envelope counts,
@@ -929,11 +930,11 @@ export function completePmListArgs(pmRoot: string): string[] {
 export function decodeCompletePmItems(parsed: unknown): PmItem[] {
   if (!isJsonRecord(parsed)) {
     throw new CommandError(
-      "Refusing unverifiable pm list-all output: the response must be a top-level object with completeness receipts.",
+      "Refusing unverifiable pm list --all output: the response must be a top-level object with completeness receipts.",
     );
   }
   if (!Array.isArray(parsed.items)) {
-    throw new CommandError("Refusing unverifiable pm list-all output: items must be an array.");
+    throw new CommandError("Refusing unverifiable pm list --all output: items must be an array.");
   }
 
   requireCompletePmField(parsed.truncated, false, "truncated");
@@ -958,7 +959,7 @@ export function decodeCompletePmItems(parsed: unknown): PmItem[] {
   );
   if (!Array.isArray(omission.omitted_field_groups) || omission.omitted_field_groups.length !== 0) {
     throw new CommandError(
-      "Refusing unverifiable pm list-all output: omission_receipt.omitted_field_groups must be empty.",
+      "Refusing unverifiable pm list --all output: omission_receipt.omitted_field_groups must be empty.",
     );
   }
 
@@ -987,33 +988,33 @@ export function decodeCompletePmItems(parsed: unknown): PmItem[] {
     || !readOutput.requested_dimensions.includes("cost")
   ) {
     throw new CommandError(
-      "Refusing unverifiable pm list-all output: read_output.requested_dimensions must include include, amount, and cost.",
+      "Refusing unverifiable pm list --all output: read_output.requested_dimensions must include include, amount, and cost.",
     );
   }
   if ("output_budget_truncation" in parsed || "output_budget_exceeded" in parsed) {
     throw new CommandError(
-      "Refusing unverifiable pm list-all output: a budget truncation or omission disclosure was present.",
+      "Refusing unverifiable pm list --all output: a budget truncation or omission disclosure was present.",
     );
   }
 
   if (!Number.isSafeInteger(parsed.count) || (parsed.count as number) < 0) {
     throw new CommandError(
-      `Refusing unverifiable pm list-all output: count must be a non-negative safe integer; received ${describeJsonValue(parsed.count)}.`,
+      `Refusing unverifiable pm list --all output: count must be a non-negative safe integer; received ${describeJsonValue(parsed.count)}.`,
     );
   }
   if (!Number.isSafeInteger(parsed.total) || (parsed.total as number) < 0) {
     throw new CommandError(
-      `Refusing unverifiable pm list-all output: total must be a non-negative safe integer; received ${describeJsonValue(parsed.total)}.`,
+      `Refusing unverifiable pm list --all output: total must be a non-negative safe integer; received ${describeJsonValue(parsed.total)}.`,
     );
   }
   if (parsed.items.length !== parsed.count) {
     throw new CommandError(
-      `Refusing unverifiable pm list-all output: items.length ${parsed.items.length} must equal count ${String(parsed.count)}.`,
+      `Refusing unverifiable pm list --all output: items.length ${parsed.items.length} must equal count ${String(parsed.count)}.`,
     );
   }
   if (parsed.count !== parsed.total) {
     throw new CommandError(
-      `Refusing incomplete pm list-all output: count ${String(parsed.count)} must equal total ${String(parsed.total)}.`,
+      `Refusing incomplete pm list --all output: count ${String(parsed.count)} must equal total ${String(parsed.total)}.`,
     );
   }
 
@@ -1021,35 +1022,35 @@ export function decodeCompletePmItems(parsed: unknown): PmItem[] {
   const items: PmItem[] = [];
   for (const [index, item] of parsed.items.entries()) {
     if (!isJsonRecord(item)) {
-      throw new CommandError(`Refusing unverifiable pm list-all output: item ${index} must be an object.`);
+      throw new CommandError(`Refusing unverifiable pm list --all output: item ${index} must be an object.`);
     }
     if (typeof item.id !== "string" || item.id.trim().length === 0) {
-      throw new CommandError(`Refusing unverifiable pm list-all output: item ${index} must have a non-empty id.`);
+      throw new CommandError(`Refusing unverifiable pm list --all output: item ${index} must have a non-empty id.`);
     }
     if (ids.has(item.id)) {
-      throw new CommandError(`Refusing unverifiable pm list-all output: duplicate item id ${item.id}.`);
+      throw new CommandError(`Refusing unverifiable pm list --all output: duplicate item id ${item.id}.`);
     }
     const title = item.title;
     const status = item.status;
     const body = item.body;
     const description = item.description;
     if (typeof title !== "string") {
-      throw new CommandError(`Refusing unverifiable pm list-all output: item ${item.id} title must be a string.`);
+      throw new CommandError(`Refusing unverifiable pm list --all output: item ${item.id} title must be a string.`);
     }
     if (typeof status !== "string") {
-      throw new CommandError(`Refusing unverifiable pm list-all output: item ${item.id} status must be a string.`);
+      throw new CommandError(`Refusing unverifiable pm list --all output: item ${item.id} status must be a string.`);
     }
     if (typeof body !== "string") {
-      throw new CommandError(`Refusing unverifiable pm list-all output: item ${item.id} body must be a string.`);
+      throw new CommandError(`Refusing unverifiable pm list --all output: item ${item.id} body must be a string.`);
     }
     if (typeof description !== "string") {
       throw new CommandError(
-        `Refusing unverifiable pm list-all output: item ${item.id} description must be a string.`,
+        `Refusing unverifiable pm list --all output: item ${item.id} description must be a string.`,
       );
     }
     if (!Array.isArray(item.tags) || item.tags.some((tag) => typeof tag !== "string")) {
       throw new CommandError(
-        `Refusing unverifiable pm list-all output: item ${item.id} tags must be an array of strings.`,
+        `Refusing unverifiable pm list --all output: item ${item.id} tags must be an array of strings.`,
       );
     }
     ids.add(item.id);
@@ -1130,21 +1131,21 @@ export function readPmItems(
     const code = (result.error as NodeJS.ErrnoException).code;
     if (code === "ENOBUFS") {
       throw new CommandError(
-        `pm list-all output exceeded the ${maxBuffer} byte read buffer. ` +
+        `pm list --all output exceeded the ${maxBuffer} byte read buffer. ` +
           "The workspace is larger than this read limit; narrow the import " +
           "(for example --labels or --since) or raise the PM_JSON_MAX_BUFFER env var.",
       );
     }
-    throw new CommandError(`pm list-all failed: ${result.error.message}`);
+    throw new CommandError(`pm list --all failed: ${result.error.message}`);
   }
   if (result.status !== 0) {
-    throw new CommandError(result.stderr || "pm list-all failed");
+    throw new CommandError(result.stderr || "pm list --all failed");
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(result.stdout) as unknown;
   } catch {
-    throw new CommandError("Could not parse `pm list-all --json` output.");
+    throw new CommandError("Could not parse `pm list --all --json` output.");
   }
   return decodeCompletePmItems(parsed);
 }
@@ -1214,9 +1215,9 @@ export function indexByProvenance(items: PmItem[]): Map<string, PmItem> {
 // ---------------------------------------------------------------------------
 
 // Node's spawnSync defaults to a 1 MiB stdout cap. A mature tracker's full JSON
-// dump (`pm list-all --full --include-body`) passes that at a few hundred items,
+// dump (`pm --output-include full list --all --include-body`) passes that at a few hundred items,
 // and the child is then killed with ENOBUFS, status null and EMPTY stderr — which
-// surfaced as a bare "pm list-all failed" with nothing to diagnose. Reproduced on
+// surfaced as a bare "pm list --all failed" with nothing to diagnose. Reproduced on
 // a real 443-item workspace at 1,052,859 bytes. 64 MiB matches the cap the sibling
 // pm packages settled on (pm-changelog, pm-context, pm-brief).
 /** Read-buffer cap for `pm` output, in bytes. 64 MiB by default; override with the

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Use canonical unbounded pm list reads with the 2026.8.20 host contract ([pm-github-iswq](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-iswq.toon))
+
 ## 2026.8.18 - 2026-08-18
 
 ### Fixed
