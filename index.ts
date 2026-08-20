@@ -1132,8 +1132,8 @@ export function readPmItems(
     if (code === "ENOBUFS") {
       throw new CommandError(
         `pm list --all output exceeded the ${maxBuffer} byte read buffer. ` +
-          "The workspace is larger than this read limit; narrow the import " +
-          "(for example --labels or --since) or raise the PM_JSON_MAX_BUFFER env var.",
+          "The complete corpus cannot be narrowed safely. Only raise the " +
+          "PM_JSON_MAX_BUFFER env var after confirming the workspace size and available memory.",
       );
     }
     throw new CommandError(`pm list --all failed: ${result.error.message}`);

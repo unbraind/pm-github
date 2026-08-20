@@ -29,6 +29,7 @@ const packageJson = JSON.parse(
 const extensionManifest = JSON.parse(
   readFileSync(resolve(repoRoot, "manifest.json"), "utf8"),
 ) as ExtensionManifest;
+const changelog = readFileSync(resolve(repoRoot, "CHANGELOG.md"), "utf8");
 
 const CLI = "@unbrained/pm-cli";
 const EXACT_VERSION = /^\d+\.\d+\.\d+$/;
@@ -102,6 +103,11 @@ test("the extension manifest declares the same floor the CLI actually enforces",
   assert.ok(
     !Object.hasOwn(extensionManifest, "pm"),
     "manifest.json must not carry the ignored legacy pm.compatibility envelope",
+  );
+  assert.match(
+    changelog,
+    /BREAKING: pm-github now requires pm CLI 2026\.8\.20 or newer; older hosts may fail installation or runtime validation/,
+    "CHANGELOG.md must disclose the compatibility break enforced by the manifest and peer dependency",
   );
 });
 

@@ -253,7 +253,9 @@ test("real installed CLI returns a complete open-and-closed corpus from a fresh 
       "",
       "the canonical installed-CLI read must not emit deprecation diagnostics",
     );
-    const envelope = JSON.parse(result.stdout) as {
+    const parsed = JSON.parse(result.stdout) as unknown;
+    const decodedItems = decodeCompletePmItems(parsed);
+    const envelope = parsed as {
       items: Array<{ id?: unknown }>;
       count: number;
       total: number;
@@ -261,7 +263,7 @@ test("real installed CLI returns a complete open-and-closed corpus from a fresh 
       has_more: boolean;
       read_output: { command: string; legacy_aliases_used?: unknown[] };
     };
-    assert.equal(envelope.items.length, envelope.count);
+    assert.equal(decodedItems.length, envelope.count);
     assert.equal(envelope.count, envelope.total);
     assert.equal(envelope.truncated, false);
     assert.equal(envelope.has_more, false);
@@ -270,7 +272,19 @@ test("real installed CLI returns a complete open-and-closed corpus from a fresh 
       !envelope.read_output.legacy_aliases_used?.includes("list-all"),
       "the real receipt must not report the deprecated list-all alias",
     );
-    assert.ok(envelope.items.some((item) => item.id === created.id));
+    assert.ok(decodedItems.some((item) => item.id === created.id));
+
+    const priorMaxBuffer = process.env.PM_JSON_MAX_BUFFER;
+    process.env.PM_JSON_MAX_BUFFER = "1";
+    try {
+      assert.throws(
+        () => readPmItems(workspace),
+        /Only raise the PM_JSON_MAX_BUFFER env var after confirming the workspace size and available memory\./,
+      );
+    } finally {
+      if (priorMaxBuffer === undefined) delete process.env.PM_JSON_MAX_BUFFER;
+      else process.env.PM_JSON_MAX_BUFFER = priorMaxBuffer;
+    }
 
     const items = readPmItems(workspace);
     assert.equal(items.length, 2);
