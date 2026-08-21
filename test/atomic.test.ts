@@ -59,10 +59,20 @@ function freshTracker(): string {
 function listItems(root: string): Array<{ id: string; title: string; status: string }> {
   const result = spawnSync(
     PM_BIN,
-    ["--path", root, "list-all", "--json", "--full", "--limit", "100"],
+    [
+      "--pm-path",
+      root,
+      "--output-include",
+      "full",
+      "list",
+      "--all",
+      "--json",
+      "--limit",
+      "100",
+    ],
     PM_SPAWN_OPTS,
   );
-  assert.strictEqual(result.status, 0, `pm list-all failed: ${result.error?.message ?? result.stderr}`);
+  assert.strictEqual(result.status, 0, `pm list --all failed: ${result.error?.message ?? result.stderr}`);
   const parsed = JSON.parse(result.stdout) as { items?: Array<{ id: string; title: string; status: string }> };
   return parsed.items ?? [];
 }
