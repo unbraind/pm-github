@@ -6,7 +6,7 @@ status: open
 priority: 1
 tags[5]: git-history,identity-gate,privacy,release,security
 created_at: "2026-08-17T07:40:36.004Z"
-updated_at: "2026-08-21T21:30:44.776Z"
+updated_at: "2026-08-21T23:18:11.154Z"
 author: codex
 estimated_minutes: 480
 acceptance_criteria: "Add a checked-in justified identity allowlist and fail-closed audit covering reachable and unreachable commits and annotated tags; add a current-tree and all-object secret/private-path gate with false-positive fixtures; classify every existing historical match without printing sensitive values into logs; obtain an explicit human decision before rewriting published history; if approved, preserve release metadata and verify old sensitive objects are no longer remotely reachable; if declined, record the residual risk and enforce the forward gate; include the audits in release:check and CI with behavioral negative controls."
@@ -18,8 +18,10 @@ component: release governance
 regression: false
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-github-1jez,related,"2026-08-17T07:40:36.004Z",codex,"cli:create:dep",detected
-notes[1]{created_at,author,text}:
+notes[3]{created_at,author,text}:
   "2026-08-21T21:30:44.759Z",ox-alpha,"Maintainer-approved rewrite executed 2026-08-21 (standing release-privacy directive; precedent pmc-t8tj). Disposable mirror rewritten with git-filter-repo: /home/steve -> $HOME across 15 host-path blobs (18 lines), codex@local -> 1153461+unbraind@users.noreply.github.com (1 commit, ancestor of main). Post-rewrite: 0 bad blobs, HEAD tree byte-identical (801689a), all heads/tags force-pushed, protection restored verbatim. Fresh-clone audit: reachable heads/tags fully clean. PR branch head ff6761e validated: build OK, 261/261 tests, pm health advisory-only. stefan@preu.at retained per maintainer decision 2026-07-21 (approved public authoring identity, see pm-rust allowlist); pi-agent@unbrained.dev classified as domain-based service identity for the forward allowlist. Remaining for closure: checked-in justified identity allowlist + fail-closed all-object audit + secret/host-path gate with false-positive fixtures and behavioral negative controls wired into release:check and CI."
+  "2026-08-21T23:08:02.086Z","harness:ox-alpha","merged PR #52 as 50777d5d8fe5dc38b14227a845f4875ea0c222b6, all threads resolved, checks green, release workflow schedule-only (daily 03:23 UTC; next scheduled pickup)"
+  "2026-08-21T23:18:11.129Z","harness:ox-alpha","PR #52 merged as 50777d5 on main: fail-closed Git identity/secret/host-path gate over all objects; both Greptile threads resolved; checks green; post-merge CI success (run 32535661556). Remaining: coordinated history-rewrite verification for already-published history before publication."
 docs[1]{path,scope,note}:
   "https://github.com/unbraind/pm-cli-companion/blob/main/.agents/pm/issues/pm-cli-website-kxtl.toon",global,Fleet commit identity gate and human rewrite decision
 body: ""
