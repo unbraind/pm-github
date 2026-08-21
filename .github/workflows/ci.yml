@@ -70,6 +70,12 @@ jobs:
       - name: Verify complete docstring coverage
         run: npm run docstring
 
+      # Fail-closed identity / secret / host-path audit over the local object
+      # store (pm-github-zqad). In CI this is evidence about refs and tags; the
+      # local release:check run additionally covers unreachable objects.
+      - name: Privacy gate (identities, secrets, host paths)
+        run: npm run privacy
+
       - name: Test with coverage gate
         run: npm run coverage
 
