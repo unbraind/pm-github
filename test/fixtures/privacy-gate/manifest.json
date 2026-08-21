@@ -1,0 +1,23 @@
+{
+  "dd8b1182a9031d73fe4a6565504c34fa4ff4bb50": {
+    "justification": "Synthetic review fixture test/fixtures/privacy-gate/synthetic-github-token.txt: token and path values are padded placeholder characters documented in README.md; no real credential or host path."
+  },
+  "bb0e81b997c87e95ca38890a782bc6f8c23d0626": {
+    "justification": "Synthetic review fixture test/fixtures/privacy-gate/synthetic-fine-grained-token.txt: token and path values are padded placeholder characters documented in README.md; no real credential or host path."
+  },
+  "39462a7a4944044aed4b081a840f762a65820f6a": {
+    "justification": "Synthetic review fixture test/fixtures/privacy-gate/synthetic-npm-token.txt: token and path values are padded placeholder characters documented in README.md; no real credential or host path."
+  },
+  "5db8d6b58cfb1871086c502cc7bca26231282efb": {
+    "justification": "Synthetic review fixture test/fixtures/privacy-gate/synthetic-slack-token.txt: token and path values are padded placeholder characters documented in README.md; no real credential or host path."
+  },
+  "6158029fb2dad669f7558e2e6030699a20e254b8": {
+    "justification": "Synthetic review fixture test/fixtures/privacy-gate/synthetic-aws-key.txt: token and path values are padded placeholder characters documented in README.md; no real credential or host path."
+  },
+  "951f8e004778da90a76d98e011aa69aa85898dc5": {
+    "justification": "Synthetic review fixture test/fixtures/privacy-gate/synthetic-private-key.pem: token and path values are padded placeholder characters documented in README.md; no real credential or host path."
+  },
+  "c93b7ed28c1dd97c0de125b8bbd34d0b7d0bcc07": {
+    "justification": "Synthetic review fixture test/fixtures/privacy-gate/synthetic-host-path.txt: token and path values are padded placeholder characters documented in README.md; no real credential or host path."
+  }
+}
