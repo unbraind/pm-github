@@ -344,8 +344,15 @@ export function runGate(root: string): PrivacyGateResult {
     for (const [oid, type] of objects) {
       if (type === "commit" || type === "tag") {
         const content = readObject(root, type, oid);
-        for (const line of content.split("\n")) {
-          if (!/^(author|committer|tagger) /.test(line)) continue;
+        // Only the header section (everything before the first blank line) can
+        // carry identity headers; message or tag-message lines that merely
+        // begin with an identity keyword must not enter this check.
+        const headerSection = content.split("\n\n")[0] ?? "";
+        for (const line of headerSection.split("\n")) {
+          // Match the role keyword without requiring a following space: a
+          // crafted object with `author<email>` or a tab separator must still
+          // be verified, never skipped.
+          if (!/^(author|committer|tagger)/.test(line)) continue;
           // An identity header that carries no parseable address is itself a
           // violation: the gate must never pass an identity it could not
           // verify, so a malformed header fails closed like an unapproved one.

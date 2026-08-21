@@ -276,6 +276,54 @@ test("privacy gate CLI entry point writes streams and sets exit code", async () 
   }
 });
 
+test("privacy gate verifies identity headers with malformed separators", () => {
+  const root = initRepo("separator-identity");
+  try {
+    writeAllowlist(root, ["intruder@localhost"]);
+    writeFileSync(join(root, "clean.txt"), "nothing suspicious\n");
+    commitAll(root, "base commit with an approved identity");
+    const tree = execFileSync("git", ["rev-parse", "HEAD^{tree}"], { cwd: root }).toString().trim();
+    const parent = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root }).toString().trim();
+    // Craft shapes a naive `role <space>` prefix check would skip:
+    // no space after the role keyword, and a tab separator.
+    for (const [label, authorLine] of [
+      ["no-space", "author<unapproved@example.com> 1700000000 +0000"],
+      ["tab", "committer\tTab Fixture <tab-unapproved@example.com> 1700000000 +0000"],
+    ] as const) {
+      const crafted = `tree ${tree}\nparent ${parent}\n${authorLine}\ncommitter X <intruder@localhost> 1700000000 +0000\n\ncrafted ${label} separator\n`;
+      const oid = execFileSync("git", ["hash-object", "-t", "commit", "-w", "--stdin", "--literally"], {
+        cwd: root,
+        input: crafted,
+      }).toString().trim();
+      execFileSync("git", ["update-ref", `refs/heads/evil-${label}`, oid], { cwd: root });
+      const result = runGate(root);
+      assert.equal(result.exitCode, 1, `${label} separator must fail the gate`);
+      assert.match(result.stderr, /identity:commit/);
+      execFileSync("git", ["update-ref", `-d`, `refs/heads/evil-${label}`], { cwd: root });
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("privacy gate does not flag message lines that begin with an identity keyword", () => {
+  const root = initRepo("message-keyword");
+  try {
+    writeAllowlist(root, ["intruder@localhost"]);
+    writeFileSync(join(root, "clean.txt"), "nothing suspicious\n");
+    execFileSync("git", ["add", "-A"], { cwd: root });
+    execFileSync(
+      "git",
+      ["commit", "-q", "-m", "author lines in the message body must not be scanned\n\nauthor something@example.com in body"],
+      { cwd: root },
+    );
+    const result = runGate(root);
+    assert.equal(result.exitCode, 0, result.stderr);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("privacy gate fails closed on an unparseable identity header", () => {
   const root = initRepo("malformed-identity");
   try {
