@@ -35,7 +35,7 @@
 
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 
 import { isMainInvocation } from "./docstring-gate.ts";
@@ -128,7 +128,7 @@ function parseAllowlist(root: string): Set<string> {
  * @param root - Absolute repository root holding `test/fixtures/`.
  * @returns Map from exact Git blob object id to its recorded justification.
  */
-function loadFixtureExemptions(root: string): Map<string, string> {
+function loadFixtureManifest(root: string): Map<string, string> {
   let raw: string;
   try {
     raw = readFileSync(join(root, FIXTURE_MANIFEST_PATH), "utf8");
@@ -137,6 +137,50 @@ function loadFixtureExemptions(root: string): Map<string, string> {
   }
   const parsed: Record<string, FixtureEntry> = JSON.parse(raw) as Record<string, FixtureEntry>;
   return new Map(Object.entries(parsed).map(([oid, entry]) => [oid, entry.justification]));
+}
+
+/**
+ * Enumerates the blob object ids actually present under the fixture directory
+ * in the HEAD tree via `git ls-tree -r HEAD -- <dir>`.
+ *
+ * An exemption only holds when the exempted content is literally a reviewed
+ * fixture file at HEAD; this closes the hole where a manifest key silences an
+ * arbitrary leaked blob that lives elsewhere in history.
+ *
+ * @param root - Absolute repository root.
+ * @returns Set of blob object ids under the fixture directory at HEAD.
+ * @throws Error when git exits non-zero or cannot be spawned.
+ */
+function listFixtureTreeBlobs(root: string): Set<string> {
+  const dir = dirname(FIXTURE_MANIFEST_PATH);
+  const result = spawnSync("git", ["ls-tree", "-r", "HEAD", "--", dir], {
+    cwd: root,
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  if (result.error !== undefined) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`git ls-tree HEAD -- ${dir} failed: ${result.stderr.trim()}`);
+  }
+  const oids = new Set<string>();
+  for (const line of (result.stdout ?? "").split("\n")) {
+    const match = /^\d+ blob ([0-9a-f]{40})\t/.exec(line);
+    if (match?.[1] !== undefined) oids.add(match[1]);
+  }
+  return oids;
+}
+
+/**
+ * Builds the effective fixture exemption set: manifest keys intersected with
+ * the blobs actually present under the fixture directory at HEAD.
+ *
+ * @param root - Absolute repository root.
+ * @returns Map from exemptable Git blob object id to its justification.
+ */
+function loadFixtureExemptions(root: string): Map<string, string> {
+  const manifest = loadFixtureManifest(root);
+  const fixtureBlobs = listFixtureTreeBlobs(root);
+  return new Map([...manifest].filter(([oid]) => fixtureBlobs.has(oid)));
 }
 
 /**
@@ -286,15 +330,27 @@ export function runGate(root: string): PrivacyGateResult {
   }
 
   const findings: Finding[] = [];
-  const exemptions = loadFixtureExemptions(root);
+  let exemptions: Map<string, string>;
+  try {
+    exemptions = loadFixtureExemptions(root);
+  } catch (error) {
+    return {
+      exitCode: 1,
+      stdout: "",
+      stderr: `privacy-gate: fixture exemption resolution failed: ${(error as Error).message}`,
+    };
+  }
   try {
     for (const [oid, type] of objects) {
       if (type === "commit" || type === "tag") {
         const content = readObject(root, type, oid);
         for (const line of content.split("\n")) {
           if (!/^(author|committer|tagger) /.test(line)) continue;
+          // An identity header that carries no parseable address is itself a
+          // violation: the gate must never pass an identity it could not
+          // verify, so a malformed header fails closed like an unapproved one.
           const email = extractEmail(line);
-          if (email !== undefined && !allowlist.has(email)) {
+          if (email === undefined || !allowlist.has(email)) {
             findings.push({ rule: `identity:${type}`, oid });
           }
         }

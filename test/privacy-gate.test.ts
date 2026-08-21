@@ -276,6 +276,52 @@ test("privacy gate CLI entry point writes streams and sets exit code", async () 
   }
 });
 
+test("privacy gate fails closed on an unparseable identity header", () => {
+  const root = initRepo("malformed-identity");
+  try {
+    writeAllowlist(root, ["intruder@localhost"]);
+    writeFileSync(join(root, "clean.txt"), "nothing suspicious\n");
+    commitAll(root, "base commit with an approved identity");
+    // Hand-craft a commit whose author header carries no angle-bracketed
+    // email, exactly the shape a crafted object would use to dodge parsing.
+    const tree = execFileSync("git", ["rev-parse", "HEAD^{tree}"], { cwd: root }).toString().trim();
+    const parent = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root }).toString().trim();
+    const crafted = `tree ${tree}\nparent ${parent}\nauthor malformed-no-email 1700000000 +0000\ncommitter malformed-no-email 1700000000 +0000\n\ncrafted commit with an unverifiable identity\n`;
+    const oid = execFileSync("git", ["hash-object", "-t", "commit", "-w", "--stdin", "--literally"], {
+      cwd: root,
+      input: crafted,
+    }).toString().trim();
+    execFileSync("git", ["update-ref", "refs/heads/evil", oid], { cwd: root });
+    const result = runGate(root);
+    assert.equal(result.exitCode, 1);
+    assert.match(result.stderr, new RegExp(`${oid} identity:commit`.replace(/([.*+?^${}()|[\]\\])/g, "\\$&")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("privacy gate ignores manifest exemptions for blobs outside the fixture directory", () => {
+  const root = initRepo("exemption-abuse");
+  try {
+    writeAllowlist(root, ["intruder@localhost"]);
+    // Commit a leak-shaped blob OUTSIDE the fixture directory...
+    const leak = "token=ghp_" + "q".repeat(36) + "\n";
+    writeFileSync(join(root, "leak.txt"), leak);
+    commitAll(root, "leak committed outside fixtures");
+    // ...then try to silence it through a manifest entry alone.
+    mkdirSync(join(root, "test", "fixtures", "privacy-gate"), { recursive: true });
+    writeFileSync(
+      join(root, "test", "fixtures", "privacy-gate", "manifest.json"),
+      JSON.stringify({ [gitBlobOid(leak)]: { justification: "abuse attempt" } }) + "\n",
+    );
+    const result = runGate(root);
+    assert.equal(result.exitCode, 1);
+    assert.match(result.stderr, /github-token-classic/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("privacy gate negative control: a fresh violation introduced after a clean pass fails", () => {
   const root = initRepo("negative-control");
   try {
