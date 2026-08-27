@@ -1,39 +1,33 @@
-# Approved commit author, committer, and tagger identities for this repository.
+# Approved commit author and committer identities for this repository.
 #
-# The privacy gate (scripts/privacy-gate.ts) fails closed on any author,
-# committer, or annotated-tag tagger email not listed here. Each entry names
-# its justification; a new entry must add one.
+# Two categories are approved:
 #
-# History note (2026-08-21): the coordinated rewrite executed under
-# maintainer approval removed codex@local and all /home/<user> host paths from
-# every reachable commit and tag. Reintroducing a machine-local identity is a
-# gate failure by design.
+# 1. Approved public authoring identities - addresses the maintainer has
+#    explicitly decided to keep as public authoring identities. These are NOT
+#    leaked personal data; they are intentional public identities already
+#    present in the public history of the unbraind/pm-* repositories.
+# 2. Service and noreply identities - automated bot and noreply addresses that
+#    carry no personal identity metadata.
+#
+# The gate in test/identity-audit.test.ts fails closed on any author or
+# committer email outside this list, and on any newly added absolute home path.
+#
+# It audits FORWARD ONLY, from the baseline in identity-baseline.txt. History
+# before that point is a maintainer decision recorded there, not an oversight:
+# rewriting it would orphan release tags and break published npm provenance.
 
-# The deliberate public authoring identity of the maintainer. Retained by an
-# explicit maintainer decision reaffirmed 2026-07-21 (see the pm-rust fleet
-# reference allowlist); it is intentional public identity metadata, not leaked
-# personal data.
+# Approved public authoring identity.
 stefan@preu.at
 
-# The maintainer's GitHub noreply addresses (two account-id forms appear in
-# this repository's history).
-187600231+unbraind@users.noreply.github.com
+# The maintainer's GitHub noreply addresses.
+unbraind@users.noreply.github.com
 1153461+unbraind@users.noreply.github.com
 
 # GitHub's committer for merges made through the web UI.
 noreply@github.com
 
-# Dependabot's public GitHub noreply address on dependency pull-request refs.
-49699333+dependabot[bot]@users.noreply.github.com
-
-# The GitHub Actions bot, which authors release commits created by
-# .github/workflows/release.yml. It must be listed here: the first release
-# would otherwise write a commit that this very audit rejects on every
-# subsequent run.
+# The GitHub Actions bot, which authors the release commit.
 41898282+github-actions[bot]@users.noreply.github.com
-github-actions[bot]@users.noreply.github.com
 
-# Domain-based agent service identity used for tracked authoring work. It
-# carries no personal metadata: pi-agent is a harness role, and unbrained.dev
-# is the project's own public domain.
-pi-agent@unbrained.dev
+# Dependabot's public GitHub noreply address.
+49699333+dependabot[bot]@users.noreply.github.com
