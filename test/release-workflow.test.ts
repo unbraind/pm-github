@@ -78,8 +78,16 @@ function withoutCredentialScrub(source: string): string {
  */
 function stepSource(name: string): string {
   const start = stepIndex(name);
+  // Derive the boundary from the indentation of the step actually matched.
+  // A fixed `^ {6}- name:` disagrees with stepIndex, which accepts any
+  // indentation: if the workflow were reindented, the search would return -1,
+  // stepSource would return the whole rest of the file, and every scoped
+  // assertion would silently widen instead of failing.
+  // stepIndex returns the offset of the line start, so the step's indentation is
+  // the run of spaces at that offset.
+  const indent = /^[ \t]*/.exec(workflow.slice(start))?.[0].length ?? 0;
   const rest = workflow.slice(start + 1);
-  const next = rest.search(/^ {6}- name:/m);
+  const next = rest.search(new RegExp(`^ {${indent}}- name:`, "m"));
   return next === -1 ? workflow.slice(start) : workflow.slice(start, start + 1 + next);
 }
 
@@ -231,6 +239,14 @@ test("no registry credential is configured, under any name or mechanism", () => 
   // value with a space rather than `=`, which the key-plus-`=` checks miss.
   assert.doesNotMatch(source, /:(?:_authToken|_auth|username|_password|certfile|keyfile)\s+\S/i);
 
+  // A GLOBAL credential needs no registry scope and no `=`:
+  // `npm config set _auth <value>` configures legacy authentication that npm
+  // honours, while every scoped and delimited check above passes.
+  assert.doesNotMatch(
+    source,
+    /npm\s+(?:config\s+)?set\s+["']?(?:\/\/\S*?[:/])?(?:_authToken|_auth|username|_password|certfile|keyfile|email)\b/i
+  );
+
   // The same credentials can arrive as environment overrides rather than as
   // .npmrc lines. NPM_CONFIG_USERCONFIG is the one legitimate member of that
   // family here - it is how the publish step finds the file it strips.
@@ -285,7 +301,14 @@ test("the empty credential that setup-node generates is removed before publishin
     assert.match(
       publish,
       new RegExp(`-e '/:${key}\\[\\[:space:\\]\\]\\*=/d'`),
-      `the credential scrub must remove '${key}' from the npm userconfig`
+      `the credential scrub must remove the registry-scoped '${key}'`
+    );
+    // npm honours an unscoped credential too, so removing only the scoped form
+    // leaves legacy authentication configured.
+    assert.match(
+      publish,
+      new RegExp(`-e '/\\^\\[\\[:space:\\]\\]\\*${key}\\[\\[:space:\\]\\]\\*=/d'`),
+      `the credential scrub must remove the global '${key}'`
     );
   }
   // The strip must happen before the publish command, not after it.

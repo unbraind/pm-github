@@ -215,7 +215,14 @@ jobs:
           # publisher IS configured - a preflight that blocks correct releases is
           # worse than the outage it exists to prevent, so accept any 2xx.
           if [ "${status}" -ge 200 ] && [ "${status}" -lt 300 ]; then
-            echo "npm accepted this workflow's identity for ${pkg_name}; publication can proceed."
+            echo "npm accepted this workflow's identity for ${pkg_name}."
+            # The exchange proves the workflow is a recognised trusted publisher.
+            # It does NOT prove the binding permits publishing: a configuration
+            # created on or after 2026-05-20 selects allowed actions, and one
+            # scoped to staging alone exchanges successfully and then fails at
+            # `npm publish` - after this run has already mutated main. Say so,
+            # so a failure there is not read as a preflight that lied.
+            echo "Note: this verifies identity, not the allowed action. The trusted publisher must have 'npm publish' selected."
             exit 0
           fi
           reason="$(RESPONSE_FILE="${response}" node -p "try{JSON.parse(require('node:fs').readFileSync(process.env.RESPONSE_FILE,'utf8')).message||''}catch(e){''}")"
@@ -569,8 +576,16 @@ jobs:
           # such line before publishing so the only credential path left is OIDC.
           userconfig="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
           if [ -f "$userconfig" ]; then
-            sed -i'' -e '/_authToken/d' -e '/:_auth[[:space:]]*=/d' -e '/:username[[:space:]]*=/d' \
-              -e '/:_password[[:space:]]*=/d' -e '/:certfile[[:space:]]*=/d' -e '/:keyfile[[:space:]]*=/d' \
+            # Both the registry-scoped forms (//registry/:_auth=...) and the
+            # GLOBAL forms (_auth=... at the start of a line). npm honours an
+            # unscoped credential too, so removing only the scoped ones leaves
+            # legacy authentication configured while every guard still passes.
+            sed -i'' -e '/_authToken/d' \
+              -e '/^[[:space:]]*_auth[[:space:]]*=/d' -e '/:_auth[[:space:]]*=/d' \
+              -e '/^[[:space:]]*username[[:space:]]*=/d' -e '/:username[[:space:]]*=/d' \
+              -e '/^[[:space:]]*_password[[:space:]]*=/d' -e '/:_password[[:space:]]*=/d' \
+              -e '/^[[:space:]]*certfile[[:space:]]*=/d' -e '/:certfile[[:space:]]*=/d' \
+              -e '/^[[:space:]]*keyfile[[:space:]]*=/d' -e '/:keyfile[[:space:]]*=/d' \
               -e '/always-auth/d' "$userconfig"
           fi
           # Re-verify HERE, not only at install time. A later step can prepend a
