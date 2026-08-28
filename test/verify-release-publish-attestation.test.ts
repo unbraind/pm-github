@@ -75,6 +75,43 @@ test("two publishes chained on one line are judged separately", () => {
   assert.equal(result.failures.length, 1);
 });
 
+test("every separator and executor the shell honours is judged, not just the spaced forms", () => {
+  // Greptile P2: a single `&` (background), a compact pipe `|`, command
+  // substitution, and a quoted string handed to `eval` or `bash -c` each form
+  // an executable command, so an unattested publish hidden behind one of those
+  // shapes would pass both CI and release:check while an attested sibling
+  // carries the audit. Judged on the merits, that is precisely the
+  // adversarial-edit gap this gate exists to close.
+  const forms = [
+    ["single ampersand (background)", `          ${ATTESTED} & ${UNATTESTED}`],
+    ["compact pipe", `          ${ATTESTED}|${UNATTESTED}`],
+    ["compact double pipe", `          ${ATTESTED}||${UNATTESTED}`],
+    ["dollar-paren substitution", `          $(${UNATTESTED})`],
+    ["backtick substitution", `          \`${UNATTESTED}\``],
+    ["eval string", "          eval \"npm publish --access public --ignore-scripts\""],
+    ["bash -c string", "          bash -c \"npm publish --access public --ignore-scripts\""],
+    ["subshell", `          ( ${UNATTESTED} )`],
+  ];
+  for (const [name, text] of forms) {
+    const result = auditPublishAttestation([{ file: "release.yml", text: text as string }]);
+    assert.equal(result.failures.length, 1, name as string);
+    assert.match(result.failures[0]!, /does not enable --provenance/, name as string);
+  }
+  // Executor strings with the flag pass; eval joins all of its arguments, so
+  // a quoted flag carried by eval also passes.
+  const evalAttested = auditPublishAttestation([
+    { file: "release.yml", text: '          bash -c "npm publish --access public --provenance"' },
+  ]);
+  assert.deepEqual(evalAttested.failures, [], "an attested publish inside bash -c passes");
+  // And separator splitting inside quotes is forbidden, so prose with a
+  // separator character does not manufacture commands.
+  const proseWithSeparator = auditPublishAttestation([
+    { file: "release.yml", text: '          echo "note: npm`publish stays prose"' },
+  ]);
+  assert.equal(proseWithSeparator.failures.length, 1, "no invocation is still the one failure, and prose stays prose");
+  assert.match(proseWithSeparator.failures[0]!, /no npm publish invocation was found/);
+});
+
 test("a publish spelled across a line continuation is still seen with its flag", () => {
   const result = auditPublishAttestation([
     { file: "release.yml", text: "          npm publish --access public \\\n            --provenance --ignore-scripts" },
@@ -125,9 +162,21 @@ test("a disabled attestation is not an attestation, in every spelling npm accept
       disabled,
     );
   }
-  for (const enabled of ["--provenance", "--provenance=true", "--no-provenance --provenance"]) {
+  for (const enabled of ["--provenance", "--provenance=true", "--no-provenance --provenance", '"--provenance"', "'--provenance=true'"]) {
     assert.equal(attestationEnabled(`npm publish --access public ${enabled}`), true, enabled);
   }
+});
+
+test("a shell-quoted attestation flag still enables the attestation, rather than blocking release:check", () => {
+  // CodeRabbit: blanking quoted spans before attestation ran meant a
+  // legitimately quoted flag, such as npm publish "--provenance", was
+  // reported as unattested and blocked release:check. Detection still blanks
+  // quoted spans so prose cannot count as a publish; attestation is judged on
+  // the raw segment with per-token quote normalization.
+  const quoted = auditPublishAttestation([{ file: "release.yml", text: "          npm publish --access public \"--provenance\"\n" }]);
+  assert.deepEqual(quoted.failures, [], "a quoted flag is still the flag");
+  const quotedOff = auditPublishAttestation([{ file: "release.yml", text: "          npm publish --access public '--no-provenance'\n" }]);
+  assert.equal(quotedOff.failures.length, 1, "quoting a disabling flag does not turn it on");
 });
 
 test("a flag that merely starts with the attestation spelling does not enable it", () => {
@@ -178,9 +227,22 @@ test("npm run publish is a script runner, not a publish", () => {
   assert.equal(isPublishCommand("npm run publish"), false);
   assert.equal(isPublishCommand("npm run-script publish"), false);
   assert.equal(isPublishCommand("npm publish"), true);
-  assert.equal(isPublishCommand("echo npm then publish later"), true);
   assert.equal(isPublishCommand("npm ci"), false);
   assert.equal(isPublishCommand("bun publish"), false);
+});
+
+test("only an invoked npm command is a publish command, so prose cannot block release:check", () => {
+  // CodeRabbit: accepting `npm` and `publish` at any token positions means
+  // prose such as `echo npm then publish later` reads as an unflagged publish
+  // and blocks release:check for a defect that is not there, and a gate that
+  // cries wolf gets weakened until it reports nothing.
+  assert.equal(isPublishCommand("echo npm then publish later"), false);
+  assert.equal(isPublishCommand("printf npm publish"), false);
+  // A publish reached through a command runner is still a publish, while
+  // runner words, options, and preceding assignments must not decide it.
+  assert.equal(isPublishCommand("sudo npm publish"), true);
+  assert.equal(isPublishCommand("env CI=true npm publish"), true);
+  assert.equal(isPublishCommand("command npm publish"), true);
 });
 
 test("finding no publish at all fails, because an empty scan and a clean tree look identical", () => {
@@ -189,8 +251,11 @@ test("finding no publish at all fails, because an empty scan and a clean tree lo
 });
 
 test("a word ending in npm does not start a publish invocation", () => {
-  const result = auditPublishAttestation([{ file: "release.yml", text: "          echo notnpm publish\n" }]);
-  assert.equal(result.failures.length, 1, "the mention is unquoted, so it is judged; it carries no flag");
+  // CodeRabbit: the earlier audit-level assertion passed only because the
+  // regression asserted loosely. Assert the word `notnpm` records NO
+  // invocation rather than leaving the no-publish failure to stand in for it.
+  const notnpm = publishInvocationsIn({ file: "release.yml", text: "          notnpm publish --access public\n" });
+  assert.deepEqual(notnpm, [], "npm must be a separate token, not a suffix");
   const bare = publishInvocationsIn({ file: "release.yml", text: "          xnpm publish --access public\n" });
   assert.deepEqual(bare, [], "npm must be a separate token, not a suffix");
 });
@@ -271,4 +336,40 @@ test("runIfMain runs only as the entry point, and reports when it does", () => {
     process.exitCode = previous;
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("a publish run through a package runner is still a publish", () => {
+  // `npx npm publish` publishes exactly as `npm publish` does. Tokenising the
+  // segment without skipping the runner makes the executable `npx`, so the
+  // segment is not recognised as a publish at all - and an unrecognised publish
+  // is never checked for the attestation flag. The failure mode is worse than a
+  // missed flag: the workflow's ordinary attested publish still satisfies the
+  // non-vacuity guard, so the gate reports clean while an unattested publish
+  // sits in the same file. Each runner spelling is asserted separately because
+  // they are separate entries in the skip list, and a single example would let
+  // the others rot back into a bypass.
+  for (const runner of ["npx", "bunx", "pnpx", "npx -y", "pnpm dlx", "yarn dlx", "npm exec", "bun x"]) {
+    const result = auditPublishAttestation([
+      { file: "release.yml", text: `          ${ATTESTED}\n          ${runner} ${UNATTESTED}` },
+    ]);
+    assert.equal(result.failures.length, 1, `${runner} ${UNATTESTED} must be judged as an unattested publish`);
+    assert.match(result.failures[0]!, /does not enable --provenance/);
+  }
+});
+
+test("a package runner carrying the attestation flag passes", () => {
+  // The mirror of the case above: skipping the runner must not also lose the
+  // flag that follows it, or every runner-spelled publish would fail closed and
+  // the gate would be unusable for a workflow that legitimately uses one.
+  const result = auditPublishAttestation([{ file: "release.yml", text: `          npx ${ATTESTED}` }]);
+  assert.deepEqual(result.failures, []);
+});
+
+test("a two-word runner is consumed only when its second word matches", () => {
+  // `npm exec` is a runner; `npm publish` is not. Consuming the pair on the
+  // first word alone would skip `publish` and stop recognising the plainest
+  // publish there is.
+  const result = auditPublishAttestation([{ file: "release.yml", text: `          ${UNATTESTED}` }]);
+  assert.equal(result.failures.length, 1);
+  assert.match(result.failures[0]!, /does not enable --provenance/);
 });

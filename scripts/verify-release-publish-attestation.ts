@@ -141,6 +141,270 @@ export interface PublishInvocation {
 }
 
 /**
+ * Split one logical command into the shell segments it would execute.
+ *
+ * A line can hold several commands, and judging the line as a whole lets a
+ * flagged publish cover for an unflagged one beside it. The separator set has
+ * to match what the shell treats as a command boundary, or an adversarial
+ * edit places the unattested publish behind a separator the scan does not know:
+ * `;`, `&`, and `|` (background and compact pipes included, not just the
+ * spaced `&&` / `||` forms), plus unquoted parentheses and command substitution
+ * markers, so a publish hiding inside `$( ... )` or a subshell is reached.
+ *
+ * Separators inside single or double quotes are left alone; a backtick or a
+ * `$(` outside quotes opens a new segment rather than being blanked, because in
+ * shell those quotes constrain argument words but substitution still executes.
+ *
+ * @param command - One logical command.
+ * @returns The executable segments of the command, in order.
+ */
+function splitSegments(command: string): string[] {
+  const segments: string[] = [];
+  let current = "";
+  let single = false;
+  let double = false;
+  const push = () => {
+    if (current.trim().length > 0) segments.push(current);
+    current = "";
+  };
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index]!;
+    if (character === "\\") {
+      current += character;
+      index += 1;
+      if (index < command.length) current += command[index]!;
+      continue;
+    }
+    if (!single && !double) {
+      if (character === "&" || character === "|" || character === ";" || character === "(" || character === ")") {
+        if ((character === "&" || character === "|") && command[index + 1] === character) index += 1;
+        push();
+        continue;
+      }
+      if (character === "`") {
+        push();
+        continue;
+      }
+      if (character === "$" && command[index + 1] === "(") {
+        index += 1;
+        push();
+        continue;
+      }
+    }
+    if (character === "'" && !double) {
+      single = !single;
+      current += character;
+      continue;
+    }
+    if (character === '"' && !single) {
+      double = !double;
+      current += character;
+      continue;
+    }
+    current += character;
+  }
+  push();
+  return segments;
+}
+
+/**
+ * Find the index of the token the shell would actually execute.
+ *
+ * The first word of a segment is not automatically the executable: command
+ * runners such as `sudo`, `env`, `xargs`, `command`, and `exec` take the
+ * command to run as an argument, and assignments like `FOO=bar` precede the
+ * command in shell. Skipping a fixed list of runner words, simple options, and
+ * word=word assignments finds the executable for those forms, while prose such
+ * as `echo npm publish` is correctly not judged as an invocation.
+ *
+ * Package runners are in that list for a reason worth stating. `npx npm publish`
+ * publishes exactly as `npm publish` does, but tokenising without skipping the
+ * runner makes the executable `npx`, so the segment is not recognised as a
+ * publish at all. That is worse than a missed flag: an unrecognised publish is
+ * never checked for `--provenance`, and the non-vacuity guard still passes
+ * because the workflow's ordinary attested publish is found elsewhere. The
+ * result is an unattested publish that the gate reports as clean. `pnpm dlx`,
+ * `yarn dlx`, `npm exec` and `bun x` spell the same thing in two tokens, so the
+ * second word is consumed too.
+ *
+ * @param tokens - Whitespace-split tokens of one segment.
+ * @returns The index of the executable token.
+ */
+function executableIndex(tokens: string[]): number {
+  const runners = new Set([
+    "env", "sudo", "doas", "time", "nice", "nohup", "xargs", "command", "exec",
+    // Package runners: each executes the following words as a command.
+    "npx", "bunx", "pnpx",
+  ]);
+  // Two-token package runners, keyed by the first word. The pair is consumed
+  // only when the second word actually matches, so a plain `npm publish` is
+  // never mistaken for `npm exec`.
+  const pairedRunners = new Map([["pnpm", "dlx"], ["yarn", "dlx"], ["npm", "exec"], ["bun", "x"]]);
+  let index = 0;
+  while (index < tokens.length) {
+    const token = tokens[index]!;
+    if (runners.has(token) || token.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) {
+      index += 1;
+      continue;
+    }
+    if (pairedRunners.get(token) === tokens[index + 1]) {
+      index += 2;
+      continue;
+    }
+    break;
+  }
+  return index;
+}
+
+/**
+ * Strip surrounding quotes from one token, if both are there.
+ *
+ * npm receives the flag whether or not the shell quoted it, so `"--provenance"`
+ * enables the attestation exactly as much as `--provenance` does. Normalizing
+ * per token instead of blanking quoted spans means a legitimately quoted flag
+ * is judged on what it carries, while prose detection upstream still treats
+ * quoted mentions as non-commands before this is ever asked.
+ *
+ * @param token - One shell token.
+ * @returns The token without a surrounding pair of matching quotes.
+ */
+function unquoteToken(token: string): string {
+  if (token.length >= 2) {
+    const first = token[0];
+    if ((first === '"' || first === "'") && token[token.length - 1] === first) {
+      return token.slice(1, -1);
+    }
+  }
+  return token;
+}
+
+/**
+ * Extract the raw content of each quoted span in one segment.
+ *
+ * Used only once a segment is known to hand a string to a shell interpreter;
+ * the content is what gets executed, so it becomes a segment of its own.
+ *
+ * @param segment - The segment to mine.
+ * @returns The raw contents of every quoted span.
+ */
+function quotedSpanContents(segment: string): string[] {
+  const spans: string[] = [];
+  let current = "";
+  let quote: string | undefined;
+  for (let index = 0; index < segment.length; index += 1) {
+    const character = segment[index]!;
+    if (character === "\\") {
+      if (quote !== undefined) current += character;
+      index += 1;
+      if (quote !== undefined && index < segment.length) current += segment[index]!;
+      continue;
+    }
+    if (quote === undefined && (character === "'" || character === '"')) {
+      quote = character;
+      continue;
+    }
+    if (quote !== undefined && character === quote) {
+      quote = undefined;
+      spans.push(current);
+      current = "";
+      continue;
+    }
+    if (quote !== undefined) current += character;
+  }
+  return spans;
+}
+
+/**
+ * Remove the first N whitespace-delimited tokens from a raw segment.
+ *
+ * Plain `split(/\s+/)` breaks a quoted span into fragments that no longer
+ * match the flag, because `eval` and `bash -c` hand off a string whose
+ * boundaries matter. Skipping tokens quote-aware keeps the remainder of the
+ * command -- the string an executor would run -- intact for judgement.
+ *
+ * @param text - One raw segment.
+ * @param count - How many tokens to drop.
+ * @returns The segment without its leading tokens, quotes preserved.
+ */
+function dropLeadingTokens(text: string, count: number): string {
+  let single = false;
+  let double = false;
+  let seen = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index]!;
+    if (character === "\\") { index += 1; continue; }
+    if (character === "'" && !double) { single = !single; continue; }
+    if (character === '"' && !single) { double = !double; continue; }
+    if (!single && !double && /\s/.test(character) && index > 0 && !/\s/.test(text[index - 1]!)) {
+      seen += 1;
+      if (seen === count) return text.slice(index);
+    }
+  }
+  return "";
+}
+
+/**
+ * Replace every quote character with a space, keeping the content.
+ *
+ * Only used on text an executor would run: blanking the span (as prose
+ * detection does) would hide the command, but stripping the quote characters
+ * preserves word boundaries while turning `eval "npm publish"` back into the
+ * tokens the shell concatenates and executes.
+ *
+ * @param text - The segment handed to an executor.
+ * @returns The text without quote characters.
+ */
+function unquoteText(text: string): string {
+  return text.replace(/["']/g, " ");
+}
+
+/**
+ * Extend a segment list with the commands a shell-string executor would run.
+ *
+ * `eval`, and `bash`/`sh`/`zsh`/`dash` with `-c`, execute a string passed to
+ * them. An unattested publish inside such a string is invisible to a scan that
+ * blanks quoted spans, while marking the string as a publish upstream would
+ * turn prose mentions into failures; extracting the string's own content, only
+ * when the segment actually hands a string to an interpreter, keeps both sides
+ * of that trade sound. `eval` joins all of its arguments with spaces, so its
+ * remainder is evaluated as one segment rather than span by span. The hand-off
+ * is resolved with bounded depth, because a string may itself invoke an
+ * executor and the scan must still terminate.
+ *
+ * @param segments - The pending segment list.
+ * @param depth - How many executor hand-offs may still be resolved.
+ * @returns The segments plus any executor-resolved ones.
+ */
+function resolveExecutorStrings(segments: string[], depth: number): string[] {
+  const out = [...segments];
+  const queue = segments.map((text) => ({ text, depth }));
+  while (queue.length > 0) {
+    const { text, depth: remaining } = queue.shift()!;
+    if (remaining <= 0) continue;
+    const tokens = text.trim().split(/\s+/);
+    const executableAt = executableIndex(tokens);
+    const executable = unquoteToken(tokens[executableAt] ?? "");
+    if (executable === "eval") {
+      const rest = unquoteText(dropLeadingTokens(text, executableAt + 1));
+      if (rest.trim().length > 0) {
+        out.push(rest);
+        queue.push({ text: rest, depth: remaining - 1 });
+      }
+      continue;
+    }
+    if (/^(bash|sh|zsh|dash)$/.test(executable) && tokens.slice(executableAt + 1).some((token) => unquoteToken(token) === "-c")) {
+      for (const span of quotedSpanContents(text)) {
+        if (span.trim().length > 0) {
+          out.push(span);
+          queue.push({ text: span, depth: remaining - 1 });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * Remove the contents of every quoted span from one command.
  *
  * Release workflows print advice that names the command they are about to run.
@@ -149,7 +413,9 @@ export interface PublishInvocation {
  * and fails it for lacking a flag no echo could carry, so the gate reports a
  * defect that is not there and gets weakened until it reports nothing. What
  * distinguishes a command from a mention is that the mention sits inside
- * quotes, so quoted spans are removed before the command is judged.
+ * quotes, so quoted spans are removed before the command is judged. Commands an
+ * explicit executor (`eval`, `bash -c`) would run are extracted before this
+ * stripping happens, so only prose stays hidden.
  *
  * Whitespace replaces each span rather than nothing, so tokens on either side
  * do not fuse into a word that was never written.
@@ -223,8 +489,15 @@ export function manifestCommandLines(text: string): string {
  * configuration flags anywhere on the line, so `npm --access public publish
  * --ignore-scripts` is a real, unattested publish that a scan requiring the two
  * words to be adjacent discards before ever looking at its flags -- and it
- * discards it silently, leaving a conventional attested sibling elsewhere in the
- * file to carry the audit to a pass.
+ * discards it silently, leaving a conventional attested sibling elsewhere in
+ * the file to carry the audit to a pass.
+ *
+ * `npm` must be the token the shell would execute, though. Accepting the pair
+ * at any positions means prose such as `echo npm then publish later` reads as
+ * an unflagged publish and blocks the release for a defect that is not there,
+ * and a gate that cries wolf gets weakened until it reports nothing. Runner
+ * words such as `sudo` or `env`, options, and preceding assignments are
+ * skipped, because a publish reached through a runner is still a publish.
  *
  * `npm run publish` is excluded: that runs a package script, and the script's
  * own body is scanned separately from the manifest. Requiring `--provenance` on
@@ -235,44 +508,13 @@ export function manifestCommandLines(text: string): string {
  */
 export function isPublishCommand(command: string): boolean {
   const tokens = command.trim().split(/\s+/);
-  const npmAt = tokens.indexOf("npm");
-  if (npmAt === -1) return false;
+  if (tokens.length === 0 || tokens[0] === undefined) return false;
+  const npmAt = executableIndex(tokens);
+  if (tokens[npmAt] !== "npm") return false;
   const publishAt = tokens.indexOf("publish", npmAt + 1);
   if (publishAt === -1) return false;
   const preceding = tokens[publishAt - 1];
   return preceding !== "run" && preceding !== "run-script";
-}
-
-/**
- * Find every publish invocation in one file's contents.
- *
- * Continuations are joined and shared arrays expanded first, for the same
- * reason the changelog-date scan does it: a multi-line invocation otherwise
- * looks like fragments, none of which carries the flag. Each logical command is
- * then split on shell separators, because one line can hold several commands
- * and judging the line as a whole lets a flagged publish cover for an unflagged
- * one beside it.
- *
- * @param source - The file's path and contents.
- * @returns The publish invocations found, in file order.
- */
-export function publishInvocationsIn(source: SourceFile): PublishInvocation[] {
-  const raw = source.file.endsWith("package.json") ? manifestCommandLines(source.text) : source.text;
-  const text = joinContinuations(raw);
-  const arrays = bashArrays(text);
-  const found: PublishInvocation[] = [];
-  for (const raw of text.split("\n")) {
-    if (/^\s*#/.test(raw)) continue;
-    // A line-level prefilter has to be at least as permissive as the judgement
-    // below, or it discards the very commands that judgement exists to catch.
-    if (!/\bnpm\b/.test(raw) || !/\bpublish\b/.test(raw)) continue;
-    for (const rawSegment of expandArrays(raw, arrays).split(/\s*(?:&&|\|\||;)\s*|\s\|\s/)) {
-      const segment = stripQuotedSpans(stripComment(rawSegment));
-      if (!isPublishCommand(segment)) continue;
-      found.push({ file: source.file, command: segment });
-    }
-  }
-  return found;
 }
 
 /**
@@ -285,14 +527,17 @@ export function publishInvocationsIn(source: SourceFile): PublishInvocation[] {
  *
  * Tokens are judged in order and the last one wins, which is how npm resolves a
  * flag given more than once: `--provenance --no-provenance` publishes without an
- * attestation, so this must answer false for it.
+ * attestation, so this must answer false for it. Shell quoting is normalized
+ * per token first, because `"--provenance"` enables the attestation exactly the
+ * same as `--provenance`.
  *
  * @param command - One logical publish command.
  * @returns True when the command publishes with an attestation.
  */
 export function attestationEnabled(command: string): boolean {
   let enabled = false;
-  for (const token of command.trim().split(/\s+/)) {
+  for (const rawToken of command.trim().split(/\s+/)) {
+    const token = unquoteToken(rawToken);
     if (token === `--no-${ATTESTATION_FLAG.slice(2)}`) enabled = false;
     else if (token === ATTESTATION_FLAG) enabled = true;
     else if (token.startsWith(`${ATTESTATION_FLAG}=`)) {
@@ -300,6 +545,48 @@ export function attestationEnabled(command: string): boolean {
     }
   }
   return enabled;
+}
+
+/**
+ * Find every publish invocation in one file's contents.
+ *
+ * Continuations are joined and shared arrays expanded first, for the same
+ * reason the changelog-date scan does it: a multi-line invocation otherwise
+ * looks like fragments, none of which carries the flag. Each logical command is
+ * then split on every shell separator, because one line can hold several
+ * commands and judging the line as a whole lets a flagged publish cover for an
+ * unflagged one beside it. Commands that hand a string to an executor
+ * (`eval`, `bash -c`) have the string's content resolved so a publish cannot
+ * hide inside it.
+ *
+ * Detection and attestation deliberately work from different text: detection
+ * blanks quoted spans so prose mentions of `npm publish` are not commands at
+ * all, while attestation is read from the raw, comment-stripped segment, so a
+ * legitimately shell-quoted flag -- `npm publish "--provenance"` -- is judged
+ * on what it carries rather than reported as unattested.
+ *
+ * @param source - The file's path and contents.
+ * @returns The publish invocations found, in file order.
+ */
+export function publishInvocationsIn(source: SourceFile): PublishInvocation[] {
+  const raw = source.file.endsWith("package.json") ? manifestCommandLines(source.text) : source.text;
+  const text = joinContinuations(raw);
+  const arrays = bashArrays(text);
+  const found: PublishInvocation[] = [];
+  for (const rawLine of text.split("\n")) {
+    if (/^\s*#/.test(rawLine)) continue;
+    // A line-level prefilter has to be at least as permissive as the judgement
+    // below, or it discards the very commands that judgement exists to catch.
+    if (!/\bnpm\b/.test(rawLine) || !/\bpublish\b/.test(rawLine)) continue;
+    const expanded = expandArrays(rawLine, arrays);
+    const segments = resolveExecutorStrings(splitSegments(expanded), 2);
+    for (const rawSegment of segments) {
+      const segment = stripComment(rawSegment);
+      if (!isPublishCommand(stripQuotedSpans(segment))) continue;
+      found.push({ file: source.file, command: segment });
+    }
+  }
+  return found;
 }
 
 /**
