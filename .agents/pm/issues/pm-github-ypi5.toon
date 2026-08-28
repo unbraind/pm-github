@@ -1,0 +1,20 @@
+id: pm-github-ypi5
+title: The daily release cannot build a changelog once the tracker outgrows the default output budget
+description: "The release job failed at the Generate changelog and release notes step with pm list-all --json answer was incomplete and was refused, count=5 of total=86. The repository pins pm-changelog through a caret range whose lockfile still resolved 2026.8.17, and that version reads the whole tracker with a plain whole-tracker list and does not pass the unbounded output-budget and output-limit controls that 2026.8.22 added. npx prefers the locally installed copy over the registry, so the job ran 2026.8.17 regardless of what npm served. With 89 items this repository crossed the default output budget, the read came back truncated, and pm-changelog correctly refused to build a changelog from a partial workspace rather than silently omitting entries. The refusal is right; the stale pin is the defect."
+type: Issue
+status: open
+priority: 0
+tags[3]: "area:changelog","area:release","type:defect"
+created_at: "2026-08-28T12:38:13.873Z"
+updated_at: "2026-08-28T12:38:27.413Z"
+author: pi-agent
+acceptance_criteria: The lockfile resolves pm-changelog 2026.8.22 or newer; the exact argv the release workflow runs for generation and for check both exit zero against the full 89 item tracker; and the installed copy is proven by reading its package.json version rather than by the range in package.json.
+risk: critical
+severity: critical
+expected_result: The release reads the entire tracker and generates a complete changelog no matter how many items the repository has accumulated.
+actual_result: The changelog step exits non-zero for any repository whose tracker exceeds the default output budget.
+affected_version: pm-changelog 2026.8.17 as locked before this change
+component: package.json devDependency on pm-changelog
+docs[1]{path,scope,note}:
+  package.json,project,pm-changelog devDependency raised to the version carrying the unbounded whole-tracker read
+body: ""

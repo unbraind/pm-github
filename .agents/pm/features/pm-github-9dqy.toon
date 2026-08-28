@@ -6,10 +6,13 @@ status: closed
 priority: 2
 tags: []
 created_at: "2026-06-03T05:07:15.430Z"
-updated_at: "2026-06-03T05:28:25.284Z"
+updated_at: "2026-08-28T12:44:03.928Z"
+closed_at: "2026-08-28T12:44:03.924Z"
+completed_at: "2026-08-28T12:44:03.924Z"
 author: codex
 resolution: Round-trip feature delivered + released
 expected_result: true round-trip + activation fixed
 actual_result: import/upsert/export/sync/search/validate all working; activation_failed=0
-close_reason: "All 5 tasks delivered + verified vs real public repo (sindresorhus/slugify): fixed activation-breaking manifest gap (preflight+search), added github validate, github search provider, dry-run-default export with provenance upsert, fixed pm-list-vs-list-all upsert dup bug. 16/16 tests pass; release:check green. Capabilities 4/9 -> 6/9 (commands,importers,schema,hooks,preflight,search)."
+close_reason: Duplicate of pm-github-4elt
+duplicate_of: pm-github-4elt
 body: ""
