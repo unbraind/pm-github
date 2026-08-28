@@ -147,6 +147,22 @@ jobs:
             exit 1
           fi
 
+      # Persist validated release metadata through the repository's protected
+      # branch policy before publishing an immutable npm artifact. A stable
+      # branch name lets a failed run update/reuse its open release PR, while
+      # the exact remote SHA lease prevents overwriting another actor's work.
+      # Ported from pm-beads' release.yml (PR #65): main must already contain the
+      # release commit before npm publish runs - the invariant the old
+      # publish-then-push ordering violated. npm published 2026.8.10, then
+      # `git push origin HEAD:main` was rejected with GH006 by the protected
+      # branch, and `set -e` killed the job before the tag push, so npm ended
+      # up ahead of git (main still at 2026.8.7, no matching tag).
+      #
+      # The merge wait resolves review threads (required_conversation_resolution
+      # is on) then attempts `gh api --method PUT .../pulls/<n>/merge` and lets
+      # GitHub be the authority, failing fast only on DIRTY/BEHIND, with a
+      # 30-minute deadline. It does NOT poll mergeStateStatus to decide merging
+      # (that deadlocked pm-changelog's release PR #133 for 30 minutes).
       # Publication is the only step that can fail for a reason outside this
       # repository, and it runs LAST - after the version bump and the release
       # commit have already landed on main. That ordering is what let a dead
@@ -255,6 +271,13 @@ jobs:
           set -euo pipefail
           npm version "${NPM_VERSION}" --no-git-tag-version --allow-same-version
           node -e "const fs=require('node:fs');const version=JSON.parse(fs.readFileSync('package.json','utf8')).version;for(const file of ['manifest.json']){if(!fs.existsSync(file))continue;const json=JSON.parse(fs.readFileSync(file,'utf8'));json.version=version;fs.writeFileSync(file,JSON.stringify(json,null,2)+'\n');}if(fs.existsSync('index.ts')){const source=fs.readFileSync('index.ts','utf8');const next=source.replace(/version:\s*[\"'][^\"']+[\"']/,'version: \"'+version+'\"');if(next!==source)fs.writeFileSync('index.ts',next);}"
+          # Clean before building, for the same reason CI does: tsc never removes
+          # output for a source that was deleted or renamed, so an orphaned artifact
+          # survives a plain rebuild. Without this the release stages the orphan,
+          # publishes it, and commits it to main - where CI's clean-rebuild
+          # comparison then fails, so a release would break the branch it just
+          # landed on. Caught in review on pm-graph#48.
+          rm -rf dist
           npm run build
 
       - name: Generate changelog and release notes
@@ -262,9 +285,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npx pm-changelog --pm-root .agents/pm --mode replace --output CHANGELOG.md --all-release-tags --release-version-from-package --date-from-version --item-url-base https://github.com/unbraind/pm-github/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --github-step-summary
-          npx pm-changelog --pm-root .agents/pm --mode replace --output CHANGELOG.md --all-release-tags --release-version-from-package --date-from-version --item-url-base https://github.com/unbraind/pm-github/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --check
-          npx pm-changelog --pm-root .agents/pm --stdout --since-previous-tag --until-release-tag --release-version-from-package --date-from-version --item-url-base https://github.com/unbraind/pm-github/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm > RELEASE_NOTES.md
+          npx pm-changelog --pm-root .agents/pm --mode replace --output CHANGELOG.md --all-release-tags --release-version-from-package --item-url-base https://github.com/unbraind/pm-slack/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --github-step-summary --pm-arg=--output-budget --pm-arg=unbounded --pm-arg=--output-limit --pm-arg=unbounded
+          npx pm-changelog --pm-root .agents/pm --mode replace --output CHANGELOG.md --all-release-tags --release-version-from-package --item-url-base https://github.com/unbraind/pm-slack/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --check --pm-arg=--output-budget --pm-arg=unbounded --pm-arg=--output-limit --pm-arg=unbounded
+          npx pm-changelog --pm-root .agents/pm --stdout --all-release-tags --release-version-from-package --item-url-base https://github.com/unbraind/pm-slack/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm > RELEASE_NOTES.md --pm-arg=--output-budget --pm-arg=unbounded --pm-arg=--output-limit --pm-arg=unbounded
 
       - name: Run release checks
         if: steps.decide.outputs.should_release == 'true'
@@ -283,6 +306,7 @@ jobs:
           paths=(package.json package-lock.json manifest.json CHANGELOG.md)
           [[ -f index.ts ]] && paths+=(index.ts)
           [[ -d src ]] && paths+=(src)
+          git ls-files --error-unmatch 'dist/' > /dev/null 2>&1 && paths+=(dist)
           git add "${paths[@]}"
           if git diff --cached --quiet; then
             echo "Release files are already current; tagging existing commit."
@@ -343,8 +367,8 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --base main \
               --head "$release_branch" \
-              --title "Release pm-github ${RELEASE_TAG}" \
-              --body "Automated daily release metadata for \`${RELEASE_TAG}\`. The release gate passed before this PR was created; npm publication and tagging remain blocked until this protected PR is merged.")"
+              --title "Release pm-slack ${RELEASE_TAG}" \
+              --body "Automated daily release metadata for \`${RELEASE_TAG}\`. The release gate passed before this PR was created; npm publication and tagging remain blocked until this protected PR is merged. Tracking: [pm-slack-1aeu](https://github.com/unbraind/pm-slack/blob/main/.agents/pm/issues/pm-slack-1aeu.toon).")"
             pr_number="${pr_url##*/}"
           fi
 
@@ -356,14 +380,6 @@ jobs:
           pr_view_err="$(mktemp)"
           merged_sha=""
           while :; do
-            # Read mergeStateStatus + statusCheckRollup only to detect the
-            # fatal DIRTY/BEHIND states and to keep the deadline message
-            # diagnosable. The merge decision is NOT derived from this state
-            # (see the step-level comment above): the merge API call is the
-            # authority. `set -e` is active, so an unguarded `gh pr view`
-            # would abort the whole step on a transient 5xx/rate limit - a
-            # failed read is not information about the PR, so it is treated as
-            # an unrecognised state and retried.
             pr_state="$(gh pr view "$pr_number" \
               --repo "$GITHUB_REPOSITORY" \
               --json mergeStateStatus,statusCheckRollup \
@@ -401,16 +417,6 @@ jobs:
                 ;;
             esac
 
-            # required_conversation_resolution is enabled, so any unresolved
-            # review thread blocks the merge forever. Advisory bot reviewers
-            # (Sourcery, cubic, CodeRabbit) routinely open threads as a
-            # confidence signal; resolve every unresolved thread on this
-            # release PR before each attempt so a bot comment cannot dead-end
-            # the daily release. Only BOT-authored threads on this PR are
-            # resolved, and only when EVERY comment on the thread is bot-
-            # authored: a human reply on a bot-opened thread must keep
-            # blocking. Clearing a human reviewer's thread would remove the
-            # very protection required_conversation_resolution provides.
             unresolved="$(gh api graphql \
               -f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){nodes{id isResolved comments(first:100){totalCount nodes{author{login __typename}}}}}}}}' \
               -F o="$owner" -F r="$repo" -F n="$pr_number" \
@@ -430,10 +436,6 @@ jobs:
               done <<< "$unresolved"
             fi
 
-            # Attempt the merge and let GitHub be the authority. A successful
-            # PUT is proof the branch-protection rules were satisfied; a
-            # failure (405 = checks not ready, 409 = SHA moved) is proof they
-            # were not. No state inference in between.
             merge_out="$(gh api --method PUT \
               "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}/merge" \
               -f merge_method=rebase \
@@ -445,7 +447,6 @@ jobs:
                 echo "Merged release PR #${pr_number} via merge API (state was ${merge_state})."
                 break
               fi
-              # Merge reported success but no sha - treat as transient, retry.
               echo "Merge returned no sha; retrying: $(tr '\n' ' ' < "$merge_err")"
               merged_sha=""
             else
@@ -455,13 +456,13 @@ jobs:
               # will never start on its own. It is invisible in statusCheckRollup,
               # so without this it is indistinguishable from a required check that
               # failed: the loop just logs "settling: none" until the deadline.
-              # pm-changelog's release PR #133 parked exactly this way on
-              # 2026-08-10 (attempt 1 conclusion `action_required` at 04:54:24Z,
-              # policy `first_time_contributors`, and `github-actions[bot]` had no
-              # merged PR in that repo yet). A human re-ran it at 05:36Z, 12
-              # minutes after the release had already given up. Try to approve it -
-              # the token often may not, which is harmless - and always surface the
-              # run so the wait is diagnosable.
+              # This is not hypothetical - pm-changelog's release PR #133 parked
+              # exactly this way on 2026-08-10 (attempt 1 conclusion
+              # `action_required` at 04:54:24Z, policy `first_time_contributors`,
+              # and `github-actions[bot]` had no merged PR in that repo yet). A
+              # human re-ran it at 05:36Z, 12 minutes after the release had already
+              # given up. Try to approve it - the token often may not, which is
+              # harmless - and always surface the run so the wait is diagnosable.
               pending_runs="$(gh api \
                 "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${release_commit}&per_page=100" \
                 --jq '.workflow_runs[]? | select(.conclusion=="action_required" or .status=="waiting") | .id' \
@@ -538,11 +539,11 @@ jobs:
           [[ -f index.ts ]] && diff_paths+=(index.ts)
           [[ -d src ]] && diff_paths+=(src)
           git diff --exit-code -- "${diff_paths[@]}"
-          # `git diff` above compares dist against itself - nothing
-          # rebuilds before this point, so it passes unconditionally and
-          # cannot see untracked or ignored artifacts. Rebuild from clean
-          # so a stale committed dist cannot ship.
-          if git ls-files --error-unmatch 'dist' > /dev/null 2>&1; then
+          # `git diff` here compared dist against itself - nothing rebuilds
+          # before this point, so the old check passed unconditionally, and
+          # it could not see untracked or orphaned artifacts at all. Rebuild
+          # and use `git status` so a stale committed dist cannot ship.
+          if git ls-files --error-unmatch 'dist/' > /dev/null 2>&1; then
             rm -rf dist
             npm run build
             dist_status="$(git status --porcelain=v1 --untracked-files=all --ignored=matching -- 'dist/')"
@@ -559,7 +560,7 @@ jobs:
       # that expired and silently stopped every fleet package publishing between
       # 2026-08-17 and 2026-08-26 while main kept bumping the version. Trusted
       # publishing must be configured for this package on npmjs.com against
-      # unbraind/pm-github and this workflow filename, or publish fails closed.
+      # unbraind/pm-slack and this workflow filename, or publish fails closed.
       - name: Publish npm package
         if: steps.decide.outputs.should_release == 'true'
         shell: bash
@@ -609,8 +610,45 @@ jobs:
           # already-published release (e.g. 2026.8.10, which landed on npm while
           # main was still at 2026.8.7) reconcile instead of failing with a 403
           # when the workflow catches up and re-runs the transaction.
-          if npm view "${pkg_name}@${NPM_VERSION}" version --json >/dev/null 2>&1; then
-            echo "::notice::${pkg_name}@${NPM_VERSION} already published; skipping publish step."
+          # Reconciliation must check the ARTIFACT, not just the version string.
+          # `npm view <pkg>@<ver> version` proves only that something is
+          # published under that coordinate. It cannot distinguish the attested
+          # package this job just produced from an unattested one published
+          # earlier, or from another commit -- so a reconcile that accepts mere
+          # existence would tag and release the current SHA on the strength of
+          # an artifact nobody verified. That is the very substitution this
+          # workflow refuses to make on the publish path, so it must not make it
+          # on the recovery path either.
+          #
+          # Every publish this workflow performs carries `--provenance`, so a
+          # version of ours that landed necessarily has attestations. Their
+          # presence is therefore the discriminator: attested means "our publish
+          # got through", absent means "something else is sitting on this
+          # coordinate" and is refused rather than reconciled.
+          registry_version_is_attested() {
+            local attestations
+            attestations="$(npm view "${pkg_name}@${NPM_VERSION}" dist.attestations --json 2>/dev/null || true)"
+            [[ -n "${attestations}" && "${attestations}" != "null" && "${attestations}" != "{}" && "${attestations}" != "[]" ]]
+          }
+          registry_has_version() {
+            npm view "${pkg_name}@${NPM_VERSION}" version --json >/dev/null 2>&1
+          }
+          # Refuses a coordinate that exists without an attestation instead of
+          # completing the release around it. Republishing cannot repair it --
+          # npm forbids overwriting a published version -- so this needs a human,
+          # and saying so is more useful than a green run over an artifact the
+          # release notes will misdescribe.
+          reconcile_or_refuse() {
+            registry_has_version || return 1
+            if registry_version_is_attested; then
+              return 0
+            fi
+            echo "::error::${pkg_name}@${NPM_VERSION} exists on the registry WITHOUT a provenance attestation. This workflow only ever publishes with --provenance, so that artifact did not come from this job. Refusing to tag and release around it; investigate before re-running."
+            exit 1
+          }
+
+          if reconcile_or_refuse; then
+            echo "::notice::${pkg_name}@${NPM_VERSION} already published and attested; skipping publish step."
             exit 0
           fi
           publish_with_provenance() {
@@ -624,8 +662,8 @@ jobs:
               echo "Published with provenance on attempt ${attempt}."
               exit 0
             fi
-            if npm view "${pkg_name}@${NPM_VERSION}" version --json >/dev/null 2>&1; then
-              echo "::notice::Version landed despite reported error; treating as success."
+            if reconcile_or_refuse; then
+              echo "::notice::Version landed attested despite the reported error; treating as success."
               exit 0
             fi
             if (( attempt < max_attempts )); then
@@ -642,16 +680,17 @@ jobs:
           # version that is on the registry, which is the "npm ahead of git"
           # split the release ordering exists to prevent. Poll instead.
           #
-          # 5 attempts, 30s apart, deliberately the same shape and numbers as the
-          # bun verification step below: it reads the same registry for the same
-          # version and already documents that propagation can take ~60s. A
-          # shorter window here would fail a release the very next step would
+          # 5 attempts, 30s apart. The bun verification step further down this
+          # file already retries the same registry on the same 30s schedule,
+          # because a version the registry has just accepted is not immediately
+          # visible; the npm read here needs the same grace for the same reason.
+          # A shorter window would fail a release that the very next step would
           # then find. The cost is paid only on the path where npm has already
           # reported an error, never on a successful publish.
           reconcile_attempts=5
           for reconcile_attempt in $(seq 1 "${reconcile_attempts}"); do
-            if npm view "${pkg_name}@${NPM_VERSION}" version --json >/dev/null 2>&1; then
-              echo "::notice::Version landed after the final reported error; treating as success."
+            if reconcile_or_refuse; then
+              echo "::notice::Version landed attested after the final reported error; treating as success."
               exit 0
             fi
             if (( reconcile_attempt < reconcile_attempts )); then
