@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- True round-trip GitHub sync: search provider, validate diagnostics, safe-by-default export, fix activation ([pm-github-9dqy](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-9dqy.toon))
 - A failed provenance publish silently falls back to an unattested one ([pm-github-nwaz](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-nwaz.toon))
 - A failed provenance publish silently falls back to an unattested one ([pm-github-1rik](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-1rik.toon))
 - A failed provenance publish silently falls back to an unattested one ([pm-github-i5b8](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-i5b8.toon))
@@ -224,7 +225,6 @@
 
 ### Fixed
 
-- True round-trip GitHub sync: search provider, validate diagnostics, safe-by-default export, fix activation ([pm-github-9dqy](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-9dqy.toon))
 - True round-trip GitHub sync: search provider, validate diagnostics, safe-by-default export, fix activation ([pm-github-4elt](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-4elt.toon))
 - FIX: add 'preflight' to manifest capabilities (activation-breaking bug) ([pm-github-qndb](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-qndb.toon))
 
