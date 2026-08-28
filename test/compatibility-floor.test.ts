@@ -134,10 +134,11 @@ test("the development dependency is an exact pin at or above the declared floor"
     atOrAbove(dev, declared as string),
     `the pinned development CLI ${dev} is below the declared floor ${String(declared)}`,
   );
-  assert.strictEqual(
-    dev,
-    CANONICAL_LIST_FLOOR,
-    "development must test the exact required host contract",
+  // CI pins the newest fleet CLI so its checks exercise the current host,
+  // while the manifest remains a compatibility minimum for consumers.
+  assert.ok(
+    atOrAbove(dev, CANONICAL_LIST_FLOOR),
+    `the pinned development CLI ${dev} must satisfy the canonical host floor ${CANONICAL_LIST_FLOOR}`,
   );
 });
 
