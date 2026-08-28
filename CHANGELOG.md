@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- A failed provenance publish silently falls back to an unattested one ([pm-github-i5b8](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-i5b8.toon))
 - Fix release publish ordering ahead of protected main push ([pm-github-v2kt](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-v2kt.toon))
 - BREAKING: pm-github now requires pm CLI 2026.8.20 or newer; older hosts may fail installation or runtime validation ([pm-github-iswq](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-iswq.toon))
 
