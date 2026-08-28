@@ -18,116 +18,21 @@
  * @packageDocumentation
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync } from "node:fs";
 import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 
-/** A tracked file's path and contents. */
-interface SourceFile {
-  /** Repository-relative path. */
-  file: string;
-  /** File contents. */
-  text: string;
-}
-
-/** The outcome of one verifier run. */
-interface VerifierResult {
-  /** Reasons the run failed; empty means it passed. */
-  failures: string[];
-  /** Lines describing what was checked, for the operator. */
-  notes: string[];
-}
-
-/**
- * Collapse shell and YAML line continuations so one logical command is one string.
- *
- * A backslash at end of line joins the next line; without this every multi-line
- * invocation looks like a set of fragments, none of which carries both the
- * version input and the date flag.
- *
- * @param text - Raw file contents.
- * @returns The same text with continuations joined.
- */
-function joinContinuations(text: string): string {
-  return text.replace(/\\\r?\n\s*/g, " ");
-}
-
-/**
- * Index bash array assignments so a shared options array can be expanded.
- *
- * The release workflows declare `common=( ... )` once and pass `"${common[@]}"`
- * to each invocation, precisely so the invocations cannot drift. A scan that
- * reads only the invocation line therefore sees none of the shared flags.
- *
- * @param text - File contents with continuations already joined.
- * @returns Array name mapped to the flag text it holds.
- */
-function bashArrays(text: string): Map<string, string> {
-  const arrays = new Map<string, string>();
-  for (const match of text.matchAll(/(?:^|\s)([A-Za-z_][A-Za-z0-9_]*)=\(([\s\S]*?)\)/g)) {
-    arrays.set(match[1], match[2].replace(/\s+/g, " ").trim());
-  }
-  return arrays;
-}
-
-/**
- * Expand `"${name[@]}"` references against the file's array declarations.
- *
- * An unknown name is left untouched rather than erased: silently dropping it
- * would turn "this scan does not understand the command" into "this command has
- * no flags", which reads as a pass.
- *
- * @param line - One logical command.
- * @param arrays - Array declarations from the same file.
- * @returns The command with referenced array contents inlined.
- */
-function expandArrays(line: string, arrays: Map<string, string>): string {
-  return line.replace(/"?\$\{([A-Za-z_][A-Za-z0-9_]*)\[@\]\}"?/g, (whole, name: string) =>
-    arrays.get(name) ?? whole);
-}
-
-/**
- * Drop an unquoted trailing comment from one command.
- *
- * A `#` inside quotes is an argument -- these invocations pass URLs containing
- * one -- while an unquoted `#` starts a comment the shell never runs. Without
- * this, a comment is part of the command as far as a substring check is
- * concerned, and `... --release-version-from-package  # --date-from-version`
- * satisfies the very check it is complaining about.
- *
- * @param command - One logical command.
- * @returns The command with any unquoted trailing comment removed.
- */
-function stripComment(command: string): string {
-  let single = false;
-  let double = false;
-  for (let index = 0; index < command.length; index += 1) {
-    const character = command[index];
-    if (character === "\\") { index += 1; continue; }
-    if (character === "'" && !double) single = !single;
-    else if (character === '"' && !single) double = !double;
-    else if (character === "#" && !single && !double && (index === 0 || /\s/.test(command[index - 1]))) {
-      return command.slice(0, index);
-    }
-  }
-  return command;
-}
-
-/**
- * Whether this module is the process entry point.
- *
- * Kept as a named function rather than an inline comparison so the suite can
- * execute both answers; a guard nothing exercises is how an entry point stops
- * running and nobody notices.
- *
- * @param argv - The process argv to judge.
- * @param moduleUrl - The module's own `import.meta.url`.
- * @returns True when argv names this module as the script being run.
- */
-function isMainInvocation(argv: string[], moduleUrl: string): boolean {
-  const script = argv[1];
-  return script !== undefined && moduleUrl === pathToFileURL(resolve(script)).href;
-}
+import {
+  bashArrays,
+  commandArguments,
+  commandName,
+  expandArrays,
+  joinContinuations,
+  type ShellCommand,
+  type SourceFile,
+  tokenizeCommands,
+  type VerifierResult,
+} from "./shell-command-scan.ts";
+import { isMainInvocation } from "./main-invocation.ts";
 
 /** The flag that attaches a build attestation to the published tarball. */
 export const ATTESTATION_FLAG = "--provenance";
@@ -136,345 +41,38 @@ export const ATTESTATION_FLAG = "--provenance";
 export interface PublishInvocation {
   /** File the invocation was found in. */
   file: string;
-  /** The logical command, with continuations joined and arrays expanded. */
-  command: string;
+  /** The program the invocation runs, reduced to its basename. */
+  program: string;
+  /** The invocation's tokens, quoting resolved. */
+  command: ShellCommand;
 }
 
-/**
- * Split one logical command into the shell segments it would execute.
- *
- * A line can hold several commands, and judging the line as a whole lets a
- * flagged publish cover for an unflagged one beside it. The separator set has
- * to match what the shell treats as a command boundary, or an adversarial
- * edit places the unattested publish behind a separator the scan does not know:
- * `;`, `&`, and `|` (background and compact pipes included, not just the
- * spaced `&&` / `||` forms), plus unquoted parentheses and command substitution
- * markers, so a publish hiding inside `$( ... )` or a subshell is reached.
- *
- * Separators inside single or double quotes are left alone; a backtick or a
- * `$(` outside quotes opens a new segment rather than being blanked, because in
- * shell those quotes constrain argument words but substitution still executes.
- *
- * @param command - One logical command.
- * @returns The executable segments of the command, in order.
- */
-function splitSegments(command: string): string[] {
-  const segments: string[] = [];
-  let current = "";
-  let single = false;
-  let double = false;
-  const push = () => {
-    if (current.trim().length > 0) segments.push(current);
-    current = "";
-  };
-  for (let index = 0; index < command.length; index += 1) {
-    const character = command[index]!;
-    if (character === "\\") {
-      current += character;
-      index += 1;
-      if (index < command.length) current += command[index]!;
-      continue;
-    }
-    if (!single && !double) {
-      if (character === "&" || character === "|" || character === ";" || character === "(" || character === ")") {
-        if ((character === "&" || character === "|") && command[index + 1] === character) index += 1;
-        push();
-        continue;
-      }
-      if (character === "`") {
-        push();
-        continue;
-      }
-      if (character === "$" && command[index + 1] === "(") {
-        index += 1;
-        push();
-        continue;
-      }
-    }
-    if (character === "'" && !double) {
-      single = !single;
-      current += character;
-      continue;
-    }
-    if (character === '"' && !single) {
-      double = !double;
-      current += character;
-      continue;
-    }
-    current += character;
-  }
-  push();
-  return segments;
-}
+/** Publishers other than npm, which this repository has no attested path for. */
+export const FOREIGN_PUBLISHERS = new Set(["yarn", "pnpm", "bun"]);
+
+/** Repository subtrees whose contents are build output rather than a publish path. */
+const GENERATED_PREFIXES = ["dist/", "coverage/", "node_modules/", ".agents/pm/runtime/"];
+
+/** Tracked paths that can execute a command, matched against the repository-relative path. */
+const EXECUTABLE_PATHS = [
+  /^\.github\/workflows\/[^/]+\.ya?ml$/,
+  /(^|\/)package\.json$/,
+  /\.(sh|bash|zsh|ksh)$/,
+  /(^|\/)(Makefile|makefile|GNUmakefile)$/,
+  /\.mk$/,
+  /(^|\/)Dockerfile([.-][^/]*)?$/,
+  /(^|\/)docker-compose([.-][^/]*)?\.ya?ml$/,
+];
 
 /**
- * Find the index of the token the shell would actually execute.
+ * Yield the command text held inside a package manifest.
  *
- * The first word of a segment is not automatically the executable: command
- * runners such as `sudo`, `env`, `xargs`, `command`, and `exec` take the
- * command to run as an argument, and assignments like `FOO=bar` precede the
- * command in shell. Skipping a fixed list of runner words, simple options, and
- * word=word assignments finds the executable for those forms, while prose such
- * as `echo npm publish` is correctly not judged as an invocation.
- *
- * Package runners are in that list for a reason worth stating. `npx npm publish`
- * publishes exactly as `npm publish` does, but tokenising without skipping the
- * runner makes the executable `npx`, so the segment is not recognised as a
- * publish at all. That is worse than a missed flag: an unrecognised publish is
- * never checked for `--provenance`, and the non-vacuity guard still passes
- * because the workflow's ordinary attested publish is found elsewhere. The
- * result is an unattested publish that the gate reports as clean. `pnpm dlx`,
- * `yarn dlx`, `npm exec` and `bun x` spell the same thing in two tokens, so the
- * second word is consumed too.
- *
- * @param tokens - Whitespace-split tokens of one segment.
- * @returns The index of the executable token.
- */
-function executableIndex(tokens: string[]): number {
-  const runners = new Set([
-    "env", "sudo", "doas", "time", "nice", "nohup", "xargs", "command", "exec",
-    // Package runners: each executes the following words as a command.
-    "npx", "bunx", "pnpx",
-  ]);
-  // Two-token package runners, keyed by the first word. The pair is consumed
-  // only when the second word actually matches, so a plain `npm publish` is
-  // never mistaken for `npm exec`.
-  const pairedRunners = new Map([["pnpm", "dlx"], ["yarn", "dlx"], ["npm", "exec"], ["bun", "x"]]);
-  let index = 0;
-  while (index < tokens.length) {
-    const token = tokens[index]!;
-    if (runners.has(token) || token.startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) {
-      index += 1;
-      continue;
-    }
-    if (pairedRunners.get(token) === tokens[index + 1]) {
-      index += 2;
-      continue;
-    }
-    break;
-  }
-  return index;
-}
-
-/**
- * Strip surrounding quotes from one token, if both are there.
- *
- * npm receives the flag whether or not the shell quoted it, so `"--provenance"`
- * enables the attestation exactly as much as `--provenance` does. Normalizing
- * per token instead of blanking quoted spans means a legitimately quoted flag
- * is judged on what it carries, while prose detection upstream still treats
- * quoted mentions as non-commands before this is ever asked.
- *
- * @param token - One shell token.
- * @returns The token without a surrounding pair of matching quotes.
- */
-function unquoteToken(token: string): string {
-  if (token.length >= 2) {
-    const first = token[0];
-    if ((first === '"' || first === "'") && token[token.length - 1] === first) {
-      return token.slice(1, -1);
-    }
-  }
-  return token;
-}
-
-/**
- * Extract the raw content of each quoted span in one segment.
- *
- * Used only once a segment is known to hand a string to a shell interpreter;
- * the content is what gets executed, so it becomes a segment of its own.
- *
- * @param segment - The segment to mine.
- * @returns The raw contents of every quoted span.
- */
-function quotedSpanContents(segment: string): string[] {
-  const spans: string[] = [];
-  let current = "";
-  let quote: string | undefined;
-  for (let index = 0; index < segment.length; index += 1) {
-    const character = segment[index]!;
-    if (character === "\\") {
-      if (quote !== undefined) current += character;
-      index += 1;
-      if (quote !== undefined && index < segment.length) current += segment[index]!;
-      continue;
-    }
-    if (quote === undefined && (character === "'" || character === '"')) {
-      quote = character;
-      continue;
-    }
-    if (quote !== undefined && character === quote) {
-      quote = undefined;
-      spans.push(current);
-      current = "";
-      continue;
-    }
-    if (quote !== undefined) current += character;
-  }
-  return spans;
-}
-
-/**
- * Remove the first N whitespace-delimited tokens from a raw segment.
- *
- * Plain `split(/\s+/)` breaks a quoted span into fragments that no longer
- * match the flag, because `eval` and `bash -c` hand off a string whose
- * boundaries matter. Skipping tokens quote-aware keeps the remainder of the
- * command -- the string an executor would run -- intact for judgement.
- *
- * @param text - One raw segment.
- * @param count - How many tokens to drop.
- * @returns The segment without its leading tokens, quotes preserved.
- */
-function dropLeadingTokens(text: string, count: number): string {
-  let single = false;
-  let double = false;
-  let seen = 0;
-  for (let index = 0; index < text.length; index += 1) {
-    const character = text[index]!;
-    if (character === "\\") { index += 1; continue; }
-    if (character === "'" && !double) { single = !single; continue; }
-    if (character === '"' && !single) { double = !double; continue; }
-    if (!single && !double && /\s/.test(character) && index > 0 && !/\s/.test(text[index - 1]!)) {
-      seen += 1;
-      if (seen === count) return text.slice(index);
-    }
-  }
-  return "";
-}
-
-/**
- * Replace every quote character with a space, keeping the content.
- *
- * Only used on text an executor would run: blanking the span (as prose
- * detection does) would hide the command, but stripping the quote characters
- * preserves word boundaries while turning `eval "npm publish"` back into the
- * tokens the shell concatenates and executes.
- *
- * @param text - The segment handed to an executor.
- * @returns The text without quote characters.
- */
-function unquoteText(text: string): string {
-  return text.replace(/["']/g, " ");
-}
-
-/**
- * Extend a segment list with the commands a shell-string executor would run.
- *
- * `eval`, and `bash`/`sh`/`zsh`/`dash` with `-c`, execute a string passed to
- * them. An unattested publish inside such a string is invisible to a scan that
- * blanks quoted spans, while marking the string as a publish upstream would
- * turn prose mentions into failures; extracting the string's own content, only
- * when the segment actually hands a string to an interpreter, keeps both sides
- * of that trade sound. `eval` joins all of its arguments with spaces, so its
- * remainder is evaluated as one segment rather than span by span. The hand-off
- * is resolved with bounded depth, because a string may itself invoke an
- * executor and the scan must still terminate.
- *
- * `-c` is detected inside a short-option cluster, not only as a whole token.
- * POSIX shells accept `bash -ec "..."` and `bash -euc "..."`, which run the
- * string exactly as `bash -c "..."` does. Matching the token exactly let those
- * spellings hand a string to an interpreter that this function then declined to
- * look inside, so an unattested publish in the string was never examined while
- * the workflow's ordinary attested publish still satisfied the non-vacuity
- * guard - the gate reported clean. Long options are excluded deliberately:
- * `--command` is not `-c`, and treating a `--`-prefixed token as a cluster of
- * short flags would misread it.
- *
- * @param segments - The pending segment list.
- * @param depth - How many executor hand-offs may still be resolved.
- * @returns The segments plus any executor-resolved ones.
- */
-function resolveExecutorStrings(segments: string[], depth: number): string[] {
-  const out = [...segments];
-  const queue = segments.map((text) => ({ text, depth }));
-  while (queue.length > 0) {
-    const { text, depth: remaining } = queue.shift()!;
-    if (remaining <= 0) continue;
-    const tokens = text.trim().split(/\s+/);
-    const executableAt = executableIndex(tokens);
-    const executable = unquoteToken(tokens[executableAt] ?? "");
-    if (executable === "eval") {
-      const rest = unquoteText(dropLeadingTokens(text, executableAt + 1));
-      if (rest.trim().length > 0) {
-        out.push(rest);
-        queue.push({ text: rest, depth: remaining - 1 });
-      }
-      continue;
-    }
-    const carriesDashC = (token: string): boolean => {
-      const bare = unquoteToken(token);
-      // A single `-` prefix only: `--command` is a long option, not a cluster
-      // of short flags that happens to contain `c`.
-      return /^-[A-Za-z]*c[A-Za-z]*$/.test(bare);
-    };
-    if (/^(bash|sh|zsh|dash)$/.test(executable) && tokens.slice(executableAt + 1).some(carriesDashC)) {
-      for (const span of quotedSpanContents(text)) {
-        if (span.trim().length > 0) {
-          out.push(span);
-          queue.push({ text: span, depth: remaining - 1 });
-        }
-      }
-    }
-  }
-  return out;
-}
-
-/**
- * Remove the contents of every quoted span from one command.
- *
- * Release workflows print advice that names the command they are about to run.
- * This repository's own workflow echoes a sentence containing the words `npm
- * publish` in quotes. A substring scan reads that echo as a publish invocation
- * and fails it for lacking a flag no echo could carry, so the gate reports a
- * defect that is not there and gets weakened until it reports nothing. What
- * distinguishes a command from a mention is that the mention sits inside
- * quotes, so quoted spans are removed before the command is judged. Commands an
- * explicit executor (`eval`, `bash -c`) would run are extracted before this
- * stripping happens, so only prose stays hidden.
- *
- * Whitespace replaces each span rather than nothing, so tokens on either side
- * do not fuse into a word that was never written.
- *
- * @param command - One logical command.
- * @returns The command with quoted spans blanked out.
- */
-export function stripQuotedSpans(command: string): string {
-  let result = "";
-  let quote: string | undefined;
-  for (let index = 0; index < command.length; index += 1) {
-    const character = command[index]!;
-    if (character === "\\") {
-      result += quote === undefined ? character : " ";
-      index += 1;
-      if (index < command.length) result += quote === undefined ? command[index]! : " ";
-      continue;
-    }
-    if (quote === undefined && (character === "'" || character === '"')) {
-      quote = character;
-      result += " ";
-      continue;
-    }
-    if (quote !== undefined && character === quote) {
-      quote = undefined;
-      result += " ";
-      continue;
-    }
-    result += quote === undefined ? character : " ";
-  }
-  return result;
-}
-
-/**
- * Expand a package manifest into the command lines its scripts would run.
- *
- * A manifest is JSON, so every script body is a *quoted* value -- and quoted
- * spans are erased before a command is judged, because that is what stops the
- * workflow's own advisory `echo` reading as an invocation. Passing the raw
- * manifest through that step therefore erases the very commands it contains: a
- * publish moved into an npm script would be invisible to this gate while being
- * entirely real. Yielding the script bodies as bare lines restores them to the
- * shape the scanner expects.
+ * A manifest is JSON, so its script bodies are string values rather than lines
+ * of shell. Handing the raw file to a shell tokeniser would read the JSON
+ * punctuation as commands and the script bodies as quoted words. Parsing the
+ * manifest and returning the bodies restores them to the shape the scanner
+ * expects, which matters because a publish moved into an npm script is entirely
+ * real and would otherwise be invisible to this gate.
  *
  * A manifest that will not parse yields nothing rather than throwing, so a
  * malformed sibling file cannot take the gate down; the manifest's own tooling
@@ -498,65 +96,83 @@ export function manifestCommandLines(text: string): string {
     .join("\n");
 }
 
+/** Subcommands that run something else, so a later `publish` word is its argument. */
+const RUNNER_SUBCOMMANDS = new Set(["run", "run-script", "exec", "explore", "x", "workspace"]);
+
 /**
- * Decide whether one command runs `npm publish`.
+ * Decide whether one command is a direct `npm publish`.
  *
- * `publish` does not have to follow `npm` immediately. npm accepts its
- * configuration flags anywhere on the line, so `npm --access public publish
- * --ignore-scripts` is a real, unattested publish that a scan requiring the two
- * words to be adjacent discards before ever looking at its flags -- and it
- * discards it silently, leaving a conventional attested sibling elsewhere in
- * the file to carry the audit to a pass.
+ * `publish` does not have to follow `npm` immediately: npm accepts its
+ * configuration flags anywhere on the line, so `npm --access public publish` is
+ * a real publish that an adjacency test discards silently, leaving an attested
+ * sibling elsewhere in the file to carry the audit to a pass.
  *
- * `npm` must be the token the shell would execute, though. Accepting the pair
- * at any positions means prose such as `echo npm then publish later` reads as
- * an unflagged publish and blocks the release for a defect that is not there,
- * and a gate that cries wolf gets weakened until it reports nothing. Runner
- * words such as `sudo` or `env`, options, and preceding assignments are
- * skipped, because a publish reached through a runner is still a publish.
+ * Reading the first non-flag word as the subcommand does not work either,
+ * because npm has flags that take a separate value (`--access public`) and
+ * flags that do not (`--ignore-scripts`), and telling them apart needs npm's
+ * own option table. So the word is looked for anywhere in the arguments, and
+ * only a preceding runner subcommand rules it out -- `npm run publish` runs a
+ * package script whose body is scanned from the manifest, and requiring the
+ * flag on the runner would report a defect that is not there.
  *
- * `npm run publish` is excluded: that runs a package script, and the script's
- * own body is scanned separately from the manifest. Requiring `--provenance` on
- * the runner rather than on the publish would report a defect that is not there.
+ * The residual imprecision is `npm --tag publish ...`, a dist-tag named after
+ * the subcommand, which this reads as a publish. That direction is deliberate:
+ * a false positive is a report line to argue with, a false negative is an
+ * unattested artifact on the registry.
  *
- * @param command - One logical command with quoted spans already blanked.
- * @returns True when the command is an `npm publish` invocation.
+ * The program is checked in command position by the caller, so `echo npm
+ * publish` and `notnpm publish` never reach here.
+ *
+ * @param command - One simple command's tokens.
+ * @returns True when the command publishes.
  */
-export function isPublishCommand(command: string): boolean {
-  const tokens = command.trim().split(/\s+/);
-  if (tokens.length === 0 || tokens[0] === undefined) return false;
-  const npmAt = executableIndex(tokens);
-  if (tokens[npmAt] !== "npm") return false;
-  const publishAt = tokens.indexOf("publish", npmAt + 1);
-  if (publishAt === -1) return false;
-  const preceding = tokens[publishAt - 1];
-  return preceding !== "run" && preceding !== "run-script";
+export function isPublishCommand(command: ShellCommand): boolean {
+  for (const token of commandArguments(command)) {
+    if (RUNNER_SUBCOMMANDS.has(token.value)) return false;
+    if (token.value === "publish") return true;
+  }
+  return false;
 }
 
 /**
  * Decide whether one publish command actually enables the attestation.
  *
- * A substring test is not enough. `--provenance=false` and `--no-provenance`
- * both contain the flag's spelling and both turn the attestation off, so a
- * containment check accepts precisely the regression this gate exists to catch
- * -- and it would do so while reporting the file as attested.
+ * A substring test is not enough. `--provenance=false`, `--provenance false` and
+ * `--no-provenance` all contain the flag's spelling and all turn the
+ * attestation off, so a containment check accepts precisely the regression this
+ * gate exists to catch -- while reporting the file as attested. `--provenance-file`
+ * is a different flag entirely and must not be read as this one.
  *
  * Tokens are judged in order and the last one wins, which is how npm resolves a
  * flag given more than once: `--provenance --no-provenance` publishes without an
- * attestation, so this must answer false for it. Shell quoting is normalized
- * per token first, because `"--provenance"` enables the attestation exactly the
- * same as `--provenance`.
+ * attestation, so this must answer false for it.
  *
- * @param command - One logical publish command.
+ * Quoting is irrelevant to the shell and so is irrelevant here: `npm publish
+ * "--provenance"` is attested, and the scan this replaces read it as bare.
+ *
+ * @param command - One simple command's tokens.
  * @returns True when the command publishes with an attestation.
  */
-export function attestationEnabled(command: string): boolean {
+export function attestationEnabled(command: ShellCommand): boolean {
+  const args = commandArguments(command);
   let enabled = false;
-  for (const rawToken of command.trim().split(/\s+/)) {
-    const token = unquoteToken(rawToken);
-    if (token === `--no-${ATTESTATION_FLAG.slice(2)}`) enabled = false;
-    else if (token === ATTESTATION_FLAG) enabled = true;
-    else if (token.startsWith(`${ATTESTATION_FLAG}=`)) {
+  for (let index = 0; index < args.length; index += 1) {
+    const token = args[index]!.value;
+    if (token === `--no-${ATTESTATION_FLAG.slice(2)}`) {
+      enabled = false;
+      continue;
+    }
+    if (token === ATTESTATION_FLAG) {
+      const next = args[index + 1]?.value;
+      if (next === "true" || next === "false") {
+        enabled = next === "true";
+        index += 1;
+        continue;
+      }
+      enabled = true;
+      continue;
+    }
+    if (token.startsWith(`${ATTESTATION_FLAG}=`)) {
       enabled = token.slice(ATTESTATION_FLAG.length + 1) === "true";
     }
   }
@@ -566,20 +182,9 @@ export function attestationEnabled(command: string): boolean {
 /**
  * Find every publish invocation in one file's contents.
  *
- * Continuations are joined and shared arrays expanded first, for the same
- * reason the changelog-date scan does it: a multi-line invocation otherwise
- * looks like fragments, none of which carries the flag. Each logical command is
- * then split on every shell separator, because one line can hold several
- * commands and judging the line as a whole lets a flagged publish cover for an
- * unflagged one beside it. Commands that hand a string to an executor
- * (`eval`, `bash -c`) have the string's content resolved so a publish cannot
- * hide inside it.
- *
- * Detection and attestation deliberately work from different text: detection
- * blanks quoted spans so prose mentions of `npm publish` are not commands at
- * all, while attestation is read from the raw, comment-stripped segment, so a
- * legitimately shell-quoted flag -- `npm publish "--provenance"` -- is judged
- * on what it carries rather than reported as unattested.
+ * Continuations are joined and shared arrays expanded before tokenising, for
+ * the same reason the changelog-date scan does it: a multi-line invocation
+ * otherwise looks like fragments, none of which carries the flag.
  *
  * @param source - The file's path and contents.
  * @returns The publish invocations found, in file order.
@@ -588,21 +193,33 @@ export function publishInvocationsIn(source: SourceFile): PublishInvocation[] {
   const raw = source.file.endsWith("package.json") ? manifestCommandLines(source.text) : source.text;
   const text = joinContinuations(raw);
   const arrays = bashArrays(text);
+  const expanded = text
+    .split("\n")
+    .map((line) => expandArrays(line, arrays))
+    .join("\n");
   const found: PublishInvocation[] = [];
-  for (const rawLine of text.split("\n")) {
-    if (/^\s*#/.test(rawLine)) continue;
-    // A line-level prefilter has to be at least as permissive as the judgement
-    // below, or it discards the very commands that judgement exists to catch.
-    if (!/\bnpm\b/.test(rawLine) || !/\bpublish\b/.test(rawLine)) continue;
-    const expanded = expandArrays(rawLine, arrays);
-    const segments = resolveExecutorStrings(splitSegments(expanded), 2);
-    for (const rawSegment of segments) {
-      const segment = stripComment(rawSegment);
-      if (!isPublishCommand(stripQuotedSpans(segment))) continue;
-      found.push({ file: source.file, command: segment });
+  for (const command of tokenizeCommands(expanded)) {
+    const program = commandName(command);
+    if (program === undefined) continue;
+    if (program === "npm") {
+      if (isPublishCommand(command)) found.push({ file: source.file, program, command });
+      continue;
+    }
+    if (FOREIGN_PUBLISHERS.has(program) && isPublishCommand(command)) {
+      found.push({ file: source.file, program, command });
     }
   }
   return found;
+}
+
+/**
+ * Render an invocation back to a readable command for a report line.
+ *
+ * @param command - The invocation's tokens.
+ * @returns The command as a single space-separated string.
+ */
+export function renderCommand(command: ShellCommand): string {
+  return command.map((token) => token.value).join(" ").slice(0, 160);
 }
 
 /**
@@ -611,6 +228,12 @@ export function publishInvocationsIn(source: SourceFile): PublishInvocation[] {
  * An absent invocation is a failure rather than a pass: a scan that finds
  * nothing has either been pointed at the wrong files or outlived the workflow
  * it guards, and both look identical to a clean result unless said out loud.
+ *
+ * A publisher other than npm fails outright rather than being checked for a
+ * flag. This repository's attested path is npm's `--provenance`; no equivalent
+ * is configured for yarn, pnpm or bun, so such an invocation is an unattested
+ * publish path regardless of the flags it carries, and guessing at another
+ * tool's spelling would be a gate that only looked strict.
  *
  * @param sources - The tracked files to scan.
  * @returns Failures and per-file notes.
@@ -622,11 +245,17 @@ export function auditPublishAttestation(sources: SourceFile[]): VerifierResult {
   for (const invocation of invocations) {
     const tally = counted.get(invocation.file) ?? { total: 0, unflagged: 0 };
     tally.total += 1;
-    if (!attestationEnabled(invocation.command)) {
+    if (invocation.program !== "npm") {
+      tally.unflagged += 1;
+      failures.push(
+        `${invocation.file}: \`${invocation.program} publish\` is a publish path with no attested`
+        + ` equivalent configured in this repository: ${renderCommand(invocation.command)}`,
+      );
+    } else if (!attestationEnabled(invocation.command)) {
       tally.unflagged += 1;
       failures.push(
         `${invocation.file}: a publish invocation does not enable ${ATTESTATION_FLAG}, so it would`
-        + ` publish an unattested artifact: ${invocation.command.trim().slice(0, 160)}`,
+        + ` publish an unattested artifact: ${renderCommand(invocation.command)}`,
       );
     }
     counted.set(invocation.file, tally);
@@ -643,20 +272,81 @@ export function auditPublishAttestation(sources: SourceFile[]): VerifierResult {
 }
 
 /**
+ * Decide whether a tracked path can run a command.
+ *
+ * The previous enumeration named two paths -- `.github/workflows` and
+ * `package.json` -- which meant a publish added to any tracked script was never
+ * audited, and because the workflow's own attested publish satisfied the
+ * non-vacuity check the gate still reported that every invocation was attested.
+ * Auditing every shape that can execute closes that, and a shebang is honoured
+ * so an extensionless tracked script is not a blind spot either.
+ *
+ * Build output is excluded. `dist/` is generated from sources this scan already
+ * reads, it is regenerated and compared byte-for-byte on the release path, and
+ * including it would audit a bundled copy of a command rather than the command.
+ *
+ * @param path - Repository-relative path.
+ * @param firstLine - The file's first line, for shebang detection.
+ * @returns True when the file should be scanned.
+ */
+export function isExecutableSource(path: string, firstLine: string): boolean {
+  if (GENERATED_PREFIXES.some((prefix) => path.startsWith(prefix))) return false;
+  if (firstLine.startsWith("#!")) return true;
+  return EXECUTABLE_PATHS.some((pattern) => pattern.test(path));
+}
+
+/**
+ * Read the first two bytes of a file, or nothing when it cannot be read.
+ *
+ * Only a shebang is being looked for, so the whole file is never loaded --
+ * `git ls-files` can name a large tracked asset, and this runs once per
+ * candidate. A tracked path that cannot be opened at all (a dangling symlink,
+ * a file removed from the working tree but still in the index) is not a
+ * publish path and must not take the gate down; it reads as empty.
+ *
+ * The handle is closed by an inner `finally` rather than one wrapping the
+ * catch, so there is no unreachable fall-through for the coverage gate to
+ * report as an untested branch.
+ *
+ * @param file - Absolute path to read.
+ * @returns The first two bytes as text, or an empty string.
+ */
+function firstBytes(file: string): string {
+  try {
+    const handle = openSync(file, "r");
+    try {
+      const buffer = Buffer.alloc(2);
+      readSync(handle, buffer, 0, 2, 0);
+      return buffer.toString("utf8");
+    } finally {
+      closeSync(handle);
+    }
+  } catch {
+    return "";
+  }
+}
+
+/**
  * List the tracked files that can run a publish.
  *
  * Git is asked rather than the filesystem walked, so an untracked scratch copy
- * of a workflow cannot satisfy or fail the gate.
+ * of a workflow cannot satisfy or fail the gate. `-z` is used because a tracked
+ * path may legally contain a newline, and splitting such a listing on newlines
+ * invents two paths that do not exist and drops the one that does.
  *
  * @param root - Repository root.
- * @returns Repository-relative paths of workflow and manifest files.
+ * @returns Repository-relative paths of every tracked file that can execute.
  */
 export function trackedPublishSources(root: string): string[] {
-  const listed = execFileSync("git", ["ls-files", ".github/workflows", "package.json"], {
+  const listed = execFileSync("git", ["ls-files", "-z"], {
     cwd: root,
     encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
   });
-  return listed.split("\n").filter((line) => line.trim().length > 0);
+  return listed
+    .split("\0")
+    .filter((path) => path.length > 0)
+    .filter((path) => isExecutableSource(path, firstBytes(resolve(root, path))));
 }
 
 /**
