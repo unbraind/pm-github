@@ -567,10 +567,10 @@ export function bashArrays(text: string): Map<string, string> {
  */
 export function shellScalars(text: string): Map<string, string> {
   const scalars = new Map<string, string>();
-  for (const match of text.matchAll(/(?:^|[\s;&|])([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"\n]*)"|'([^'\n]*)')/g)) {
-    // The alternation guarantees exactly one of the two value groups matched,
-    // so there is no third case to fall back to.
-    const value = match[2] ?? match[3]!;
+  for (const match of text.matchAll(/(?:^|[\s;&|])([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"\n]*)"|'([^'\n]*)'|([^\s;&|"'`$()]+))/g)) {
+    // The alternation guarantees exactly one of the three value groups matched,
+    // so there is no fourth case to fall back to.
+    const value = match[2] ?? match[3] ?? match[4]!;
     // Only a plain literal is inlined. A value carrying a substitution, a
     // backtick, or a quote of its own changes how the line it lands in parses:
     // inlining `pkg_name="$(node -p …)"` injects an unbalanced parenthesis into

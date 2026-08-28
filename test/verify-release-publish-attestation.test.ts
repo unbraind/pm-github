@@ -641,7 +641,7 @@ test("a command held in a scalar is expanded, so the assignment is where the pub
   const scalars = shellScalars('CMD="npm publish"\nOTHER=\'npm publish --provenance\'\nBARE=npm\n');
   assert.equal(scalars.get("CMD"), "npm publish");
   assert.equal(scalars.get("OTHER"), "npm publish --provenance");
-  assert.equal(scalars.get("BARE"), undefined, "an unquoted value cannot hold a command");
+  assert.equal(scalars.get("BARE"), "npm", "an unquoted single-word value can hold a command name");
   assert.equal(expandScalars("$CMD", scalars), "npm publish");
   assert.equal(expandScalars("${CMD}", scalars), "npm publish");
   assert.equal(expandScalars("$UNKNOWN", scalars), "$UNKNOWN", "an unknown name is left in place, not erased");
@@ -774,4 +774,23 @@ test("a substitution's quote state does not leak across its lines", () => {
   const found = publishInvocationsIn({ file: "release.yml", text }).map((i) => renderCommand(i.command));
   assert.ok(found.includes("npm publish"), "the publish inside the substitution is still found");
   assert.ok(found.includes("npm publish --provenance"), "and the one after it is not swallowed");
+});
+
+test("a publish routed through an unquoted scalar is audited, not hidden by an attested sibling", () => {
+  // `NPM=npm` was skipped because only quoted assignments were indexed, so
+  // `$NPM publish` resolved to nothing and was never recognised as a publish.
+  // The workflow's own legitimate publish then satisfied the non-vacuity check
+  // and the whole audit reported a clean pass -- the gate was blind rather than
+  // wrong, which is the failure mode that gets a gate trusted while it is not
+  // looking. Only the variable-routed invocation may fail here.
+  const result = auditPublishAttestation([{
+    file: "release.yml",
+    text: [
+      `          npm publish --access public ${ATTESTATION_FLAG}`,
+      "          NPM=npm",
+      "          $NPM publish --access public",
+    ].join("\n"),
+  }]);
+  assert.equal(result.failures.length, 1, "the variable-routed publish must be audited");
+  assert.match(result.failures[0]!, /does not enable --provenance/);
 });

@@ -1,0 +1,13 @@
+id: pm-github-tko1
+title: The publish-attestation gate misses a publish routed through an unquoted shell variable
+description: ""
+type: Issue
+status: open
+priority: 1
+tags: []
+created_at: "2026-08-28T22:09:55.294Z"
+updated_at: "2026-08-28T22:09:57.974Z"
+author: claude
+notes[1]{created_at,author,text}:
+  "2026-08-28T22:09:57.888Z",codex,"author=claude\ncreated_at=now\ntext=shellScalars indexed only quoted assignments, so a bare NPM=npm was never recorded. expandScalars then left $NPM unresolved, tokenizeCommands saw a program named \"$NPM\" rather than npm, and the line was not recognised as a publish at all. Because the workflow's own legitimate attested publish still satisfied the non-vacuity guard, auditPublishAttestation returned zero failures and the gate reported a clean pass over a workflow containing an unattested publish. The gate was blind rather than wrong, which is the failure mode that keeps a gate trusted while it is not looking.\n\nMeasured behaviourally across the fleet rather than by reading the sources, by importing each repository's own verify-release-publish-attestation.ts and auditing a fixture holding one attested publish plus one variable-routed unattested publish. 12 of 17 repositories returned failures=0: pm-graph, pm-starter, pm-csv, pm-context, pm-web, pm-presets, pm-ts-starter, pm-todos, pm-linear, pm-brief, pm-github and pm-slack-standup. 5 already caught it: pm-jira, pm-beads, pm-ops, pm-slack and pm-gantt-chart.\n\nFix: shellScalars accepts a third alternative for an unquoted single-word value, matching what pm-jira already carries. The existing guard that refuses to inline a value containing a substitution, backtick, quote or parenthesis is unchanged, so a value that would change how its line parses is still never inlined.\n\nThe regression test asserts the audit-level property rather than the map contents, so it fails for the reason the gate exists: with the fix reverted it reports failures=0 where 1 is required. The neighbouring assertion that an unquoted value cannot hold a command encoded the old behaviour as intentional and was updated to match, exactly as pm-jira updated it.\n\nThis is the fifth time this class of bypass has been fixed in one vendored copy while the others stayed exposed. The root cause is that the verifier is vendored into every package instead of being consumed from pm-ops; that is tracked in the companion repository as pm-cli-website-bunt."
+body: ""
