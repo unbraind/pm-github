@@ -373,3 +373,34 @@ test("a two-word runner is consumed only when its second word matches", () => {
   assert.equal(result.failures.length, 1);
   assert.match(result.failures[0]!, /does not enable --provenance/);
 });
+
+test("a shell string handed over through a combined short-option cluster is still inspected", () => {
+  // POSIX shells accept `bash -ec "..."` and `bash -euc "..."`, which run the
+  // string exactly as `bash -c "..."` does. Matching `-c` as a whole token let
+  // those spellings hand a string to an interpreter the scan then declined to
+  // look inside: the unattested publish in the string was never examined, while
+  // the ordinary attested publish still satisfied the non-vacuity guard, so the
+  // gate reported clean over an unattested publish.
+  for (const handoff of ["bash -ec", "bash -euc", "sh -ec", "bash -eu -c", "bash -c", "sh -xc"]) {
+    const result = auditPublishAttestation([
+      { file: "release.yml", text: `          ${ATTESTED}\n          ${handoff} "${UNATTESTED}"` },
+    ]);
+    assert.equal(result.failures.length, 1, `${handoff} must hand its string to the scan`);
+    assert.match(result.failures[0]!, /does not enable --provenance/);
+  }
+});
+
+test("a combined short-option cluster carrying an attested publish still passes", () => {
+  const result = auditPublishAttestation([{ file: "release.yml", text: `          bash -ec "${ATTESTED}"` }]);
+  assert.deepEqual(result.failures, []);
+});
+
+test("a long option is not read as a cluster of short flags", () => {
+  // `--command` contains a `c`, but it is not `-c`. Treating a `--`-prefixed
+  // token as a short-flag cluster would make any long option hand its quoted
+  // arguments to the scan as if they were shell commands.
+  const result = auditPublishAttestation([
+    { file: "release.yml", text: `          ${ATTESTED}\n          echo --command "${UNATTESTED}"` },
+  ]);
+  assert.deepEqual(result.failures, [], "prose behind a long option is not an invocation");
+});

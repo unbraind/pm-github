@@ -371,6 +371,16 @@ function unquoteText(text: string): string {
  * is resolved with bounded depth, because a string may itself invoke an
  * executor and the scan must still terminate.
  *
+ * `-c` is detected inside a short-option cluster, not only as a whole token.
+ * POSIX shells accept `bash -ec "..."` and `bash -euc "..."`, which run the
+ * string exactly as `bash -c "..."` does. Matching the token exactly let those
+ * spellings hand a string to an interpreter that this function then declined to
+ * look inside, so an unattested publish in the string was never examined while
+ * the workflow's ordinary attested publish still satisfied the non-vacuity
+ * guard - the gate reported clean. Long options are excluded deliberately:
+ * `--command` is not `-c`, and treating a `--`-prefixed token as a cluster of
+ * short flags would misread it.
+ *
  * @param segments - The pending segment list.
  * @param depth - How many executor hand-offs may still be resolved.
  * @returns The segments plus any executor-resolved ones.
@@ -392,7 +402,13 @@ function resolveExecutorStrings(segments: string[], depth: number): string[] {
       }
       continue;
     }
-    if (/^(bash|sh|zsh|dash)$/.test(executable) && tokens.slice(executableAt + 1).some((token) => unquoteToken(token) === "-c")) {
+    const carriesDashC = (token: string): boolean => {
+      const bare = unquoteToken(token);
+      // A single `-` prefix only: `--command` is a long option, not a cluster
+      // of short flags that happens to contain `c`.
+      return /^-[A-Za-z]*c[A-Za-z]*$/.test(bare);
+    };
+    if (/^(bash|sh|zsh|dash)$/.test(executable) && tokens.slice(executableAt + 1).some(carriesDashC)) {
       for (const span of quotedSpanContents(text)) {
         if (span.trim().length > 0) {
           out.push(span);
