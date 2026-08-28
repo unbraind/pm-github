@@ -6,7 +6,7 @@ status: open
 priority: 0
 tags[4]: "area:gates","area:release","area:supply-chain","type:defect"
 created_at: "2026-08-28T12:38:36.013Z"
-updated_at: "2026-08-28T12:52:01.213Z"
+updated_at: "2026-08-28T20:48:39.553Z"
 author: claude
 acceptance_criteria: "npx, bunx, pnpx and the two-word pnpm dlx, yarn dlx, npm exec and bun x forms are all judged as publishes; a runner-prefixed publish that does carry the attestation flag still passes; the two-word runners are consumed only when the second word matches so a plain npm publish is unaffected; and reverting the skip-list change makes the new tests fail."
 risk: critical
@@ -16,8 +16,13 @@ expected_result: "A publish is judged on what it does, not on how it is spelled,
 actual_result: "A runner-prefixed publish was not recognised as a publish, was never checked, and left the gate reporting clean."
 component: scripts/verify-release-publish-attestation.ts executableIndex
 customer_impact: "A release could publish an unattested artifact while every gate reported green, defeating the supply-chain guarantee the gate exists to provide."
-comments[1]{created_at,author,text}:
+comments[2]{created_at,author,text}:
   "2026-08-28T12:52:01.213Z",claude,"A second bypass of the same class, raised by Greptile on PR 57 and confirmed: a shell string handed over through a combined short-option cluster was never inspected. POSIX shells accept bash -ec and bash -euc, which run the string exactly as bash -c does, but the executor resolver matched -c as a whole token only. Measured before the fix: bash -c is caught, while bash -ec, bash -euc and sh -ec all read as clean over an unattested publish, because the workflow's ordinary attested publish still satisfies the non-vacuity guard. The resolver now recognises -c inside a single-dash short-option cluster, and excludes long options deliberately so that --command is not misread as a cluster containing c. Reverting the change fails two of the thirty-two cases."
+  "2026-08-28T20:48:39.523Z",pi-agent,Verified pull request 57 before merge. Its required CI checks are green and review threads are resolved. The published gate and its package-runner regression coverage are present on the current head.
+notes[1]{created_at,author,text}:
+  "2026-08-28T20:48:39.523Z",pi-agent,"Local verification passed: npm test, npm run release:check, npm run changelog:full, npm run changelog:check, and pinned pm health --strict-exit. npm run lint is unavailable because package.json has no lint script."
+tests[1]{command,scope,timeout_seconds,note}:
+  "npm run release:check",project,300,full release gate for pull request 57
 docs[2]{path,scope,note}:
   scripts/verify-release-publish-attestation.ts,project,executableIndex now skips package runners before choosing the executable
   test/verify-release-publish-attestation.test.ts,project,regression cases for every runner spelling plus the attested-runner and two-word-runner mirrors
