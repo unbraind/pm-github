@@ -824,11 +824,17 @@ test("assignment-shaped heredoc content cannot attest a later publish", () => {
 
 test("an assignment-only list persists every literal binding", () => {
   assert.equal(shellScalars("NPM=npm UNUSED=x\n").get("NPM"), "npm");
-  const result = auditPublishAttestation([{
-    file: "release.yml",
-    text: "NPM=npm UNUSED=x\n$NPM publish\nnpm publish --provenance\n",
-  }]);
-  assert.equal(result.failures.length, 1, "the publish routed through the first binding is audited");
+  assert.equal(shellScalars("NPM=npm UNUSED=x$(printf y)\n").get("NPM"), "npm",
+    "a later dynamic binding does not discard an earlier literal binding");
+  assert.equal(shellScalars("NPM=npm UNUSED=x$(printf y) echo no\n").get("NPM"), undefined,
+    "a command after the bindings makes all of them temporary");
+  for (const assignment of ["NPM=npm UNUSED=x", "NPM=npm UNUSED=x$(printf y)"]) {
+    const result = auditPublishAttestation([{
+      file: "release.yml",
+      text: `${assignment}\n$NPM publish\nnpm publish --provenance\n`,
+    }]);
+    assert.equal(result.failures.length, 1, "the publish routed through the first binding is audited");
+  }
 });
 
 test("an assignment the shell never makes is not indexed", () => {

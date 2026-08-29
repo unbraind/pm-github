@@ -558,20 +558,31 @@ export function bashArrays(text: string): Map<string, string> {
 const LITERAL_ASSIGNMENT =
   /^(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)=(?:"((?:\\.|[^"\\$`])*)"|'([^']*)'|((?:\\.|[^\s;&|"'`$()\\])+))/;
 
+/** True when the line's outer command consists only of assignment words. */
+function isAssignmentOnlyLine(line: string): boolean {
+  const outer = tokenizeCommands(line)[0];
+  if (outer === undefined) return false;
+  const words = outer[0]?.value === "export" ? outer.slice(1) : outer;
+  return words.length > 0 && words.every((token) =>
+    !token.startsQuoted && /^[A-Za-z_][A-Za-z0-9_]*=/.test(token.value));
+}
+
 /** Parse every persistent literal binding at the start of one physical line. */
 function scalarAssignments(line: string): Array<[string, string]> {
   const assignments: Array<[string, string]> = [];
   let rest = line.replace(/^[ \t]*/, "");
   while (true) {
     const assignment = LITERAL_ASSIGNMENT.exec(rest);
-    if (assignment === null) return [];
+    if (assignment === null) return assignments.length > 0 && isAssignmentOnlyLine(line) ? assignments : [];
     const raw = assignment[2] ?? assignment[3] ?? assignment[4]!;
     const value = assignment[3] === undefined ? raw.replace(/\\(.)/g, "$1") : raw;
-    if (/[$`"'()]/.test(value)) return [];
+    if (/[$`"'()]/.test(value)) return assignments.length > 0 && isAssignmentOnlyLine(line) ? assignments : [];
     assignments.push([assignment[1]!, value]);
     rest = rest.slice(assignment[0].length).replace(/^[ \t]*/, "");
     if (/^(?:[;#]|\r?$)/.test(rest)) return assignments;
-    if (!/^(?:export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=/.test(rest)) return [];
+    if (!/^(?:export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=/.test(rest)) {
+      return isAssignmentOnlyLine(line) ? assignments.slice(0, -1) : [];
+    }
   }
 }
 
