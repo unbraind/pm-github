@@ -961,6 +961,8 @@ test("a scalar is taken only from a line that is exactly one literal assignment"
   // Both leaks were false passes end to end, not merely wrong map entries.
   for (const text of [
     ["          FLAG=--provenance | cat", "          npm publish --access public $FLAG"],
+    ["          FLAG=--provenance |& cat", "          npm publish --access public $FLAG"],
+    ["          false && FLAG=--provenance", "          npm publish --access public $FLAG"],
     ["          FLAG=--provenance &", "          npm publish --access public $FLAG"],
     ["          # ignored; FLAG=--provenance", "          npm publish --access public $FLAG"],
     ["          FLAG=--provenance some-command", "          npm publish --access public $FLAG"],

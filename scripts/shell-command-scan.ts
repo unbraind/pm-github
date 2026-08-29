@@ -560,7 +560,7 @@ const LITERAL_ASSIGNMENT =
 
 /** True when the line's outer command consists only of assignment words. */
 function isAssignmentOnlyLine(line: string): boolean {
-  if (/(^|[^|&])(?:\||&)(?![|&])/.test(line)) return false;
+  if (/\|&|(^|[^|&])(?:\||&)(?![|&])/.test(line)) return false;
   const parsed = tokenizeCommands(line)[0];
   if (parsed === undefined) return false;
   const outer = withoutRedirections(parsed);
@@ -778,8 +778,15 @@ export function expandShellScalars(text: string): string {
       if (candidate.replace(/\r$/, "") === heredoc.delimiter) heredocs.shift();
       return line;
     }
+    let conditional = false;
     const expanded = shellSegments(line).map((segment) => {
-      for (const [name, value] of scalarAssignments(segment)) scalars.set(name, value);
+      if (segment === "&&" || segment === "||") {
+        conditional = true;
+        return segment;
+      }
+      if (!conditional) {
+        for (const [name, value] of scalarAssignments(segment)) scalars.set(name, value);
+      }
       return expandScalars(segment, scalars);
     }).join("");
     heredocs.push(...heredocTerminators(line));
