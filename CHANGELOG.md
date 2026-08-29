@@ -6,6 +6,11 @@
 
 - Validate pm CLI development dependency bump ([pm-github-j8zh](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-j8zh.toon))
 - The publish-attestation gate misses a publish routed through an unquoted shell variable ([pm-github-tko1](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-tko1.toon))
+
+## 2026.8.29 - 2026-08-29
+
+### Fixed
+
 - True round-trip GitHub sync: search provider, validate diagnostics, safe-by-default export, fix activation ([pm-github-9dqy](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-9dqy.toon))
 - A failed provenance publish silently falls back to an unattested one ([pm-github-i5b8](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-i5b8.toon))
 - Fix release publish ordering ahead of protected main push ([pm-github-v2kt](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-v2kt.toon))
