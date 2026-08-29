@@ -691,7 +691,7 @@ function heredocTerminators(line: string): Array<{ delimiter: string; stripTabs:
     if (quote !== undefined) {
       while (cursor < line.length && line[cursor] !== quote) cursor += 1;
     } else {
-      while (cursor < line.length && /[A-Za-z0-9_]/.test(line[cursor]!)) cursor += 1;
+      while (cursor < line.length && /[^\s;&|<>()]/.test(line[cursor]!)) cursor += 1;
     }
     if (cursor > start && (quote === undefined || line[cursor] === quote)) {
       found.push({ delimiter: line.slice(start, cursor), stripTabs });

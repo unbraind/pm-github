@@ -835,6 +835,12 @@ test("assignment-shaped heredoc content cannot attest a later publish", () => {
   }]);
   assert.equal(result.failures.length, 1, "the heredoc body is data, not a shell binding");
 
+  const punctuated = auditPublishAttestation([{
+    file: "release.yml",
+    text: "cat <<EOF-1\nEOF\nFLAG=--provenance\nEOF-1\nnpm publish $FLAG\nnpm publish --provenance\n",
+  }]);
+  assert.equal(punctuated.failures.length, 1, "a punctuated delimiter is not truncated");
+
   const multiple = auditPublishAttestation([{
     file: "release.yml",
     text: "cat <<ONE <<TWO\nfirst\nONE\nFLAG=--provenance\nTWO\nnpm publish $FLAG\nnpm publish --provenance\n",
