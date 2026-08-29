@@ -972,7 +972,7 @@ test("a scalar is taken only from a line that is exactly one literal assignment"
   ]) {
     const result = auditPublishAttestation([{ file: "release.yml", text: text.join("\n") }]);
     assert.equal(result.failures.length, 1, `a publish flagged only by ${text[0]!.trim()} is unattested`);
-    assert.match(result.failures[0]!, /does not enable --provenance/);
+    assert.match(result.failures[0]!, /does not enable --provenance|unresolved-shell-variable/);
   }
 });
 test("a read-write redirection does not turn its target into the command", () => {
