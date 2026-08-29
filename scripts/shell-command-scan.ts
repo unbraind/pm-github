@@ -343,14 +343,18 @@ export function tokenizeCommands(text: string, depth = 0): ShellCommand[] {
  * `> /dev/null npm publish` runs npm. A scan that reads words in order sees `>`
  * as the program and audits nothing. The forms accepted here are the ones a
  * workflow actually writes: the plain operators, a file-descriptor prefix
- * (`2>`, `2>>`), and the duplicating forms (`>&`, `2>&1`, `&>`).
+ * (`2>`, `2>>`), the duplicating forms (`>&`, `2>&1`, `&>`), and the read-write
+ * form `<>`. `<>` has to be named explicitly: it is not `<` followed by `>`, so
+ * without it the operator was read as a joined redirection that consumes no
+ * target, its target `/dev/null` became the command word, and the real
+ * `npm publish` after it was never audited.
  *
  * @param token - One command word.
  * @returns True when the word is a redirection operator.
  */
 function isRedirection(token: ShellToken): boolean {
   if (token.startsQuoted) return false;
-  return /^(?:[0-9]*(?:>>?|<<?<?)&?[0-9-]*|&>>?)$/.test(token.value);
+  return /^(?:[0-9]*(?:>>?|<>|<<?<?)&?[0-9-]*|&>>?)$/.test(token.value);
 }
 
 /**
@@ -550,37 +554,244 @@ export function bashArrays(text: string): Map<string, string> {
   return arrays;
 }
 
+/** One literal assignment at the current position in an assignment-only command. */
+const LITERAL_ASSIGNMENT =
+  /^(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)=(?:"((?:\\.|[^"\\$`])*)"|'([^']*)'|((?:\\.|[^\s;&|"'`$()\\])+))/;
+
+/** True when the line's outer command consists only of assignment words. */
+function isAssignmentOnlyLine(line: string): boolean {
+  if (/\|&|(^|[^|&])(?:\||&)(?![|&])/.test(line)) return false;
+  const parsed = tokenizeCommands(line)[0];
+  if (parsed === undefined) return false;
+  const outer = withoutRedirections(parsed);
+  const words = outer[0]?.value === "export" ? outer.slice(1) : outer;
+  return words.length > 0 && words.every((token) =>
+    !token.startsQuoted && /^[A-Za-z_][A-Za-z0-9_]*=/.test(token.value));
+}
+
+/** Length of the first raw shell word, including quoted substitutions. */
+function shellWordLength(text: string): number {
+  let single = false;
+  let double = false;
+  let depth = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]!;
+    if (char === "\\" && !single) {
+      index += 1;
+      continue;
+    }
+    if (char === "'" && !double) single = !single;
+    else if (char === '"' && !single) double = !double;
+    else if (!single && char === "$" && text[index + 1] === "(") {
+      depth += 1;
+      index += 1;
+    } else if (!single && char === ")" && depth > 0) depth -= 1;
+    else if (!single && !double && depth === 0 && /\s/.test(char)) return index;
+  }
+  return text.length;
+}
+
+/** Parse every persistent literal binding at the start of one physical line. */
+function scalarAssignments(line: string): Array<[string, string]> {
+  const assignments: Array<[string, string]> = [];
+  const assignmentOnly = isAssignmentOnlyLine(line);
+  let rest = line.replace(/^[ \t]*/, "");
+  if (/^(?:export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=\(/.test(rest)) return [];
+  while (rest.length > 0) {
+    if (/^(?:[;#]|\r?$)/.test(rest)) return assignments;
+    if (/^(?:\d*)?(?:<>|>>?|<)/.test(rest)) return assignmentOnly ? assignments : [];
+    const assignment = LITERAL_ASSIGNMENT.exec(rest);
+    if (assignment === null) {
+      if (!assignmentOnly) return [];
+      rest = rest.slice(shellWordLength(rest)).replace(/^[ \t]*/, "");
+      continue;
+    }
+    const after = rest.slice(assignment[0].length);
+    const boundary = after.length === 0 || /^[ \t\r;#]/.test(after);
+    if (!boundary) {
+      if (!assignmentOnly) return [];
+      rest = rest.slice(shellWordLength(rest)).replace(/^[ \t]*/, "");
+      continue;
+    }
+    const raw = assignment[2] ?? assignment[3] ?? assignment[4]!;
+    const value = assignment[3] === undefined ? raw.replace(/\\(.)/g, "$1") : raw;
+    if (!/[$`"'()]/.test(value)) assignments.push([assignment[1]!, value]);
+    rest = after.replace(/^[ \t]*/, "");
+  }
+  return assignments;
+}
+
+/** Split one line at unquoted top-level sequencing operators, retaining them. */
+function shellSegments(line: string): string[] {
+  const segments: string[] = [];
+  let start = 0;
+  let single = false;
+  let double = false;
+  let depth = 0;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index]!;
+    if (char === "\\" && !single) index += 1;
+    else if (char === "'" && !double) single = !single;
+    else if (char === '"' && !single) double = !double;
+    else if (!single && char === "$" && line[index + 1] === "(") {
+      depth += 1;
+      index += 1;
+    } else if (!single && char === ")" && depth > 0) depth -= 1;
+    else if (!single && !double && depth === 0 && char === "#" &&
+      (index === 0 || /\s/.test(line[index - 1]!))) break;
+    else if (!single && !double && depth === 0 && (char === ";" ||
+      ((char === "&" || char === "|") && line[index + 1] === char))) {
+      const width = char === ";" ? 1 : 2;
+      segments.push(line.slice(start, index), line.slice(index, index + width));
+      start = index + width;
+      index += width - 1;
+    }
+  }
+  segments.push(line.slice(start));
+  return segments;
+}
+
+/** Return every syntactic, unquoted heredoc terminator opened on a command line. */
+function heredocTerminators(line: string): Array<{ delimiter: string; stripTabs: boolean }> {
+  const found: Array<{ delimiter: string; stripTabs: boolean }> = [];
+  let single = false;
+  let double = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index]!;
+    if (char === "\\" && !single) {
+      index += 1;
+      continue;
+    }
+    if (char === "'" && !double) {
+      single = !single;
+      continue;
+    }
+    if (!single && ((char === "$" && line[index + 1] === "(" && line[index + 2] === "(") ||
+      (!double && char === "(" && line[index + 1] === "("))) {
+      const close = line.indexOf("))", index + (char === "$" ? 3 : 2));
+      if (close !== -1) index = close + 1;
+      continue;
+    }
+    if (double && char === "$" && line[index + 1] === "(") {
+      found.push(...heredocTerminators(line.slice(index + 2)));
+    }
+    if (char === '"' && !single) {
+      double = !double;
+      continue;
+    }
+    if (single || double) continue;
+    if (char === "#" && (index === 0 || /\s/.test(line[index - 1]!))) return found;
+    if (char !== "<" || line[index + 1] !== "<" || line[index + 2] === "<") continue;
+    let cursor = index + 2;
+    const stripTabs = line[cursor] === "-";
+    if (stripTabs) cursor += 1;
+    while (line[cursor] === " " || line[cursor] === "\t") cursor += 1;
+    const quote = line[cursor] === "'" || line[cursor] === '"' ? line[cursor++] : undefined;
+    const start = cursor;
+    if (quote !== undefined) {
+      while (cursor < line.length && line[cursor] !== quote) cursor += 1;
+    } else {
+      while (cursor < line.length && /[^\s;&|<>()]/.test(line[cursor]!)) cursor += 1;
+    }
+    if (cursor > start && (quote === undefined || line[cursor] === quote)) {
+      found.push({ delimiter: line.slice(start, cursor), stripTabs });
+      index = cursor;
+    }
+  }
+  return found;
+}
+
 /**
  * Index scalar assignments so a command held in a variable can be audited.
  *
  * `CMD="npm publish"` followed by `$CMD` runs a publish that no scan of the
  * invocation line can see, because the invocation line contains no publish. The
- * assignment is where the command actually is.
+ * assignment is where the command actually is. `NPM=npm` followed by
+ * `$NPM publish` hides one the same way, so unquoted values are indexed too.
  *
- * Only literal single- or double-quoted values are indexed. An unquoted value
- * cannot hold a space and so cannot hold a command, and a value built from
- * other variables is not resolvable without evaluating the script, which this
- * module deliberately does not do.
+ * A name is taken only where a line OPENS with an assignment-only list carrying
+ * fully literal values and holds nothing else before its end or a `;`.
+ * `NPM=npm; cmd` therefore binds, because the semicolon ends the assignment and
+ * the shell keeps it afterwards, while `NPM=npm cmd` does not, because it lasts only
+ * for the command it precedes. Requiring the line to OPEN with the assignment is
+ * what keeps a `;` inside a comment from exposing one. That single rule keeps
+ * the scan from inventing
+ * bindings the shell never makes, each of which let an unattested publish
+ * borrow a flag and pass the gate:
+ *
+ * - `# FLAG=--provenance` is a comment, and a comment is not a line that is
+ *   only an assignment.
+ * - `echo "config NPM=npm"` is a command with an argument, not an assignment.
+ * - `FLAG=--provenance some-command` binds only for that one command; the shell
+ *   does not keep it afterwards, so neither does this map.
+ * - `$(FLAG=--provenance)` binds inside a subshell that the outer shell never
+ *   sees.
+ * - `NPM=npm$SUFFIX` and `NPM=npm$(printf foo)` are not literal. The value must
+ *   match to the end of the line, so a prefix is never mistaken for the whole
+ *   value -- the mistake that let a scan analyse a different command from the
+ *   one the shell runs.
+ *
+ * `export NPM=npm`, a trailing `# comment` and a CRLF line ending are all still
+ * assignments: refusing them left `$NPM` unresolved, and an attested publish
+ * elsewhere in the file then satisfied the non-vacuity guard, so being too
+ * strict here passes an unattested publish just as being too loose does.
+ *
+ * Escapes are honoured outside single quotes, so `NPM=npm\\ publish` is one word
+ * holding a command while `CMD='"'"'a\\b'"'"' keeps its backslash as the shell does.
+ * A value that still carries a substitution, backtick, quote or parenthesis
+ * after unescaping is refused: inlining `pkg_name="$(node -p …)"` injects an
+ * unbalanced parenthesis into an unrelated command, and the scan then reports
+ * invocations that are not there while losing the one that is -- a false
+ * verdict in both directions, which is worse than not resolving the variable.
  *
  * @param text - File contents with continuations already joined.
- * @returns Variable name mapped to the literal text it holds.
+ * Heredoc bodies are data rather than commands and are skipped. Callers that
+ * expand a complete source use `expandShellScalars`, which applies each binding
+ * only to its own line and later lines, so reassignment cannot rewrite history.
+ *
+ * @returns Variable name mapped to the last literal text assigned to it.
  */
 export function shellScalars(text: string): Map<string, string> {
   const scalars = new Map<string, string>();
-  for (const match of text.matchAll(/(?:^|[\s;&|])([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"\n]*)"|'([^'\n]*)')/g)) {
-    // The alternation guarantees exactly one of the two value groups matched,
-    // so there is no third case to fall back to.
-    const value = match[2] ?? match[3]!;
-    // Only a plain literal is inlined. A value carrying a substitution, a
-    // backtick, or a quote of its own changes how the line it lands in parses:
-    // inlining `pkg_name="$(node -p …)"` injects an unbalanced parenthesis into
-    // an unrelated command, and the scan then reports invocations that are not
-    // there while losing the one that is. That is a false verdict in both
-    // directions, which is worse than not resolving the variable at all.
-    if (/[$`"'()]/.test(value)) continue;
-    scalars.set(match[1]!, value);
+  const heredocs: Array<{ delimiter: string; stripTabs: boolean }> = [];
+  for (const line of text.split("\n")) {
+    const heredoc = heredocs[0];
+    if (heredoc !== undefined) {
+      const candidate = heredoc.stripTabs ? line.replace(/^\t+/, "") : line;
+      if (candidate.replace(/\r$/, "") === heredoc.delimiter) heredocs.shift();
+      continue;
+    }
+    for (const [name, value] of scalarAssignments(line)) scalars.set(name, value);
+    heredocs.push(...heredocTerminators(line));
   }
   return scalars;
+}
+
+/** Expand scalar references using only bindings visible at each source line. */
+export function expandShellScalars(text: string): string {
+  const scalars = new Map<string, string>();
+  const heredocs: Array<{ delimiter: string; stripTabs: boolean }> = [];
+  return text.split("\n").map((line) => {
+    const heredoc = heredocs[0];
+    if (heredoc !== undefined) {
+      const candidate = heredoc.stripTabs ? line.replace(/^\t+/, "") : line;
+      if (candidate.replace(/\r$/, "") === heredoc.delimiter) heredocs.shift();
+      return line;
+    }
+    let conditional = false;
+    const expanded = shellSegments(line).map((segment) => {
+      if (segment === "&&" || segment === "||") {
+        conditional = true;
+        return segment;
+      }
+      if (!conditional) {
+        for (const [name, value] of scalarAssignments(segment)) scalars.set(name, value);
+      }
+      return expandScalars(segment, scalars);
+    }).join("");
+    heredocs.push(...heredocTerminators(line));
+    return expanded;
+  }).join("\n");
 }
 
 /**

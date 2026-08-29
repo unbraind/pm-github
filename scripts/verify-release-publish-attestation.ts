@@ -27,9 +27,8 @@ import {
   commandCandidates,
   commandName,
   expandArrays,
-  expandScalars,
+  expandShellScalars,
   joinContinuations,
-  shellScalars,
   type ShellCommand,
   type SourceFile,
   tokenizeCommands,
@@ -206,10 +205,9 @@ export function publishInvocationsIn(source: SourceFile): PublishInvocation[] {
   const raw = source.file.endsWith("package.json") ? manifestCommandLines(source.text) : source.text;
   const text = joinContinuations(raw);
   const arrays = bashArrays(text);
-  const scalars = shellScalars(text);
-  const expanded = text
+  const expanded = expandShellScalars(text)
     .split("\n")
-    .map((line) => expandScalars(expandArrays(line, arrays), scalars))
+    .map((line) => expandArrays(line, arrays))
     .join("\n");
   const found: PublishInvocation[] = [];
   for (const command of tokenizeCommands(expanded)) {
@@ -220,11 +218,15 @@ export function publishInvocationsIn(source: SourceFile): PublishInvocation[] {
     for (const candidate of commandCandidates(command)) {
       const program = commandName(candidate);
       if (program === undefined) continue;
-      if (program !== "npm" && !FOREIGN_PUBLISHERS.has(program)) continue;
       if (!isPublishCommand(candidate)) continue;
+      // A variable-routed publisher that cannot be resolved must fail closed.
+      // Treating `$NPM publish` as "not a publish" lets any unsupported shell
+      // construct turn a parser limitation into a clean attestation verdict.
+      const unresolvedPublisher = /^\$(?:\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)$/.test(program);
+      if (program !== "npm" && !FOREIGN_PUBLISHERS.has(program) && !unresolvedPublisher) continue;
       // Not de-duplicated: two identical publish lines are two invocations, and
       // collapsing them would report one of them as if the other did not exist.
-      found.push({ file: source.file, program, command: candidate });
+      found.push({ file: source.file, program: unresolvedPublisher ? "unresolved-shell-variable" : program, command: candidate });
     }
   }
   return found;
