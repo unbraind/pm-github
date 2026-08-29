@@ -560,8 +560,9 @@ const LITERAL_ASSIGNMENT =
 
 /** True when the line's outer command consists only of assignment words. */
 function isAssignmentOnlyLine(line: string): boolean {
-  const outer = tokenizeCommands(line)[0];
-  if (outer === undefined) return false;
+  const parsed = tokenizeCommands(line)[0];
+  if (parsed === undefined) return false;
+  const outer = withoutRedirections(parsed);
   const words = outer[0]?.value === "export" ? outer.slice(1) : outer;
   return words.length > 0 && words.every((token) =>
     !token.startsQuoted && /^[A-Za-z_][A-Za-z0-9_]*=/.test(token.value));
@@ -581,16 +582,49 @@ function scalarAssignments(line: string): Array<[string, string]> {
     rest = rest.slice(assignment[0].length).replace(/^[ \t]*/, "");
     if (/^(?:[;#]|\r?$)/.test(rest)) return assignments;
     if (!/^(?:export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=/.test(rest)) {
-      return isAssignmentOnlyLine(line) ? assignments.slice(0, -1) : [];
+      if (!isAssignmentOnlyLine(line)) return [];
+      return /^(?:\d*)?(?:<>|>>?|<)/.test(rest) ? assignments : assignments.slice(0, -1);
     }
   }
 }
 
-/** Return the heredoc terminator opened on a command line, if any. */
+/** Return a syntactic, unquoted heredoc terminator opened on a command line. */
 function heredocTerminator(line: string): { delimiter: string; stripTabs: boolean } | undefined {
-  const match = /<<(-?)[ \t]*(?:'([^']+)'|"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))/.exec(line);
-  if (match === null) return undefined;
-  return { delimiter: match[2] ?? match[3] ?? match[4]!, stripTabs: match[1] === "-" };
+  let single = false;
+  let double = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index]!;
+    if (char === "\\" && !single) {
+      index += 1;
+      continue;
+    }
+    if (char === "'" && !double) {
+      single = !single;
+      continue;
+    }
+    if (char === '"' && !single) {
+      double = !double;
+      continue;
+    }
+    if (single || double) continue;
+    if (char === "#" && (index === 0 || /\s/.test(line[index - 1]!))) return undefined;
+    if (char !== "<" || line[index + 1] !== "<" || line[index + 2] === "<") continue;
+    let cursor = index + 2;
+    const stripTabs = line[cursor] === "-";
+    if (stripTabs) cursor += 1;
+    while (line[cursor] === " " || line[cursor] === "\t") cursor += 1;
+    const quote = line[cursor] === "'" || line[cursor] === '"' ? line[cursor++] : undefined;
+    const start = cursor;
+    if (quote !== undefined) {
+      while (cursor < line.length && line[cursor] !== quote) cursor += 1;
+    } else {
+      while (cursor < line.length && /[A-Za-z0-9_]/.test(line[cursor]!)) cursor += 1;
+    }
+    if (cursor > start && (quote === undefined || line[cursor] === quote)) {
+      return { delimiter: line.slice(start, cursor), stripTabs };
+    }
+  }
+  return undefined;
 }
 
 /**

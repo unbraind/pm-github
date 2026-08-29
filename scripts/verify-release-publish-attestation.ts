@@ -205,10 +205,10 @@ export function publishInvocationsIn(source: SourceFile): PublishInvocation[] {
   const raw = source.file.endsWith("package.json") ? manifestCommandLines(source.text) : source.text;
   const text = joinContinuations(raw);
   const arrays = bashArrays(text);
-  const expanded = expandShellScalars(text
+  const expanded = expandShellScalars(text)
     .split("\n")
     .map((line) => expandArrays(line, arrays))
-    .join("\n"));
+    .join("\n");
   const found: PublishInvocation[] = [];
   for (const command of tokenizeCommands(expanded)) {
     // Every reading, not just the command's own: a wrapper option that takes a
