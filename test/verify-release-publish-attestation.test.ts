@@ -821,6 +821,12 @@ test("assignment-shaped heredoc content cannot attest a later publish", () => {
   }]);
   assert.equal(result.failures.length, 1, "the heredoc body is data, not a shell binding");
 
+  const nested = auditPublishAttestation([{
+    file: "release.yml",
+    text: 'value="$(cat <<EOF\nFLAG=--provenance\nEOF\n)"\nnpm publish $FLAG\nnpm publish --provenance\n',
+  }]);
+  assert.equal(nested.failures.length, 1, "a heredoc inside a quoted substitution is still data");
+
   for (const prose of ['echo "<<END"', "# <<END"]) {
     const quoted = auditPublishAttestation([{
       file: "release.yml",
@@ -849,9 +855,11 @@ test("an assignment-only list persists every literal binding", () => {
     "redirection-only assignment commands persist their bindings");
   assert.equal(shellScalars("NPM=npm UNUSED=x$(printf y)\n").get("NPM"), "npm",
     "a later dynamic binding does not discard an earlier literal binding");
+  assert.equal(shellScalars("UNUSED=x$(printf y) NPM=npm\n").get("NPM"), "npm",
+    "an earlier dynamic binding does not hide a later literal binding");
   assert.equal(shellScalars("NPM=npm UNUSED=x$(printf y) echo no\n").get("NPM"), undefined,
     "a command after the bindings makes all of them temporary");
-  for (const assignment of ["NPM=npm UNUSED=x", "NPM=npm UNUSED=x$(printf y)", "NPM=npm >/dev/null"]) {
+  for (const assignment of ["NPM=npm UNUSED=x", "NPM=npm UNUSED=x$(printf y)", "UNUSED=x$(printf y) NPM=npm", "NPM=npm >/dev/null"]) {
     const result = auditPublishAttestation([{
       file: "release.yml",
       text: `${assignment}\n$NPM publish\nnpm publish --provenance\n`,

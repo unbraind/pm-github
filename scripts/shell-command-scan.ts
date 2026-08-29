@@ -568,24 +568,55 @@ function isAssignmentOnlyLine(line: string): boolean {
     !token.startsQuoted && /^[A-Za-z_][A-Za-z0-9_]*=/.test(token.value));
 }
 
+/** Length of the first raw shell word, including quoted substitutions. */
+function shellWordLength(text: string): number {
+  let single = false;
+  let double = false;
+  let depth = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index]!;
+    if (char === "\\" && !single) {
+      index += 1;
+      continue;
+    }
+    if (char === "'" && !double) single = !single;
+    else if (char === '"' && !single) double = !double;
+    else if (!single && char === "$" && text[index + 1] === "(") {
+      depth += 1;
+      index += 1;
+    } else if (!single && char === ")" && depth > 0) depth -= 1;
+    else if (!single && !double && depth === 0 && /\s/.test(char)) return index;
+  }
+  return text.length;
+}
+
 /** Parse every persistent literal binding at the start of one physical line. */
 function scalarAssignments(line: string): Array<[string, string]> {
   const assignments: Array<[string, string]> = [];
+  const assignmentOnly = isAssignmentOnlyLine(line);
   let rest = line.replace(/^[ \t]*/, "");
-  while (true) {
+  while (rest.length > 0) {
+    if (/^(?:[;#]|\r?$)/.test(rest)) return assignments;
+    if (/^(?:\d*)?(?:<>|>>?|<)/.test(rest)) return assignmentOnly ? assignments : [];
     const assignment = LITERAL_ASSIGNMENT.exec(rest);
-    if (assignment === null) return assignments.length > 0 && isAssignmentOnlyLine(line) ? assignments : [];
+    if (assignment === null) {
+      if (!assignmentOnly) return [];
+      rest = rest.slice(shellWordLength(rest)).replace(/^[ \t]*/, "");
+      continue;
+    }
+    const after = rest.slice(assignment[0].length);
+    const boundary = after.length === 0 || /^[ \t\r;#]/.test(after);
+    if (!boundary) {
+      if (!assignmentOnly) return [];
+      rest = rest.slice(shellWordLength(rest)).replace(/^[ \t]*/, "");
+      continue;
+    }
     const raw = assignment[2] ?? assignment[3] ?? assignment[4]!;
     const value = assignment[3] === undefined ? raw.replace(/\\(.)/g, "$1") : raw;
-    if (/[$`"'()]/.test(value)) return assignments.length > 0 && isAssignmentOnlyLine(line) ? assignments : [];
-    assignments.push([assignment[1]!, value]);
-    rest = rest.slice(assignment[0].length).replace(/^[ \t]*/, "");
-    if (/^(?:[;#]|\r?$)/.test(rest)) return assignments;
-    if (!/^(?:export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=/.test(rest)) {
-      if (!isAssignmentOnlyLine(line)) return [];
-      return /^(?:\d*)?(?:<>|>>?|<)/.test(rest) ? assignments : assignments.slice(0, -1);
-    }
+    if (!/[$`"'()]/.test(value)) assignments.push([assignment[1]!, value]);
+    rest = after.replace(/^[ \t]*/, "");
   }
+  return assignments;
 }
 
 /** Return a syntactic, unquoted heredoc terminator opened on a command line. */
@@ -601,6 +632,10 @@ function heredocTerminator(line: string): { delimiter: string; stripTabs: boolea
     if (char === "'" && !double) {
       single = !single;
       continue;
+    }
+    if (double && char === "$" && line[index + 1] === "(") {
+      const nested = heredocTerminator(line.slice(index + 2));
+      if (nested !== undefined) return nested;
     }
     if (char === '"' && !single) {
       double = !double;
