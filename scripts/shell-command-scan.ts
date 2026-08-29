@@ -620,6 +620,31 @@ function scalarAssignments(line: string): Array<[string, string]> {
   return assignments;
 }
 
+/** Split one line at unquoted top-level semicolons, retaining separators. */
+function shellSegments(line: string): string[] {
+  const segments: string[] = [];
+  let start = 0;
+  let single = false;
+  let double = false;
+  let depth = 0;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index]!;
+    if (char === "\\" && !single) index += 1;
+    else if (char === "'" && !double) single = !single;
+    else if (char === '"' && !single) double = !double;
+    else if (!single && char === "$" && line[index + 1] === "(") {
+      depth += 1;
+      index += 1;
+    } else if (!single && char === ")" && depth > 0) depth -= 1;
+    else if (!single && !double && depth === 0 && char === ";") {
+      segments.push(line.slice(start, index), ";");
+      start = index + 1;
+    }
+  }
+  segments.push(line.slice(start));
+  return segments;
+}
+
 /** Return a syntactic, unquoted heredoc terminator opened on a command line. */
 function heredocTerminator(line: string): { delimiter: string; stripTabs: boolean } | undefined {
   let single = false;
@@ -632,6 +657,11 @@ function heredocTerminator(line: string): { delimiter: string; stripTabs: boolea
     }
     if (char === "'" && !double) {
       single = !single;
+      continue;
+    }
+    if (!single && char === "$" && line[index + 1] === "(" && line[index + 2] === "(") {
+      const close = line.indexOf("))", index + 3);
+      if (close !== -1) index = close + 1;
       continue;
     }
     if (double && char === "$" && line[index + 1] === "(") {
@@ -738,8 +768,10 @@ export function expandShellScalars(text: string): string {
       if (candidate.replace(/\r$/, "") === heredoc.delimiter) heredoc = undefined;
       return line;
     }
-    for (const [name, value] of scalarAssignments(line)) scalars.set(name, value);
-    const expanded = expandScalars(line, scalars);
+    const expanded = shellSegments(line).map((segment) => {
+      for (const [name, value] of scalarAssignments(segment)) scalars.set(name, value);
+      return expandScalars(segment, scalars);
+    }).join("");
     heredoc = heredocTerminator(line);
     return expanded;
   }).join("\n");

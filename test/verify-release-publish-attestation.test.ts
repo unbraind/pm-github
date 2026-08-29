@@ -806,6 +806,12 @@ test("scalar bindings are resolved at their source position", () => {
     ].join("\n"),
   }]);
   assert.equal(result.failures.length, 1, "a later reassignment cannot rewrite the earlier publish");
+
+  const sameLine = auditPublishAttestation([{
+    file: "release.yml",
+    text: "CMD='npm publish --provenance'; CMD='npm publish'; $CMD\nnpm publish --provenance\n",
+  }]);
+  assert.equal(sameLine.failures.length, 1, "same-line reassignment applies before the following command");
 });
 
 test("assignment-shaped heredoc content cannot attest a later publish", () => {
@@ -826,6 +832,12 @@ test("assignment-shaped heredoc content cannot attest a later publish", () => {
     text: 'value="$(cat <<EOF\nFLAG=--provenance\nEOF\n)"\nnpm publish $FLAG\nnpm publish --provenance\n',
   }]);
   assert.equal(nested.failures.length, 1, "a heredoc inside a quoted substitution is still data");
+
+  const arithmetic = auditPublishAttestation([{
+    file: "release.yml",
+    text: ": $((1 << 2))\nNPM=npm\n$NPM publish\nnpm publish --provenance\n",
+  }]);
+  assert.equal(arithmetic.failures.length, 1, "an arithmetic shift does not open a heredoc");
 
   for (const prose of ['echo "<<END"', "# <<END"]) {
     const quoted = auditPublishAttestation([{
