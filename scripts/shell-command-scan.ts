@@ -560,6 +560,7 @@ const LITERAL_ASSIGNMENT =
 
 /** True when the line's outer command consists only of assignment words. */
 function isAssignmentOnlyLine(line: string): boolean {
+  if (/(^|[^|&])(?:\||&)(?![|&])/.test(line)) return false;
   const parsed = tokenizeCommands(line)[0];
   if (parsed === undefined) return false;
   const outer = withoutRedirections(parsed);
@@ -620,7 +621,7 @@ function scalarAssignments(line: string): Array<[string, string]> {
   return assignments;
 }
 
-/** Split one line at unquoted top-level semicolons, retaining separators. */
+/** Split one line at unquoted top-level sequencing operators, retaining them. */
 function shellSegments(line: string): string[] {
   const segments: string[] = [];
   let start = 0;
@@ -636,17 +637,21 @@ function shellSegments(line: string): string[] {
       depth += 1;
       index += 1;
     } else if (!single && char === ")" && depth > 0) depth -= 1;
-    else if (!single && !double && depth === 0 && char === ";") {
-      segments.push(line.slice(start, index), ";");
-      start = index + 1;
+    else if (!single && !double && depth === 0 && (char === ";" ||
+      ((char === "&" || char === "|") && line[index + 1] === char))) {
+      const width = char === ";" ? 1 : 2;
+      segments.push(line.slice(start, index), line.slice(index, index + width));
+      start = index + width;
+      index += width - 1;
     }
   }
   segments.push(line.slice(start));
   return segments;
 }
 
-/** Return a syntactic, unquoted heredoc terminator opened on a command line. */
-function heredocTerminator(line: string): { delimiter: string; stripTabs: boolean } | undefined {
+/** Return every syntactic, unquoted heredoc terminator opened on a command line. */
+function heredocTerminators(line: string): Array<{ delimiter: string; stripTabs: boolean }> {
+  const found: Array<{ delimiter: string; stripTabs: boolean }> = [];
   let single = false;
   let double = false;
   for (let index = 0; index < line.length; index += 1) {
@@ -665,15 +670,14 @@ function heredocTerminator(line: string): { delimiter: string; stripTabs: boolea
       continue;
     }
     if (double && char === "$" && line[index + 1] === "(") {
-      const nested = heredocTerminator(line.slice(index + 2));
-      if (nested !== undefined) return nested;
+      found.push(...heredocTerminators(line.slice(index + 2)));
     }
     if (char === '"' && !single) {
       double = !double;
       continue;
     }
     if (single || double) continue;
-    if (char === "#" && (index === 0 || /\s/.test(line[index - 1]!))) return undefined;
+    if (char === "#" && (index === 0 || /\s/.test(line[index - 1]!))) return found;
     if (char !== "<" || line[index + 1] !== "<" || line[index + 2] === "<") continue;
     let cursor = index + 2;
     const stripTabs = line[cursor] === "-";
@@ -687,10 +691,11 @@ function heredocTerminator(line: string): { delimiter: string; stripTabs: boolea
       while (cursor < line.length && /[A-Za-z0-9_]/.test(line[cursor]!)) cursor += 1;
     }
     if (cursor > start && (quote === undefined || line[cursor] === quote)) {
-      return { delimiter: line.slice(start, cursor), stripTabs };
+      found.push({ delimiter: line.slice(start, cursor), stripTabs });
+      index = cursor;
     }
   }
-  return undefined;
+  return found;
 }
 
 /**
@@ -745,15 +750,16 @@ function heredocTerminator(line: string): { delimiter: string; stripTabs: boolea
  */
 export function shellScalars(text: string): Map<string, string> {
   const scalars = new Map<string, string>();
-  let heredoc: { delimiter: string; stripTabs: boolean } | undefined;
+  const heredocs: Array<{ delimiter: string; stripTabs: boolean }> = [];
   for (const line of text.split("\n")) {
+    const heredoc = heredocs[0];
     if (heredoc !== undefined) {
       const candidate = heredoc.stripTabs ? line.replace(/^\t+/, "") : line;
-      if (candidate.replace(/\r$/, "") === heredoc.delimiter) heredoc = undefined;
+      if (candidate.replace(/\r$/, "") === heredoc.delimiter) heredocs.shift();
       continue;
     }
     for (const [name, value] of scalarAssignments(line)) scalars.set(name, value);
-    heredoc = heredocTerminator(line);
+    heredocs.push(...heredocTerminators(line));
   }
   return scalars;
 }
@@ -761,18 +767,19 @@ export function shellScalars(text: string): Map<string, string> {
 /** Expand scalar references using only bindings visible at each source line. */
 export function expandShellScalars(text: string): string {
   const scalars = new Map<string, string>();
-  let heredoc: { delimiter: string; stripTabs: boolean } | undefined;
+  const heredocs: Array<{ delimiter: string; stripTabs: boolean }> = [];
   return text.split("\n").map((line) => {
+    const heredoc = heredocs[0];
     if (heredoc !== undefined) {
       const candidate = heredoc.stripTabs ? line.replace(/^\t+/, "") : line;
-      if (candidate.replace(/\r$/, "") === heredoc.delimiter) heredoc = undefined;
+      if (candidate.replace(/\r$/, "") === heredoc.delimiter) heredocs.shift();
       return line;
     }
     const expanded = shellSegments(line).map((segment) => {
       for (const [name, value] of scalarAssignments(segment)) scalars.set(name, value);
       return expandScalars(segment, scalars);
     }).join("");
-    heredoc = heredocTerminator(line);
+    heredocs.push(...heredocTerminators(line));
     return expanded;
   }).join("\n");
 }

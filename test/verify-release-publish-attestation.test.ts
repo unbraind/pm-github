@@ -807,6 +807,14 @@ test("scalar bindings are resolved at their source position", () => {
   }]);
   assert.equal(result.failures.length, 1, "a later reassignment cannot rewrite the earlier publish");
 
+  for (const operator of ["&&", "||"]) {
+    const controlled = auditPublishAttestation([{
+      file: "release.yml",
+      text: `NPM=npm ${operator} $NPM publish\nnpm publish --provenance\n`,
+    }]);
+    assert.equal(controlled.failures.length, 1, `${operator} preserves the assignment before the invocation`);
+  }
+
   const sameLine = auditPublishAttestation([{
     file: "release.yml",
     text: "CMD='npm publish --provenance'; CMD='npm publish'; $CMD\nnpm publish --provenance\n",
@@ -826,6 +834,12 @@ test("assignment-shaped heredoc content cannot attest a later publish", () => {
     ].join("\n"),
   }]);
   assert.equal(result.failures.length, 1, "the heredoc body is data, not a shell binding");
+
+  const multiple = auditPublishAttestation([{
+    file: "release.yml",
+    text: "cat <<ONE <<TWO\nfirst\nONE\nFLAG=--provenance\nTWO\nnpm publish $FLAG\nnpm publish --provenance\n",
+  }]);
+  assert.equal(multiple.failures.length, 1, "every heredoc body remains data");
 
   const nested = auditPublishAttestation([{
     file: "release.yml",
@@ -944,6 +958,8 @@ test("a scalar is taken only from a line that is exactly one literal assignment"
 
   // Both leaks were false passes end to end, not merely wrong map entries.
   for (const text of [
+    ["          FLAG=--provenance | cat", "          npm publish --access public $FLAG"],
+    ["          FLAG=--provenance &", "          npm publish --access public $FLAG"],
     ["          FLAG=--provenance some-command", "          npm publish --access public $FLAG"],
     ["          $(FLAG=--provenance)", "          npm publish --access public $FLAG"],
   ]) {
