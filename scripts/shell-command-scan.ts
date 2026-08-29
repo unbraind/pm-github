@@ -637,6 +637,8 @@ function shellSegments(line: string): string[] {
       depth += 1;
       index += 1;
     } else if (!single && char === ")" && depth > 0) depth -= 1;
+    else if (!single && !double && depth === 0 && char === "#" &&
+      (index === 0 || /\s/.test(line[index - 1]!))) break;
     else if (!single && !double && depth === 0 && (char === ";" ||
       ((char === "&" || char === "|") && line[index + 1] === char))) {
       const width = char === ";" ? 1 : 2;
@@ -664,8 +666,9 @@ function heredocTerminators(line: string): Array<{ delimiter: string; stripTabs:
       single = !single;
       continue;
     }
-    if (!single && char === "$" && line[index + 1] === "(" && line[index + 2] === "(") {
-      const close = line.indexOf("))", index + 3);
+    if (!single && ((char === "$" && line[index + 1] === "(" && line[index + 2] === "(") ||
+      (!double && char === "(" && line[index + 1] === "("))) {
+      const close = line.indexOf("))", index + (char === "$" ? 3 : 2));
       if (close !== -1) index = close + 1;
       continue;
     }
