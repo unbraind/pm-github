@@ -795,6 +795,42 @@ test("a publish routed through an unquoted scalar is audited, not hidden by an a
   assert.match(result.failures[0]!, /does not enable --provenance/);
 });
 
+test("scalar bindings are resolved at their source position", () => {
+  const result = auditPublishAttestation([{
+    file: "release.yml",
+    text: [
+      "NPM=npm",
+      "$NPM publish",
+      "NPM=echo",
+      "npm publish --provenance",
+    ].join("\n"),
+  }]);
+  assert.equal(result.failures.length, 1, "a later reassignment cannot rewrite the earlier publish");
+});
+
+test("assignment-shaped heredoc content cannot attest a later publish", () => {
+  const result = auditPublishAttestation([{
+    file: "release.yml",
+    text: [
+      "cat <<EOF",
+      "FLAG=--provenance",
+      "EOF",
+      "npm publish $FLAG",
+      "npm publish --provenance",
+    ].join("\n"),
+  }]);
+  assert.equal(result.failures.length, 1, "the heredoc body is data, not a shell binding");
+});
+
+test("an assignment-only list persists every literal binding", () => {
+  assert.equal(shellScalars("NPM=npm UNUSED=x\n").get("NPM"), "npm");
+  const result = auditPublishAttestation([{
+    file: "release.yml",
+    text: "NPM=npm UNUSED=x\n$NPM publish\nnpm publish --provenance\n",
+  }]);
+  assert.equal(result.failures.length, 1, "the publish routed through the first binding is audited");
+});
+
 test("an assignment the shell never makes is not indexed", () => {
   // Scalars used to be read straight out of the raw text, which indexed three
   // things the shell does not assign. The middle one is a gate bypass: a name

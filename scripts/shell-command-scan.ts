@@ -554,9 +554,33 @@ export function bashArrays(text: string): Map<string, string> {
   return arrays;
 }
 
-/** A line opening with one assignment of a fully literal value, ending there or at a `;`. */
-const STANDALONE_ASSIGNMENT =
-  /^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)=(?:"((?:\\.|[^"\\$`])*)"|'([^']*)'|((?:\\.|[^\s;&|"'`$()\\])+))[ \t]*(?:[;#]|\r?$)/;
+/** One literal assignment at the current position in an assignment-only command. */
+const LITERAL_ASSIGNMENT =
+  /^(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)=(?:"((?:\\.|[^"\\$`])*)"|'([^']*)'|((?:\\.|[^\s;&|"'`$()\\])+))/;
+
+/** Parse every persistent literal binding at the start of one physical line. */
+function scalarAssignments(line: string): Array<[string, string]> {
+  const assignments: Array<[string, string]> = [];
+  let rest = line.replace(/^[ \t]*/, "");
+  while (true) {
+    const assignment = LITERAL_ASSIGNMENT.exec(rest);
+    if (assignment === null) return [];
+    const raw = assignment[2] ?? assignment[3] ?? assignment[4]!;
+    const value = assignment[3] === undefined ? raw.replace(/\\(.)/g, "$1") : raw;
+    if (/[$`"'()]/.test(value)) return [];
+    assignments.push([assignment[1]!, value]);
+    rest = rest.slice(assignment[0].length).replace(/^[ \t]*/, "");
+    if (/^(?:[;#]|\r?$)/.test(rest)) return assignments;
+    if (!/^(?:export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=/.test(rest)) return [];
+  }
+}
+
+/** Return the heredoc terminator opened on a command line, if any. */
+function heredocTerminator(line: string): { delimiter: string; stripTabs: boolean } | undefined {
+  const match = /<<(-?)[ \t]*(?:'([^']+)'|"([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))/.exec(line);
+  if (match === null) return undefined;
+  return { delimiter: match[2] ?? match[3] ?? match[4]!, stripTabs: match[1] === "-" };
+}
 
 /**
  * Index scalar assignments so a command held in a variable can be audited.
@@ -566,10 +590,10 @@ const STANDALONE_ASSIGNMENT =
  * assignment is where the command actually is. `NPM=npm` followed by
  * `$NPM publish` hides one the same way, so unquoted values are indexed too.
  *
- * A name is taken only where a line OPENS with one assignment carrying a fully
- * literal value and holds nothing else before its end or a `;`. `NPM=npm; cmd`
- * therefore binds, because the semicolon ends the assignment and the shell keeps
- * it afterwards, while `NPM=npm cmd` does not, because that binding lasts only
+ * A name is taken only where a line OPENS with an assignment-only list carrying
+ * fully literal values and holds nothing else before its end or a `;`.
+ * `NPM=npm; cmd` therefore binds, because the semicolon ends the assignment and
+ * the shell keeps it afterwards, while `NPM=npm cmd` does not, because it lasts only
  * for the command it precedes. Requiring the line to OPEN with the assignment is
  * what keeps a `;` inside a comment from exposing one. That single rule keeps
  * the scan from inventing
@@ -602,24 +626,42 @@ const STANDALONE_ASSIGNMENT =
  * verdict in both directions, which is worse than not resolving the variable.
  *
  * @param text - File contents with continuations already joined.
- * @returns Variable name mapped to the literal text it holds.
+ * Heredoc bodies are data rather than commands and are skipped. Callers that
+ * expand a complete source use `expandShellScalars`, which applies each binding
+ * only to its own line and later lines, so reassignment cannot rewrite history.
+ *
+ * @returns Variable name mapped to the last literal text assigned to it.
  */
 export function shellScalars(text: string): Map<string, string> {
   const scalars = new Map<string, string>();
+  let heredoc: { delimiter: string; stripTabs: boolean } | undefined;
   for (const line of text.split("\n")) {
-    const assignment = STANDALONE_ASSIGNMENT.exec(line);
-    if (assignment === null) continue;
-    // Exactly one of the three value alternatives matches, so the last is the
-    // only case left rather than a fallback that could be undefined.
-    const raw = assignment[2] ?? assignment[3] ?? assignment[4]!;
-    // Single quotes make a backslash literal, so only the other two forms are
-    // unescaped. Unescaping a single-quoted value turned `'npm publish
-    // \\--provenance'` into an attested-looking command the shell never runs.
-    const value = assignment[3] === undefined ? raw.replace(/\\(.)/g, "$1") : raw;
-    if (/[$`"'()]/.test(value)) continue;
-    scalars.set(assignment[1]!, value);
+    if (heredoc !== undefined) {
+      const candidate = heredoc.stripTabs ? line.replace(/^\t+/, "") : line;
+      if (candidate.replace(/\r$/, "") === heredoc.delimiter) heredoc = undefined;
+      continue;
+    }
+    for (const [name, value] of scalarAssignments(line)) scalars.set(name, value);
+    heredoc = heredocTerminator(line);
   }
   return scalars;
+}
+
+/** Expand scalar references using only bindings visible at each source line. */
+export function expandShellScalars(text: string): string {
+  const scalars = new Map<string, string>();
+  let heredoc: { delimiter: string; stripTabs: boolean } | undefined;
+  return text.split("\n").map((line) => {
+    if (heredoc !== undefined) {
+      const candidate = heredoc.stripTabs ? line.replace(/^\t+/, "") : line;
+      if (candidate.replace(/\r$/, "") === heredoc.delimiter) heredoc = undefined;
+      return line;
+    }
+    for (const [name, value] of scalarAssignments(line)) scalars.set(name, value);
+    const expanded = expandScalars(line, scalars);
+    heredoc = heredocTerminator(line);
+    return expanded;
+  }).join("\n");
 }
 
 /**
