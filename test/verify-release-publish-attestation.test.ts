@@ -963,6 +963,8 @@ test("a scalar is taken only from a line that is exactly one literal assignment"
     ["          FLAG=--provenance | cat", "          npm publish --access public $FLAG"],
     ["          FLAG=--provenance |& cat", "          npm publish --access public $FLAG"],
     ["          false && FLAG=--provenance", "          npm publish --access public $FLAG"],
+    ["          false || NPM=npm", "          $NPM publish --access public"],
+    ["          export NPM=npm FOO", "          $NPM publish --access public"],
     ["          FLAG=--provenance &", "          npm publish --access public $FLAG"],
     ["          # ignored; FLAG=--provenance", "          npm publish --access public $FLAG"],
     ["          FLAG=--provenance some-command", "          npm publish --access public $FLAG"],
