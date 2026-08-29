@@ -857,9 +857,11 @@ test("an assignment-only list persists every literal binding", () => {
     "a later dynamic binding does not discard an earlier literal binding");
   assert.equal(shellScalars("UNUSED=x$(printf y) NPM=npm\n").get("NPM"), "npm",
     "an earlier dynamic binding does not hide a later literal binding");
+  assert.equal(shellScalars('UNUSED="$(printf y)" NPM=npm\n').get("NPM"), "npm",
+    "a quoted dynamic binding does not swallow a later literal binding");
   assert.equal(shellScalars("NPM=npm UNUSED=x$(printf y) echo no\n").get("NPM"), undefined,
     "a command after the bindings makes all of them temporary");
-  for (const assignment of ["NPM=npm UNUSED=x", "NPM=npm UNUSED=x$(printf y)", "UNUSED=x$(printf y) NPM=npm", "NPM=npm >/dev/null"]) {
+  for (const assignment of ["NPM=npm UNUSED=x", "NPM=npm UNUSED=x$(printf y)", "UNUSED=x$(printf y) NPM=npm", 'UNUSED="$(printf y)" NPM=npm', "NPM=npm >/dev/null"]) {
     const result = auditPublishAttestation([{
       file: "release.yml",
       text: `${assignment}\n$NPM publish\nnpm publish --provenance\n`,

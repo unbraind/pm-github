@@ -595,6 +595,7 @@ function scalarAssignments(line: string): Array<[string, string]> {
   const assignments: Array<[string, string]> = [];
   const assignmentOnly = isAssignmentOnlyLine(line);
   let rest = line.replace(/^[ \t]*/, "");
+  if (/^(?:export[ \t]+)?[A-Za-z_][A-Za-z0-9_]*=\(/.test(rest)) return [];
   while (rest.length > 0) {
     if (/^(?:[;#]|\r?$)/.test(rest)) return assignments;
     if (/^(?:\d*)?(?:<>|>>?|<)/.test(rest)) return assignmentOnly ? assignments : [];
