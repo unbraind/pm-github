@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Group codeql-action bumps into one pull request to end the split-PR deadlock ([pm-github-11qm](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-11qm.toon))
+
 ## 2026.8.31 - 2026-08-31
 
 ### Fixed
