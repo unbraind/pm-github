@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Security
+
+- The Link-header parser backtracks polynomially, so one hostile pagination header stalls every repository sync in the fleet ([pm-github-494f](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-494f.toon))
+
 ## 2026.9.1 - 2026-09-01
 
 ### Fixed
