@@ -285,18 +285,53 @@ test("parseNextLink extracts the rel=\"next\" page URL", () => {
 });
 
 test("parseNextLink rejects adversarial Link-header input without polynomial backtracking", () => {
-  // CodeQL witness for js/polynomial-redos: a string starting with '<'
-  // followed by many repetitions of '<=' causes the unbounded [^>]+
-  // quantifier (retried at every position by match()) to exhibit O(n²)
-  // backtracking.  Anchoring with ^ and bounding the capture to 2048
-  // characters eliminates both the multi-position scan and the
-  // unbounded single-attempt backtracking.
+  // CodeQL witness for js/polynomial-redos: a string starting with '<' followed
+  // by many repetitions of '<=' makes the unbounded [^>]+ quantifier - retried
+  // at every position by match() - do O(n²) work. Anchoring with ^ and bounding
+  // the capture to 2048 characters removes both the multi-position scan and the
+  // unbounded backtracking within a single attempt.
+  //
+  // The bound is deliberately generous rather than tight. A single cold
+  // measurement on a contended CI runner carries JIT warm-up, GC pauses,
+  // scheduler noise and coverage instrumentation, so a 50ms assertion would
+  // measure the runner as much as the code and flake on a correct fix. 2000ms
+  // cannot be reached by the linear implementation on any runner while still
+  // failing decisively against the original expression, which took 25141ms on
+  // an idle machine - a 12x margin below the defect and a 40x margin above the
+  // real cost. A bound that can flake gets raised or deleted the first time it
+  // does, which is how a regression test stops guarding anything.
+  //
+  // The scale-free half of the assertion is the ratio: doubling the witness
+  // must not quadruple the time. That is the actual claim - linear rather than
+  // polynomial growth - and it holds regardless of how fast the runner is.
   const witness = "<" + "<=".repeat(100_000);
-  const start = performance.now();
-  const result = parseNextLink(witness);
-  const elapsed = performance.now() - start;
-  assert.strictEqual(result, undefined, "adversarial input must not match");
-  assert.ok(elapsed < 50, `must return within 50 ms, took ${elapsed.toFixed(2)} ms`);
+  const doubleWitness = "<" + "<=".repeat(200_000);
+
+  parseNextLink("<https://api.github.com/x>; rel=\"next\""); // warm up the JIT and the regex
+
+  const startSingle = performance.now();
+  assert.strictEqual(parseNextLink(witness), undefined, "adversarial input must not match");
+  const single = performance.now() - startSingle;
+
+  const startDouble = performance.now();
+  assert.strictEqual(parseNextLink(doubleWitness), undefined, "adversarial input must not match");
+  const double = performance.now() - startDouble;
+
+  assert.ok(
+    single < 2000,
+    `a linear scan of a 200001-character header must not approach the quadratic cost `
+      + `(25141ms before the fix); took ${single.toFixed(2)}ms`,
+  );
+  // Guard the ratio against a near-zero denominator: below a millisecond the
+  // measurement is noise, and dividing by it would manufacture a huge ratio on
+  // an idle machine. Both timings that small already prove the point.
+  if (single >= 1) {
+    assert.ok(
+      double / single < 3,
+      `doubling the input must not multiply the time superlinearly: `
+        + `${single.toFixed(2)}ms then ${double.toFixed(2)}ms (ratio ${(double / single).toFixed(2)})`,
+    );
+  }
 });
 
 test("parseNextLink returns undefined when there is no next page", () => {
