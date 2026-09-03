@@ -576,7 +576,7 @@ export function fetchJSON(url: string, token?: string): Promise<FetchResult> {
 export function parseNextLink(linkHeader?: string): string | undefined {
   if (!linkHeader) return undefined;
   for (const part of linkHeader.split(",")) {
-    const match = part.match(/<([^>]+)>\s*;\s*rel="next"/);
+    const match = part.match(/^\s*<([^>]{1,2048})>\s*;\s*rel="next"/);
     if (match) return match[1];
   }
   return undefined;

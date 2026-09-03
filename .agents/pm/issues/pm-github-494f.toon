@@ -1,0 +1,22 @@
+id: pm-github-494f
+title: "The Link-header parser backtracks polynomially, so one hostile pagination header stalls every repository sync in the fleet"
+description: "CodeQL alert 1 reports js/polynomial-redos at index.ts line 579, in parseNextLink. The expression was part.match(/<([^>]+)>\\s*;\\s*rel=\"next\"/), and it is quadratic for two compounding reasons: match without an anchor retries the pattern at every position in the string, and the unbounded [^>]+ quantifier backtracks within each attempt. A header consisting of a single < followed by a long run of <= drives both behaviours at once.\n\nThe reachability is what makes this worth more than its severity label. parseNextLink consumes the Link response header from the GitHub API, which is remote input on every paginated request, and pm-github is the package the entire fleet uses to sync pm items with GitHub issues. A stall here is not confined to one repository: it is a stall in the sync path that every other package depends on.\n\nMeasured on a 200001-character witness: the original expression takes 25141 ms and does not return in any practical sense. Anchoring the match with ^\\s* removes the multi-position retry, and bounding the capture to {1,2048} removes the unbounded backtracking within a single attempt. The same witness returns in under 50 ms afterwards. The bound is safe for the input's real domain, because a Link header URI is a GitHub API URL and 2048 characters is well beyond any it produces, and anchoring is correct because RFC 8288 places the URI-reference first in every link-value."
+type: Issue
+status: closed
+priority: 1
+tags[1]: security
+created_at: "2026-09-03T17:45:52.494Z"
+updated_at: "2026-09-03T17:46:33.556Z"
+closed_at: "2026-09-03T17:46:07.284Z"
+completed_at: "2026-09-03T17:46:07.284Z"
+author: pi-agent
+acceptance_criteria: "The adversarial witness returns within a hard time bound rather than merely faster; the regression test fails when the original expression is restored, verified by reverting rather than asserted; and CodeQL confirms the alert closed on a scan of main rather than the alert being dismissed"
+risk: high
+comments[1]{created_at,author,text}:
+  "2026-09-03T17:46:05.903Z",codex,"Verified the regression test is non-vacuous rather than assuming it. Restored the original unanchored expression with the new test in place: the test fails at 25141.04ms against the 50ms bound. Restored the fix: it passes. A test that passes against both implementations would have proved nothing.\n\nTwo pre-existing test failures in this repository are unrelated to this change and are a local-clone artifact rather than a defect. The privacy gate reports three host-path violations naming blob hashes; git cat-file confirms they are blobs, git rev-list --all does not reach them, and they are absent from origin/main. They are unreachable objects left in this clone's object database by an earlier history rewrite, and a fresh CI checkout does not have them, which is why CI is green on main. The gate scanning the whole object database rather than only reachable history is the stricter and better behaviour; it just makes a developer clone report violations that were never published."
+tests[1]{command,path,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref},note}:
+  "npx tsx --test --test-name-pattern \"parseNextLink rejects adversarial Link-header input without polynomial backtracking\" test/smoke.test.ts",test/smoke.test.ts,project,120,codex,"2026-09-03T17:46:33.523Z",local_mutation,main,"ReDoS regression: proved to fail (25141ms) against the original unanchored expression"
+docs[1]{path,scope,note}:
+  "https://github.com/unbraind/pm-github/security/code-scanning/1",project,"CodeQL alert 1 js/polynomial-redos index.ts:579"
+close_reason: "Anchored the match and bounded the capture; the 200001-character witness now returns in under 50ms where it previously took 25141ms, and the regression test was proved to fail against the original expression."
+body: ""

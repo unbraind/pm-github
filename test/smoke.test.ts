@@ -284,6 +284,21 @@ test("parseNextLink extracts the rel=\"next\" page URL", () => {
   );
 });
 
+test("parseNextLink rejects adversarial Link-header input without polynomial backtracking", () => {
+  // CodeQL witness for js/polynomial-redos: a string starting with '<'
+  // followed by many repetitions of '<=' causes the unbounded [^>]+
+  // quantifier (retried at every position by match()) to exhibit O(n²)
+  // backtracking.  Anchoring with ^ and bounding the capture to 2048
+  // characters eliminates both the multi-position scan and the
+  // unbounded single-attempt backtracking.
+  const witness = "<" + "<=".repeat(100_000);
+  const start = performance.now();
+  const result = parseNextLink(witness);
+  const elapsed = performance.now() - start;
+  assert.strictEqual(result, undefined, "adversarial input must not match");
+  assert.ok(elapsed < 50, `must return within 50 ms, took ${elapsed.toFixed(2)} ms`);
+});
+
 test("parseNextLink returns undefined when there is no next page", () => {
   assert.strictEqual(parseNextLink(undefined), undefined);
   assert.strictEqual(
