@@ -1,0 +1,28 @@
+id: pm-github-c5i4
+title: Pin the pm toolchain and assert the changelog-date flag by difference
+description: "Pin @unbrained/pm-cli 2026.9.5, pm-changelog 2026.9.2, and pm-ops ^2026.9.5. pm-changelog 2026.9.2 stopped stamping the wall clock, so the unflagged control must prove --date-from-version is load-bearing by differing from the flagged heading rather than by matching a clock-derived string."
+type: Chore
+status: closed
+priority: 2
+tags: []
+created_at: "2026-09-05T18:14:51.255Z"
+updated_at: "2026-09-05T18:24:31.473Z"
+closed_at: "2026-09-05T18:15:12.866Z"
+completed_at: "2026-09-05T18:15:12.866Z"
+claim_principal: pi-agent
+author: pi-agent
+resolution: Pinned the current pm toolchain and made the changelog-date control assert difference rather than a clock string.
+expected_result: "release:check and pm health --strict-exit pass on pm-cli 2026.9.5, pm-changelog 2026.9.2, and pm-ops 2026.9.5; the unflagged heading control fails when identical to the flagged heading and passes when it differs."
+actual_result: "release:check exit 0; pm health --strict-exit exit 0; identical-control script exit 1; restored script exit 0 with undated heading '## 2026.1.2'."
+comments[2]{created_at,author,text}:
+  "2026-09-05T18:15:05.801Z",pi-agent,"Pinned @unbrained/pm-cli 2026.9.5 (exact), pm-changelog 2026.9.2 (exact), and pm-ops ^2026.9.5 (caret preserved).\n\npm-changelog 2026.9.2 no longer stamps the wall clock. An unflagged run now emits '## 2026.1.2' instead of '## 2026.1.2 - <today>'. The previous control only noted that mismatch and still exited 0, so a no-op --date-from-version would have passed.\n\nThe control now fails only when the unflagged heading is missing or identical to the flagged '## 2026.1.2 - 2026-01-02'. That is true of both the old clock-stamping generator and 2026.9.2.\n\nRevert-proof: forcing the unflagged invocation to also pass --date-from-version made the script exit 1 (identical heading '## 2026.1.2 - 2026-01-02'). Restoring the unflagged invocation made it exit 0 (undated '## 2026.1.2').\n\nnpm run release:check and pm health --strict-exit both exit 0 on this tree."
+  "2026-09-05T18:24:31.473Z",claude-orchestrator,"Greptile raised a valid P2 on the loosened control: asserting only that the unflagged heading differs from the flagged one means a generator emitting a malformed heading, or a heading for the wrong version, is reported as undated and passes. The control then proves the flag changed something, but not that it changed the right thing. Replaced the open-ended else with an explicit allow-list of the two shapes a correct generator can produce for the probe version: the clock-derived heading and the bare undated heading. Anything else fails and names both accepted forms alongside what was received. Verified every branch fires: a wrong-version heading fails as unrecognised, undated and clock-derived both pass, a heading identical to the flagged run fails, and an empty heading fails."
+files[6]{path,scope}:
+  package.json,project
+  package-lock.json,project
+  scripts/verify-release-changelog-date.sh,project
+  CHANGELOG.md,project
+  .agents/pm/chores/pm-github-c5i4.toon,project
+  .agents/pm/history/pm-github-c5i4.jsonl,project
+close_reason: Pinned the current pm toolchain and made the changelog-date control assert difference rather than a clock string.
+body: ""

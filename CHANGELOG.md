@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Other
+
+- Pin the pm toolchain and assert the changelog-date flag by difference ([pm-github-c5i4](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-c5i4.toon))
+
 ## 2026.9.4 - 2026-09-04
 
 ### Security
