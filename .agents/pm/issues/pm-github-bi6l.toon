@@ -6,7 +6,7 @@ status: closed
 priority: 2
 tags: []
 created_at: "2026-09-05T18:45:11.664Z"
-updated_at: "2026-09-05T18:45:13.537Z"
+updated_at: "2026-09-05T18:55:36.700Z"
 closed_at: "2026-09-05T18:45:13.525Z"
 completed_at: "2026-09-05T18:45:13.525Z"
 claim_principal: claude-orchestrator
@@ -14,9 +14,13 @@ author: claude-orchestrator
 resolution: Bounded the control by a grammar of recognised heading forms and escaped the probe version before interpolation.
 expected_result: "Other versions, prerelease suffixes and a non-date in the date position are all rejected; bare, suffixed, dated and suffixed-and-dated headings are accepted."
 actual_result: "All nine cases verified; release:check exits 0."
-comments[1]{created_at,author,text}:
+comments[2]{created_at,author,text}:
   "2026-09-05T18:45:13.071Z",claude-orchestrator,"Greptile raised a second P2 on the sibling pm-linear pull request against the boundary that was merged here earlier today, and it applies identically. Excluding only a digit immediately after the probe still accepted a heading for version 2026.1.2.3 and for 2026.1.2-rc1, which are other versions, and 2026.1.2 followed by a dash and garbage, which is a date position holding something that is not a date and is exactly the shape a broken date implementation would emit. The suffix is now matched as a grammar covering the bare version, an optional numeric duplicate-section suffix and an optional ISO date. Separately the probe was interpolated into the pattern unescaped, so its dots matched any character; it is now escaped before use."
-files[1]{path,scope}:
+  "2026-09-05T18:55:35.554Z",claude-orchestrator,"Greptile raised two further P2s on this pull request and both were right. First, matching the optional date by its digit widths accepts an impossible date such as a month of 13 and a day of 40, and a stale date from any past day, which are precisely the malformed date implementations this control exists to reject. The date is now bound to the actual clock date, because the only date an unflagged run may legitimately carry is today's: deriving the date from the clock is the defect the flag removes. Second, the grammar had no committed tests, and a normal run only ever sees the one heading this checkout's generator emits, so every accept and reject boundary was unexercised. The script now has a self-test mode that runs the matcher against a fixed fourteen case matrix and exits non-zero on disagreement, and the release workflow test invokes it so the pattern stays single sourced rather than being restated in the test and drifting. The test also asserts that specific matrix rows actually ran, so a self-test that silently checked nothing cannot pass. Confirmed non-vacuous by restoring the shape-only date match, which fails the test."
+files[2]{path,scope}:
   scripts/verify-release-changelog-date.sh,project
+  test/release-workflow.test.ts,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  the changelog-date control's heading grammar accepts and rejects the matrix it claims to,project,claude-orchestrator,"2026-09-05T18:55:36.672Z",local_mutation,fix/match-the-date-control-heading-as-a-grammar
 close_reason: Bounded the control by a grammar of recognised heading forms and escaped the probe version before interpolation.
 body: ""

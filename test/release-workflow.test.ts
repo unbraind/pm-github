@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import test from "node:test";
@@ -485,4 +486,40 @@ test("publication is proven possible before anything is mutated", () => {
   assert.match(step, /trap\s+'rm -f "\$\{response\}"'\s+EXIT/);
   assert.doesNotMatch(step, /-o\s+\/tmp\/[^\s"]+/);
   assert.match(step, /-o "\$\{response\}"/);
+});
+
+/**
+ * The changelog-date verifier's heading grammar, exercised through the script's
+ * own `--self-test` mode.
+ *
+ * Normal execution only ever sees the single heading this checkout's generator
+ * happens to emit, so the accept/reject boundaries the grammar exists to enforce
+ * are never exercised by a real run and can regress silently. `--self-test` runs
+ * the matcher against a fixed matrix and exits non-zero on any disagreement,
+ * which keeps the pattern single-sourced: this test asserts the script's own
+ * verdict rather than re-declaring the regular expression and drifting from it.
+ *
+ * The matrix covers what a review of this control has actually caught: another
+ * version, a prerelease suffix, an impossible date, a stale date, a non-date in
+ * the date position, a heading matched only because an unescaped probe's dots
+ * were treated as wildcards, and the empty heading.
+ */
+test("the changelog-date control's heading grammar accepts and rejects the matrix it claims to", () => {
+  const script = resolve(import.meta.dirname, "../scripts/verify-release-changelog-date.sh");
+  const run = spawnSync("bash", [script, "--self-test"], { encoding: "utf-8" });
+  assert.equal(
+    run.status,
+    0,
+    `the heading grammar disagreed with its own matrix:\n${run.stdout}\n${run.stderr}`,
+  );
+  // A self-test that silently checked nothing would also exit 0, so require the
+  // matrix to have actually run.
+  assert.ok(
+    run.stdout.includes("ok - reject ## 2026.1.2 - 2026-13-40"),
+    "the impossible-date case must be exercised, not skipped",
+  );
+  assert.ok(
+    run.stdout.includes("ok - accept ## 2026.1.2"),
+    "the bare-version case must be exercised, not skipped",
+  );
 });
