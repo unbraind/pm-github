@@ -61,18 +61,23 @@ else
   echo "ok - with the flag the heading is version-derived: $with"
 fi
 # The unflagged run is the control: it proves the flag is doing the work.
-# Assert only that it DIFFERS from the flagged heading. Pinning the control to
-# the clock form (`## <probe> - <today>`) fails against pm-changelog 2026.9.2,
-# which stopped stamping the wall clock and emits the bare `## <probe>` instead.
-# Both generators still differ from the version-dated heading; a control identical
-# to the flagged run still fails, because then the flag discriminates nothing.
+# It must not be pinned to the clock form (`## <probe> - <today>`), which fails
+# against pm-changelog 2026.9.2 -- that release stopped stamping the wall clock
+# and emits the bare `## <probe>` instead. But it must not accept ANY differing
+# heading either: a generator emitting a malformed heading, or one for the wrong
+# version, would then be reported as "undated" and pass while proving nothing
+# about the flag. So the control is an explicit allow-list of the two shapes a
+# correct generator can produce for THIS probe version, and anything else fails.
+bare_heading="## ${probe}"
 if [ -z "$without" ]; then
   echo "FAIL: without --date-from-version produced no heading, so the comparison proves nothing" >&2; status=1
 elif [ "$without" = "$with" ]; then
   echo "FAIL: without --date-from-version the heading is already '$without', identical to the flagged run" >&2; status=1
 elif [ "$without" = "$today_heading" ]; then
   echo "ok - without the flag the heading is clock-derived: $without (this is the defect the flag removes)"
-else
+elif [ "$without" = "$bare_heading" ]; then
   echo "ok - without the flag the heading is undated: $without (this is the defect the flag removes)"
+else
+  echo "FAIL: without --date-from-version expected the clock-derived '$today_heading' or the undated '$bare_heading', got '$without' - the control cannot vouch for a heading it does not recognise" >&2; status=1
 fi
 exit $status
