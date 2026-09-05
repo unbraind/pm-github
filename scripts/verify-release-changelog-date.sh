@@ -68,16 +68,21 @@ fi
 # version, would then be reported as "undated" and pass while proving nothing
 # about the flag. So the control is an explicit allow-list of the two shapes a
 # correct generator can produce for THIS probe version, and anything else fails.
-bare_heading="## ${probe}"
+# The bound is "a heading for THIS probe version, in some form other than the
+# version-derived one" rather than an enumerated list of spellings. Enumerating
+# is too brittle: the generator also emits a disambiguated `## <probe>-2` when a
+# section for that version already exists, which is legitimate output that an
+# allow-list of the bare and clock forms would reject. The trailing `[^0-9]`
+# guard stops `2026.1.2` matching a heading for `2026.1.20`.
 if [ -z "$without" ]; then
   echo "FAIL: without --date-from-version produced no heading, so the comparison proves nothing" >&2; status=1
 elif [ "$without" = "$with" ]; then
   echo "FAIL: without --date-from-version the heading is already '$without', identical to the flagged run" >&2; status=1
+elif ! printf '%s' "$without" | grep -qE "^## ${probe}([^0-9].*)?$"; then
+  echo "FAIL: without --date-from-version expected a heading for ${probe} in a non-version-derived form, got '$without' - the control cannot vouch for a heading that is not even for the probe version" >&2; status=1
 elif [ "$without" = "$today_heading" ]; then
   echo "ok - without the flag the heading is clock-derived: $without (this is the defect the flag removes)"
-elif [ "$without" = "$bare_heading" ]; then
-  echo "ok - without the flag the heading is undated: $without (this is the defect the flag removes)"
 else
-  echo "FAIL: without --date-from-version expected the clock-derived '$today_heading' or the undated '$bare_heading', got '$without' - the control cannot vouch for a heading it does not recognise" >&2; status=1
+  echo "ok - without the flag the heading is not version-derived: $without (this is the defect the flag removes)"
 fi
 exit $status
