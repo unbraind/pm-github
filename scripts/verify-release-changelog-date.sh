@@ -60,9 +60,19 @@ if [ "$with" != "$expected" ]; then
 else
   echo "ok - with the flag the heading is version-derived: $with"
 fi
-if [ "$without" != "$today_heading" ]; then
-  echo "note - without the flag the heading was '$without' (expected the clock-derived '$today_heading'); the flag's effect is still asserted above"
-else
+# The unflagged run is the control: it proves the flag is doing the work.
+# Assert only that it DIFFERS from the flagged heading. Pinning the control to
+# the clock form (`## <probe> - <today>`) fails against pm-changelog 2026.9.2,
+# which stopped stamping the wall clock and emits the bare `## <probe>` instead.
+# Both generators still differ from the version-dated heading; a control identical
+# to the flagged run still fails, because then the flag discriminates nothing.
+if [ -z "$without" ]; then
+  echo "FAIL: without --date-from-version produced no heading, so the comparison proves nothing" >&2; status=1
+elif [ "$without" = "$with" ]; then
+  echo "FAIL: without --date-from-version the heading is already '$without', identical to the flagged run" >&2; status=1
+elif [ "$without" = "$today_heading" ]; then
   echo "ok - without the flag the heading is clock-derived: $without (this is the defect the flag removes)"
+else
+  echo "ok - without the flag the heading is undated: $without (this is the defect the flag removes)"
 fi
 exit $status
