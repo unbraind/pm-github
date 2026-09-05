@@ -1,0 +1,22 @@
+id: pm-github-bi6l
+title: Match the release-date control heading as a grammar and escape the probe version
+description: "Excluding only a trailing digit still admitted other versions and a date position holding a non-date, and the probe was interpolated into the pattern unescaped so its dots matched any character."
+type: Issue
+status: closed
+priority: 2
+tags: []
+created_at: "2026-09-05T18:45:11.664Z"
+updated_at: "2026-09-05T18:45:13.537Z"
+closed_at: "2026-09-05T18:45:13.525Z"
+completed_at: "2026-09-05T18:45:13.525Z"
+claim_principal: claude-orchestrator
+author: claude-orchestrator
+resolution: Bounded the control by a grammar of recognised heading forms and escaped the probe version before interpolation.
+expected_result: "Other versions, prerelease suffixes and a non-date in the date position are all rejected; bare, suffixed, dated and suffixed-and-dated headings are accepted."
+actual_result: "All nine cases verified; release:check exits 0."
+comments[1]{created_at,author,text}:
+  "2026-09-05T18:45:13.071Z",claude-orchestrator,"Greptile raised a second P2 on the sibling pm-linear pull request against the boundary that was merged here earlier today, and it applies identically. Excluding only a digit immediately after the probe still accepted a heading for version 2026.1.2.3 and for 2026.1.2-rc1, which are other versions, and 2026.1.2 followed by a dash and garbage, which is a date position holding something that is not a date and is exactly the shape a broken date implementation would emit. The suffix is now matched as a grammar covering the bare version, an optional numeric duplicate-section suffix and an optional ISO date. Separately the probe was interpolated into the pattern unescaped, so its dots matched any character; it is now escaped before use."
+files[1]{path,scope}:
+  scripts/verify-release-changelog-date.sh,project
+close_reason: Bounded the control by a grammar of recognised heading forms and escaped the probe version before interpolation.
+body: ""

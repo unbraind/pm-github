@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Match the release-date control heading as a grammar and escape the probe version ([pm-github-bi6l](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-bi6l.toon))
+
 ### Other
 
 - Pin the pm toolchain and assert the changelog-date flag by difference ([pm-github-c5i4](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-c5i4.toon))
