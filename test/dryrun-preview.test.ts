@@ -60,11 +60,11 @@ test("non-atomic --dry-run previews updates for already-linked issues instead of
     `summary line missing; saw: ${messages.join(" | ")}`
   );
   assert.ok(
-    messages.some((message) => /#2 update: Already linked \(open, bug,reliability\)/.test(message)),
+    messages.includes("  [dry-run] #2 update: Already linked (open, bug,reliability)"),
     "per-issue line should label the already-linked issue as an update"
   );
   assert.ok(
-    messages.some((message) => /#1 import: Brand new \(open\)/.test(message)),
+    messages.includes("  [dry-run] #1 import: Brand new (open)"),
     "per-issue line should label the unlinked issue as an import"
   );
 });
