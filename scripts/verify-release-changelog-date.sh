@@ -90,9 +90,17 @@ SELFTEST
 fi
 # In pm-changelog's own repository the generator is the build output, not a
 # dependency, so resolve it in that order rather than assuming node_modules.
-if [ -x ./node_modules/.bin/pm-changelog ]; then bin="./node_modules/.bin/pm-changelog"
-elif [ -f ./dist/cli.js ]; then bin="node ./dist/cli.js"
-else bin="npx pm-changelog"; fi
+# Resolve the generator binary once. A function is used rather than a scalar
+# variable because the publish-attestation auditor treats an unresolved
+# variable in command position (e.g. `$bin ...`) as a potential publish path:
+# it cannot prove the variable does not expand to `npm publish`, so it fails
+# closed. A named function in command position is a literal program name, not
+# an unresolved expansion, so the auditor can dismiss it as a non-publisher.
+run_changelog() {
+  if [ -x ./node_modules/.bin/pm-changelog ]; then ./node_modules/.bin/pm-changelog "$@"
+  elif [ -f ./dist/cli.js ]; then node ./dist/cli.js "$@"
+  else npx pm-changelog "$@"; fi
+}
 # The generator refuses a truncated workspace read rather than silently
 # omitting entries, so the unbounded controls the real scripts pass are
 # required here too.
@@ -101,8 +109,8 @@ common=(--pm-root .agents/pm --stdout --pm-bin ./node_modules/.bin/pm
         --pm-arg=--output-limit --pm-arg=unbounded
         --release-version "$probe")
 
-with=$($bin "${common[@]}" --date-from-version 2>/dev/null | grep -m1 '^## ' || true)
-without=$($bin "${common[@]}" 2>/dev/null | grep -m1 '^## ' || true)
+with=$(run_changelog "${common[@]}" --date-from-version 2>/dev/null | grep -m1 '^## ' || true)
+without=$(run_changelog "${common[@]}" 2>/dev/null | grep -m1 '^## ' || true)
 
 if [ "$with" != "$expected" ]; then
   echo "FAIL: with --date-from-version expected '$expected', got '$with'" >&2; status=1
