@@ -2852,7 +2852,7 @@ export async function runImport(
       updated = prepared.length - imported;
       for (const entry of prepared) {
         const action = entry.match?.id ? "update" : "import";
-        console.error(`  [dry-run][atomic] #${entry.issueNumber} ${action} ${entry.title} (${entry.status})`);
+        console.error(`  [dry-run][atomic] #${entry.issueNumber} ${action}: ${entry.title} (${entry.status})`);
       }
       console.error(
         `[dry-run] Atomic plan would import ${imported}, update ${updated}, skip ${skipped}.`,
@@ -2961,7 +2961,8 @@ export async function runImport(
 
     if (opts.dryRun) {
       const action = match?.id ? "update" : "import";
-      console.error(`  [dry-run] #${issue.number} ${action} ${title} (${status}, ${labels.join(",")})`);
+      const metadata = labels.length > 0 ? `${status}, ${labels.join(",")}` : status;
+      console.error(`  [dry-run] #${issue.number} ${action}: ${title} (${metadata})`);
       if (match?.id) updated++;
       else imported++;
       continue;
