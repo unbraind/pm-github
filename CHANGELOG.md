@@ -6,6 +6,10 @@
 
 - Consume the canonical attestation gate instead of carrying a copy of it ([pm-github-u5qc](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-u5qc.toon))
 
+### Other
+
+- Harden the attestation consumer suite to match the rest of the converged fleet ([pm-github-xqgi](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-xqgi.toon))
+
 ## 2026.9.6 - 2026-09-06
 
 ### Fixed
