@@ -15,7 +15,7 @@ const issue = (number: number, title: string): GhIssue => ({
   title,
   body: "",
   state: "open",
-  labels: [],
+  labels: number === 2 ? [{ name: "bug" }, { name: "reliability" }] : [],
   assignee: null,
   milestone: null,
   user: { login: "octocat" },
@@ -60,18 +60,21 @@ test("non-atomic --dry-run previews updates for already-linked issues instead of
     `summary line missing; saw: ${messages.join(" | ")}`
   );
   assert.ok(
-    messages.some((message) => /#2 update Already linked/.test(message)),
+    messages.includes("  [dry-run] #2 update: Already linked (open, bug,reliability)"),
     "per-issue line should label the already-linked issue as an update"
   );
   assert.ok(
-    messages.some((message) => /#1 import Brand new/.test(message)),
+    messages.includes("  [dry-run] #1 import: Brand new (open)"),
     "per-issue line should label the unlinked issue as an import"
   );
 });
 
 test("atomic and non-atomic --dry-run agree on the import/update split", async () => {
   const plain = (await previewImport(false)).result as Record<string, unknown>;
-  const atomic = (await previewImport(true)).result as Record<string, unknown>;
+  const { result: atomicResult, messages } = await previewImport(true);
+  const atomic = atomicResult as Record<string, unknown>;
+  assert.ok(messages.includes("  [dry-run][atomic] #1 import: Brand new (open)"));
+  assert.ok(messages.includes("  [dry-run][atomic] #2 update: Already linked (open)"));
 
   assert.strictEqual(plain.wouldImport, atomic.wouldImport);
   assert.strictEqual(plain.wouldUpdate, atomic.wouldUpdate);
