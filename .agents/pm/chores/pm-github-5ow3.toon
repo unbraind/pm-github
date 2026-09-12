@@ -2,19 +2,24 @@ id: pm-github-5ow3
 title: Certify the CLI and SDK on PM 2026.9.7
 description: "Upgrade the development CLI and SDK to published 2026.9.7 and pm-changelog to published 2026.9.6. Re-run real package quality and acceptance gates against the exact installed dependencies, preserving the manifest compatibility floor unless runtime behavior requires a higher minimum. Companion tracking: pm-cli-companion item pm-cli-website-6yiv."
 type: Chore
-status: in_progress
+status: closed
 priority: 2
 tags[3]: cli,compatibility,sdk
 created_at: "2026-09-07T20:37:28.620Z"
-updated_at: "2026-09-07T21:01:19.914Z"
-assignee: codex-pm-ecosystem
+updated_at: "2026-09-12T20:58:15.728Z"
+closed_at: "2026-09-12T20:58:15.675Z"
+completed_at: "2026-09-12T20:58:15.675Z"
 claim_principal: codex-pm-ecosystem
 author: codex-pm-ecosystem
 acceptance_criteria: Exact installed dependency versions are verified; package checks and real CLI acceptance pass without weakened gates; independent coverage and privacy limitations remain explicit
+resolution: Superseded by pm-github-u95z
+expected_result: The repository certifies the current pm CLI
+actual_result: "pm-github-u95z certifies 2026.9.12 with release:check passing"
 comments[1]{created_at,author,text}:
   "2026-09-07T21:01:19.914Z",codex-pm-ecosystem,"Final local release:check passed using installed CLI/SDK 2026.9.7 and pm-changelog 2026.9.6. Final top-level test report: tests=299, pass=299, fail=0, skipped=0. ℹ all files   |  92.57 |    82.94 |   92.27 | . Coverage is the current reported scope; complete four-dimensional source certification and independent production/privacy/review gates remain open."
 tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
   "npm run release:check",project,1200,codex-pm-ecosystem,"2026-09-07T20:37:31.983Z",local_mutation,chore/certify-pm-cli-2026-9-7
 docs[1]{path,scope,note}:
   "https://github.com/unbraind/pm-cli/releases/tag/v2026.9.7",project,Published CLI and SDK release
+close_reason: "Superseded by pm-github-u95z. The repository moved past 2026.9.7 to pm CLI 2026.9.10 before this item was closed, and pm-github-u95z now certifies 2026.9.12, where release:check passes. Nothing this item tracked remains open."
 body: ""
