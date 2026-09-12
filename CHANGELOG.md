@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Other
+
+- Certify the CLI and SDK on PM 2026.9.7 ([pm-github-5ow3](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-5ow3.toon))
+- Certify pm CLI 2026.9.12 and the pm-ops 2026.9.11 auditor ([pm-github-u95z](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-u95z.toon))
+
 ## 2026.9.11 - 2026-09-11
 
 ### Other
