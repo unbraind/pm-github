@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Other
+
+- Certify pm CLI 2026.9.17 ([pm-github-ksq2](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-ksq2.toon))
+
 ## 2026.9.13 - 2026-09-13
 
 ### Other
@@ -68,11 +74,16 @@
 
 - Refuse incomplete pm item corpora before GitHub imports, exports, and syncs ([pm-github-ep0u](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-ep0u.toon))
 
-## 2026.8.16 - 2026-08-16
+## 2026.8.17 - 2026-08-17
 
 ### Fixed
 
 - The manifest declared a pm CLI floor of 2026.7.28 while peerDependencies required 2026.8.3, so the CLI enforced a weaker minimum than npm ([pm-github-7d1h](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-7d1h.toon))
+
+## 2026.8.16 - 2026-08-16
+
+### Fixed
+
 - A github command can silently lose its preflight credential gate when the override scope drifts from the mutating command set ([pm-github-4ga9](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-4ga9.toon))
 
 ## 2026.8.15 - 2026-08-15
