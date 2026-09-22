@@ -35,7 +35,7 @@
     "release:check": "npm run typecheck && npm run build && npm run docstring && npm run privacy && npm run coverage && npm run audit:prod && npm run pack:dry-run && npm run changelog:check && npm run verify:release-publish-attestation",
     "prepublishOnly": "npm run release:check",
     "release:notes": "pm-changelog --pm-root .agents/pm --pm-arg=--output-limit --pm-arg=unbounded --pm-arg=--output-budget --pm-arg=unbounded --stdout --since-previous-tag --until-release-tag --release-version-from-package --date-from-version --item-url-base https://github.com/unbraind/pm-github/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --github-step-summary",
-    "prepare": "node scripts/prepare-merge-driver.mjs",
+    "prepare": "node scripts/prepare-merge-driver.ts",
     "merge:install": "pm merge install",
     "coverage": "npm run build && npm run build:test && node scripts/coverage-gate.ts",
     "privacy": "node scripts/privacy-gate.ts"
@@ -45,9 +45,9 @@
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
-    "@unbrained/pm-cli": "2026.9.17",
-    "pm-changelog": "2026.9.16",
-    "pm-ops": "2026.9.13",
+    "@unbrained/pm-cli": "2026.9.21",
+    "pm-changelog": "2026.9.18",
+    "pm-ops": "2026.9.18",
     "typescript": "^7.0.2"
   },
   "keywords": [
