@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Other
+
+- Certify pm CLI 2026.9.23 and adopt the guarded pm-ops merge-driver launcher ([pm-github-d2az](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-d2az.toon))
+
 ## 2026.9.22 - 2026-09-22
 
 ### Fixed
