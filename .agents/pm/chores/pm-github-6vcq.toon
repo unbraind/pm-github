@@ -1,0 +1,22 @@
+id: pm-github-6vcq
+title: Certify pm-github with PM CLI SDK 2026.9.26
+description: "Refresh the extension development SDK and release tools to current published PM CLI, pm-changelog, and pm-ops versions. Preserve the supported host compatibility floor unless a real API incompatibility requires a change. Verify the canonical merge-driver launcher, full release gate, and real GitHub issue import contract."
+type: Chore
+status: in_progress
+priority: 2
+tags: []
+created_at: "2026-09-26T16:33:06.566Z"
+updated_at: "2026-09-26T16:37:52.017Z"
+assignee: codex
+claim_principal: codex
+author: codex
+acceptance_criteria: "Manifest and lockfile exact-pin the current developer SDK and release-tool versions; installed package readback matches; canonical pm-ops launcher is copied byte for byte; release:check, strict PM health, and a real issue-import dry run pass; source and hosted user data stay outside the public diff."
+notes[1]{created_at,author,text}:
+  "2026-09-26T16:37:52.017Z",codex,"2026-09-26: devDependency and lock exact-pin @unbrained/pm-cli 2026.9.26, pm-changelog 2026.9.25, and pm-ops 2026.9.26; installed package readback matches. Copied current pm-ops canonical merge-driver launcher. Full npm run release:check and PM linked rerun passed, including typecheck, build, docstrings, privacy, coverage floor, production audit, pack, changelog, and publish attestation. Companion installed pm-github dry-run on real public unbraind/pm-cli issue #1316 proposed 0 creates, 1 update, 0 skips, without mutation. The direct package checkout does not self-register its extension; real GitHub dry-run evidence belongs to the companion installed extension. Measured lcov is 5,618/6,069 lines (92.57%), 972/1,172 branches (82.94%), 179/194 functions (92.27%); exact 100% remains open under pm-github-9cjx. No hosted data or telemetry source/config touched."
+files[3]{path,scope,note}:
+  package-lock.json,project,resolved package versions and integrity
+  package.json,project,exact development toolchain pins
+  scripts/prepare-merge-driver.ts,project,canonical pm-ops launcher
+tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  "npm run release:check",project,300,codex,"2026-09-26T16:35:47.449Z",local_mutation,chore/pm-github-sdk-2026-9-26
+body: ""
