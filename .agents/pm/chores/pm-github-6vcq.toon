@@ -6,18 +6,22 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-09-26T16:33:06.566Z"
-updated_at: "2026-09-26T16:38:47.633Z"
+updated_at: "2026-09-26T17:02:58.106Z"
 assignee: codex
 claim_principal: codex
 author: codex
 acceptance_criteria: "Manifest and lockfile exact-pin the current developer SDK and release-tool versions; installed package readback matches; canonical pm-ops launcher is copied byte for byte; release:check, strict PM health, and a real issue-import dry run pass; source and hosted user data stay outside the public diff."
-notes[2]{created_at,author,text}:
+notes[4]{created_at,author,text}:
   "2026-09-26T16:37:52.017Z",codex,"2026-09-26: devDependency and lock exact-pin @unbrained/pm-cli 2026.9.26, pm-changelog 2026.9.25, and pm-ops 2026.9.26; installed package readback matches. Copied current pm-ops canonical merge-driver launcher. Full npm run release:check and PM linked rerun passed, including typecheck, build, docstrings, privacy, coverage floor, production audit, pack, changelog, and publish attestation. Companion installed pm-github dry-run on real public unbraind/pm-cli issue #1316 proposed 0 creates, 1 update, 0 skips, without mutation. The direct package checkout does not self-register its extension; real GitHub dry-run evidence belongs to the companion installed extension. Measured lcov is 5,618/6,069 lines (92.57%), 972/1,172 branches (82.94%), 179/194 functions (92.27%); exact 100% remains open under pm-github-9cjx. No hosted data or telemetry source/config touched."
   "2026-09-26T16:38:47.633Z",codex,"Package candidate proposed in https://github.com/unbraind/pm-github/pull/99 at first head 248da98. CI checks, exact-head bot reviews, merge, and publication remain pending independent gates. The pinned development SDK is current; the existing host minimum remains supported and is not claimed raised."
-files[3]{path,scope,note}:
+  "2026-09-26T16:55:14.837Z",codex,CodeRabbit exact-head review 5326615917 found the consumer lacked a fixture for an existing node_modules/pm-ops without package.json. Added a real prepare-hook child-checkout regression; 7/7 targeted tests pass. The hoisted resolution fix remains in canonical pm-ops ops-jzp5 and will be copied after its published release.
+  "2026-09-26T17:02:58.084Z",codex,"2026-09-26 17:02 UTC: after adding CodeRabbit’s real child-checkout test for a present incomplete local pm-ops install, npm run release:check passed (308/308 tests, 0 skipped, 0 production audit vulnerabilities), strict PM health ok=true with two stale-item advisories, and linked prepare-hook suite 7/7 passed. Canonical hoisted fix remains open in https://github.com/unbraind/pm-ops/pull/124 and not yet published; this consumer launcher cannot be refreshed byte-for-byte until then."
+files[4]{path,scope,note}:
   package-lock.json,project,resolved package versions and integrity
   package.json,project,exact development toolchain pins
   scripts/prepare-merge-driver.ts,project,canonical pm-ops launcher
-tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  test/prepare-merge-driver.test.ts,project,Consumer regression for incomplete installed pm-ops
+tests[2]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
   "npm run release:check",project,300,codex,"2026-09-26T16:35:47.449Z",local_mutation,chore/pm-github-sdk-2026-9-26
+  node --test test/prepare-merge-driver.test.ts,project,120,codex,"2026-09-26T16:55:15.403Z",local_mutation,chore/pm-github-sdk-2026-9-26
 body: ""
