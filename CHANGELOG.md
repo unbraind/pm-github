@@ -34,6 +34,12 @@
 
 - Certify pm CLI 2026.9.10 and pick up the canonical auditor fixes the lockfile was holding back ([pm-github-drwr](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-drwr.toon))
 
+## 2026.9.9 - 2026-09-09
+
+### Fixed
+
+- github import --dry-run runs the action verb into the title and emits a dangling comma when an issue has no labels ([pm-github-github-ee4d59c27b67-35](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-github-ee4d59c27b67-35.toon))
+
 ## 2026.9.8 - 2026-09-08
 
 ### Security
