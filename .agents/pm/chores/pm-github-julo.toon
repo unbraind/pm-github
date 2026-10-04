@@ -1,0 +1,27 @@
+id: pm-github-julo
+title: Certify pm-github on PM CLI/SDK 2026.10.4 and consolidate pending dependency updates
+description: "Raise the exact development pin @unbrained/pm-cli to 2026.10.4 together with pm-ops 2026.10.4 (pm-changelog already at 2026.9.25); consolidate Dependabot #101 (pm-cli), #102 (@types/node), #103 (pm-ops) and #104 (codeql-action pinned SHA group 2892aa5); keep the canonical pm-ops merge-driver launcher byte-identical; certify with the full release gate plus isolated real-tracker dogfooding of the read-only GitHub surfaces via npm and Bun."
+type: Chore
+status: in_progress
+priority: 2
+tags[4]: cli,dependencies,release-readiness,sdk
+created_at: "2026-10-04T10:20:50.548Z"
+updated_at: "2026-10-04T10:28:04.897Z"
+author: pi-glm
+acceptance_criteria: "npm run release:check passes (privacy, docstring, coverage gates intact); pm health with the repo-pinned 2026.10.4 binary is clean; packed tarball exercises validate/import/export-preview/sync-preview against a real repo read-only via npx @unbrained/pm-cli@2026.10.4 and bunx with zero GitHub mutation"
+actual_result: "Pins raised: @unbrained/pm-cli 2026.9.26->2026.10.4, pm-ops 2026.9.28->2026.10.4; pm-changelog already latest 2026.9.25; @types/node 26.6.4 in range; codeql-action pinned SHA group 2892aa5 carried from Dependabot #104. Canonical pm-ops 2026.10.4 prepare-merge-driver.ts recopied byte-for-byte. npm audit and npm audit --omit=dev both 0 vulnerabilities. Full npm run release:check PASS: typecheck, build, docstring, privacy gate, coverage at configured thresholds, pack dry-run, changelog check, publish-attestation gate. npx pm health exit 0 (one pre-existing stale-items advisory). Real-tracker read-only dogfood on the packed tarball passed via npx and bunx: validate ok; real 26-issue import from unbraind/pm-cli with provenance-tag idempotent re-import (0 new / 26 updated); export --dry-run plan only; sync --dry-run planned 0/1 with no GitHub mutation. pm-github managed extension (self, npm 2026.10.4) registered with read-only previews only."
+comments[3]{created_at,author,text}:
+  "2026-10-04T10:21:00.651Z",pi-glm,"Starting at 2daff95 (Release pm-github v2026.10.04). Plan: pm-cli 2026.9.26->2026.10.4, pm-ops 2026.9.28->2026.10.4, @types/node ->26.6.4 in range, codeql-action SHA group 1c5b6756->2892aa5 from #104; recopy canonical prepare-merge-driver.ts from pm-ops 2026.10.4; full release gate + read-only dogfood (validate/import/export dry-run/sync dry-run) + previews."
+  "2026-10-04T10:26:29.326Z",pi-glm,"Real-tracker dogfood PASS (read-only on GitHub). Packed pm-github-2026.10.4.tgz installed into a scratch copy of this repo's real .agents/pm and registered via pm package install with CLI 2026.10.4. npm path (npx -y @unbrained/pm-cli@2026.10.4): github validate --repo unbraind/pm-github -> ok (token via gh CLI, HTTP 200, quota 4813/5000); github import unbraind/pm-github -> no open issues found (truthful, both this repo and unbraind/pm-csv have zero open issues); github import unbraind/pm-cli -> Imported 26 new (real open issue data fetched read-only); re-import -> 0 new / 26 updated proving gh:owner/repo#N provenance idempotency; github export --dry-run -> create/update plan only, writes nothing; github sync --dry-run --repo unbraind/pm-csv -> planned 0. bun path (bunx @unbrained/pm-cli@2026.10.4): github validate -> ok; github import unbraind/pm-cli -> 0 new / 26 updated; export --dry-run and sync --dry-run identical. Zero GitHub mutation (reads + local scratch writes only); scratch deleted after evidence capture."
+  "2026-10-04T10:27:47.809Z",pi-glm,"pm-github installed as managed project extension from npm at latest 2026.10.4 (self-extension registration; extensions are per-clone/gitignored). Read-only previews against unbraind/pm-github: github validate -> ok (HTTP 200, quota 4776/5000); github export --dry-run -> plan only, writes nothing; github sync --dry-run -> planned 1 / skipped 1, no mutation. No issues created/modified, no scheduled sync enabled."
+files[4]{path,scope,note}:
+  .github/workflows/codeql.yml,project,codeql-action pinned SHA group 2892aa5 from #104
+  package-lock.json,project,Resolved dependency graph with consolidated Dependabot bumps
+  package.json,project,Exact CLI/ops pins raised to 2026.10.4
+  scripts/prepare-merge-driver.ts,project,Canonical pm-ops 2026.10.4 launcher recopied byte-for-byte
+tests[4]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  "npm run release:check",project,pi-glm,"2026-10-04T10:27:55.325Z",local_mutation,chore/pm-github-pm-cli-2026-10-4
+  npx pm health,project,pi-glm,"2026-10-04T10:27:56.397Z",local_mutation,chore/pm-github-pm-cli-2026-10-4
+  npx -y @unbrained/pm-cli@2026.10.4 github import unbraind/pm-cli,project,pi-glm,"2026-10-04T10:27:57.374Z",local_mutation,chore/pm-github-pm-cli-2026-10-4
+  bunx @unbrained/pm-cli@2026.10.4 github sync --dry-run --repo unbraind/pm-csv,project,pi-glm,"2026-10-04T10:27:58.293Z",local_mutation,chore/pm-github-pm-cli-2026-10-4
+body: ""
