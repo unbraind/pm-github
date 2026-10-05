@@ -232,9 +232,11 @@ test("scanner fires on every high-confidence credential signature", () => {
     ["npm-token", `publish with ${NPM_TOKEN}`],
     ["aws-access-key-id", `export AWS_ACCESS_KEY_ID=${AWS_KEY}`],
     ["slack-token", `slack ${SLACK_TOKEN}`],
+    ["slack-webhook", "https://hooks.slack.com/" + "services/T12345678/B12345678/" + "A".repeat(24)],
     ["openai-api-key", `key ${OPENAI_KEY}`],
     ["anthropic-api-key", `key ${ANTHROPIC_KEY}`],
     ["openai-project-key", "key " + "sk-proj-" + "I".repeat(30)],
+    ["openai-service-account-key", "key " + "sk-svcacct-" + "I".repeat(30)],
     ["private-key-block", "-----BEGIN " + "RSA PRIVATE KEY-----"],
   ];
   for (const [rule, line] of cases) {

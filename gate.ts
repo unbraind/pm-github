@@ -192,9 +192,11 @@ const CREDENTIAL_RULES: readonly ContentRule[] = [
   { rule: "npm-token", pattern: /npm_[A-Za-z0-9]{36}/g },
   { rule: "aws-access-key-id", pattern: /(?:AKIA|ASIA)[0-9A-Z]{16}/g },
   { rule: "slack-token", pattern: /xox[abprs]-[A-Za-z0-9-]{10,}/g },
+  { rule: "slack-webhook", pattern: /https:\/\/hooks\.slack\.com\/services\/T[A-Za-z0-9]+\/B[A-Za-z0-9]+\/[A-Za-z0-9]{24,}/g },
   { rule: "openai-legacy-key", pattern: /sk-[A-Za-z0-9]{48}/g },
   { rule: "openai-api-key", pattern: /sk-[A-Za-z0-9_-]{20,}T3BlbkFJ[A-Za-z0-9_-]{20,}/g },
   { rule: "openai-project-key", pattern: /sk-proj-[A-Za-z0-9_-]{20,}/g },
+  { rule: "openai-service-account-key", pattern: /sk-svcacct-[A-Za-z0-9_-]{20,}/g },
   { rule: "anthropic-api-key", pattern: /sk-ant-[A-Za-z0-9_-]{20,}/g },
   {
     rule: "bearer-token",
