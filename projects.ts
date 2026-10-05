@@ -148,11 +148,8 @@ export function decodeItemId(encoded: string): string | undefined {
   if (encoded.length === 0 || encoded.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(encoded)) {
     return undefined;
   }
-  try {
-    return Buffer.from(encoded, "hex").toString("utf8");
-  } catch {
-    return undefined;
-  }
+  // Validated even-length hex is accepted by Buffer without a parse exception.
+  return Buffer.from(encoded, "hex").toString("utf8");
 }
 
 // The project link rides on a machine-parseable tag, like the issue provenance

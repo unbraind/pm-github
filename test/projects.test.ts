@@ -13,6 +13,7 @@ import {
   mapOptionNameToPmStatus,
   parseProjectRef,
   parseProjectItemTag,
+  parseAssignmentMap,
   parseStatusMap,
   projectItemTag,
   resolveOptionForStatus,
@@ -50,6 +51,7 @@ test("parseProjectRef parses owner/number, owner#number, and URLs", () => {
 
 test("project provenance rejects incomplete hex encodings without accepting another board", () => {
   for (const invalid of ["", "a", "gg", "00z0"]) assert.equal(decodeItemId(invalid), undefined);
+  assert.equal(decodeItemId(Buffer.from("PVTI_fixture").toString("hex").toUpperCase()), "PVTI_fixture");
   assert.equal(parseProjectItemTag("gh-project:acme/5#a"), undefined);
   assert.equal(parseProjectRef("  "), undefined);
   assert.equal(parseProjectRef("acme/" + "9".repeat(400)), undefined);
@@ -61,6 +63,7 @@ test("status mapping falls back only when the board did not provide an explicit 
   assert.equal(mapOptionNameToPmStatus("Done", new Map([["open", "Queued"]])), "closed");
   assert.equal(mapOptionNameToPmStatus("Unrecognized", new Map()), undefined);
   assert.equal(parseStatusMap([" = Todo", "open = "]), undefined);
+  assert.deepEqual(parseAssignmentMap(["Bug=defect"]), new Map([["Bug", "defect"]]));
 });
 
 test("project indexes omit redacted content and tolerate missing local provenance", () => {
