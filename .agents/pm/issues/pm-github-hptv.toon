@@ -1,0 +1,14 @@
+id: pm-github-hptv
+title: Bound native Bun CLI repeats of a completed public atomic import
+description: "The final packed candidate imported three public issues and passed its Node repeat, privacy gate, and strict health. A direct native Bun CLI repeat remained active with substantial CPU use and was terminated after a bounded acceptance run; tracker bytes stayed unchanged. Earlier native Bun acceptance and library harness tests passed, so the installed-host boundary needs a minimal synthetic reproduction before assigning an upstream cause. Keep this separate from passing Node workflow safety and from the all-source coverage blocker."
+type: Issue
+status: open
+priority: 1
+tags: []
+created_at: "2026-10-05T08:28:54.625Z"
+updated_at: "2026-10-05T08:28:54.625Z"
+author: codex-sol
+files[2]{path,scope}:
+  index.ts,project
+  test/import-gate.test.ts,project
+body: ""

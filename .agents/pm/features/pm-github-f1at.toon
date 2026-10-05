@@ -6,7 +6,7 @@ status: in_progress
 priority: 1
 tags[5]: "area:ci","area:gates","area:import","area:privacy",changelog-unreleased
 created_at: "2026-10-05T06:09:58.912Z"
-updated_at: "2026-10-05T08:28:56.086Z"
+updated_at: "2026-10-05T08:29:31.898Z"
 assignee: codex-sol
 claim_principal: codex-sol
 author: pi-glm
@@ -25,7 +25,7 @@ comments[13]{created_at,author,text}:
   "2026-10-05T08:16:55.234Z",codex-sol,"Verified Node and native Bun regressions for gated preview redaction in atomic and non-atomic modes, including imported credential-shaped titles and labels. Corrected launcher acceptance to invoke Node exactly as the package prepare hook declares; a Bun test runner must not silently substitute its own executable for an explicitly Node-based lifecycle hook. Final full suites are being rerun with these corrections."
   "2026-10-05T08:20:15.079Z",codex-sol,"Native Bun investigation reproduced a concrete subprocess issue: after changing PATH, spawnSync without an explicit environment still found gh; with an explicit current environment it correctly failed ENOENT. GitHub credential discovery, gh availability checks, and PM subprocesses now pass the current environment explicitly, preserving scoped authentication and CLI selection under Node and Bun. This was verified with credential-presence booleans only; no credential values were logged."
   "2026-10-05T08:28:56.085Z",codex-sol,"Frozen packed-candidate public receipt: fetched/planned/skipped 3/3/0, imported 3 items, Node second run exited zero and left item/history bytes identical, privacy PASS over 6 changed files with zero findings, pinned strict health passed, and no remote was configured. The direct native Bun CLI repeat remained active and was terminated; it left tracker bytes identical but has no passing exit/verdict. The entire bounded sequence took 312.01 seconds. This supersedes the earlier native-CLI positive receipt as the current acceptance boundary; native library tests remain separate evidence."
-files[8]{path,scope}:
+files[10]{path,scope}:
   .github/workflows/pm-github-sync.yml,project
   docs/sync-workflow-caller.yml,project
   gate.ts,project
@@ -33,9 +33,12 @@ files[8]{path,scope}:
   scripts/generate-changelog.ts,project
   test/gate.test.ts,project
   test/generate-changelog.test.ts,project
+  test/handler-failures.test.ts,project
   test/import-gate.test.ts,project
-tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  test/prepare-merge-driver.test.ts,project
+tests[2]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
   node --test test/gate.test.ts test/import-gate.test.ts,project,600,codex-sol,"2026-10-05T07:43:22.444Z",local_mutation,feat/import-privacy-gate
+  "npm run test:bun",project,900,codex-sol,"2026-10-05T08:29:30.824Z",local_mutation,feat/import-privacy-gate
 docs[2]{path,scope}:
   docs/sync-workflow-caller.yml,project
   README.md,project
