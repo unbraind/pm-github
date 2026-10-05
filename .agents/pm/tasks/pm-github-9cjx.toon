@@ -6,9 +6,9 @@ status: in_progress
 priority: 1
 tags[5]: all-source,coverage,quality-gate,scripts,tdd
 created_at: "2026-08-17T07:32:29.666Z"
-updated_at: "2026-10-05T09:31:52.268Z"
-assignee: codex-sol-coverage
-claim_principal: codex-sol-coverage
+updated_at: "2026-10-05T09:45:17.622Z"
+assignee: codex-sol
+claim_principal: codex-sol
 author: codex
 estimated_minutes: 960
 acceptance_criteria: "Automatically discover every executable TypeScript production and operational source; require exact 100% statements, branches, functions, and lines; prohibit ignore pragmas, source allowlist blind spots, threshold weakening, vacuous tests, and mocks of the unit under test; exercise GitHub behavior at the HTTP boundary, pm behavior through real SDK/installed-CLI boundaries, and operational scripts through real filesystem/process behavior; prove the gate fails when a new uncovered source or branch is introduced."
@@ -16,7 +16,7 @@ expected_result: "Every executable TypeScript source and operational script is a
 actual_result: The source walker skips scripts and aggregate coverage remains 91.83/82.14/91.75 with thresholds fixed at 88/79/89.
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-github-n3z3,related,"2026-08-17T07:32:29.666Z",codex,"cli:create:dep",detected
-comments[8]{created_at,author,text}:
+comments[11]{created_at,author,text}:
   "2026-10-05T07:52:16.974Z",codex-sol,"Replaced the narrowed coverage wrapper with an explicit authored-module inventory, exact 100 percent thresholds for all four dimensions, stale-LCOV invalidation, and missing-file rejection. Added checked operational-script tests, ESLint enforcement, erasable TypeScript syntax, and a jscpd wrapper that verifies its full source inventory. Typecheck, 122 documented declarations, ESLint, and zero duplication passed. Coverage remains a measured gate rather than an approval claim."
   "2026-10-05T08:09:10.457Z",codex-sol,"Strict all-authored-module run completed with 369 tests passing and no skipped tests. Coverage remained below the unchanged 100/100/100/100 requirement: lines/statements 93.25 percent, branches 84.41 percent, functions 94.92 percent over 11 authored TS/JS modules including operational scripts. LCOV was invalidated on failure. Most remaining uncovered branches and ten uncovered functions are in the pre-existing GitHub Projects sync handlers; this is a release blocker, not a passing gate. The shell release-date verifier remains outside the V8 denominator and is exercised separately."
   "2026-10-05T08:58:34.554Z",codex-sol,"Final frozen-source verification at 0b7c4ab: the linked npm coverage command ran all 375 tests with 375 passing, zero failures and zero skips, then correctly exited nonzero at the unchanged 100 percent gate. Complete inventory: 12 authored TS/JS modules including operational scripts. Lines/statements 7739 of 8285 = 93.40 percent; branches 1548 of 1826 = 84.77 percent; functions 188 of 198 = 94.94 percent. Failed LCOV was removed. No source ignores or lowered thresholds were introduced; release remains blocked."
@@ -25,20 +25,26 @@ comments[8]{created_at,author,text}:
   "2026-10-05T09:26:42.190Z",codex-sol-coverage,"Native Bun verification passed all 12 Projects harness cases and all 39 planner cases, with per-file timeout 600000. Executable lookup failure fixtures now run in explicit Node subprocesses while registered harness behavior stays native. This follows the existing lifecycle test boundary and prevents temporary PATH changes from reaching the host credential helper. Linked Node tests passed 51 of 51 through pm test; test-result tracking is disabled, so this comment records the receipt."
   "2026-10-05T09:29:20.437Z",codex-sol-coverage,"The Projects planner module now measures exact 100/100/100/100 in the targeted c8 run: 732 of 732 lines and statements, 18 of 18 functions, 181 of 181 branches, with 39 Node tests passing. Removed only the impossible parse-exception catch after validating even-length hex; Buffer accepts that validated input without a parsing exception. Malformed encodings still reject before decoding, and uppercase hex preserves the original case-sensitive id. Full package evidence remains pending the orchestrator run; saved baseline receipts cannot be treated as exact-current after scanner changes by the parallel review work."
   "2026-10-05T09:31:52.268Z",codex-sol-coverage,"Counter correction for the latest Projects-only run: all 182 of 182 measured branches are covered; the prior comment used the earlier branch total of 181. Lines and statements remain 732 of 732, functions 18 of 18. The linked 39-test Node planner suite passed. Added eight additional real filesystem/process boundary cases; targeted Node and native Bun both pass 8 of 8."
-files[12]{path,scope}:
+  "2026-10-05T09:34:52.514Z",codex-sol,"Stopped the Codex CLI coverage sub-agent immediately after a fresh quota check reported OVER_FORECAST while the other providers remained exhausted, honoring the owner weekly forecast limit. Preserved its focused commits and remaining test files for orchestrator verification. Projects planners reached exact 100 in targeted c8; 12 Projects harness cases, 8 operational boundary cases, and 9 import error cases passed Node and native Bun. Package-wide coverage still requires a fresh frozen-source run and must not be presented as 100. No thresholds, source inventory, or ignores were weakened."
+  "2026-10-05T09:41:56.169Z",codex-sol,"Orchestrator verification preserved the interrupted new coverage tests and corrected their fixture setup: explicit repo-local tracker initialization, filename-derived item id expectations, and removal of the linked host package-root environment for the missing-metadata Windows case. The preserved Projects and planner cases pass Node; all 74 preserved cases pass native Bun. The newly linked boundary/import/diff command is being reverified through the PM runner before final broad checks. These are test-fixture corrections; production rejection behavior and the exact gate remain unchanged."
+  "2026-10-05T09:45:17.622Z",codex-sol,The corrected linked boundary/import/diff command passes all 23 Node cases through pm test with progress and exit zero. The preserved Projects/planner suites also passed their native behavior checks; the complete 74-case preserved set passed Bun before the environment-isolation correction. Final frozen-source full npm coverage and native Bun checks follow. All useful interrupted files are retained and linked to this item.
+files[15]{path,scope}:
   eslint.config.js,project
   package.json,project
   projects.ts,project
   scripts/coverage-gate.ts,project
   scripts/duplication-gate.ts,project
   test,project
+  test/coverage-boundaries.test.ts,project
   test/coverage-gate.test.ts,project
   test/duplication-gate.test.ts,project
+  test/gate-inputs.test.ts,project
   test/helpers/node-scenario.ts,project
+  test/import-errors.test.ts,project
   test/lint-policy.test.ts,project
   test/project-sync.test.ts,project
   test/projects.test.ts,project
-tests[3]:
+tests[4]:
   - command: npm run coverage
     path: scripts/coverage-gate.ts
     scope: project
@@ -58,6 +64,14 @@ tests[3]:
     provenance:
       author: codex-sol-coverage
       created_at: "2026-10-05T09:29:21.443Z"
+      source_kind: local_mutation
+      source_ref: feat/import-privacy-gate
+  - command: node --test test/coverage-boundaries.test.ts test/import-errors.test.ts test/gate-inputs.test.ts
+    scope: project
+    timeout_seconds: 300
+    provenance:
+      author: codex-sol
+      created_at: "2026-10-05T09:38:01.943Z"
       source_kind: local_mutation
       source_ref: feat/import-privacy-gate
 docs[2]{path,scope,note}:
