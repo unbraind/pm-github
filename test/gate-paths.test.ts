@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-import { runTrackerGate, scanLineForRuleHits } from "../gate.ts";
+import { isHighEntropySecretAssignment, runTrackerGate, scanLineForRuleHits } from "../gate.ts";
 
 test("a credential in a proposed tracker filename fails without exposing the filename", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-gate-path-"));
@@ -36,5 +36,26 @@ test("Windows drive paths accept both separators while public URLs stay clean", 
   }
   for (const value of ["https://github.com/acme/widgets/issues/1", "https://example.org/a", "C:relative.txt"]) {
     assert.equal(scanLineForRuleHits(value).some(hit => hit.rule === "windows-host-path"), false);
+  }
+});
+
+test("camel-case secrets, Slack app credentials and labelled plain phones are gated", () => {
+  const secret = "Zj9kP2mQ7xW4" + "nB8vC5tR1sD";
+  for (const name of ["accessToken", "clientSecret", "privateKey", "APIToken", "AWSSecretAccessKey"]) {
+    assert.equal(isHighEntropySecretAssignment(name, secret), true);
+    assert.ok(scanLineForRuleHits(`${name} = "${secret}"`).some(hit => hit.rule === "high-entropy-assignment"));
+  }
+  for (const value of [secret + "2026-10-05", "a1b2c3d4-e5f6" + "-7890-abcd-ef0123456789"]) {
+    assert.equal(isHighEntropySecretAssignment("api_key", value), true);
+  }
+  assert.equal(isHighEntropySecretAssignment("request_id", "a1b2c3d4-e5f6-7890-abcd-ef0123456789"), false);
+  for (const prefix of ["xapp", "xoxc", "xoxd"]) {
+    assert.ok(scanLineForRuleHits(prefix + "-" + "A".repeat(36)).some(hit => hit.rule === "slack-token"));
+  }
+  for (const value of ["phone: " + "415" + "555" + "0123", '"mobile": "' + "0044" + "7700" + "900123" + '"']) {
+    assert.ok(scanLineForRuleHits(value).some(hit => hit.rule === "phone-number"));
+  }
+  for (const value of ["github-comment:" + "12345678901", "phone: 123456", "phone: 1-----2", "phone: 1234567890123456"]) {
+    assert.equal(scanLineForRuleHits(value).some(hit => hit.rule === "phone-number"), false);
   }
 });

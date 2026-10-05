@@ -191,7 +191,7 @@ const CREDENTIAL_RULES: readonly ContentRule[] = [
   { rule: "github-token-fine-grained", pattern: /github_pat_[A-Za-z0-9_]{22,}/g },
   { rule: "npm-token", pattern: /npm_[A-Za-z0-9]{36}/g },
   { rule: "aws-access-key-id", pattern: /(?:AKIA|ASIA)[0-9A-Z]{16}/g },
-  { rule: "slack-token", pattern: /xox[abprs]-[A-Za-z0-9-]{10,}/g },
+  { rule: "slack-token", pattern: /(?:xox[a-z]|xapp)-[A-Za-z0-9-]{10,}/g },
   { rule: "slack-webhook", pattern: /https:\/\/hooks\.slack\.com\/services\/T[A-Za-z0-9]+\/B[A-Za-z0-9]+\/[A-Za-z0-9]{24,}/g },
   { rule: "openai-legacy-key", pattern: /sk-[A-Za-z0-9]{48}/g },
   { rule: "openai-api-key", pattern: /sk-[A-Za-z0-9_-]{20,}T3BlbkFJ[A-Za-z0-9_-]{20,}/g },
@@ -236,6 +236,12 @@ const PERSONAL_DATA_RULES: readonly ContentRule[] = [
     // only guards the parenthesized variant against truncation by surrounding
     // punctuation.
     confirm: (matched) => (matched.match(/\d/g) ?? []).length === 10,
+  },
+  {
+    rule: "phone-number",
+    pattern: /\b(?:phone|telephone|tel|mobile)\b["']?\s*[:=]\s*["']?\s*\+?\d[\d \t().-]{5,}\d/gi,
+    // Contact labels distinguish unformatted numbers from issue/comment ids.
+    confirm: (matched) => { const digits = matched.replace(/\D/g, "").length; return digits >= 7 && digits <= 15; },
   },
 ];
 
@@ -286,10 +292,6 @@ const SECRET_IDENTIFIER_PAIRS: readonly string[] = ["api_key", "access_key", "pr
 const HIGH_ENTROPY_ASSIGNMENT =
   /(?:^|[^A-Za-z0-9_])([A-Za-z][A-Za-z0-9_-]{0,48})(?:\\?["'`])?\s*[:=]\s*(?:\\?["'`])?([A-Za-z0-9+/_=-]{20,256})(?:\\?["'`])?/g;
 
-/** Value shapes that are structured data, not secrets, even when long. */
-const NON_SECRET_VALUE_SHAPES =
-  /(?:\d{4}-\d{2}-\d{2})|(?:^\{?[0-9a-f]{8}-[0-9a-f]{4}-)/i;
-
 /**
  * Shannon entropy per character of a value.
  *
@@ -319,7 +321,7 @@ export function shannonEntropyPerChar(value: string): number {
  * Fires only when the identifier names a credential (token/secret/password/
  * credential/api_key/access_key/private_key segment) AND the value is long
  * (≥20 chars), high-entropy (≥3.9 bits/char — above dates, timestamps, prose),
- * and not a date/UUID shape. Both halves are required: identifier-only would
+ * and the identifier names a credential. Both halves are required: identifier-only would
  * flag every `token: "the token above"` prose reference, entropy-only would
  * flag every generated id.
  *
@@ -329,8 +331,8 @@ export function shannonEntropyPerChar(value: string): number {
  */
 export function isHighEntropySecretAssignment(identifier: string, value: string): boolean {
   if (value.length < 20) return false;
-  if (NON_SECRET_VALUE_SHAPES.test(value)) return false;
-  const segments = identifier.toLowerCase().split(/[_-]+/).filter(Boolean);
+  const segments = identifier.replace(/([A-Z])([A-Z][a-z])/g, "$1_$2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase().split(/[_-]+/).filter(Boolean);
   const namesSecret =
     segments.some((segment) => SECRET_IDENTIFIER_SEGMENTS.includes(segment)) ||
     SECRET_IDENTIFIER_PAIRS.includes(segments.join("_"));
