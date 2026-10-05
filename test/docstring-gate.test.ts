@@ -70,7 +70,7 @@ test("docstring gate main writes violations to stderr and sets the exit code", (
       observedExitCode = process.exitCode;
       process.stdout.write = originalStdoutWrite;
       process.stderr.write = originalStderrWrite;
-      process.exitCode = originalExitCode;
+      process.exitCode = originalExitCode ?? 0;
     }
     assert.equal(observedExitCode, 1);
     assert.equal(stdout, "");
@@ -156,7 +156,7 @@ test("docstring gate main writes a success line to stdout and exits 0", () => {
   } finally {
     observedExitCode = process.exitCode;
     process.stdout.write = originalStdoutWrite;
-    process.exitCode = originalExitCode;
+    process.exitCode = originalExitCode ?? 0;
   }
   assert.equal(observedExitCode, 0);
   assert.match(stdout, /docstring-gate:.*documented\.\n$/);

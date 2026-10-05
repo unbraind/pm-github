@@ -272,7 +272,7 @@ test("privacy gate CLI entry point writes streams and sets exit code", async () 
   } finally {
     process.stdout.write = originalWrite;
     process.stderr.write = originalErrWrite;
-    process.exitCode = originalExit;
+    process.exitCode = originalExit ?? 0;
   }
 });
 
