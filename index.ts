@@ -264,7 +264,7 @@ export function resolveGitHubToken(): string | undefined {
   const envToken = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
   if (envToken && envToken.trim()) return envToken.trim();
   try {
-    const result = spawnSync("gh", ["auth", "token"], { encoding: "utf-8" });
+    const result = spawnSync("gh", ["auth", "token"], { encoding: "utf-8", env: { ...process.env } });
     if (result.status === 0) {
       const token = result.stdout.trim();
       if (token) return token;
@@ -1130,7 +1130,7 @@ export function readPmItems(
   const result = spawnSync(
     command,
     args,
-    { encoding: "utf-8", maxBuffer },
+    { encoding: "utf-8", maxBuffer, env: { ...process.env } },
   );
   // A buffer overrun kills the child with status null and no stderr, so name the
   // real cause instead of reporting an unexplained failure.
@@ -2310,7 +2310,7 @@ export function parseImportOptions(options: Record<string, unknown>): ImportOpti
 // error-handling shape.
 function pmRun(args: string[]): { ok: boolean; stderr: string; stdout: string } {
   const maxBuffer = pmJsonMaxBuffer();
-  const result = spawnSync("pm", args, { encoding: "utf-8", maxBuffer });
+  const result = spawnSync("pm", args, { encoding: "utf-8", maxBuffer, env: { ...process.env } });
   return { ok: result.status === 0, stderr: result.stderr || "", stdout: result.stdout || "" };
 }
 
@@ -4036,7 +4036,7 @@ export interface ValidateReport {
 // Detect whether the `gh` CLI is installed and runnable on PATH.
 function detectGhCli(): boolean {
   try {
-    const r = spawnSync("gh", ["--version"], { encoding: "utf-8" });
+    const r = spawnSync("gh", ["--version"], { encoding: "utf-8", env: { ...process.env } });
     return r.status === 0;
   } catch {
     return false;

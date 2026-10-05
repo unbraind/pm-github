@@ -40,7 +40,8 @@
     "coverage": "npm run build && npm run build:test && node scripts/coverage-gate.ts",
     "privacy": "node scripts/privacy-gate.ts",
     "lint": "eslint .",
-    "duplication": "node scripts/duplication-gate.ts"
+    "duplication": "node scripts/duplication-gate.ts",
+    "test:bun": "bun_status=0; for test_file in test/*.test.ts; do bun test --timeout 600000 \"$test_file\" || bun_status=1; done; exit \"$bun_status\""
   },
   "peerDependencies": {
     "@unbrained/pm-cli": ">=2026.8.20"
