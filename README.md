@@ -262,11 +262,11 @@ pm github gate --diff sync.patch     # scan an explicit unified diff file instea
 pm github gate --allowlist .pm-github-gate-allowlist.json
 ```
 
-It scans **only the proposed change** — the added lines of the staged/working/untracked diff under the resolved pm tracker path (never a hardcoded `.agents/pm`; the SDK-resolved path wins), or an explicit `--diff` file — so pre-existing reviewed content is not re-litigated on every run, and removed content (which cannot publish anything new) is never scanned. It fails closed (non-zero, machine-readable report with `item_id` + `field` + `rule` + the sha256 `hash` of the matched content, **never the matched content itself**) on:
+It scans **only the proposed change** — the added lines and their filenames in the staged/working/untracked diff under the resolved pm tracker path (never a hardcoded `.agents/pm`; the SDK-resolved path wins), or an explicit `--diff` file — so pre-existing reviewed content is not re-litigated on every run, and removed content (which cannot publish anything new) is never scanned. A finding in a filename uses `field: "file_path"` and redacts a sensitive item id. It fails closed (non-zero, machine-readable report with `item_id` + `field` + `rule` + the sha256 `hash` of the matched content, **never the matched content itself**) on:
 
 - **credentials** — GitHub (`ghp_/gho_/ghu_/ghs_/ghr_` and fine-grained `github_pat_`), npm, AWS access key ids, Slack, OpenAI, Anthropic tokens, generic `Authorization: Bearer` values, `-----BEGIN … PRIVATE KEY-----` blocks, and high-entropy assignments to secret-named identifiers (`token = "…"`, `api_key: …`) whose value has high measured entropy;
 - **personal data** — email addresses other than no-reply identities (`@users.noreply.github.com`, `noreply@…`, `@noreply.…`), and phone numbers in international (`+…`) or North-American (`(555) 123-4567`, `555-123-4567`) notation;
-- **host paths** — absolute local filesystem paths (POSIX home/system directories and Windows drive paths), and named home-directory references.
+- **host paths** — absolute local filesystem paths (POSIX home/system directories and Windows drive paths with either separator), and named home-directory references.
 
 Unreadable input, malformed or truncated diffs, binary input, Git failures, malformed allowlists, and scanner errors fail the gate. Untracked operational state in the tracker root (`locks/`, `extensions/`, `checkpoints/`) is excluded. Explicitly staged operational files remain in scope. Staged and unstaged changes are scanned separately, including staged content that the working copy subsequently removed.
 

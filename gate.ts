@@ -5,7 +5,7 @@
 // writes that text straight into the pm tracker. A sync workflow then pushes the
 // tracker to a public branch — publishing the leak with it. This module is the
 // gate that runs between the write and any push: it scans ONLY the proposed
-// change (the added lines of the staged/working/untracked diff under the
+// change (the added lines and their filenames in the staged/working/untracked diff under the
 // resolved pm tracker path, or an explicit unified diff), so pre-existing
 // reviewed content is not re-litigated on every run, and it FAILS CLOSED:
 //
@@ -253,7 +253,7 @@ const HOST_PATH_RULES: readonly ContentRule[] = [
   },
   {
     rule: "windows-host-path",
-    pattern: /[A-Za-z]:\\[^\s"'`<>),;\]}]+/g,
+    pattern: /(?<![A-Za-z0-9_:/])[A-Za-z]:[\\/][^\s"'`<>),;\]}]+/g,
   },
   {
     rule: "home-username",
@@ -791,7 +791,7 @@ const UNTRACKED_FILE_BYTE_CAP = 8 * 1024 * 1024;
 // ---------------------------------------------------------------------------
 
 /**
- * Scan one change file's added lines and return raw findings.
+ * Scan one change file's added lines and proposed filename and return raw findings.
  *
  * Each hit is attributed to the changed file's item id; the field comes from the
  * toon walk for `.toon` files and from the enclosing JSONL patch entry for
@@ -805,9 +805,12 @@ const UNTRACKED_FILE_BYTE_CAP = 8 * 1024 * 1024;
 function scanChangeFile(change: ChangeFile): Array<GateFinding & { matched: string }> {
   const findings: Array<GateFinding & { matched: string }> = [];
   const seen = new Set<string>();
-  for (const line of change.addedLines) {
+  const proposedLines = change.addedLines.length === 0 ? [] : [
+    { text: change.filePath, field: "file_path" }, ...change.addedLines,
+  ];
+  for (const line of proposedLines) {
     const values: Array<{ text: string; field: string; structural?: boolean }> = [];
-    if (change.filePath.endsWith(".jsonl")) {
+    if (change.filePath.endsWith(".jsonl") && line.field !== "file_path") {
       if (line.text.trim() === "") continue;
       // Structural JSON patch paths are pointers, while their values are data.
       // Decode data before scanning so escaped separators cannot bypass a rule.

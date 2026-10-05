@@ -6,7 +6,7 @@ status: blocked
 priority: 1
 tags[5]: "area:ci","area:gates","area:import","area:privacy",changelog-unreleased
 created_at: "2026-10-05T06:09:58.912Z"
-updated_at: "2026-10-05T09:11:07.592Z"
+updated_at: "2026-10-05T09:16:14.202Z"
 assignee: codex-sol
 claim_principal: codex-sol
 author: pi-glm
@@ -15,7 +15,7 @@ blocked_by: pm-github-9cjx
 dependencies[2]{id,kind,created_at,author,source_kind,author_source}:
   pm-github-9cjx,blocked_by,"2026-10-05T08:43:10.230Z",codex-sol,"cli:update:blocked_by",detected
   pm-github-hptv,blocked_by,"2026-10-05T08:43:10.230Z",codex-sol,"cli:update:dep",detected
-comments[18]{created_at,author,text}:
+comments[20]{created_at,author,text}:
   "2026-10-05T06:21:37.672Z",pi-glm,"Design settled: new gate.ts holds the pure scanner (credential/personal-data/host-path rules over ADDED lines only, sha256 content-hash allowlist with required written justification, fail-closed on unreadable input/git failure/malformed allowlist); unified-diff parser with toon field attribution + jsonl patch-entry attribution; git collector covers staged+working+untracked under the resolved tracker path and excludes operational locks/extensions/checkpoints subpaths. Registered as 'pm github gate' (--diff, --allowlist) and composed into import via --gate: plan completeness + provenance idempotency verified pre-mutation, tracker-change scan post-write, non-zero exit so a workflow can never push on a finding. Reusable workflow_call sync workflow added with SHA-pinned actions; caller example at docs/sync-workflow-caller.yml."
   "2026-10-05T06:33:25.742Z",pi-glm,"Implementation checkpoint: gate.ts (scanner + unified-diff parser with toon/jsonl field attribution + git collector over staged/working/untracked tracker changes, operational locks/extensions/checkpoints excluded + sha256-keyed allowlist with required justification) is registered as 'pm github gate' and composed into import via --gate (plan completeness + provenance idempotency verified pre-mutation, fail-closed scan post-write, non-zero exit). Reusable workflow_call sync workflow with SHA-pinned actions + caller example added. Full package suite green: 347 tests pass, coverage 93.55 lines / 84.05 branches / 93.62 functions (repo thresholds 88/79/89 met), docstring gate 119/119, repo privacy gate clean over 3107 objects. New suites test/gate.test.ts (29) and test/import-gate.test.ts (13) include the adversarial full-sequence replay on a real git repo with a bare remote: token-in-body, token-in-comment, email, host-path, and high-entropy fixtures all fail the gated import before anything can be pushed, and the remote's ref list never gains the sync branch."
   "2026-10-05T06:42:46.064Z",codex-sol,"Resumed interrupted run as codex-sol. Preserving implementation commit and README draft. Verification priorities: scanner fail-closed inputs and redaction, full bare-remote sequence, SDK-resolved tracker paths, reusable workflow input safety and existing PR updates, real public issue acceptance, and requested all-source 100 percent coverage. Previous evidence met only the existing lower thresholds; this is not the requested coverage gate."
@@ -34,20 +34,24 @@ comments[18]{created_at,author,text}:
   "2026-10-05T08:58:35.322Z",codex-sol,"Final frozen-source checks at 0b7c4ab: npm ran 375 tests with all passing; the full per-file native Bun linked test ran 375 cases and exited zero. Gate/import tests include 57 cases and actual workflow shell execution against bare remotes. Typecheck, strict erasable syntax, ESLint, 123 documented declarations, zero duplication across 12 authored modules, production audit, packing, attested-publish checks, generated changelog, pinned CLI strict health, and Git-object privacy passed. Mandatory 100/100/100/100 coverage remains blocked at 93.40/93.40/84.77/94.94. A latest direct public fetch retry timed out before planning or writing; preserve the earlier three-item Node receipt separately and keep native installed-CLI acceptance blocked."
   "2026-10-05T09:03:35.170Z",codex-sol,"Latest packed-candidate real-data acceptance recovered after the transient public API timeout: fresh scratch project with pinned CLI 2026.10.4 and the packed candidate planned/fetched/skipped 3/3/0 public unbraind/pm-todos issues, imported 3, passed privacy over 6 files with zero findings, completed a byte-identical Node repeat, and passed strict health in 12.28 seconds. No remote was configured and no push occurred. This is the final positive Node receipt; native installed-CLI acceptance remains separately bounded and tracked."
   "2026-10-05T09:11:07.592Z",codex-sol,"A current quota refresh reports Ollama Cloud, OpenCode Go, and Grok exhausted; Codex remains on pace within the weekly forecast. Started the updated Codex CLI with gpt-6.1-sol at xhigh to continue the existing exact all-source coverage task pm-github-9cjx. Thresholds remain 100 for all four metrics, no source ignores, and no release or rollout is authorized until the gate passes. The latest native installed-CLI repeat also passed in 4.22 seconds without tracker mutation; the earlier intermittent observation remains tracked."
-files[10]{path,scope}:
+  "2026-10-05T09:14:18.425Z",codex-sol,"Additional privacy review reproduced two missed shapes: a credential present only in a proposed tracker filename, and Windows drive paths using forward slashes. Both are now scanned. Filename findings use file_path and sensitive item identifiers are redacted. Real temporary Git regression tests prove a token-bearing filename fails without creating a commit; URL controls remain clean. The combined gate suite passes 40 Node cases."
+  "2026-10-05T09:16:14.202Z",codex-sol,"The proposed-filename and Windows-separator fixes passed 40 Node gate cases and 40 native Bun gate cases. The newly linked two-case command ran through pm test with progress and exit zero. Strict typecheck, source and test ESLint, 123 documented declarations, and the complete 12-module zero-duplication gate pass. Final broad npm, Bun, coverage, and packed acceptance must be refreshed after the concurrent coverage work settles."
+files[11]{path,scope}:
   .github/workflows/pm-github-sync.yml,project
   docs/sync-workflow-caller.yml,project
   gate.ts,project
   index.ts,project
   scripts/generate-changelog.ts,project
+  test/gate-paths.test.ts,project
   test/gate.test.ts,project
   test/generate-changelog.test.ts,project
   test/handler-failures.test.ts,project
   test/import-gate.test.ts,project
   test/prepare-merge-driver.test.ts,project
-tests[2]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+tests[3]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
   node --test test/gate.test.ts test/import-gate.test.ts,project,600,codex-sol,"2026-10-05T07:43:22.444Z",local_mutation,feat/import-privacy-gate
   "npm run test:bun",project,900,codex-sol,"2026-10-05T08:29:30.824Z",local_mutation,feat/import-privacy-gate
+  node --test test/gate-paths.test.ts,project,60,codex-sol,"2026-10-05T09:15:00.790Z",local_mutation,feat/import-privacy-gate
 docs[2]{path,scope}:
   docs/sync-workflow-caller.yml,project
   README.md,project
