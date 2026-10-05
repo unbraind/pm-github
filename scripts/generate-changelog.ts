@@ -24,7 +24,7 @@ export async function generateChangelog(root: string, args: readonly string[]): 
       "--mode", "replace", "--output", "CHANGELOG.md", "--all-release-tags", "--release-version-from-package",
       "--date-from-version", "--item-url-base", "https://github.com/unbraind/pm-github/blob/main/.agents/pm",
       "--respect-item-release", ...args], {
-      cwd: root, input: JSON.stringify({ items }), encoding: "utf8", maxBuffer: 64 * 1024 * 1024,
+      cwd: root, input: JSON.stringify({ items }), encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: { ...process.env },
     });
     if (result.status === null) return 1;
     process.stdout.write(result.stdout);

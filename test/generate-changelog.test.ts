@@ -29,7 +29,9 @@ test("canonical changelog includes tagged pending work without closing it or adm
     fs.appendFileSync(path.join(root, "CHANGELOG.md"), "\nDrift\n");
     assert.equal(await generateChangelog(root, ["--check", "--no-check-diff"]), 1);
     const previousPath = process.env.PATH;
-    process.env.PATH = "";
+    const emptyBin = path.join(root, "empty-bin");
+    fs.mkdirSync(emptyBin);
+    process.env.PATH = emptyBin;
     try {
       assert.equal(await generateChangelog(root, []), 1);
     } finally {
