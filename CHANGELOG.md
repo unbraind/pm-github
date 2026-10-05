@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Fail-closed privacy gate for automated GitHub issue imports and one reusable sync workflow ([pm-github-f1at](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-f1at.toon))
+
 ### Other
 
 - Auto-merge green Dependabot updates and group the pm toolchain into one daily PR ([pm-github-u9df](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-u9df.toon))
@@ -102,16 +106,11 @@
 
 - Refuse incomplete pm item corpora before GitHub imports, exports, and syncs ([pm-github-ep0u](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-ep0u.toon))
 
-## 2026.8.17 - 2026-08-17
-
-### Fixed
-
-- The manifest declared a pm CLI floor of 2026.7.28 while peerDependencies required 2026.8.3, so the CLI enforced a weaker minimum than npm ([pm-github-7d1h](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-7d1h.toon))
-
 ## 2026.8.16 - 2026-08-16
 
 ### Fixed
 
+- The manifest declared a pm CLI floor of 2026.7.28 while peerDependencies required 2026.8.3, so the CLI enforced a weaker minimum than npm ([pm-github-7d1h](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-7d1h.toon))
 - A github command can silently lose its preflight credential gate when the override scope drifts from the mutating command set ([pm-github-4ga9](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-4ga9.toon))
 
 ## 2026.8.15 - 2026-08-15

@@ -119,6 +119,27 @@ test("recovered journals cannot substitute for a complete persisted provenance c
   ], prepared, "acme/widgets"), CommandError);
 });
 
+test("gated comment imports scan persisted values without importing REST user metadata", async () => {
+  const { root, base } = initSyncRepo();
+  try {
+    const comment = { id: 101, body: "Public comment", created_at: "2026-10-02T00:00:00Z",
+      user: { login: "octocat", events_url: "https://api.github.com/users/octocat/events{/privacy}" } };
+    await withMockGithub(githubHandler([issue(1, "Public issue", "Public body")], new Map([[1, [comment]]])), async () => {
+      const result = await runGatedImport(root, { atomic: true, gate: true, "with-comments": true, "comments-mode": "both" });
+      assert.equal(result.imported, 1);
+      assert.equal((result.gate as ImportGateReceipt).verdict, "pass");
+      const tracker = path.join(root, ".agents/pm");
+      const item = fs.readdirSync(path.join(tracker, "issues")).find(file => file.endsWith(".toon"));
+      assert.ok(item);
+      const text = fs.readFileSync(path.join(tracker, "issues", item), "utf8");
+      assert.ok(text.includes("Public comment"));
+      assert.ok(!text.includes("events_url"));
+    });
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
 test("a real completed SDK journal with reset item files cannot authorize a push", async () => {
   const { root, base, bare, git } = initSyncRepo();
   try {
@@ -658,7 +679,7 @@ case "$1 $2" in
   *) exit 1 ;;
 esac
 `, { mode: 0o755 });
-  const env = { ...process.env, PATH: tools + path.delimiter + process.env.PATH,
+  const env = { ...process.env, PATH: tools + path.delimiter + bin + path.delimiter + process.env.PATH,
     GH_TOKEN: "synthetic-test-token", GITHUB_TOKEN: "synthetic-test-token", PM_AUTHOR: "codex-sol",
     PM_PATH: path.join(root, ".agents", "pm"), REPOSITORY: "acme/widgets", CALLING_REPOSITORY: "acme/widgets",
     PM_GITHUB_VERSION: "2026.10.4", SYNC_BRANCH, SYNC_LEASE: "", RUNNER_TEMP: base,

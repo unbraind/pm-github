@@ -53,6 +53,38 @@ test("staged content is scanned even when the working copy restores clean text",
   }
 });
 
+test("operational exclusions cannot hide staged files or nested item content", () => {
+  const { root, git } = initGateRepo();
+  try {
+    for (const relative of ["locks/receipt.json", "issues/extensions/item.toon"]) {
+      const file = path.join(root, ".agents/pm", relative);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, `body: "${GH_TOKEN}"\n`);
+    }
+    assert.equal(git(["add", ".agents/pm/locks/receipt.json"]).status, 0);
+    const report = runTrackerGate({ pmRoot: root });
+    assert.equal(report.verdict, "fail");
+    assert.equal(report.scanned_files, 2);
+    assert.equal(report.findings.length, 2);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("history pointer syntax never suppresses credentials in a pointer", () => {
+  const diff = `--- /dev/null\n+++ b/history/item.jsonl\n@@ -0,0 +1 @@\n+${JSON.stringify({ patch: [{ op: "add", path: `/metadata/${GH_TOKEN}`, value: "clean" }] })}\n`;
+  const { root } = initGateRepo();
+  try {
+    const file = path.join(root, "proposal.diff");
+    fs.writeFileSync(file, diff);
+    const report = runTrackerGate({ pmRoot: root, diffFile: file });
+    assert.equal(report.verdict, "fail");
+    assert.ok(report.findings.some(finding => finding.rule === "github-token-classic"));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("an allowlisted value cannot hide another value in the same item field", () => {
   const { root } = initGateRepo();
   try {

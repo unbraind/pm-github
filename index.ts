@@ -3047,7 +3047,10 @@ export async function runImport(
       const preview = runTrackerGate({ pmRoot, plannedItems: planned.map(entry => ({
         itemId: entry.match?.id ?? `github-issue-${entry.issueNumber}`,
         fields: { title: entry.title, description: entry.description, body: entry.body, tags: entry.tags,
-          assignee: entry.assignee, sprint: entry.milestone, comments: entry.comments },
+          assignee: entry.assignee, sprint: entry.milestone,
+          comments: entry.syncAnnotations ? entry.comments.map(comment => ({
+            author: comment.user?.login, text: comment.body, created_at: comment.created_at,
+          })) : [] },
       })) });
       if (preview.verdict === "fail") throw new CommandError(JSON.stringify({ ...preview, error: "pm github gate: FAIL before write" }));
     }

@@ -344,6 +344,8 @@ MIT
 
 Release checks require type checking, docstrings, ESLint, zero source duplication, exact 100/100/100/100 coverage across authored TypeScript and JavaScript modules including operational scripts, production dependency audit, package packing, Bun behavior, strict PM health, and pm-changelog validation. Unloaded modules count at zero; no source ignores or lowered thresholds are accepted. Coverage shortfalls block release. The shell changelog-date verifier is exercised separately and is outside the V8 percentage denominator. The daily release workflow publishes only when commits exist after the latest release tag and uses pm-changelog to generate CHANGELOG.md and GitHub release notes.
 
+`npm run changelog:full` reads the complete tracker through the SDK and feeds pm-changelog. Closed work supplies release history; the explicit `changelog-unreleased` tag includes a pending candidate without closing its PM item. Other open work stays excluded.
+
 ## Multi-agent merge safety
 
 This repo tracks its project management in `.agents/pm/` and ships a committed `.gitattributes`

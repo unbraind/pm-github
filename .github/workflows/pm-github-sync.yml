@@ -96,7 +96,11 @@ jobs:
 
       # The calling repo's own devDependency provides the pm CLI (npm ci).
       - name: Install dependencies
-        run: npm ci
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          printf '%s/node_modules/.bin\n' "${GITHUB_WORKSPACE}" >> "${GITHUB_PATH}"
 
       - name: Install pinned pm-github extension
         shell: bash

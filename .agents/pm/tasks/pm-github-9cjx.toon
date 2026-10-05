@@ -6,7 +6,7 @@ status: in_progress
 priority: 1
 tags[5]: all-source,coverage,quality-gate,scripts,tdd
 created_at: "2026-08-17T07:32:29.666Z"
-updated_at: "2026-10-05T07:52:16.974Z"
+updated_at: "2026-10-05T08:09:10.457Z"
 assignee: codex-sol
 claim_principal: codex-sol
 author: codex
@@ -16,8 +16,9 @@ expected_result: "Every executable TypeScript source and operational script is a
 actual_result: The source walker skips scripts and aggregate coverage remains 91.83/82.14/91.75 with thresholds fixed at 88/79/89.
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-github-n3z3,related,"2026-08-17T07:32:29.666Z",codex,"cli:create:dep",detected
-comments[1]{created_at,author,text}:
+comments[2]{created_at,author,text}:
   "2026-10-05T07:52:16.974Z",codex-sol,"Replaced the narrowed coverage wrapper with an explicit authored-module inventory, exact 100 percent thresholds for all four dimensions, stale-LCOV invalidation, and missing-file rejection. Added checked operational-script tests, ESLint enforcement, erasable TypeScript syntax, and a jscpd wrapper that verifies its full source inventory. Typecheck, 122 documented declarations, ESLint, and zero duplication passed. Coverage remains a measured gate rather than an approval claim."
+  "2026-10-05T08:09:10.457Z",codex-sol,"Strict all-authored-module run completed with 369 tests passing and no skipped tests. Coverage remained below the unchanged 100/100/100/100 requirement: lines/statements 93.25 percent, branches 84.41 percent, functions 94.92 percent over 11 authored TS/JS modules including operational scripts. LCOV was invalidated on failure. Most remaining uncovered branches and ten uncovered functions are in the pre-existing GitHub Projects sync handlers; this is a release blocker, not a passing gate. The shell release-date verifier remains outside the V8 denominator and is exercised separately."
 files[8]{path,scope}:
   eslint.config.js,project
   package.json,project
@@ -27,20 +28,8 @@ files[8]{path,scope}:
   test/coverage-gate.test.ts,project
   test/duplication-gate.test.ts,project
   test/lint-policy.test.ts,project
-tests[2]:
-  - command: npm run coverage
-    path: scripts/coverage-gate.ts
-    scope: project
-    timeout_seconds: 900
-    note: Current ratcheted gate; this item remains open until it measures all executable sources at exact 100/100/100/100.
-  - command: npm run coverage
-    scope: project
-    timeout_seconds: 600
-    provenance:
-      author: codex-sol
-      created_at: "2026-10-05T07:43:24.083Z"
-      source_kind: local_mutation
-      source_ref: feat/import-privacy-gate
+tests[1]{command,path,scope,timeout_seconds,note}:
+  npm run coverage,scripts/coverage-gate.ts,project,900,Current ratcheted gate; this item remains open until it measures all executable sources at exact 100/100/100/100.
 docs[2]{path,scope,note}:
   "https://github.com/unbraind/pm-cli-companion/blob/main/.agents/pm/epics/pm-cli-website-ktip.toon",global,Fleet exact coverage mandate
   "https://github.com/unbraind/pm-cli-companion/blob/main/.agents/pm/issues/pm-cli-website-odki.toon",global,Fleet operational script coverage gap
