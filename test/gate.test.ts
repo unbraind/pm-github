@@ -39,6 +39,65 @@ const MANIFEST_CAPABILITIES = ["commands", "importers", "schema", "hooks", "pref
 const harnessPromise: Promise<ExtensionTestHarness> =
   createExtensionTestHarness(extension, { capabilities: [...MANIFEST_CAPABILITIES] });
 
+test("staged content is scanned even when the working copy restores clean text", () => {
+  const { root, git } = initGateRepo();
+  try {
+    const file = path.join(root, ".agents", "pm", "issues", "pm-test-aabb.toon");
+    const original = fs.readFileSync(file, "utf8");
+    fs.writeFileSync(file, `id: pm-test-aabb\nbody: "${GH_TOKEN}"\n`);
+    assert.equal(git(["add", ".agents/pm/issues/pm-test-aabb.toon"]).status, 0);
+    fs.writeFileSync(file, original);
+    assert.equal(runTrackerGate({ pmRoot: root }).verdict, "fail");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an allowlisted value cannot hide another value in the same item field", () => {
+  const { root } = initGateRepo();
+  try {
+    const other = "ghp_" + "B".repeat(36);
+    fs.writeFileSync(path.join(root, GATE_ALLOWLIST_FILENAME), JSON.stringify({
+      [sha256Hex(GH_TOKEN)]: { reason: "Reviewed synthetic value." },
+    }));
+    fs.writeFileSync(path.join(root, ".agents", "pm", "issues", "pm-test-aabb.toon"),
+      `id: pm-test-aabb\nbody: "${GH_TOKEN} and ${other}"\n`);
+    const report = runTrackerGate({ pmRoot: root });
+    assert.equal(report.verdict, "fail");
+    assert.equal(report.allowlisted, 1);
+    assert.equal(report.findings.length, 1);
+    assert.equal(report.findings[0]!.hash, sha256Hex(other));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("malformed, truncated, and binary diffs fail closed", () => {
+  for (const diff of ["garbage", "--- a/item\n+++ b/item\n@@ -0,0 +1,2 @@\n+body: clean",
+    "diff --git a/item b/item\nBinary files a/item and b/item differ",
+    "--- a/item\n+++ b/item\n@@ invalid @@\n+body: clean"]) {
+    assert.throws(() => parseUnifiedDiff(diff), GateInputError);
+  }
+  assert.deepEqual(parseUnifiedDiff(""), []);
+});
+
+test("escaped tokens and Windows paths retain redacted findings", () => {
+  const escapedToken = "\\u0067" + GH_TOKEN.slice(1);
+  assert.ok(scanLineForRuleHits(escapedToken).some(hit => hit.rule === "github-token-classic"));
+  assert.ok(scanLineForRuleHits(JSON.stringify(WIN_PATH)).some(hit => hit.rule === "windows-host-path"));
+  assert.ok(scanLineForRuleHits("Authorization: Bearer " + "A".repeat(32)).some(hit => hit.rule === "bearer-token"));
+  assert.deepEqual(scanLineForRuleHits("noreply@example.org"), []);
+  assert.ok(scanLineForRuleHits("person-noreply@example.org").some(hit => hit.rule === "email-address"));
+});
+
+test("a present but unreadable optional allowlist fails without echoing its error", () => {
+  assert.throws(() => readGateAllowlist("reviewed.json", false, () => {
+    const failure = new Error(GH_TOKEN) as NodeJS.ErrnoException;
+    failure.code = "EACCES";
+    throw failure;
+  }), err => err instanceof GateInputError && !err.message.includes(GH_TOKEN));
+});
+
 // --- Fake-but-well-formed malicious fixtures, assembled from parts so that no
 // --- tracked blob holds a complete signature.
 const GH_TOKEN = "ghp_" + "A".repeat(36);
@@ -110,7 +169,7 @@ test("scanner fires on every high-confidence credential signature", () => {
     ["openai-api-key", `key ${OPENAI_KEY}`],
     ["anthropic-api-key", `key ${ANTHROPIC_KEY}`],
     ["openai-project-key", "key " + "sk-proj-" + "I".repeat(30)],
-    ["private-key-block", "-----BEGIN RSA PRIVATE KEY-----"],
+    ["private-key-block", "-----BEGIN " + "RSA PRIVATE KEY-----"],
   ];
   for (const [rule, line] of cases) {
     const hits = scanLineForRuleHits(line);
@@ -121,12 +180,12 @@ test("scanner fires on every high-confidence credential signature", () => {
   }
 });
 
-test("bearer rule requires a digit-bearing credential, not prose", () => {
+test("bearer rule detects credentials including letter-only values", () => {
   assert.deepStrictEqual(
     scanLineForRuleHits("Authorization: Bearer " + "aB3cD9eFg1hA7bC2dE4fG").map((hit) => hit.rule),
     ["bearer-token"],
   );
-  assert.deepStrictEqual(scanLineForRuleHits("Use Bearer authenticationmechanism everywhere"), []);
+  assert.deepStrictEqual(scanLineForRuleHits("Use Bearer authentication everywhere"), []);
 });
 
 test("personal-data rules: emails and phone numbers, with no-reply exemption", () => {
@@ -213,7 +272,7 @@ test("parseUnifiedDiff attributes item id and toon fields, and skips removed lin
     "index 111..222 100644",
     "--- a/.agents/pm/issues/pm-x1.toon",
     "+++ b/.agents/pm/issues/pm-x1.toon",
-    "@@ -1,3 +1,6 @@",
+    "@@ -1,2 +1,5 @@",
     " id: pm-x1",
     '-title: "old"',
     '+title: "New title"',
@@ -224,7 +283,7 @@ test("parseUnifiedDiff attributes item id and toon fields, and skips removed lin
     "diff --git a/.agents/pm/history/pm-x1.jsonl b/.agents/pm/history/pm-x1.jsonl",
     "--- /dev/null",
     "+++ b/.agents/pm/history/pm-x1.jsonl",
-    "@@ -0,0 +1 @@",
+    "@@ -0,0 +1,2 @@",
     `+{"op":"add","path":"/metadata/body","value":"mail ${PERSONAL_EMAIL}"}`,
     `+{"op":"add","path":"/metadata/id","value":"pm-x1"}`,
   ].join("\n");
@@ -417,10 +476,10 @@ test("collectTrackerChange fails closed when the tracker escapes the Git work tr
   );
 });
 
-test("a vanished untracked tracker file contributes no change instead of failing", () => {
+test("a vanished untracked tracker file fails closed", () => {
   const { root } = initGateRepo();
   try {
-    const report = runTrackerGate({
+    assert.throws(() => runTrackerGate({
       pmRoot: root,
       dependencies: {
         runGit: (cwd, args) => {
@@ -435,9 +494,7 @@ test("a vanished untracked tracker file contributes no change instead of failing
           return { ok: true, stdout: "", stderr: "" };
         },
       },
-    });
-    assert.strictEqual(report.verdict, "pass");
-    assert.strictEqual(report.scanned_files, 0);
+    }), GateInputError);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -503,7 +560,7 @@ test("an allowlisted content hash is suppressed and counted, never widened to a 
     const diff = [
       "--- /dev/null",
       "+++ b/.agents/pm/issues/pm-allow.toon",
-      "@@ -0,0 +2 @@",
+      "@@ -0,0 +2,2 @@",
       `+body: "token ${GH_TOKEN}"`,
       `+body: "token ${NPM_TOKEN}"`,
     ].join("\n");
@@ -563,7 +620,7 @@ test("the default repository-root allowlist is consulted when present", () => {
     const report = runTrackerGate({ pmRoot: root });
     assert.strictEqual(report.verdict, "pass");
     assert.strictEqual(report.allowlisted, 1);
-    assert.strictEqual(report.allowlist_path, path.join(root, GATE_ALLOWLIST_FILENAME));
+    assert.strictEqual(report.allowlist_path, GATE_ALLOWLIST_FILENAME);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

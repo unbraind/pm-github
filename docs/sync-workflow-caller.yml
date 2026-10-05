@@ -1,30 +1,15 @@
-# Caller workflow for the reusable gated pm-github sync.
-#
-# A fleet repo copies this file to .github/workflows/pm-github-sync.yml and
-# edits exactly three values: its repository (or omits it to use its own),
-# the pinned pm-github version, and the schedule. The schedule stays with the
-# caller; the audited implementation (gate, plan, health, push, PR) lives in
-# one reusable workflow in unbraind/pm-github.
-
+# Replace release placeholders after the gated extension is published.
 name: Sync GitHub issues into pm
-
 on:
   schedule:
-    - cron: "17 2 * * *" # pick a per-repo minute to spread fleet load
+    - cron: "17 2 * * *"
   workflow_dispatch:
-
 permissions:
   contents: write
   pull-requests: write
-
-concurrency:
-  group: pm-github-sync
-  cancel-in-progress: false
-
 jobs:
   gated-sync:
-    # Pin the reusable workflow to the released pm-github tag that ships it.
-    uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@v2026.10.04
+    uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@RELEASE_COMMIT_SHA
     with:
-      repository: unbraind/pm-graph # default: the calling repository
-      pm-github-version: "2026.10.4" # required: exact published version
+      repository: unbraind/pm-graph
+      pm-github-version: "RELEASE_VERSION"

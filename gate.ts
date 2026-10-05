@@ -30,6 +30,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { resolvePmRoot } from "@unbrained/pm-cli/sdk";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -152,13 +153,7 @@ export interface TrackerGateInput {
  * @returns The resolved pm data directory.
  */
 export function resolvePmDataDir(pmRoot: string): string {
-  const nested = path.join(pmRoot, ".agents", "pm");
-  try {
-    if (fs.statSync(nested).isDirectory()) return nested;
-  } catch {
-    // Not the workspace-root form — assume pmRoot already is the data dir.
-  }
-  return pmRoot;
+  return resolvePmRoot(process.cwd(), pmRoot);
 }
 
 // ---------------------------------------------------------------------------
@@ -193,7 +188,7 @@ const CREDENTIAL_RULES: readonly ContentRule[] = [
   { rule: "github-token-classic", pattern: /gh[ousrp]_[A-Za-z0-9]{36}/g },
   { rule: "github-token-fine-grained", pattern: /github_pat_[A-Za-z0-9_]{22,}/g },
   { rule: "npm-token", pattern: /npm_[A-Za-z0-9]{36}/g },
-  { rule: "aws-access-key-id", pattern: /AKIA[0-9A-Z]{16}/g },
+  { rule: "aws-access-key-id", pattern: /(?:AKIA|ASIA)[0-9A-Z]{16}/g },
   { rule: "slack-token", pattern: /xox[abprs]-[A-Za-z0-9-]{10,}/g },
   { rule: "openai-api-key", pattern: /sk-[A-Za-z0-9_-]{20,}T3BlbkFJ[A-Za-z0-9_-]{20,}/g },
   { rule: "openai-project-key", pattern: /sk-proj-[A-Za-z0-9_-]{20,}/g },
@@ -201,10 +196,7 @@ const CREDENTIAL_RULES: readonly ContentRule[] = [
   {
     rule: "bearer-token",
     pattern: /[Bb]earer\s+[A-Za-z0-9._~+/=-]{20,}/g,
-    // A real bearer credential is base64/base62-ish and virtually always mixes
-    // letters with digits; prose after "Bearer" ("Bearer authentication
-    // tokens…") is all letters and must not fire.
-    confirm: (matched) => /[0-9]/.test(matched),
+
   },
   { rule: "private-key-block", pattern: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/g },
 ];
@@ -220,7 +212,10 @@ const PERSONAL_DATA_RULES: readonly ContentRule[] = [
     // GitHub, GitLab and most mail systems use a "noreply" domain or local part
     // for automated identities; anything else in imported issue text is a real
     // person's address and fails closed.
-    confirm: (matched) => !/[.\-@]no-?reply[.\-@]/i.test(matched),
+    confirm: (matched) => {
+      const [local, domain] = matched.toLowerCase().split("@");
+      return !/^(?:no-?reply)$/.test(local!) && !/(?:^|\.)no-?reply(?:\.|$)/.test(domain!);
+    },
   },
   {
     rule: "phone-number",
@@ -249,11 +244,11 @@ const PERSONAL_DATA_RULES: readonly ContentRule[] = [
 const HOST_PATH_RULES: readonly ContentRule[] = [
   {
     rule: "absolute-host-path",
-    pattern: /(?:^|[\s"'`(\[=,{])\/(?:home|Users|root|tmp|var|mnt|media|opt|srv|private|www|inetpub)\//g,
+    pattern: /(?:^|[\s"'`([=,{])\/(?:home|Users|root|tmp|var|mnt|media|opt|srv|private|www|inetpub|etc|usr|workspace|workspaces)\/[^\s"'`<>),;\]}]*/g,
   },
   {
     rule: "windows-host-path",
-    pattern: /[A-Za-z]:\\(?:Users|home|root|tmp|Windows|Program Files|Inetpub|www)\\/g,
+    pattern: /[A-Za-z]:\\[^\s"'`<>),;\]}]+/g,
   },
   {
     rule: "home-username",
@@ -261,7 +256,7 @@ const HOST_PATH_RULES: readonly ContentRule[] = [
     // leak (`~alice/report.txt`); `~/` (anonymous), `~~strikethrough~~`, and
     // prose approximations (`~most users`) are excluded by the boundary and
     // the required trailing slash.
-    pattern: /(?:^|[\s"'`(\[=,])~[A-Za-z][A-Za-z0-9._-]{1,}\//g,
+    pattern: /(?:^|[\s"'`([=,])~[A-Za-z][A-Za-z0-9._-]*\/[^\s"'`<>),;\]}]*/g,
   },
 ];
 
@@ -360,20 +355,39 @@ interface RuleHit {
  * @returns Every rule hit on the line, in evaluation order.
  */
 export function scanLineForRuleHits(line: string): RuleHit[] {
+  // Serialized tracker text may escape separators or provider prefixes. Map
+  // decoded characters back to their original offsets for history attribution.
+  const offsets: number[] = [];
+  let decoded = "";
+  for (let index = 0; index < line.length; index++) {
+    const unicode = /^\\u([0-9a-f]{4})/i.exec(line.slice(index));
+    if (unicode) {
+      decoded += String.fromCharCode(Number.parseInt(unicode[1]!, 16));
+      offsets.push(index);
+      index += 5;
+    } else if (line[index] === "\\" && /[\\/nrt]/.test(line[index + 1] ?? "")) {
+      decoded += ({ n: "\n", r: "\r", t: "\t" } as Record<string, string>)[line[index + 1]!] ?? line[index + 1]!;
+      offsets.push(index);
+      index++;
+    } else {
+      decoded += line[index]!;
+      offsets.push(index);
+    }
+  }
   const hits: RuleHit[] = [];
   for (const rule of [...CREDENTIAL_RULES, ...PERSONAL_DATA_RULES, ...HOST_PATH_RULES]) {
     rule.pattern.lastIndex = 0;
-    for (let match = rule.pattern.exec(line); match; match = rule.pattern.exec(line)) {
+    for (let match = rule.pattern.exec(decoded); match; match = rule.pattern.exec(decoded)) {
       if (!rule.confirm || rule.confirm(match[0])) {
-        hits.push({ rule: rule.rule, matched: match[0], index: match.index });
+        hits.push({ rule: rule.rule, matched: match[0], index: offsets[match.index]! });
       }
     }
   }
   HIGH_ENTROPY_ASSIGNMENT.lastIndex = 0;
-  for (let match = HIGH_ENTROPY_ASSIGNMENT.exec(line); match; match = HIGH_ENTROPY_ASSIGNMENT.exec(line)) {
+  for (let match = HIGH_ENTROPY_ASSIGNMENT.exec(decoded); match; match = HIGH_ENTROPY_ASSIGNMENT.exec(decoded)) {
     const [identifier, value] = [match[1]!, match[2]!];
     if (isHighEntropySecretAssignment(identifier, value)) {
-      hits.push({ rule: "high-entropy-assignment", matched: value, index: match.index });
+      hits.push({ rule: "high-entropy-assignment", matched: value, index: offsets[match.index]! });
     }
   }
   return hits;
@@ -480,10 +494,22 @@ function jsonlFieldForHit(filePath: string, line: string, hitIndex: number): str
  * @returns One entry per changed file with added lines and attribution.
  */
 export function parseUnifiedDiff(diffText: string): ChangeFile[] {
+  if (diffText.trim() !== "" && !/^\+\+\+ /m.test(diffText) && !/^diff --git /m.test(diffText)) {
+    throw new GateInputError("pm github gate: input is not a unified diff.");
+  }
   const files: ChangeFile[] = [];
   let filePath = "";
   let itemId = "";
   let walk: WalkLine[] = [];
+  let oldRemaining = 0;
+  let newRemaining = 0;
+  let inHunk = false;
+  const completeHunk = (): void => {
+    if (oldRemaining !== 0 || newRemaining !== 0) {
+      throw new GateInputError("pm github gate: unified diff is truncated or malformed.");
+    }
+    inHunk = false;
+  };
 
   const flushFile = (): void => {
     if (filePath === "" || walk.length === 0) {
@@ -501,36 +527,63 @@ export function parseUnifiedDiff(diffText: string): ChangeFile[] {
 
   const lines = diffText.split("\n");
   for (const raw of lines) {
-    if (raw.startsWith("+++ ")) {
+    if (raw === "GIT binary patch" || raw.startsWith("Binary files ") || raw.includes("\0")) {
+      throw new GateInputError("pm github gate: binary input cannot be privacy-scanned.");
+    }
+    if (raw.startsWith("diff --git ") || raw.startsWith("--- ")) {
+      completeHunk();
       flushFile();
-      filePath = raw.slice(4).trim();
+      filePath = "";
+      continue;
+    }
+    if (raw.startsWith("+++ ")) {
+      completeHunk();
+      flushFile();
+      filePath = raw.slice(4).split("\t")[0]!.trim();
+      if (filePath.startsWith('"')) {
+        try { filePath = JSON.parse(filePath) as string; } catch {
+          throw new GateInputError("pm github gate: unreadable diff filename.");
+        }
+      }
       if (filePath === "/dev/null") filePath = "";
       else filePath = filePath.replace(/^[ab]\//, "");
       itemId = "";
       continue;
     }
     if (filePath === "") continue; // headers, index lines, and text before any +++
-    if (raw.startsWith("--- ")) continue;
-    if (raw.startsWith("@@")) continue;
+    if (raw.startsWith("@@")) {
+      completeHunk();
+      const hunk = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/.exec(raw);
+      if (!hunk) throw new GateInputError("pm github gate: invalid unified diff hunk.");
+      oldRemaining = Number(hunk[1] ?? 1);
+      newRemaining = Number(hunk[2] ?? 1);
+      inHunk = true;
+      continue;
+    }
     // Diff metadata (`\ No newline at end of file`) is checked before the marker
     // checks: real added content is always `+`-prefixed, so a bare `\\` line is
     // never content.
     if (raw.startsWith("\\")) continue;
+    if (raw === "" && !inHunk) continue;
+    if (!inHunk) throw new GateInputError("pm github gate: content outside a diff hunk.");
     if (raw.startsWith("+")) {
+      newRemaining--;
       const text = raw.slice(1);
       if (itemId === "") itemId = itemIdForFile(filePath, text);
       walk.push({ text, added: true });
       continue;
     }
-    if (raw.startsWith("-")) continue;
-    if (raw.startsWith(" ") || raw === "") {
+    if (raw.startsWith("-")) { oldRemaining--; continue; }
+    if (raw.startsWith(" ")) {
+      oldRemaining--;
+      newRemaining--;
       walk.push({ text: raw.startsWith(" ") ? raw.slice(1) : raw, added: false });
       continue;
     }
-    // Anything else (e.g. `diff --git` line without prior `+++`, index lines)
-    // ends the current file's context; flush keeps line order intact.
-    flushFile();
+    if (raw === "" && oldRemaining === 0 && newRemaining === 0) { completeHunk(); continue; }
+    throw new GateInputError("pm github gate: invalid unified diff content.");
   }
+  completeHunk();
   flushFile();
 
   return files;
@@ -643,7 +696,7 @@ export function collectTrackerChange(
 
   const status = runGit(repoRoot, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", trackerSpec]);
   if (!status.ok) {
-    throw new GateInputError(`pm github gate: git status failed: ${status.stderr.trim()}`);
+    throw new GateInputError("pm github gate: git status failed; refusing to scan incomplete input.");
   }
 
   const changes: ChangeFile[] = [];
@@ -662,27 +715,26 @@ export function collectTrackerChange(
       try {
         size = fs.statSync(absolute).size;
       } catch {
-        // Vanished between status and read: nothing exists to publish, so
-        // there is no input to scan for this path — not a silent pass, the
-        // file simply contributes no change.
-        continue;
+        throw new GateInputError("pm github gate: a proposed file cannot be inspected.");
       }
       if (size > UNTRACKED_FILE_BYTE_CAP) {
         throw new GateInputError(
-          `pm github gate: untracked tracker file is too large to scan (${filePath}); refusing to guess.`,
+          `pm github gate: untracked tracker file is too large to scan ; refusing to guess.`,
         );
       }
       changes.push(wholeFileChange(absolute, filePath, readFileSync));
       continue;
     }
     if (xy.includes("D") && !/[AMU]/.test(xy)) continue; // pure deletion
-    const diff = runGit(repoRoot, ["diff", "--no-color", "--unified=3", "HEAD", "--", filePath]);
-    if (!diff.ok) {
-      throw new GateInputError(`pm github gate: git diff failed for ${filePath}: ${diff.stderr.trim()}`);
+    const addedLines: AddedLine[] = [];
+    for (const revision of [["--cached"], []]) {
+      const diff = runGit(repoRoot, ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=3", ...revision, "--", filePath]);
+      if (!diff.ok) {
+        throw new GateInputError("pm github gate: git diff failed; refusing to scan incomplete input.");
+      }
+      for (const parsed of parseUnifiedDiff(diff.stdout)) addedLines.push(...parsed.addedLines);
     }
-    if (diff.stdout.trim() === "") continue;
-    const [parsedDiff] = parseUnifiedDiff(diff.stdout);
-    if (parsedDiff) changes.push(parsedDiff);
+    if (addedLines.length > 0) changes.push({ filePath, itemId: itemIdForFile(filePath, ""), addedLines });
   }
   return changes;
 }
@@ -719,17 +771,15 @@ export function readGateAllowlist(
   let raw: string;
   try {
     raw = readFileSync(allowlistPath);
-  } catch {
-    if (required) {
-      throw new GateInputError(`pm github gate: allowlist file is unreadable: ${path.basename(allowlistPath)}`);
-    }
-    return new Map();
+  } catch (err: unknown) {
+    if (!required && (err as NodeJS.ErrnoException).code === "ENOENT") return new Map();
+    throw new GateInputError("pm github gate: allowlist file is unreadable.");
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    throw new GateInputError(`pm github gate: allowlist file is not valid JSON: ${path.basename(allowlistPath)}`);
+    throw new GateInputError(`pm github gate: allowlist file is not valid JSON: (allowlist)`);
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new GateInputError(`pm github gate: allowlist file must be a JSON object keyed by content hash`);
@@ -737,7 +787,7 @@ export function readGateAllowlist(
   const entries = new Map<string, AllowlistEntry>();
   for (const [hash, value] of Object.entries(parsed as Record<string, unknown>)) {
     if (!/^[0-9a-f]{64}$/.test(hash)) {
-      throw new GateInputError(`pm github gate: allowlist key "${hash.slice(0, 12)}…" is not a sha256 content hash`);
+      throw new GateInputError(`pm github gate: allowlist key is not a sha256 content hash`);
     }
     const reason = (value as { reason?: unknown } | null)?.reason;
     if (typeof reason !== "string" || reason.trim() === "") {
@@ -779,7 +829,7 @@ function scanChangeFile(change: ChangeFile): Array<GateFinding & { matched: stri
         ? line.field
         : jsonlFieldForHit(change.filePath, line.text, hit.index);
       const itemId = change.filePath.endsWith(".toon") ? change.itemId : itemIdForFile(change.filePath, line.text);
-      const key = `${hit.rule}\0${change.itemId || itemId}\0${field}`;
+      const key = `${hit.rule}\0${change.itemId || itemId}\0${field}\0${hit.matched}`;
       if (seen.has(key)) continue;
       seen.add(key);
       findings.push({
@@ -827,7 +877,7 @@ export function runTrackerGate(input: TrackerGateInput): GateReport {
     if (err instanceof GateInputError) throw err;
     if (err instanceof Error && err.message.startsWith("pm github gate:")) throw err;
     throw new GateInputError(
-      `pm github gate: could not read the proposed tracker change — ${err instanceof Error ? err.message : String(err)}`,
+      `pm github gate: could not read the proposed tracker change; input is unavailable.`,
     );
   }
 
@@ -865,11 +915,11 @@ export function runTrackerGate(input: TrackerGateInput): GateReport {
       added_lines: addedLines,
       findings,
       allowlisted,
-      allowlist_path: allowlistPath,
+      allowlist_path: allowlistPath ? path.basename(allowlistPath) : "",
     };
   } catch (err: unknown) {
     throw new GateInputError(
-      `pm github gate: scanner error — ${err instanceof Error ? err.message : String(err)}`,
+      `pm github gate: scanner error; scan did not complete.`,
     );
   }
 }

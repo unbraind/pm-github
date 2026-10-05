@@ -1,3 +1,4 @@
+import { comments as readComments } from "@unbrained/pm-cli/sdk";
 // Tests for the cross-process comment-sync lock (pm-github-503u).
 //
 // Unit tests cover the lock helper in isolation: acquire/release roundtrip
@@ -145,6 +146,7 @@ test("resolvePmDataDir prefers a nested .agents/pm and falls back to pmRoot itse
   try {
     assert.strictEqual(resolvePmDataDir(root), root, "no .agents/pm → pmRoot is the data dir");
     mkdirSync(join(root, ".agents", "pm"), { recursive: true });
+    writeFileSync(join(root, ".agents", "pm", "settings.json"), '{"version":1}\n');
     assert.strictEqual(resolvePmDataDir(root), join(root, ".agents", "pm"));
     // A pmRoot that already IS the data dir keeps working.
     assert.strictEqual(resolvePmDataDir(join(root, ".agents", "pm")), join(root, ".agents", "pm"));
@@ -157,6 +159,7 @@ test("importCommentSyncLockPath lands in locks/ with a pm-github prefix and sani
   const root = mkdtempSync(join(tmpdir(), "pm-github-lockpath-test-"));
   try {
     mkdirSync(join(root, ".agents", "pm"), { recursive: true });
+    writeFileSync(join(root, ".agents", "pm", "settings.json"), '{"version":1}\n');
     const p = importCommentSyncLockPath(root, "pm-ab12");
     assert.strictEqual(p, join(root, ".agents", "pm", "locks", "pm-github.comment-sync.pm-ab12.lock"));
     // Filename-unsafe characters are replaced, so the lock always stays inside
@@ -439,9 +442,7 @@ test("two in-process concurrent syncs of the same comments never duplicate", asy
       syncGithubCommentsToAnnotations(id, comments, root, 1),
     ]);
     assert.strictEqual(r1.added + r2.added, comments.length, "each comment added exactly once across both syncs");
-    const { comments: stored } = await import("@unbrained/pm-cli/sdk").then((m) =>
-      m.comments(id, {}, { pmRoot: root }),
-    );
+    const { comments: stored } = await readComments(id, {}, { pmRoot: root });
     assert.strictEqual(stored.length, comments.length, "no duplicate comments stored");
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -502,9 +503,7 @@ test(
       );
       assert.strictEqual(r1.skipped + r2.skipped, comments.length, "the loser of the race skips every duplicate");
 
-      const { comments: stored } = await import("@unbrained/pm-cli/sdk").then((m) =>
-        m.comments(id, {}, { pmRoot: root }),
-      );
+      const { comments: stored } = await readComments(id, {}, { pmRoot: root });
       assert.strictEqual(stored.length, comments.length, "exactly one stored comment per GitHub comment");
       const markerIds = stored.map((c: { text?: string }) => {
         const m = /<!--\s*pm-github:comment:(\d+)\s*-->/.exec(c.text ?? "");

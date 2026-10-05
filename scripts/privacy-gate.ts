@@ -68,6 +68,8 @@ interface Finding {
 interface FixtureEntry {
   /** Human-readable justification recorded next to the fixture in review. */
   readonly justification: string;
+  /** Exact retained test blob provenance for a historical synthetic header. */
+  readonly historical_test?: { readonly commit: string; readonly path: string };
 }
 
 /** Path of the identity allowlist, relative to the repository root. */
@@ -128,7 +130,7 @@ function parseAllowlist(root: string): Set<string> {
  * @param root - Absolute repository root holding `test/fixtures/`.
  * @returns Map from exact Git blob object id to its recorded justification.
  */
-function loadFixtureManifest(root: string): Map<string, string> {
+function loadFixtureManifest(root: string): Map<string, FixtureEntry> {
   let raw: string;
   try {
     raw = readFileSync(join(root, FIXTURE_MANIFEST_PATH), "utf8");
@@ -136,7 +138,7 @@ function loadFixtureManifest(root: string): Map<string, string> {
     return new Map();
   }
   const parsed: Record<string, FixtureEntry> = JSON.parse(raw) as Record<string, FixtureEntry>;
-  return new Map(Object.entries(parsed).map(([oid, entry]) => [oid, entry.justification]));
+  return new Map(Object.entries(parsed));
 }
 
 /**
@@ -180,7 +182,19 @@ function listFixtureTreeBlobs(root: string): Set<string> {
 function loadFixtureExemptions(root: string): Map<string, string> {
   const manifest = loadFixtureManifest(root);
   const fixtureBlobs = listFixtureTreeBlobs(root);
-  return new Map([...manifest].filter(([oid]) => fixtureBlobs.has(oid)));
+  for (const [oid, entry] of manifest) {
+    const source = entry.historical_test;
+    if (!source) continue;
+    if (!/^[0-9a-f]{40}$/.test(source.commit) || !/^test\/[A-Za-z0-9_-]+\.test\.ts$/.test(source.path)) {
+      throw new Error("Historical fixture provenance must name an exact commit and a test source.");
+    }
+    const resolved = spawnSync("git", ["ls-tree", source.commit, "--", source.path], { cwd: root, encoding: "utf8" });
+    if (resolved.status !== 0 || !resolved.stdout.startsWith(`100644 blob ${oid}\t`)) {
+      throw new Error("Historical fixture provenance does not match the reviewed blob.");
+    }
+    fixtureBlobs.add(oid);
+  }
+  return new Map([...manifest].filter(([oid]) => fixtureBlobs.has(oid)).map(([oid, entry]) => [oid, entry.justification]));
 }
 
 /**

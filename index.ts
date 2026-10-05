@@ -53,10 +53,10 @@ import {
   GateInputError,
   formatGateReport,
   runTrackerGate,
+  resolvePmDataDir,
 } from "./gate.ts";
 
 export { resolvePmDataDir } from "./gate.ts";
-import { resolvePmDataDir } from "./gate.ts";
 
 import {
   type ProjectItem,
@@ -274,7 +274,7 @@ export function resolveGitHubToken(): string | undefined {
   return undefined;
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number) => new Promise((r) => { setTimeout(r, ms); });
 
 /**
  * Decide whether the Authorization token may be forwarded across a redirect.
@@ -626,7 +626,7 @@ export function optionString(options: Record<string, unknown>, ...keys: string[]
 
 // Whether an option key was explicitly provided (even if empty/falsey).
 export function optionProvided(options: Record<string, unknown>, ...keys: string[]): boolean {
-  return keys.some((k) => Object.prototype.hasOwnProperty.call(options, k));
+  return keys.some((k) => Object.hasOwn(options, k));
 }
 
 // Parse a `--since` value into an ISO timestamp the GitHub `since` query param
@@ -2705,7 +2705,8 @@ async function prepareGithubImport(
       comments = await fetchIssueComments!(issue, repo, token);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`#${issue.number}: failed to fetch comments — ${msg}`);
+      if (opts.gate) throw new CommandError(`pm github gate: comments for issue #${issue.number} could not be read.`);
+      console.error(opts.gate ? `pm github gate: comments for issue #${issue.number} could not be read.` : `#${issue.number}: failed to fetch comments — ${msg}`);
     }
   }
 
@@ -2787,7 +2788,10 @@ export function verifyImportPlanCompleteness(
     (number) => !fetched.has(number),
   );
   const countsReconcile = prepared.length + skippedNumbers.length === issues.length;
-  if (duplicates > 0 || unaccounted.length > 0 || foreign.length > 0 || !countsReconcile) {
+  const overlapping = skippedNumbers.some((number) => planned.has(number));
+  const duplicateFetch = fetched.size !== issues.length;
+  const duplicateSkip = skippedSet.size !== skippedNumbers.length;
+  if (overlapping || duplicateFetch || duplicateSkip || duplicates > 0 || unaccounted.length > 0 || foreign.length > 0 || !countsReconcile) {
     throw new CommandError(
       `pm github gate: import plan is incomplete — fetched ${issues.length}, planned ${prepared.length}, ` +
         `skipped ${skippedNumbers.length}; duplicates ${duplicates}, unaccounted [${unaccounted.join(", ")}], ` +
@@ -2889,14 +2893,14 @@ function gateImportWrites(pmRoot: string): ImportGateReceipt {
     throw new CommandError(
       err instanceof GateInputError
         ? err.message
-        : `pm github gate: could not run the gate — ${err instanceof Error ? err.message : String(err)}`,
+        : `pm github gate: could not run the gate; scan did not complete.`,
       EXIT_CODE.GENERIC_FAILURE,
     );
   }
   const lines = formatGateReport(report);
   console.error(lines.join("\n"));
   if (report.verdict === "fail") {
-    throw new CommandError(lines.join("\n"), EXIT_CODE.GENERIC_FAILURE);
+    throw new CommandError(JSON.stringify({ ...report, error: "pm github gate: FAIL" }), EXIT_CODE.GENERIC_FAILURE);
   }
   return {
     verdict: report.verdict,
@@ -3078,7 +3082,7 @@ export async function runImport(
       updated = prepared.length - imported;
       for (const entry of prepared) {
         const action = entry.match?.id ? "update" : "import";
-        console.error(`  [dry-run][atomic] #${entry.issueNumber} ${action}: ${entry.title} (${entry.status})`);
+        console.error(`  [dry-run][atomic] #${entry.issueNumber} ${action}: ${opts.gate ? "(gated title)" : entry.title} (${entry.status})`);
       }
       console.error(
         `[dry-run] Atomic plan would import ${imported}, update ${updated}, skip ${skipped}.`,
@@ -5485,7 +5489,7 @@ export default defineExtension({
           throw new CommandError(
             err instanceof GateInputError
               ? err.message
-              : `pm github gate: scanner error — ${err instanceof Error ? err.message : String(err)}`,
+              : `pm github gate: scanner error; scan did not complete.`,
             EXIT_CODE.GENERIC_FAILURE,
           );
         }
@@ -5494,7 +5498,7 @@ export default defineExtension({
         }
         if (report.verdict === "fail") {
           throw new CommandError(
-            formatGateReport(report).join("\n"),
+            JSON.stringify({ ...report, error: "pm github gate: FAIL" }),
             EXIT_CODE.GENERIC_FAILURE,
           );
         }

@@ -54,7 +54,18 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       REPOSITORY: ${{ inputs.repository }}
       SYNC_BRANCH: ${{ inputs.sync-branch }}
+      PM_GITHUB_VERSION: ${{ inputs.pm-github-version }}
+      CALLING_REPOSITORY: ${{ github.repository }}
     steps:
+      - name: Validate sync inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${REPOSITORY}" == "${CALLING_REPOSITORY}" ]]
+          [[ "${PM_GITHUB_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "${SYNC_BRANCH}" == automation/* ]]
+          git check-ref-format "refs/heads/${SYNC_BRANCH}"
+
       - name: Checkout main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -78,6 +89,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch --force origin main
+          sync_lease="$(git ls-remote --heads origin "refs/heads/${SYNC_BRANCH}" | cut -f1)"
+          printf 'SYNC_LEASE=%s\n' "${sync_lease}" >> "${GITHUB_ENV}"
           git switch --force-create "${SYNC_BRANCH}" origin/main
 
       # The calling repo's own devDependency provides the pm CLI (npm ci).
@@ -88,8 +101,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ./node_modules/.bin/pm package install "npm:pm-github@${{ inputs.pm-github-version }}" --project
-          node -e 'if (require("./.agents/pm/extensions/pm-github/package.json").version !== process.argv[1]) process.exit(1)' "${{ inputs.pm-github-version }}"
+          ./node_modules/.bin/pm package install "npm:pm-github@${PM_GITHUB_VERSION}" --project
+          node -e 'if (require("./.agents/pm/extensions/pm-github/package.json").version !== process.argv[1]) process.exit(1)' "${PM_GITHUB_VERSION}"
 
       # Keep the install's bookkeeping out of the sync diff; the extension tree
       # itself is operational state the privacy gate deliberately excludes.
@@ -104,16 +117,29 @@ jobs:
             rm -f "${managed_registry}"
           fi
 
+      - name: Verify gate is available
+        run: ./node_modules/.bin/pm github gate --json
+
       - name: Validate GitHub access
         run: ./node_modules/.bin/pm github validate --repo "${REPOSITORY}"
 
       - name: Preview GitHub to pm plan
-        run: ./node_modules/.bin/pm github import "${REPOSITORY}" --state all --atomic --dry-run
+        run: ./node_modules/.bin/pm github import "${REPOSITORY}" --state all --atomic --gate --dry-run --with-comments
 
       # The gate step. A finding (or unreadable scan input) fails this step, so
       # the job never reaches the commit/push below with a leak in the change.
       - name: Gated GitHub to pm import
-        run: ./node_modules/.bin/pm github import "${REPOSITORY}" --state all --atomic --gate
+        run: ./node_modules/.bin/pm github import "${REPOSITORY}" --state all --atomic --gate --with-comments
+
+      - name: Verify repeat import is a no-op
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -- .agents/pm ':(exclude).agents/pm/extensions' ':(exclude).agents/pm/locks' ':(exclude).agents/pm/checkpoints'
+          ./node_modules/.bin/pm github import "${REPOSITORY}" --state all --atomic --gate --with-comments
+          git diff --exit-code -- .agents/pm ':(exclude).agents/pm/extensions' ':(exclude).agents/pm/locks' ':(exclude).agents/pm/checkpoints'
+          [[ -z "$(git ls-files --others --exclude-standard -- .agents/pm ':(exclude).agents/pm/extensions' ':(exclude).agents/pm/locks' ':(exclude).agents/pm/checkpoints')" ]]
+          ./node_modules/.bin/pm github gate --json
 
       - name: Verify strict pm health
         run: ./node_modules/.bin/pm health --strict-exit
@@ -144,7 +170,7 @@ jobs:
             exit 1
           fi
           git commit -m "chore(pm): sync GitHub issues (gated)"
-          git push --force origin "${SYNC_BRANCH}"
+          git push --force-with-lease="refs/heads/${SYNC_BRANCH}:${SYNC_LEASE}" origin "HEAD:refs/heads/${SYNC_BRANCH}"
           body_file="${RUNNER_TEMP}/pm-github-sync-pr.md"
           {
             printf '%s\n\n' "Automated pm-github issue synchronization for ${REPOSITORY}."

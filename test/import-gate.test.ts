@@ -17,7 +17,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { readFileSync } from "node:fs";
 
 import { createExtensionTestHarness, type ExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 
@@ -514,8 +513,8 @@ test("gated dry-run embeds the verified plan receipts and writes nothing", async
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const workflowPath = path.join(repoRoot, ".github", "workflows", "pm-github-sync.yml");
-const workflow = readFileSync(workflowPath, "utf-8");
-const callerExample = readFileSync(path.join(repoRoot, "docs", "sync-workflow-caller.yml"), "utf-8");
+const workflow = fs.readFileSync(workflowPath, "utf-8");
+const callerExample = fs.readFileSync(path.join(repoRoot, "docs", "sync-workflow-caller.yml"), "utf-8");
 
 /** Offset of one named step within the workflow source, for ordering assertions. */
 function stepOffset(name: string): number {
@@ -577,16 +576,16 @@ test("the PR body links every changed item as a permanent main-tree pm link", ()
   assert.match(workflow, /gh pr create/);
   assert.match(workflow, /gh pr edit/);
   // The push is explicit and force-resets the automation branch from main.
-  assert.match(workflow, /git push --force origin "\$\{SYNC_BRANCH\}"/);
+  assert.match(workflow, /git push --force-with-lease=/);
 });
 
 test("the caller example pins the reusable workflow and the extension version", () => {
   assert.match(callerExample, /^on:\n  schedule:\n    - cron:/m, "the caller owns the schedule");
   assert.match(
     callerExample,
-    /uses: unbraind\/pm-github\/\.github\/workflows\/pm-github-sync\.yml@v[0-9.]+/,
+    /uses: unbraind\/pm-github\/\.github\/workflows\/pm-github-sync\.yml@RELEASE_COMMIT_SHA/,
   );
-  assert.match(callerExample, /pm-github-version: "[0-9.]+"/);
+  assert.match(callerExample, /pm-github-version: "RELEASE_VERSION"/);
   assert.match(callerExample, /^permissions:\n  contents: write\n  pull-requests: write\n/m);
   const lines = callerExample.split("\n").filter((line) => line.trim() !== "" && !line.startsWith("#"));
   assert.ok(lines.length <= 40, "the caller stays a small, reviewable file");
