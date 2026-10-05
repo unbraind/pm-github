@@ -3212,8 +3212,8 @@ export async function runImport(
 
     if (opts.dryRun) {
       const action = match?.id ? "update" : "import";
-      const metadata = labels.length > 0 ? `${status}, ${labels.join(",")}` : status;
-      console.error(`  [dry-run] #${issue.number} ${action}: ${title} (${metadata})`);
+      const metadata = !opts.gate && labels.length > 0 ? `${status}, ${labels.join(",")}` : status;
+      console.error(`  [dry-run] #${issue.number} ${action}: ${opts.gate ? "(gated title)" : title} (${metadata})`);
       if (match?.id) updated++;
       else imported++;
       continue;

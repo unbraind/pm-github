@@ -237,6 +237,26 @@ test("parseImportOptions reads the gate flag without changing defaults", () => {
   assert.strictEqual(parseImportOptions({ gate: "1" }).gate, true);
 });
 
+test("gated previews redact issue titles and labels in both import modes", async () => {
+  const original = console.error;
+  const messages: string[] = [];
+  console.error = (...values: unknown[]) => { messages.push(values.join(" ")); };
+  try {
+    for (const atomic of [false, true]) {
+      const malicious = { ...issue(1, GH_TOKEN, "Public body"), labels: [{ name: GH_TOKEN }] };
+      const result = await runImport("acme/widgets", "unused-preview", parseImportOptions({ gate: true, dryRun: true, atomic }), {
+        resolveToken: () => undefined, fetchIssues: async () => [malicious], readItems: () => [],
+      });
+      assert.ok("wouldImport" in result);
+      assert.equal(result.wouldImport, 1);
+    }
+    assert.ok(messages.some(message => message.includes("(gated title)")));
+    assert.ok(!messages.join("\n").includes(GH_TOKEN));
+  } finally {
+    console.error = original;
+  }
+});
+
 test("verifyImportPlanCompleteness passes a reconciling plan and fails every drift", () => {
   const issues = [issue(1, "One", "b1"), issue(2, "Two", "b2"), issue(3, "Blank", "   ")];
 
