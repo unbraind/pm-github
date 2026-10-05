@@ -6,8 +6,10 @@ status: open
 priority: 1
 tags: []
 created_at: "2026-10-05T09:23:42.980Z"
-updated_at: "2026-10-05T09:26:00.035Z"
+updated_at: "2026-10-05T09:32:54.787Z"
 author: codex-sol
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-github-f1at,related,"2026-10-05T09:32:54.728Z",codex-sol,"cli:update:dep",detected
 comments[1]{created_at,author,text}:
   "2026-10-05T09:25:31.280Z",codex-sol,"The caller example intentionally uses release commit and exact version placeholders. The currently published extension predates the gate, and this work is authorized only in the pm-github worktree. No pilot workflow in another repository was changed, enabled, or dispatched. Resolve the placeholders only after a reviewed release and separately authorized caller adoption."
 files[2]{path,scope}:

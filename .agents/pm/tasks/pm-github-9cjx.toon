@@ -1,19 +1,18 @@
 id: pm-github-9cjx
 title: Reach exact all-source coverage and include every operational script
-description: "The current gate measures index.ts and projects.ts but explicitly skips scripts, and its thresholds are 88/79/89. The latest measured corpus after the complete-read work is 91.83% lines, 82.14% branches, and 91.75% functions across two production files, so a green release check is not the mandated exact 100/100/100/100 all-source result."
+description: "The gate now discovers all 12 authored TypeScript and JavaScript modules, including operational scripts, with exact 100 percent thresholds and no source ignores. Projects planners reach exact 100 in all metrics and every authored function is covered. Aggregate line and branch gaps remain in index.ts, gate.ts, and operational failure boundaries; continue meaningful behavior tests without lowering the gate."
 type: Task
-status: in_progress
+status: blocked
 priority: 1
 tags[5]: all-source,coverage,quality-gate,scripts,tdd
 created_at: "2026-08-17T07:32:29.666Z"
-updated_at: "2026-10-05T09:45:17.622Z"
-assignee: codex-sol
-claim_principal: codex-sol
+updated_at: "2026-10-05T09:57:29.647Z"
 author: codex
 estimated_minutes: 960
 acceptance_criteria: "Automatically discover every executable TypeScript production and operational source; require exact 100% statements, branches, functions, and lines; prohibit ignore pragmas, source allowlist blind spots, threshold weakening, vacuous tests, and mocks of the unit under test; exercise GitHub behavior at the HTTP boundary, pm behavior through real SDK/installed-CLI boundaries, and operational scripts through real filesystem/process behavior; prove the gate fails when a new uncovered source or branch is introduced."
+blocked_reason: Exact 100 percent coverage is unfinished; continuation stopped at the owner resource limit.
 expected_result: "Every executable TypeScript source and operational script is automatically included in measurement and exact statements, branches, functions, and lines all reach 100% through behavioral tests."
-actual_result: The source walker skips scripts and aggregate coverage remains 91.83/82.14/91.75 with thresholds fixed at 88/79/89.
+actual_result: "Frozen source ae86e7d: all 420 npm tests pass; lines and statements 8099/8299 (97.59 percent), branches 1859/2083 (89.24 percent), functions 200/200 (100 percent). Exact 100 gate fails and invalidates LCOV. All 420 native Bun tests pass separately."
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-github-n3z3,related,"2026-08-17T07:32:29.666Z",codex,"cli:create:dep",detected
 comments[11]{created_at,author,text}:

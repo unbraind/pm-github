@@ -6,10 +6,11 @@ status: open
 priority: 1
 tags: []
 created_at: "2026-10-05T08:28:54.625Z"
-updated_at: "2026-10-05T09:07:19.298Z"
+updated_at: "2026-10-05T09:55:33.050Z"
 author: codex-sol
-comments[1]{created_at,author,text}:
+comments[2]{created_at,author,text}:
   "2026-10-05T09:07:19.298Z",codex-sol,"A fresh bounded native Bun CLI repeat of the latest packed candidate passed in 4.22 seconds with exit zero and byte-identical tracker contents. This contrasts with the earlier long-running repeat, so retain the issue as an intermittent installed-host investigation rather than claiming a consistent Bun failure. All 375 native Bun library and operational tests also pass."
+  "2026-10-05T09:55:33.050Z",codex-sol,"The final packed candidate matched all three authored runtime modules byte-for-byte. Its fresh Node public import passed with three issues, a byte-identical second run, zero gate findings, and strict health in 24.94 seconds. A bounded direct native Bun CLI repeat, using the same pinned host and startup executable path, timed out at 45.06 seconds and was terminated with SIGTERM; durable tracker bytes stayed unchanged. This reproduces the intermittent installed-host boundary alongside all 420 passing native Bun library and operational tests. No scratch remote was configured and no public-data push occurred."
 files[2]{path,scope}:
   index.ts,project
   test/import-gate.test.ts,project
