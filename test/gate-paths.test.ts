@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 
-import { isHighEntropySecretAssignment, runTrackerGate, scanLineForRuleHits } from "../gate.ts";
+import { GateInputError, isHighEntropySecretAssignment, runTrackerGate, scanLineForRuleHits } from "../gate.ts";
 
 test("a credential in a proposed tracker filename fails without exposing the filename", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-gate-path-"));
@@ -57,5 +57,27 @@ test("camel-case secrets, Slack app credentials and labelled plain phones are ga
   }
   for (const value of ["github-comment:" + "12345678901", "phone: 123456", "phone: 1-----2", "phone: 1234567890123456"]) {
     assert.equal(scanLineForRuleHits(value).some(hit => hit.rule === "phone-number"), false);
+  }
+});
+
+test("untracked binary content and undecodable files fail closed", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-gate-encoding-"));
+  const token = "ghp_" + "A".repeat(36);
+  try {
+    assert.equal(spawnSync("git", ["init", "--quiet", root]).status, 0);
+    const tracker = path.join(root, ".agents", "pm");
+    fs.mkdirSync(path.join(tracker, "issues"), { recursive: true });
+    fs.writeFileSync(path.join(tracker, "settings.json"), "{}\n");
+    const file = path.join(tracker, "issues", "encoded.toon");
+    for (const bytes of [Buffer.from("body: " + token, "utf16le"), Buffer.from([0xc3, 0x28]), Buffer.from("body: clean\0data")]) {
+      fs.writeFileSync(file, bytes);
+      assert.throws(() => runTrackerGate({ pmRoot: tracker }), error =>
+        error instanceof GateInputError && !error.message.includes(token));
+    }
+    const diff = path.join(root, "proposal.patch");
+    fs.writeFileSync(diff, Buffer.from([0xc3, 0x28]));
+    assert.throws(() => runTrackerGate({ pmRoot: tracker, diffFile: diff }), GateInputError);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });

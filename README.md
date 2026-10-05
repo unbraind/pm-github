@@ -268,7 +268,7 @@ It scans **only the proposed change** — the added lines and their filenames in
 - **personal data** — email addresses other than no-reply identities (`@users.noreply.github.com`, `noreply@…`, `@noreply.…`), phone numbers in international (`+…`) or North-American (`(555) 123-4567`, `555-123-4567`) notation, and unformatted numbers under phone/tel/mobile contact labels;
 - **host paths** — absolute local filesystem paths (POSIX home/system directories and Windows drive paths with either separator), and named home-directory references.
 
-Unreadable input, malformed or truncated diffs, binary input, Git failures, malformed allowlists, and scanner errors fail the gate. Untracked operational state in the tracker root (`locks/`, `extensions/`, `checkpoints/`) is excluded. Explicitly staged operational files remain in scope. Staged and unstaged changes are scanned separately, including staged content that the working copy subsequently removed.
+Unreadable input, malformed or truncated diffs, binary input, invalid UTF-8, Git failures, malformed allowlists, and scanner errors fail the gate. Untracked operational state in the tracker root (`locks/`, `extensions/`, `checkpoints/`) is excluded. Explicitly staged operational files remain in scope. Staged and unstaged changes are scanned separately, including staged content that the working copy subsequently removed.
 
 **False positives** are allowlisted by *content hash*, not by pattern: put the sha256 from the finding into `.pm-github-gate-allowlist.json` at the repository root (or pass `--allowlist <file>`) with a written justification. An entry suppresses exactly the reviewed content, can never widen to a pattern, and a missing justification fails the gate:
 

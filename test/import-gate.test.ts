@@ -47,7 +47,7 @@ const SYNC_BRANCH = "automation/pm-github-sync";
 const GH_TOKEN = "ghp_" + "A".repeat(36);
 const PERSONAL_EMAIL = "alice.person@example.org";
 const HOME_PATH = "/" + "home" + "/alice/report.txt";
-const HIGH_ENTROPY_SECRET = "Zj9kP2mQ7xW4nB8vC5tR1sD";
+const HIGH_ENTROPY_SECRET = "Zj9kP2mQ7xW4" + "nB8vC5tR1sD";
 
 /**
  * Build one GitHub issue REST payload for the mock server.
@@ -721,10 +721,15 @@ const WORKFLOW_IMPORT_SEQUENCE = ["Validate GitHub access", "Preview GitHub to p
 
 test("the executable reusable workflow never publishes each adversarial fixture", async () => {
   const cases = [
-    { body: GH_TOKEN, comment: "" },
-    { body: "clean", comment: GH_TOKEN },
-    { body: PERSONAL_EMAIL, comment: "" },
-    { body: HOME_PATH, comment: "" },
+    { body: GH_TOKEN, comment: "", rule: "github-token-classic" },
+    { body: "clean", comment: GH_TOKEN, rule: "github-token-classic" },
+    { body: PERSONAL_EMAIL, comment: "", rule: "email-address" },
+    { body: HOME_PATH, comment: "", rule: "absolute-host-path" },
+    { body: `accessToken = "${HIGH_ENTROPY_SECRET}"`, comment: "", rule: "high-entropy-assignment" },
+    { body: `api_key = "${HIGH_ENTROPY_SECRET}2026-10-05"`, comment: "", rule: "high-entropy-assignment" },
+    { body: "xapp-" + "1-" + "A".repeat(36), comment: "", rule: "slack-token" },
+    { body: "phone: " + "415" + "555" + "0123", comment: "", rule: "phone-number" },
+    { body: "C:" + "/" + "Users/fixture/report.txt", comment: "", rule: "windows-host-path" },
   ];
   for (const fixture of cases) {
     const { root, base, bare, git } = initSyncRepo();
@@ -742,8 +747,13 @@ test("the executable reusable workflow never publishes each adversarial fixture"
         const result = await executeWorkflow(workflowShell(WORKFLOW_IMPORT_SEQUENCE), root, { ...env,
           PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE });
         assert.notEqual(result.code, 0, "the actual shell must stop at the gate");
-        assert.ok(!result.stdout.includes(GH_TOKEN) && !result.stderr.includes(GH_TOKEN));
+        assert.ok(result.stderr.includes(fixture.rule), "the expected privacy rule rejects this fixture");
+        for (const sensitive of [GH_TOKEN, HIGH_ENTROPY_SECRET, PERSONAL_EMAIL, HOME_PATH]) {
+          assert.ok(!result.stdout.includes(sensitive) && !result.stderr.includes(sensitive));
+        }
         assert.deepEqual(remoteRefs(bare), ["refs/heads/main"]);
+        assert.deepEqual(fs.readdirSync(path.join(root, ".agents/pm/issues")).filter(file => file.endsWith(".toon")), [],
+          "preflight never writes malicious issue data to an item file");
         assert.ok(!fs.existsSync(env.REVIEW_RECEIPT!), "no review is opened after a gate failure");
       });
     } finally { fs.rmSync(base, { recursive: true, force: true }); }

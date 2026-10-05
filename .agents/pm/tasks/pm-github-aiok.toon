@@ -1,0 +1,16 @@
+id: pm-github-aiok
+title: Adopt the released gated sync caller in fleet repositories
+description: "After the gated extension is published and its exact quality gates pass, replace the release commit and version placeholders in docs/sync-workflow-caller.yml and migrate the disabled pm-graph, pm-jira, and pm-todos sync callers to the single reusable implementation. Keep automated workflows disabled until the owner authorizes rollout. The current candidate is confined to pm-github and must not modify or dispatch workflows in other repositories. Verify a fresh nonempty import, malicious no-push fixtures, repeat idempotency, and permanent changed-item links in each authorized caller rollout."
+type: Task
+status: open
+priority: 1
+tags: []
+created_at: "2026-10-05T09:23:42.980Z"
+updated_at: "2026-10-05T09:26:00.035Z"
+author: codex-sol
+comments[1]{created_at,author,text}:
+  "2026-10-05T09:25:31.280Z",codex-sol,"The caller example intentionally uses release commit and exact version placeholders. The currently published extension predates the gate, and this work is authorized only in the pm-github worktree. No pilot workflow in another repository was changed, enabled, or dispatched. Resolve the placeholders only after a reviewed release and separately authorized caller adoption."
+files[2]{path,scope}:
+  .github/workflows/pm-github-sync.yml,project
+  docs/sync-workflow-caller.yml,project
+body: ""

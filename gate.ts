@@ -30,6 +30,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { TextDecoder } from "node:util";
 import { resolvePmRoot } from "@unbrained/pm-cli/sdk";
 
 // ---------------------------------------------------------------------------
@@ -587,6 +588,7 @@ function wholeFileChange(
   readFileSync: (filePath: string) => string,
 ): ChangeFile {
   const content = readFileSync(filePath);
+  if (content.includes("\0")) throw new GateInputError("pm github gate: binary input cannot be privacy-scanned.");
   const lines = content.split("\n").map((text) => ({ text, added: true }));
   const fields = attributeToonFields(lines);
   let itemId = "";
@@ -639,6 +641,16 @@ export function runGitDefault(cwd: string, args: readonly string[]): { ok: boole
 }
 
 /**
+ * Read tracker, diff, or allowlist text without silently replacing invalid bytes.
+ *
+ * @param filePath - Input file to decode as UTF-8.
+ * @returns Complete decoded text; malformed input throws and fails the gate.
+ */
+function readTrackerText(filePath: string): string {
+  return new TextDecoder("utf-8", { fatal: true }).decode(fs.readFileSync(filePath));
+}
+
+/**
  * Collect the proposed tracker change from the Git working tree.
  *
  * The proposed change is everything a commit would publish: staged plus unstaged
@@ -657,7 +669,7 @@ export function collectTrackerChange(
   dependencies: GateRunDependencies = {},
 ): ChangeFile[] {
   const runGit = dependencies.runGit ?? runGitDefault;
-  const readFileSync = dependencies.readFileSync ?? ((filePath: string) => fs.readFileSync(filePath, "utf-8"));
+  const readFileSync = dependencies.readFileSync ?? readTrackerText;
 
   const toplevel = runGit(pmDataDir, ["rev-parse", "--show-toplevel"]);
   if (!toplevel.ok || toplevel.stdout.trim() === "") {
@@ -880,7 +892,7 @@ function scanChangeFile(change: ChangeFile): Array<GateFinding & { matched: stri
  * @returns The machine-readable gate report.
  */
 export function runTrackerGate(input: TrackerGateInput): GateReport {
-  const readFileSync = input.dependencies?.readFileSync ?? ((filePath: string) => fs.readFileSync(filePath, "utf-8"));
+  const readFileSync = input.dependencies?.readFileSync ?? readTrackerText;
   const runGit = input.dependencies?.runGit ?? runGitDefault;
 
   const pmDataDir = resolvePmDataDir(input.pmRoot);
