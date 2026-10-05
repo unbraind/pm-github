@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,7 @@ import { createExtensionTestHarness, type ExtensionTestHarness } from "@unbraine
 
 import extension, {
   CommandError,
+  type PmItem,
   EXIT_CODE,
   applyClientFilters,
   applyExportPlan,
@@ -441,7 +442,7 @@ test("scopeItemsByIds selects requested items and reports unknown ids", () => {
 });
 
 test("mapSearchHits maps remote issue numbers to local items, dropping unmatched", () => {
-  const index = new Map<string, any>([
+  const index = new Map<string, PmItem>([
     ["owner/repo#10", { id: "pm-a", tags: ["gh:owner/repo#10"] }],
     ["owner/repo#20", { id: "pm-b", tags: ["gh:owner/repo#20"] }],
   ]);
@@ -990,7 +991,6 @@ test("native github importer advertises --include-comments as an alias for --wit
 });
 
 test("manifest uses only runtime-supported capability names", async () => {
-  const { readFileSync } = await import("node:fs");
   const manifest = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url), "utf-8"));
   assert.ok(!manifest.capabilities.includes("exporters"), "exporters is a registration, not a manifest capability");
 });

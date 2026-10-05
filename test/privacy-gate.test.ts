@@ -29,6 +29,7 @@ import {
   gitBlobOid,
   type PrivacyGateResult,
   runGate,
+  main,
   scanBlob,
 } from "../scripts/privacy-gate.ts";
 
@@ -238,7 +239,6 @@ test("extractEmail parses git header shapes and rejects malformed lines", () => 
 });
 
 test("privacy gate CLI entry point writes streams and sets exit code", async () => {
-  const { main } = await import("../scripts/privacy-gate.ts");
   const cleanRoot = repoRoot;
   let stdout = "";
   let stderr = "";

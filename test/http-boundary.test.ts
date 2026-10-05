@@ -34,6 +34,8 @@ import {
   githubApiBase,
   parseImportOptions,
   runImport,
+  type GhIssue,
+  type GhComment,
 } from "../index.ts";
 
 import {
@@ -51,7 +53,7 @@ const IMPORT_OPTS = parseImportOptions({});
 
 // Minimal GitHub issue factory for the pagination fixtures. Typed against the
 // exported GhIssue so a field rename fails the compile.
-function ghIssue(number: number): import("../index.ts").GhIssue {
+function ghIssue(number: number): GhIssue {
   return {
     number,
     title: `t${number}`,
@@ -66,7 +68,7 @@ function ghIssue(number: number): import("../index.ts").GhIssue {
   };
 }
 
-function ghComment(id: number): import("../index.ts").GhComment {
+function ghComment(id: number): GhComment {
   return { id, user: { login: "alice" }, created_at: "2026-01-01T00:00:00Z", body: `c${id}` };
 }
 
@@ -355,7 +357,7 @@ test("fetchAllIssues throws on a non-array (object) response", async () => {
 
 test("fetchComments skips the network entirely when the issue has no comments", async () => {
   await withMockGithub((_req, res) => jsonResponse(res, 200, []), async (server) => {
-    const issue: import("../index.ts").GhIssue = {
+    const issue: GhIssue = {
       number: 1, title: "t", body: null, state: "open", labels: [],
       assignee: null, milestone: null, created_at: "", updated_at: "", html_url: "",
       comments: 0,
@@ -376,7 +378,7 @@ test("fetchComments pages through the comments Link header", async () => {
       });
     }
   }, async () => {
-    const issue: import("../index.ts").GhIssue = {
+    const issue: GhIssue = {
       number: 1, title: "t", body: null, state: "open", labels: [],
       assignee: null, milestone: null, created_at: "", updated_at: "", html_url: "",
       comments: 3,
@@ -397,7 +399,7 @@ test("fetchComments tolerates a malformed page mid-stream (keeps earlier pages)"
       });
     }
   }, async () => {
-    const issue: import("../index.ts").GhIssue = {
+    const issue: GhIssue = {
       number: 1, title: "t", body: null, state: "open", labels: [],
       assignee: null, milestone: null, created_at: "", updated_at: "", html_url: "",
       comments: 1,

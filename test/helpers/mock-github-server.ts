@@ -106,7 +106,7 @@ export function startMockGithub(handler: MockGithubHandler): Promise<MockGithubS
         baseUrl,
         requests,
         close: () =>
-          new Promise<void>((resolveClose) => server.close(() => resolveClose())),
+          new Promise<void>((resolveClose) => { server.close(() => resolveClose()); }),
       });
     });
   });
