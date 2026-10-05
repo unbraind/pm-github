@@ -12,7 +12,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -26,6 +26,7 @@ import extension, {
   runImport,
   verifyImportPlanCompleteness,
   verifyImportIdempotency,
+  verifyImportedProvenance,
   type GhComment,
   type GhIssue,
   type ImportGateReceipt,
@@ -108,6 +109,28 @@ function planEntry(issueNumber: number, tags: string[], match?: PmItem): Prepare
     match,
   };
 }
+
+test("recovered journals cannot substitute for a complete persisted provenance corpus", () => {
+  const prepared = [planEntry(1, ["gh:acme/widgets#1"])];
+  assert.throws(() => verifyImportedProvenance([], prepared, "acme/widgets"), CommandError);
+  assert.equal(verifyImportedProvenance([{ id: "item-a", tags: ["gh:acme/widgets#1"] }], prepared, "acme/widgets"), 1);
+  assert.throws(() => verifyImportedProvenance([
+    { id: "item-a", tags: ["gh:acme/widgets#1"] }, { id: "item-b", tags: ["gh:acme/widgets#1"] },
+  ], prepared, "acme/widgets"), CommandError);
+});
+
+test("a real completed SDK journal with reset item files cannot authorize a push", async () => {
+  const { root, base, bare, git } = initSyncRepo();
+  try {
+    await withMockGithub(githubHandler([issue(1, "Synthetic issue", "Public body")]), async () => {
+      await runGatedImport(root, { atomic: true, gate: true });
+      assert.equal(git(["add", ".agents/pm"]).status, 0);
+      assert.equal(git(["reset", "--hard", "HEAD"]).status, 0);
+      await assert.rejects(runGatedImport(root, { atomic: true, gate: true }), /persisted corpus does not account/);
+      assert.deepEqual(remoteRefs(bare), ["refs/heads/main"]);
+    });
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
 
 function githubHandler(
   issues: readonly GhIssue[],
@@ -386,16 +409,11 @@ test("adversarial: token in a body, token in a comment, email, and host path pre
       // holds exactly the baseline ref it started with.
       assert.deepStrictEqual(remoteRefs(bare), ["refs/heads/main"]);
 
-      // The worktree still holds the uncommitted gated failure, but a retried
-      // gate command alone reproduces the fail verdict without re-importing.
-      await assert.rejects(
-        ext.runCommand({ command: "github gate", global: { json: true }, pmRoot: root }),
-        (err: unknown) => {
-          assert.match((err as Error).message, /FAIL/);
-          assert.match((err as Error).message, /github-token-classic/);
-          return true;
-        },
-      );
+      // In-memory preflight rejects the import before sensitive values reach
+      // disk. The post-write gate remains a separate protection for formatting.
+      const clean = await ext.runCommand({ command: "github gate", global: { json: true }, pmRoot: root });
+      assert.equal((clean.result as { verdict: string }).verdict, "pass");
+
     });
     assert.strictEqual(git(["status", "--porcelain"]).status, 0);
   } finally {
@@ -563,7 +581,7 @@ test("the gated import runs after validate/plan and before health, commit, and p
   assert.match(workflow, /pm health --strict-exit/);
   // No staged catch-all that could commit unscanned content.
   assert.doesNotMatch(workflow, /git add -A/);
-  assert.match(workflow, /git add -- \.agents\/pm ':\(exclude\)\.agents\/pm\/extensions'/);
+  assert.match(workflow, /git --literal-pathspecs add --pathspec-from-file=/);
 });
 
 test("the PR body links every changed item as a permanent main-tree pm link", () => {
@@ -589,4 +607,135 @@ test("the caller example pins the reusable workflow and the extension version", 
   assert.match(callerExample, /^permissions:\n  contents: write\n  pull-requests: write\n/m);
   const lines = callerExample.split("\n").filter((line) => line.trim() !== "" && !line.startsWith("#"));
   assert.ok(lines.length <= 40, "the caller stays a small, reviewable file");
+});
+/** Extract executable shell from the workflow so the real push ordering is tested. */
+function workflowShell(names: readonly string[]): string {
+  return names.map(name => {
+    const start = stepOffset(name);
+    const next = workflow.indexOf("\n      - name:", start + 1);
+    const step = workflow.slice(start, next < 0 ? undefined : next);
+    const block = /        run: \|\n([\s\S]*)/.exec(step);
+    if (block) return block[1]!.split("\n").filter(line => line.startsWith("          ")).map(line => line.slice(10)).join("\n");
+    const single = /        run: (.+)/.exec(step);
+    assert.ok(single, `${name} needs executable shell`);
+    return single[1]!;
+  }).join("\n");
+}
+
+/** Run a real workflow shell while allowing the local mock HTTP server to respond. */
+function executeWorkflow(shell: string, root: string, env: NodeJS.ProcessEnv): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("bash", ["-c", "set -euo pipefail\n" + shell], { cwd: root, env });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", chunk => { stdout += String(chunk); });
+    child.stderr.on("data", chunk => { stderr += String(chunk); });
+    child.on("error", reject);
+    child.on("close", code => resolve({ code, stdout, stderr }));
+  });
+}
+
+/** Install the candidate and create a local gh PR receipt boundary, never a network writer. */
+async function prepareWorkflowFixture(root: string, base: string): Promise<NodeJS.ProcessEnv> {
+  const bin = path.join(root, "node_modules", ".bin");
+  fs.mkdirSync(bin, { recursive: true });
+  fs.symlinkSync(path.resolve(import.meta.dirname, "../node_modules/.bin/pm"), path.join(bin, "pm"));
+  const tools = path.join(base, "tools");
+  fs.mkdirSync(tools, { recursive: true });
+  fs.writeFileSync(path.join(tools, "gh"), `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "--version" ]]; then printf 'gh fixture\\n'; exit 0; fi
+case "$1 $2" in
+  "pr list") printf '%s' "\${EXISTING_PR:-}" ;;
+  "pr create"|"pr edit")
+    printf '%s\\n' "$2" >> "\${REVIEW_ACTIONS}"
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == "--body-file" ]]; then cp "$2" "\${REVIEW_RECEIPT}"; break; fi
+      shift
+    done
+    printf 'https://example.invalid/review/1\\n'
+    ;;
+  *) exit 1 ;;
+esac
+`, { mode: 0o755 });
+  const env = { ...process.env, PATH: tools + path.delimiter + process.env.PATH,
+    GH_TOKEN: "synthetic-test-token", GITHUB_TOKEN: "synthetic-test-token", PM_AUTHOR: "codex-sol",
+    PM_PATH: path.join(root, ".agents", "pm"), REPOSITORY: "acme/widgets", CALLING_REPOSITORY: "acme/widgets",
+    PM_GITHUB_VERSION: "2026.10.4", SYNC_BRANCH, SYNC_LEASE: "", RUNNER_TEMP: base,
+    GITHUB_ENV: path.join(base, "job-env"), REVIEW_RECEIPT: path.join(base, "review.md"), REVIEW_ACTIONS: path.join(base, "review-actions") };
+  const packageRoot = path.resolve(import.meta.dirname, "..");
+  const packed = await executeWorkflow(`npm pack --ignore-scripts --json --pack-destination '${base.replace(/'/g, "'\\''")}'`, packageRoot, env);
+  assert.equal(packed.code, 0, packed.stderr);
+  const [{ filename }] = JSON.parse(packed.stdout) as [{ filename: string }];
+  const archive = path.join(base, filename).replace(/'/g, "'\\''");
+  const installed = await executeWorkflow(`./node_modules/.bin/pm package install '${archive}' --project`, root, env);
+  assert.equal(installed.code, 0, installed.stderr);
+  const restored = await executeWorkflow(workflowShell(["Configure PM merge drivers", "Verify gate is available"]), root, env);
+  assert.equal(restored.code, 0, restored.stderr);
+  return env;
+}
+
+const WORKFLOW_IMPORT_SEQUENCE = ["Validate GitHub access", "Preview GitHub to pm plan", "Gated GitHub to pm import",
+  "Verify repeat import is a no-op", "Verify strict pm health", "Commit gated sync changes and open review PR"] as const;
+
+test("the executable reusable workflow never publishes each adversarial fixture", async () => {
+  const cases = [
+    { body: GH_TOKEN, comment: "" },
+    { body: "clean", comment: GH_TOKEN },
+    { body: PERSONAL_EMAIL, comment: "" },
+    { body: HOME_PATH, comment: "" },
+  ];
+  for (const fixture of cases) {
+    const { root, base, bare, git } = initSyncRepo();
+    try {
+      const env = await prepareWorkflowFixture(root, base);
+      assert.equal(git(["switch", "-c", SYNC_BRANCH]).status, 0);
+      const comments = new Map<number, GhComment[]>([[1, [{ id: 100, body: fixture.comment,
+        user: { login: "fixture" }, created_at: "2026-10-01T00:00:00Z" }]]]);
+      const issues = [issue(1, "Synthetic issue", fixture.body)];
+      const handle = githubHandler(issues, comments);
+      await withMockGithub((req, res, url, server) => {
+        if (req.url === "/repos/acme/widgets") jsonResponse(res, 200, { private: false });
+        else handle(req, res, url, server);
+      }, async () => {
+        const result = await executeWorkflow(workflowShell(WORKFLOW_IMPORT_SEQUENCE), root, { ...env,
+          PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE });
+        assert.notEqual(result.code, 0, "the actual shell must stop at the gate");
+        assert.ok(!result.stdout.includes(GH_TOKEN) && !result.stderr.includes(GH_TOKEN));
+        assert.deepEqual(remoteRefs(bare), ["refs/heads/main"]);
+        assert.ok(!fs.existsSync(env.REVIEW_RECEIPT!), "no review is opened after a gate failure");
+      });
+    } finally { fs.rmSync(base, { recursive: true, force: true }); }
+  }
+});
+
+test("the executable reusable workflow pushes only a clean import and creates or updates linked reviews", async () => {
+  const { root, base, bare, git } = initSyncRepo();
+  try {
+    const env = await prepareWorkflowFixture(root, base);
+    assert.equal(git(["switch", "-c", SYNC_BRANCH]).status, 0);
+    const handle = githubHandler([issue(1, "Synthetic issue", "Reviewed public body.")]);
+    await withMockGithub((req, res, url, server) => {
+      if (req.url === "/repos/acme/widgets") jsonResponse(res, 200, { private: false });
+      else handle(req, res, url, server);
+    }, async () => {
+      const result = await executeWorkflow(workflowShell(WORKFLOW_IMPORT_SEQUENCE), root, { ...env,
+        PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE });
+      assert.equal(result.code, 0, result.stderr + "\n" + result.stdout);
+      assert.deepEqual(remoteRefs(bare), ["refs/heads/" + SYNC_BRANCH, "refs/heads/main"].sort());
+      assert.match(fs.readFileSync(env.REVIEW_RECEIPT!, "utf8"), /https:\/\/github\.com\/acme\/widgets\/blob\/main\/\.agents\/pm\/issues\/[^)]+\.toon/);
+      const lease = git(["rev-parse", "HEAD"]).stdout.trim();
+      // Each Actions job starts from a fresh checkout, without old local journals.
+      const nextRoot = path.join(base, "next-work");
+      assert.equal(spawnSync("git", ["clone", "--branch", "main", bare, nextRoot], { encoding: "utf8" }).status, 0);
+      const nextEnv = await prepareWorkflowFixture(nextRoot, base);
+      assert.equal(spawnSync("git", ["-C", nextRoot, "switch", "-c", SYNC_BRANCH]).status, 0);
+      assert.equal(spawnSync("git", ["-C", nextRoot, "config", "user.name", "Fixture"]).status, 0);
+      assert.equal(spawnSync("git", ["-C", nextRoot, "config", "user.email", "fixture@users.noreply.github.com"]).status, 0);
+      const update = await executeWorkflow(workflowShell(WORKFLOW_IMPORT_SEQUENCE), nextRoot, { ...nextEnv,
+        PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE, SYNC_LEASE: lease, EXISTING_PR: "1" });
+      assert.equal(update.code, 0, update.stderr + "\n" + update.stdout);
+      assert.deepEqual(fs.readFileSync(env.REVIEW_ACTIONS!, "utf8").trim().split("\n"), ["create", "edit"]);
+    });
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });

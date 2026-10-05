@@ -98,6 +98,40 @@ test("a present but unreadable optional allowlist fails without echoing its erro
   }), err => err instanceof GateInputError && !err.message.includes(GH_TOKEN));
 });
 
+test("the SDK resolves custom tracker roots and scans symlink destinations", () => {
+  const { root } = initGateRepo();
+  try {
+    const custom = path.join(root, "tracker");
+    fs.renameSync(path.join(root, ".agents", "pm"), custom);
+    fs.symlinkSync("/" + "srv/private/report", path.join(custom, "issues", "link"));
+    const report = runTrackerGate({ pmRoot: custom });
+    assert.equal(report.verdict, "fail");
+    assert.ok(report.findings.some(f => f.rule === "absolute-host-path"));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("history pointers are structural but encoded history values are scanned", () => {
+  const { root } = initGateRepo();
+  try {
+    const history = path.join(root, ".agents", "pm", "history");
+    fs.mkdirSync(history);
+    fs.writeFileSync(path.join(history, "pm-test-aabb.jsonl"), JSON.stringify({ patch: [
+      { op: "replace", path: "/metadata/body", value: "clean" },
+      { op: "add", path: "/metadata/comments", value: [{ text: GH_TOKEN }] },
+    ] }) + "\n");
+    const report = runTrackerGate({ pmRoot: root });
+    assert.equal(report.verdict, "fail");
+    assert.ok(report.findings.some(f => f.rule === "github-token-classic"));
+    assert.ok(!report.findings.some(f => f.rule === "absolute-host-path"));
+    fs.writeFileSync(path.join(history, "pm-test-aabb.jsonl"), "not json\n");
+    assert.throws(() => runTrackerGate({ pmRoot: root }), GateInputError);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // --- Fake-but-well-formed malicious fixtures, assembled from parts so that no
 // --- tracked blob holds a complete signature.
 const GH_TOKEN = "ghp_" + "A".repeat(36);

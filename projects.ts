@@ -213,12 +213,27 @@ export const DEFAULT_STATUS_CANDIDATES: Record<string, string[]> = {
 export function parseStatusMap(
   raw: string[],
 ): Map<string, string> | undefined {
+  return parseAssignmentMap(raw, true);
+}
+
+/**
+ * Parse nonempty key=value pairs without expanding malformed entries.
+ *
+ * Shared by label translation and project status mapping; status keys normalize
+ * case while label keys preserve the spelling GitHub supplied.
+ *
+ * @param raw - Assignment entries collected from a CLI option.
+ * @param normalizeKeys - Whether the left-hand keys are case-insensitive.
+ * @returns The usable mappings, or undefined for an empty effective map.
+ */
+export function parseAssignmentMap(raw: readonly string[], normalizeKeys = false): Map<string, string> | undefined {
   if (!raw || raw.length === 0) return undefined;
   const map = new Map<string, string>();
   for (const entry of raw) {
     const eq = entry.indexOf("=");
     if (eq <= 0) continue;
-    const from = entry.slice(0, eq).trim().toLowerCase();
+    const key = entry.slice(0, eq).trim();
+    const from = normalizeKeys ? key.toLowerCase() : key;
     const to = entry.slice(eq + 1).trim();
     if (!from || !to) continue;
     map.set(from, to);

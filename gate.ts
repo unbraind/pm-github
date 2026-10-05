@@ -134,6 +134,8 @@ export interface TrackerGateInput {
   readonly allowlistFile?: string;
   /** Injectable collaborators; production defaults shell out to Git and `fs`. */
   readonly dependencies?: GateRunDependencies;
+  /** Rendered import values scanned in memory before persistence or diagnostics. */
+  readonly plannedItems?: readonly { readonly itemId: string; readonly fields: Readonly<Record<string, unknown>> }[];
 }
 
 // ---------------------------------------------------------------------------
@@ -190,12 +192,13 @@ const CREDENTIAL_RULES: readonly ContentRule[] = [
   { rule: "npm-token", pattern: /npm_[A-Za-z0-9]{36}/g },
   { rule: "aws-access-key-id", pattern: /(?:AKIA|ASIA)[0-9A-Z]{16}/g },
   { rule: "slack-token", pattern: /xox[abprs]-[A-Za-z0-9-]{10,}/g },
+  { rule: "openai-legacy-key", pattern: /sk-[A-Za-z0-9]{48}/g },
   { rule: "openai-api-key", pattern: /sk-[A-Za-z0-9_-]{20,}T3BlbkFJ[A-Za-z0-9_-]{20,}/g },
   { rule: "openai-project-key", pattern: /sk-proj-[A-Za-z0-9_-]{20,}/g },
   { rule: "anthropic-api-key", pattern: /sk-ant-[A-Za-z0-9_-]{20,}/g },
   {
     rule: "bearer-token",
-    pattern: /[Bb]earer\s+[A-Za-z0-9._~+/=-]{20,}/g,
+    pattern: /(?:authorization\s*:\s*bearer\s+[A-Za-z0-9._~+/=-]{8,}|bearer\s+[A-Za-z0-9._~+/=-]{20,})/gi,
 
   },
   { rule: "private-key-block", pattern: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/g },
@@ -244,7 +247,7 @@ const PERSONAL_DATA_RULES: readonly ContentRule[] = [
 const HOST_PATH_RULES: readonly ContentRule[] = [
   {
     rule: "absolute-host-path",
-    pattern: /(?:^|[\s"'`([=,{])\/(?:home|Users|root|tmp|var|mnt|media|opt|srv|private|www|inetpub|etc|usr|workspace|workspaces)\/[^\s"'`<>),;\]}]*/g,
+    pattern: /(?:^|[\s"'`([=,{])\/[A-Za-z0-9._-]+(?:\/[^\s"'`<>),;\]}]*)?/g,
   },
   {
     rule: "windows-host-path",
@@ -279,7 +282,7 @@ const SECRET_IDENTIFIER_PAIRS: readonly string[] = ["api_key", "access_key", "pr
 
 /** Assignment shape for the high-entropy rule: `NAME = "value"` / `name: value`. */
 const HIGH_ENTROPY_ASSIGNMENT =
-  /(?:^|[^A-Za-z0-9_])([A-Za-z][A-Za-z0-9_-]{0,48})\s*[:=]\s*(?:\\?["'`])?([A-Za-z0-9+/_=-]{20,256})(?:\\?["'`])?/g;
+  /(?:^|[^A-Za-z0-9_])([A-Za-z][A-Za-z0-9_-]{0,48})(?:\\?["'`])?\s*[:=]\s*(?:\\?["'`])?([A-Za-z0-9+/_=-]{20,256})(?:\\?["'`])?/g;
 
 /** Value shapes that are structured data, not secrets, even when long. */
 const NON_SECRET_VALUE_SHAPES =
@@ -379,7 +382,9 @@ export function scanLineForRuleHits(line: string): RuleHit[] {
     rule.pattern.lastIndex = 0;
     for (let match = rule.pattern.exec(decoded); match; match = rule.pattern.exec(decoded)) {
       if (!rule.confirm || rule.confirm(match[0])) {
-        hits.push({ rule: rule.rule, matched: match[0], index: offsets[match.index]! });
+        const matched = rule.rule === "absolute-host-path" ? match[0].slice(match[0].indexOf("/"))
+          : rule.rule === "home-username" ? match[0].slice(match[0].indexOf("~")) : match[0];
+        hits.push({ rule: rule.rule, matched, index: offsets[match.index]! });
       }
     }
   }
@@ -429,9 +434,6 @@ export function attributeToonFields(lines: readonly WalkLine[]): string[] {
   });
 }
 
-/** Patch-entry shape in a pm history JSONL event: `{"op":"add","path":"/metadata/x","value":"…"}`. */
-const JSONL_PATCH_ENTRY = /"path":"\/(?:metadata\/)?([A-Za-z0-9_]+)"\s*,\s*"value":"/g;
-
 /** Item id statement inside a pm history JSONL event. */
 const JSONL_ITEM_ID = /"path":"\/metadata\/id"\s*,\s*"value":"([^"]+)"/;
 
@@ -451,31 +453,6 @@ function itemIdForFile(filePath: string, line: string): string {
   if (base.endsWith(".toon")) return base.slice(0, -".toon".length);
   if (base.endsWith(".jsonl")) return JSONL_ITEM_ID.exec(line)?.[1] ?? base.slice(0, -".jsonl".length);
   return "";
-}
-
-/**
- * Resolve the item field a rule hit landed in, for a non-toon changed file.
- *
- * History JSONL events change one or more metadata fields per line; the hit is
- * attributed to the last patch entry that starts at or before the hit offset.
- * Anything else (settings, schema, unknown formats) reports the empty field
- * rather than a guess.
- *
- * @param filePath - The changed file path.
- * @param line - The full added line text.
- * @param hitIndex - Character offset of the hit within the line.
- * @returns The field name, or `""` when unattributable.
- */
-function jsonlFieldForHit(filePath: string, line: string, hitIndex: number): string {
-  if (!filePath.endsWith(".jsonl")) return "";
-  JSONL_PATCH_ENTRY.lastIndex = 0;
-  let field = "";
-  let match: RegExpExecArray | null;
-  while ((match = JSONL_PATCH_ENTRY.exec(line))) {
-    if (match.index > hitIndex) break;
-    field = match[1]!;
-  }
-  return field;
 }
 
 // ---------------------------------------------------------------------------
@@ -625,7 +602,7 @@ function wholeFileChange(
  * installed extension code would re-litigate reviewed package text on every
  * run. Item files, history, schema, and settings stay in scope.
  */
-const UNTRACKED_SCAN_EXCLUDED = ["/locks/", "/extensions/", "/checkpoints/"];
+const UNTRACKED_SCAN_EXCLUDED = ["locks", "extensions", "checkpoints"];
 
 /**
  * Whether a repo-relative changed path is operational state, out of gate scope.
@@ -635,7 +612,7 @@ const UNTRACKED_SCAN_EXCLUDED = ["/locks/", "/extensions/", "/checkpoints/"];
  */
 function isOperationalTrackerPath(repoRelative: string): boolean {
   const normalized = repoRelative.replace(/\\/g, "/");
-  return UNTRACKED_SCAN_EXCLUDED.some((segment) => normalized.includes(segment));
+  return UNTRACKED_SCAN_EXCLUDED.includes(normalized.split("/")[0]!);
 }
 
 /**
@@ -708,12 +685,15 @@ export function collectTrackerChange(
     // Rename/copy entries carry the original path as the next NUL token; it is
     // provenance of the rename, not a second changed path.
     if (xy[0] === "R" || xy[0] === "C" || xy[1] === "R" || xy[1] === "C") index++;
-    if (isOperationalTrackerPath(filePath)) continue;
+    if (xy === "??" && isOperationalTrackerPath(path.relative(pmDataDir, path.join(repoRoot, filePath)))) continue;
     if (xy === "??") {
       const absolute = path.join(repoRoot, filePath);
       let size = 0;
+      let symlink = false;
       try {
-        size = fs.statSync(absolute).size;
+        const stat = fs.lstatSync(absolute);
+        size = stat.size;
+        symlink = stat.isSymbolicLink();
       } catch {
         throw new GateInputError("pm github gate: a proposed file cannot be inspected.");
       }
@@ -722,13 +702,13 @@ export function collectTrackerChange(
           `pm github gate: untracked tracker file is too large to scan ; refusing to guess.`,
         );
       }
-      changes.push(wholeFileChange(absolute, filePath, readFileSync));
+      changes.push(wholeFileChange(absolute, filePath, symlink ? (file) => fs.readlinkSync(file) : readFileSync));
       continue;
     }
     if (xy.includes("D") && !/[AMU]/.test(xy)) continue; // pure deletion
     const addedLines: AddedLine[] = [];
     for (const revision of [["--cached"], []]) {
-      const diff = runGit(repoRoot, ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=3", ...revision, "--", filePath]);
+      const diff = runGit(repoRoot, ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=2147483647", ...revision, "--", filePath]);
       if (!diff.ok) {
         throw new GateInputError("pm github gate: git diff failed; refusing to scan incomplete input.");
       }
@@ -824,21 +804,56 @@ function scanChangeFile(change: ChangeFile): Array<GateFinding & { matched: stri
   const findings: Array<GateFinding & { matched: string }> = [];
   const seen = new Set<string>();
   for (const line of change.addedLines) {
-    for (const hit of scanLineForRuleHits(line.text)) {
-      const field = change.filePath.endsWith(".toon")
-        ? line.field
-        : jsonlFieldForHit(change.filePath, line.text, hit.index);
-      const itemId = change.filePath.endsWith(".toon") ? change.itemId : itemIdForFile(change.filePath, line.text);
-      const key = `${hit.rule}\0${change.itemId || itemId}\0${field}\0${hit.matched}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      findings.push({
-        rule: hit.rule,
-        item_id: change.itemId || itemId,
-        field,
-        hash: createHash("sha256").update(hit.matched).digest("hex"),
-        matched: hit.matched,
-      });
+    const values: Array<{ text: string; field: string; structural?: boolean }> = [];
+    if (change.filePath.endsWith(".jsonl")) {
+      if (line.text.trim() === "") continue;
+      // Structural JSON patch paths are pointers, while their values are data.
+      // Decode data before scanning so escaped separators cannot bypass a rule.
+      let parsed: unknown;
+      try { parsed = JSON.parse(line.text); } catch {
+        throw new GateInputError("pm github gate: malformed history event.");
+      }
+      const pending: Array<{ value: unknown; field: string }> = [{ value: parsed, field: "unknown" }];
+      while (pending.length > 0) {
+        const entry = pending.pop()!;
+        if (typeof entry.value === "string") values.push({ text: entry.value, field: entry.field });
+        else if (Array.isArray(entry.value)) {
+          for (const value of entry.value) pending.push({ value, field: entry.field });
+        } else if (entry.value !== null && typeof entry.value === "object") {
+          const record = entry.value as Record<string, unknown>;
+          const patch = typeof record.op === "string" && ["add", "replace", "remove", "test", "move", "copy"].includes(record.op) && typeof record.path === "string";
+          if (patch) {
+            for (const key of ["path", "from"]) {
+              if (typeof record[key] === "string") values.push({ text: record[key], field: key, structural: /^\/(?:metadata(?:\/|$)|body(?:\/|$))/.test(record[key]) });
+            }
+          }
+          if (patch && Object.hasOwn(record, "value")) {
+            const parts = (record.path as string).split("/").filter(Boolean);
+            pending.push({ value: record.value, field: parts[0] === "metadata" ? (parts[1] ?? "metadata") : (parts[0] ?? "unknown") });
+          }
+          for (const [key, value] of Object.entries(record)) {
+            if (patch && ["op", "path", "value", "from"].includes(key)) continue;
+            pending.push({ value, field: key === "metadata" || key === "patch" ? entry.field : key });
+          }
+        }
+      }
+    } else values.push({ text: line.text, field: line.field });
+    for (const value of values) {
+      for (const hit of scanLineForRuleHits(value.text)) {
+        if (value.structural && ["absolute-host-path", "windows-host-path", "home-username"].includes(hit.rule)) continue;
+        const field = value.field;
+        const itemId = change.itemId || itemIdForFile(change.filePath, line.text);
+        const key = `${hit.rule}\0${itemId}\0${field}\0${hit.matched}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        findings.push({
+          rule: hit.rule,
+          item_id: scanLineForRuleHits(itemId).length > 0 ? "" : itemId,
+          field: scanLineForRuleHits(field).length > 0 ? "unknown" : field,
+          hash: createHash("sha256").update(hit.matched).digest("hex"),
+          matched: hit.matched,
+        });
+      }
     }
   }
   return findings;
@@ -872,6 +887,11 @@ export function runTrackerGate(input: TrackerGateInput): GateReport {
     } else {
       source = "git";
       files = collectTrackerChange(pmDataDir, { runGit, readFileSync });
+    }
+    for (const item of input.plannedItems ?? []) {
+      files.push({ filePath: "planned.jsonl", itemId: item.itemId, addedLines: [{
+        text: JSON.stringify({ metadata: item.fields }), field: "unknown",
+      }] });
     }
   } catch (err: unknown) {
     if (err instanceof GateInputError) throw err;
@@ -915,9 +935,10 @@ export function runTrackerGate(input: TrackerGateInput): GateReport {
       added_lines: addedLines,
       findings,
       allowlisted,
-      allowlist_path: allowlistPath ? path.basename(allowlistPath) : "",
+      allowlist_path: allowlistPath ? (input.allowlistFile ? "(explicit allowlist)" : GATE_ALLOWLIST_FILENAME) : "",
     };
   } catch (err: unknown) {
+    if (err instanceof GateInputError) throw err;
     throw new GateInputError(
       `pm github gate: scanner error; scan did not complete.`,
     );

@@ -70,6 +70,7 @@ import {
   parseProjectItemTag,
   parseProjectRef,
   parseStatusMap,
+  parseAssignmentMap,
   projectItemTag,
 } from "./projects.ts";
 
@@ -667,17 +668,7 @@ export function parseLabelMap(
 ): Map<string, string> | undefined {
   const lookup = keys.length > 0 ? keys : ["label-map", "labelMap"];
   const raw = optionCsv(options, ...lookup);
-  if (raw.length === 0) return undefined;
-  const map = new Map<string, string>();
-  for (const entry of raw) {
-    const eq = entry.indexOf("=");
-    if (eq <= 0) continue; // need a non-empty "from" before the '='
-    const from = entry.slice(0, eq).trim();
-    const to = entry.slice(eq + 1).trim();
-    if (!from || !to) continue;
-    map.set(from, to);
-  }
-  return map.size > 0 ? map : undefined;
+  return parseAssignmentMap(raw);
 }
 
 // Apply a label translation table to a list of labels. Labels with a mapping
@@ -2860,6 +2851,25 @@ export function verifyImportIdempotency(
   };
 }
 
+/**
+ * Verify the persisted corpus actually contains every issue in the written plan.
+ *
+ * A recovered SDK journal alone is insufficient evidence after local files are
+ * reset or removed. Require unique durable provenance before a caller may push.
+ *
+ * @param existing - Complete post-write item corpus.
+ * @param prepared - Every entry the verified plan required.
+ * @param repo - Source repository whose provenance must be present.
+ * @returns Number of durable issue identities verified.
+ */
+export function verifyImportedProvenance(existing: PmItem[], prepared: readonly PreparedGithubImport[], repo: string): number {
+  const index = indexByProvenance(existing);
+  const persisted = prepared.map(entry => ({ ...entry, match: index.get(`${repo.toLowerCase()}#${entry.issueNumber}`) }));
+  if (persisted.some(entry => !entry.match?.id)) throw new CommandError("pm github gate: persisted corpus does not account for the complete import plan. Nothing may be pushed.");
+  verifyImportIdempotency(existing, persisted, repo);
+  return persisted.length;
+}
+
 /** Receipt of the fail-closed tracker privacy gate embedded in an import result. */
 export interface ImportGateReceipt {
   /** The gate verdict for the proposed tracker change. */
@@ -3004,7 +3014,7 @@ export async function runImport(
   let gateCompleteness: ImportPlanCompletenessReceipts | undefined;
   let gateIdempotency: ImportIdempotencyReceipts | undefined;
   let gatePlanByNumber: Map<number, PreparedGithubImport> | undefined;
-  if (opts.gate) {
+  if (opts.gate || opts.atomic) {
     const planned: PreparedGithubImport[] = [];
     const skippedNumbers: number[] = [];
     for (const issue of filtered) {
@@ -3022,43 +3032,38 @@ export async function runImport(
       }
       planned.push(entry);
     }
+    if (opts.gate) {
     gateCompleteness = verifyImportPlanCompleteness(filtered, planned, skippedNumbers);
     gateIdempotency = verifyImportIdempotency(
       existingItems,
       planned,
       repo,
     );
+    }
     gatePlan = planned;
     gatePlanByNumber = new Map(planned.map((entry) => [entry.issueNumber, entry]));
     skipped = skippedNumbers.length;
-    console.error(
-      `pm github gate: plan verified — ${gateCompleteness.planned} planned, ${gateCompleteness.skipped} skipped, ` +
-        `${gateIdempotency.matched_by_provenance} matched by provenance, ${gateIdempotency.new_entries} new.`,
+    if (opts.gate && !opts.dryRun) {
+      const preview = runTrackerGate({ pmRoot, plannedItems: planned.map(entry => ({
+        itemId: entry.match?.id ?? `github-issue-${entry.issueNumber}`,
+        fields: { title: entry.title, description: entry.description, body: entry.body, tags: entry.tags,
+          assignee: entry.assignee, sprint: entry.milestone, comments: entry.comments },
+      })) });
+      if (preview.verdict === "fail") throw new CommandError(JSON.stringify({ ...preview, error: "pm github gate: FAIL before write" }));
+    }
+    if (opts.gate) console.error(
+      `pm github gate: plan verified — ${gateCompleteness!.planned} planned, ${gateCompleteness!.skipped} skipped, ` +
+        `${gateIdempotency!.matched_by_provenance} matched by provenance, ${gateIdempotency!.new_entries} new.`,
     );
   }
+
+  const gatePlanFields = opts.gate ? { gate: { completeness: gateCompleteness, idempotency: gateIdempotency, scan: "post-write" } } : {};
 
   if (opts.atomic) {
     // The gated pipeline already prepared every entry (and counted its skips)
     // during the pre-mutation plan phase; reuse that plan verbatim so the write
     // phase cannot diverge from the verified plan.
-    const prepared: PreparedGithubImport[] = gatePlan ? [...gatePlan] : [];
-    if (!gatePlan) {
-      for (const issue of filtered) {
-        const entry = await prepareGithubImport(
-          issue,
-          repo,
-          opts,
-          token,
-          existing.get(`${repo.toLowerCase()}#${issue.number}`),
-          dependencies.fetchIssueComments,
-        );
-        if (!entry) {
-          skipped++;
-          continue;
-        }
-        prepared.push(entry);
-      }
-    }
+    const prepared: PreparedGithubImport[] = [...gatePlan!];
 
     if (prepared.length === 0) {
       if (opts.dryRun) {
@@ -3100,11 +3105,12 @@ export async function runImport(
         wouldSkip: skipped,
         atomic: true,
         ...(opts.linkDeps ? { wouldLinkDependencyCandidates: countDependencyRefCandidates(repo, filtered) } : {}),
-        ...(opts.gate ? { gate: { completeness: gateCompleteness, idempotency: gateIdempotency, scan: "post-write" } } : {}),
+        ...gatePlanFields,
       };
     }
 
     const result = await (dependencies.commitAtomic ?? importGithubAtomic)(pmRoot, repo, prepared);
+    if (opts.gate) verifyImportedProvenance((dependencies.readItems ?? readPmItems)(pmRoot), prepared, repo);
     for (const entry of prepared) {
       if (!entry.syncAnnotations) continue;
       const itemId = result.itemIds.get(entry.issueNumber);
@@ -3325,7 +3331,7 @@ export async function runImport(
       wouldSkip: skipped,
       ...(opts.atomic ? { atomic: true } : {}),
       ...(opts.linkDeps ? { wouldLinkDependencyCandidates: countDependencyRefCandidates(repo, filtered) } : {}),
-      ...(opts.gate ? { gate: { completeness: gateCompleteness, idempotency: gateIdempotency, scan: "post-write" } } : {}),
+      ...gatePlanFields,
     };
   }
 
@@ -3339,6 +3345,7 @@ export async function runImport(
   reportDepLink(depLink);
   // Gated pipeline, phase 2 — the writes are on disk but nothing is committed or
   // pushed; scan the proposed tracker change now and fail closed.
+  if (opts.gate) verifyImportedProvenance((dependencies.readItems ?? readPmItems)(pmRoot), gatePlan!, repo);
   const gateReceipt = opts.gate ? gateImportWrites(pmRoot) : undefined;
   return { imported, updated, skipped, ...depLinkResultFields(depLink), ...(gateReceipt ? { gate: gateReceipt } : {}) };
 }
@@ -3404,6 +3411,20 @@ export interface SyncPlanEntry {
   to: "open" | "closed";
 }
 
+/**
+ * Require every requested item before a remote sync or export can begin.
+ *
+ * @param items - Complete local corpus.
+ * @param requested - Selected ids, or an empty list for the complete corpus.
+ * @returns Matched items in corpus order.
+ * @throws CommandError when any requested identity is absent.
+ */
+function requireRequestedItems(items: PmItem[], requested: string[]): PmItem[] {
+  const scoped = scopeItemsByIds(items, requested.length > 0 ? requested : undefined);
+  if (scoped.missing.length > 0) throw new CommandError(`--ids included unknown pm item id(s): ${scoped.missing.join(", ")}`, EXIT_CODE.NOT_FOUND);
+  return scoped.selected;
+}
+
 // Build the pm → GitHub issue sync plan: for each pm item linked to `repo`, emit
 // a create-or-update entry keyed by the issue's provenance tag.
 export function planSync(items: PmItem[], repo: string): SyncPlanEntry[] {
@@ -3461,15 +3482,8 @@ async function runSync(ctx: CommandHandlerContext) {
     );
   }
 
-  const allItems = readPmItems(ctx.pm_root);
-  const scoped = scopeItemsByIds(allItems, scopedIds.length > 0 ? scopedIds : undefined);
-  if (scoped.missing.length > 0) {
-    throw new CommandError(
-      `--ids included unknown pm item id(s): ${scoped.missing.join(", ")}`,
-      EXIT_CODE.NOT_FOUND,
-    );
-  }
-  const plan = planSync(scoped.selected, repo);
+  const selected = requireRequestedItems(readPmItems(ctx.pm_root), scopedIds);
+  const plan = planSync(selected, repo);
 
   if (plan.length === 0) {
     const scopeNote = scopedIds.length > 0 ? ` from --ids (${scopedIds.join(", ")})` : "";
@@ -3791,15 +3805,8 @@ async function runExport(ctx: CommandHandlerContext) {
     );
   }
 
-  const allItems = readPmItems(ctx.pm_root);
-  const scoped = scopeItemsByIds(allItems, scopedIds.length > 0 ? scopedIds : undefined);
-  if (scoped.missing.length > 0) {
-    throw new CommandError(
-      `--ids included unknown pm item id(s): ${scoped.missing.join(", ")}`,
-      EXIT_CODE.NOT_FOUND,
-    );
-  }
-  const plan = buildExportPlan(scoped.selected, repo, labelMap);
+  const selected = requireRequestedItems(readPmItems(ctx.pm_root), scopedIds);
+  const plan = buildExportPlan(selected, repo, labelMap);
   const creates = plan.filter((e) => e.action === "create").length;
   const updates = plan.filter((e) => e.action === "update").length;
 
@@ -3824,7 +3831,7 @@ async function runExport(ctx: CommandHandlerContext) {
         console.error(JSON.stringify(plan, null, 2));
       }
       const scopeNote = scopedIds.length > 0
-        ? ` Scoped to ${scoped.selected.length} item(s) via --ids.`
+        ? ` Scoped to ${selected.length} item(s) via --ids.`
         : "";
       const labelNote = labelMap && labelMap.size > 0
         ? ` Label map applied (${labelMap.size} mapping(s)).`
@@ -4649,6 +4656,22 @@ async function runProjectList(ctx: CommandHandlerContext) {
   return { owner, projects };
 }
 
+/**
+ * Require a valid owner/number board reference before a project command can run.
+ *
+ * Resolves positional and --project forms identically for fields, import, and
+ * sync; a malformed reference exits before any GraphQL request or mutation.
+ *
+ * @param ctx - The host command context.
+ * @param usage - Command-specific recovery instruction.
+ * @returns The parsed project identity.
+ */
+function requireProjectRef(ctx: CommandHandlerContext, usage: string): ProjectRef {
+  const ref = parseProjectRef(optionString(ctx.options || {}, "project") || ctx.args?.[0]);
+  if (!ref) throw new CommandError(usage, EXIT_CODE.USAGE);
+  return ref;
+}
+
 // --- project fields --------------------------------------------------------
 
 /**
@@ -4661,13 +4684,7 @@ async function runProjectList(ctx: CommandHandlerContext) {
  */
 async function runProjectFields(ctx: CommandHandlerContext) {
   const options = ctx.options || {};
-  const ref = parseProjectRef(optionString(options, "project") || (ctx.args?.[0] as string | undefined));
-  if (!ref) {
-    throw new CommandError(
-      "Usage: pm github project fields <owner/number>  (e.g. pm github project fields unbraind/5)",
-      EXIT_CODE.USAGE,
-    );
-  }
+  const ref = requireProjectRef(ctx, "Usage: pm github project fields <owner/number>  (e.g. pm github project fields unbraind/5)");
   const token = resolveGitHubToken();
   const meta = await resolveProject(ref, token);
   const q = `
@@ -4709,13 +4726,7 @@ async function runProjectFields(ctx: CommandHandlerContext) {
  */
 async function runProjectImport(ctx: CommandHandlerContext) {
   const options = ctx.options || {};
-  const ref = parseProjectRef(optionString(options, "project") || (ctx.args?.[0] as string | undefined));
-  if (!ref) {
-    throw new CommandError(
-      "Usage: pm github project import <owner/number> [--dry-run] [--status-map pm=Option,...] [--type <type>]",
-      EXIT_CODE.USAGE,
-    );
-  }
+  const ref = requireProjectRef(ctx, "Usage: pm github project import <owner/number> [--dry-run] [--status-map pm=Option,...] [--type <type>]");
   const dryRun = optionEnabled(options, "dry-run", "dryRun");
   const itemType = optionString(options, "type") || "Task";
   const statusMap = parseStatusMap(optionCsv(options, "status-map", "statusMap"));
@@ -4950,13 +4961,7 @@ interface PullPlanEntryLike {
  */
 async function runProjectSync(ctx: CommandHandlerContext) {
   const options = ctx.options || {};
-  const ref = parseProjectRef(optionString(options, "project") || (ctx.args?.[0] as string | undefined));
-  if (!ref) {
-    throw new CommandError(
-      "Usage: pm github project sync <owner/number> [--push|--pull] [--apply] [--ids pm-1,..] [--status-map pm=Option,..] [--no-add-missing] [--prefer pm|github]",
-      EXIT_CODE.USAGE,
-    );
-  }
+  const ref = requireProjectRef(ctx, "Usage: pm github project sync <owner/number> [--push|--pull] [--apply] [--ids pm-1,..] [--status-map pm=Option,..] [--no-add-missing] [--prefer pm|github]");
 
   const wantPush = optionEnabled(options, "push");
   const wantPull = optionEnabled(options, "pull");

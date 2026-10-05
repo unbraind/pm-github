@@ -42,6 +42,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  issues: read
 
 concurrency:
   group: pm-github-sync-${{ inputs.repository }}
@@ -104,24 +105,14 @@ jobs:
           ./node_modules/.bin/pm package install "npm:pm-github@${PM_GITHUB_VERSION}" --project
           node -e 'if (require("./.agents/pm/extensions/pm-github/package.json").version !== process.argv[1]) process.exit(1)' "${PM_GITHUB_VERSION}"
 
-      # Keep the install's bookkeeping out of the sync diff; the extension tree
-      # itself is operational state the privacy gate deliberately excludes.
-      - name: Restore managed extension registry
-        shell: bash
-        run: |
-          set -euo pipefail
-          managed_registry=".agents/pm/extensions/.managed-extensions.json"
-          if git ls-files --error-unmatch "${managed_registry}" > /dev/null 2>&1; then
-            git restore -- "${managed_registry}"
-          else
-            rm -f "${managed_registry}"
-          fi
+      - name: Configure PM merge drivers
+        run: ./node_modules/.bin/pm merge install
 
       - name: Verify gate is available
         run: ./node_modules/.bin/pm github gate --json
 
       - name: Validate GitHub access
-        run: ./node_modules/.bin/pm github validate --repo "${REPOSITORY}"
+        run: ./node_modules/.bin/pm github validate --repo "${REPOSITORY}" --json | jq -e ' .ok == true and .repo_accessible == true '
 
       - name: Preview GitHub to pm plan
         run: ./node_modules/.bin/pm github import "${REPOSITORY}" --state all --atomic --gate --dry-run --with-comments
@@ -135,10 +126,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git add -- .agents/pm ':(exclude).agents/pm/extensions' ':(exclude).agents/pm/locks' ':(exclude).agents/pm/checkpoints'
+          paths_file="${RUNNER_TEMP}/pm-github-tracker-paths"
+          git ls-files -z --modified --deleted --others --exclude-standard -- .agents/pm > "${paths_file}"
+          node -e 'const fs = require("node:fs"); const file = process.argv[1]; const paths = fs.readFileSync(file, "utf8").split("\0").filter(p => p && !["extensions", "locks", "checkpoints"].includes(p.slice(".agents/pm/".length).split("/")[0])); fs.writeFileSync(file, paths.map(p => p + "\0").join(""));' "${paths_file}"
+          if [[ -s "${paths_file}" ]]; then
+            git --literal-pathspecs add --pathspec-from-file="${paths_file}" --pathspec-file-nul
+          fi
           ./node_modules/.bin/pm github import "${REPOSITORY}" --state all --atomic --gate --with-comments
-          git diff --exit-code -- .agents/pm ':(exclude).agents/pm/extensions' ':(exclude).agents/pm/locks' ':(exclude).agents/pm/checkpoints'
-          [[ -z "$(git ls-files --others --exclude-standard -- .agents/pm ':(exclude).agents/pm/extensions' ':(exclude).agents/pm/locks' ':(exclude).agents/pm/checkpoints')" ]]
+          git diff --exit-code -- .agents/pm ':(exclude,glob).agents/pm/extensions/**' ':(exclude,glob).agents/pm/locks/**' ':(exclude,glob).agents/pm/checkpoints/**'
+          [[ -z "$(git ls-files --others --exclude-standard -- .agents/pm ':(exclude,glob).agents/pm/extensions/**' ':(exclude,glob).agents/pm/locks/**' ':(exclude,glob).agents/pm/checkpoints/**')" ]]
           ./node_modules/.bin/pm github gate --json
 
       - name: Verify strict pm health
@@ -148,7 +144,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git add -- .agents/pm ':(exclude).agents/pm/extensions' ':(exclude).agents/pm/locks' ':(exclude).agents/pm/checkpoints'
+          ./node_modules/.bin/pm github gate --json
           if git diff --cached --quiet; then
             echo "GitHub issues already match the pm tracker; no PR is needed."
             exit 0

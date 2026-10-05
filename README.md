@@ -268,7 +268,7 @@ It scans **only the proposed change** — the added lines of the staged/working/
 - **personal data** — email addresses other than no-reply identities (`@users.noreply.github.com`, `noreply@…`, `@noreply.…`), and phone numbers in international (`+…`) or North-American (`(555) 123-4567`, `555-123-4567`) notation;
 - **host paths** — absolute local filesystem paths (POSIX home/system directories and Windows drive paths), and named home-directory references.
 
-Unreadable input, a Git failure, a malformed allowlist, or a scanner error fails the gate — a clean verdict can never be the result of not being able to read what was scanned. The `locks/`, `extensions/`, and `checkpoints/` tracker subpaths are operational state and are not scanned; item files, history, schema, and settings stay in scope.
+Unreadable input, malformed or truncated diffs, binary input, Git failures, malformed allowlists, and scanner errors fail the gate. Untracked operational state in the tracker root (`locks/`, `extensions/`, `checkpoints/`) is excluded. Explicitly staged operational files remain in scope. Staged and unstaged changes are scanned separately, including staged content that the working copy subsequently removed.
 
 **False positives** are allowlisted by *content hash*, not by pattern: put the sha256 from the finding into `.pm-github-gate-allowlist.json` at the repository root (or pass `--allowlist <file>`) with a written justification. An entry suppresses exactly the reviewed content, can never widen to a pattern, and a missing justification fails the gate:
 
@@ -288,11 +288,13 @@ Unreadable input, a Git failure, a malformed allowlist, or a scanner error fails
 4. **write** — the ordinary (atomic or per-item) import;
 5. **gate** — the proposed tracker change is scanned; a finding exits non-zero, so the caller never commits or pushes.
 
-The `gate` receipt in the result reports the verdict, scanned file count, findings, and allowlisted count.
+Rendered values are also scanned in memory before mutation, so a known finding cannot be written to disk. After mutation, the importer verifies that every planned provenance tag exists exactly once, then scans the tracker diff. A completed SDK journal cannot substitute for missing item files.
+
+The `gate` receipt reports the verdict, scanned file count, findings, and allowlisted count. With `--json`, successful reports go to stdout; failures use the host CLI's JSON error envelope on stderr, with the redacted gate report serialized in `detail` (`jq ' .detail | fromjson ' gate-error.json`). Unreadable inputs produce a nonzero JSON refusal.
 
 ## Automated sync workflow
 
-Fleet repos sync their issues into pm through ONE audited implementation: the reusable `workflow_call` workflow at [`.github/workflows/pm-github-sync.yml`](.github/workflows/pm-github-sync.yml) in this repository. It runs the gated pipeline in fail-closed order — checkout → install the **pinned** extension → `pm github validate` → dry-run plan → **gated import** → `pm health --strict-exit` → and only then commit, push the sync branch, and open/update a review PR whose body links every changed item as `https://github.com/<repo>/blob/main/.agents/pm/<folder>/<id>.toon`. Because `--gate` exits non-zero on any finding, the job can never reach the push step with a leak in the change. Actions are pinned by commit SHA; permissions are least-privilege (`contents: write`, `pull-requests: write`).
+Fleet repos sync their issues into pm through ONE audited implementation: the reusable `workflow_call` workflow at [`.github/workflows/pm-github-sync.yml`](.github/workflows/pm-github-sync.yml) in this repository. It runs the gated pipeline in fail-closed order — checkout → install the **pinned** extension → `pm github validate` → dry-run plan → **gated import** → `pm health --strict-exit` → and only then commit, push the sync branch, and open/update a review PR whose body links every changed item as `https://github.com/<repo>/blob/main/.agents/pm/<folder>/<id>.toon`. Because `--gate` exits non-zero on any finding, the job can never reach the push step with a leak in the change. Actions are pinned by commit SHA; permissions are least-privilege (`contents: write`, `pull-requests: write`, `issues: read`).
 
 A fleet repo owns the schedule and calls it with the pinned versions (see [`docs/sync-workflow-caller.yml`](docs/sync-workflow-caller.yml)):
 
@@ -306,6 +308,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  issues: read
 
 concurrency:
   group: pm-github-sync
@@ -339,7 +342,7 @@ MIT
 
 ## Release Automation
 
-This package is release-ready for GitHub, npm, and Bun-compatible installs. CI runs type checking, build, production dependency audit, package packing, Bun install verification, and pm-changelog validation. The daily release workflow publishes only when commits exist after the latest release tag and uses pm-changelog to generate CHANGELOG.md and GitHub release notes.
+Release checks require type checking, docstrings, ESLint, zero source duplication, exact 100/100/100/100 coverage across authored TypeScript and JavaScript modules including operational scripts, production dependency audit, package packing, Bun behavior, strict PM health, and pm-changelog validation. Unloaded modules count at zero; no source ignores or lowered thresholds are accepted. Coverage shortfalls block release. The shell changelog-date verifier is exercised separately and is outside the V8 percentage denominator. The daily release workflow publishes only when commits exist after the latest release tag and uses pm-changelog to generate CHANGELOG.md and GitHub release notes.
 
 ## Multi-agent merge safety
 
