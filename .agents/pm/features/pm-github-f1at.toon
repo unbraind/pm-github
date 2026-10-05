@@ -1,0 +1,22 @@
+id: pm-github-f1at
+title: Fail-closed privacy gate for automated GitHub issue imports and one reusable sync workflow
+description: "Automated fleet-wide sync is disabled because the pilot workflow pushes imported issue text to a public branch before any privacy gate inspects the proposed tracker diff. Add a fail-closed scanner over the proposed tracker change, wire it into import as --gate, and ship one reusable workflow_call sync workflow fleet repos can call."
+type: Feature
+status: in_progress
+priority: 1
+tags[4]: "area:ci","area:gates","area:import","area:privacy"
+created_at: "2026-10-05T06:09:58.912Z"
+updated_at: "2026-10-05T06:33:25.742Z"
+assignee: pi-glm
+claim_principal: pi-glm
+author: pi-glm
+acceptance_criteria: A fresh checkout installs the pinned extension and exercises a nonempty issue import; malicious issue-body credential and personal-data fixtures prevent any public branch push; completeness and idempotency are checked before mutation; a clean import opens a reviewable PR with permanent PM links; existing pilot workflows and future rollouts use one audited implementation or equivalent gate.
+comments[2]{created_at,author,text}:
+  "2026-10-05T06:21:37.672Z",pi-glm,"Design settled: new gate.ts holds the pure scanner (credential/personal-data/host-path rules over ADDED lines only, sha256 content-hash allowlist with required written justification, fail-closed on unreadable input/git failure/malformed allowlist); unified-diff parser with toon field attribution + jsonl patch-entry attribution; git collector covers staged+working+untracked under the resolved tracker path and excludes operational locks/extensions/checkpoints subpaths. Registered as 'pm github gate' (--diff, --allowlist) and composed into import via --gate: plan completeness + provenance idempotency verified pre-mutation, tracker-change scan post-write, non-zero exit so a workflow can never push on a finding. Reusable workflow_call sync workflow added with SHA-pinned actions; caller example at docs/sync-workflow-caller.yml."
+  "2026-10-05T06:33:25.742Z",pi-glm,"Implementation checkpoint: gate.ts (scanner + unified-diff parser with toon/jsonl field attribution + git collector over staged/working/untracked tracker changes, operational locks/extensions/checkpoints excluded + sha256-keyed allowlist with required justification) is registered as 'pm github gate' and composed into import via --gate (plan completeness + provenance idempotency verified pre-mutation, fail-closed scan post-write, non-zero exit). Reusable workflow_call sync workflow with SHA-pinned actions + caller example added. Full package suite green: 347 tests pass, coverage 93.55 lines / 84.05 branches / 93.62 functions (repo thresholds 88/79/89 met), docstring gate 119/119, repo privacy gate clean over 3107 objects. New suites test/gate.test.ts (29) and test/import-gate.test.ts (13) include the adversarial full-sequence replay on a real git repo with a bare remote: token-in-body, token-in-comment, email, host-path, and high-entropy fixtures all fail the gated import before anything can be pushed, and the remote's ref list never gains the sync branch."
+files[4]{path,scope}:
+  .github/workflows/pm-github-sync.yml,project
+  docs/sync-workflow-caller.yml,project
+  gate.ts,project
+  index.ts,project
+body: ""

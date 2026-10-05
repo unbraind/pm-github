@@ -54,6 +54,7 @@ function importOpts(overrides: Partial<ImportOptions> = {}): ImportOptions {
     atomic: false,
     linkDeps: true,
     ...overrides,
+    gate: false,
   };
 }
 

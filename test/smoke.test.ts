@@ -114,6 +114,7 @@ const baseOpts: ImportOptions = {
   dryRun: false,
   atomic: false,
   linkDeps: false,
+  gate: false,
 };
 
 test("extension has required shape", () => {

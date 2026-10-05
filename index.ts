@@ -2,6 +2,7 @@
 //
 // Capabilities (see manifest.json):
 //   commands   — `pm gh-issues import` (legacy) + `pm github sync` +
+//                `pm github gate` (fail-closed pre-push privacy gate) +
 //                `pm github project list|fields|import|sync` (Projects v2)
 //   importers  — `pm github import <owner/repo>` (idempotent native import)
 //   exporters  — `pm github export` (render pm items as a GitHub-issues payload)
@@ -45,6 +46,17 @@ import {
   type PmClientOptions,
 } from "@unbrained/pm-cli/sdk";
 import { collectNewOrderingCycleWarnings as sdkCollectNewOrderingCycleWarnings } from "@unbrained/pm-cli/sdk/graph";
+
+import {
+  type GateReport,
+  type GateVerdict,
+  GateInputError,
+  formatGateReport,
+  runTrackerGate,
+} from "./gate.ts";
+
+export { resolvePmDataDir } from "./gate.ts";
+import { resolvePmDataDir } from "./gate.ts";
 
 import {
   type ProjectItem,
@@ -167,6 +179,10 @@ export interface ImportOptions {
   atomic: boolean;
   /** When true, run the `--link-deps` dependency-edge second pass after import. */
   linkDeps: boolean;
+  /** When true, verify plan completeness + provenance idempotency before the
+   *  write, and run the fail-closed tracker privacy gate after it, failing the
+   *  import (non-zero) on any credential, personal-data, or host-path finding. */
+  gate: boolean;
 }
 
 type CommitItemMutations = (
@@ -1705,27 +1721,6 @@ export type ImportLockAcquisition =
   | { status: "degraded" };
 
 /**
- * Resolve the pm data dir from the `pmRoot` a command handler receives.
- *
- * The host may hand either the workspace root (the dir containing `.agents/pm`)
- * or the data dir itself — the pm CLI accepts both for `--path`. This returns
- * the dir that actually holds `settings.json` and `locks/`, defaulting to
- * `pmRoot` unchanged when no nested `.agents/pm` exists.
- *
- * @param pmRoot - The path supplied by the extension host.
- * @returns The resolved pm data directory.
- */
-export function resolvePmDataDir(pmRoot: string): string {
-  const nested = path.join(pmRoot, ".agents", "pm");
-  try {
-    if (fs.statSync(nested).isDirectory()) return nested;
-  } catch {
-    // Not the workspace-root form — assume pmRoot already is the data dir.
-  }
-  return pmRoot;
-}
-
-/**
  * Absolute lock file path for one item's comment-sync critical section.
  *
  * The item id is sanitized defensively: pm ids are already filename-safe, but
@@ -2315,6 +2310,7 @@ export function parseImportOptions(options: Record<string, unknown>): ImportOpti
     dryRun: optionEnabled(options, "dry-run", "dryRun"),
     atomic: optionEnabled(options, "atomic"),
     linkDeps: optionEnabled(options, "link-deps", "linkDeps"),
+    gate: optionEnabled(options, "gate"),
   };
 }
 
@@ -2735,14 +2731,192 @@ async function prepareGithubImport(
   };
 }
 
+/** Receipts from the gated import's completeness check. */
+export interface ImportPlanCompletenessReceipts {
+  /** Number of issues the fetch delivered after filtering. */
+  readonly fetched: number;
+  /** Number of issues the plan prepares to import or update. */
+  readonly planned: number;
+  /** Number of issues the plan explicitly skips (e.g. empty titles). */
+  readonly skipped: number;
+}
+
+/** Receipts from the gated import's idempotency check. */
+export interface ImportIdempotencyReceipts {
+  /** Distinct `gh:owner/repo#N` provenance keys in the existing corpus. */
+  readonly provenance_indexed: number;
+  /** Number of plan entries matched to an existing item via its provenance tag. */
+  readonly matched_by_provenance: number;
+  /** Number of plan entries that will be born new; each must carry its tag. */
+  readonly new_entries: number;
+}
+
+/**
+ * Verify that a gated import's plan accounts for every fetched issue exactly once.
+ *
+ * An import that silently drops an issue (or plans one twice) would leave the
+ * tracker out of sync with GitHub while reporting success, and the sync PR
+ * would then publish an incomplete state. The check is fail-closed: every
+ * filtered issue number must appear in the prepared entries or the explicit
+ * skip list exactly once, nothing outside the fetched set may appear, and the
+ * counts must reconcile. A violation throws {@link CommandError} before any
+ * mutation happens.
+ *
+ * @param issues - The filtered issues the fetch delivered.
+ * @param prepared - The plan entries built from them.
+ * @param skippedNumbers - Issue numbers the plan explicitly skips.
+ * @returns The reconciled counts on success.
+ */
+export function verifyImportPlanCompleteness(
+  issues: readonly GhIssue[],
+  prepared: readonly PreparedGithubImport[],
+  skippedNumbers: readonly number[],
+): ImportPlanCompletenessReceipts {
+  const fetched = new Set(issues.map((issue) => issue.number));
+  const planned = new Set<number>();
+  let duplicates = 0;
+  for (const entry of prepared) {
+    if (planned.has(entry.issueNumber)) duplicates++;
+    planned.add(entry.issueNumber);
+  }
+  const skippedSet = new Set(skippedNumbers);
+  const unaccounted = [...fetched].filter(
+    (number) => !planned.has(number) && !skippedSet.has(number),
+  );
+  const foreign = [...planned, ...skippedNumbers].filter(
+    (number) => !fetched.has(number),
+  );
+  const countsReconcile = prepared.length + skippedNumbers.length === issues.length;
+  if (duplicates > 0 || unaccounted.length > 0 || foreign.length > 0 || !countsReconcile) {
+    throw new CommandError(
+      `pm github gate: import plan is incomplete — fetched ${issues.length}, planned ${prepared.length}, ` +
+        `skipped ${skippedNumbers.length}; duplicates ${duplicates}, unaccounted [${unaccounted.join(", ")}], ` +
+        `out-of-plan [${foreign.join(", ")}]. No item was written.`,
+      EXIT_CODE.GENERIC_FAILURE,
+    );
+  }
+  return { fetched: issues.length, planned: prepared.length, skipped: skippedNumbers.length };
+}
+
+/**
+ * Verify that a gated import's plan keeps a second run a no-op via provenance tags.
+ *
+ * Idempotency is only real when every re-import lands on exactly one item: a
+ * corpus with two items sharing a `gh:owner/repo#N` tag updates one and lets the
+ * other drift, and a plan entry targeting a second entry's item would write the
+ * same item twice. The check fails closed on duplicate provenance tags in the
+ * existing corpus, on plan entries that would create a new item without its
+ * provenance tag, and on two plan entries resolving to the same existing item.
+ *
+ * @param existing - The complete existing pm item corpus.
+ * @param prepared - The plan entries about to be written.
+ * @param repo - The `owner/repo` being imported from.
+ * @returns The provenance idempotency receipts on success.
+ */
+export function verifyImportIdempotency(
+  existing: readonly PmItem[],
+  prepared: readonly PreparedGithubImport[],
+  repo: string,
+): ImportIdempotencyReceipts {
+  const tagOwners = new Map<string, string>();
+  const duplicateTags = new Set<string>();
+  for (const item of existing) {
+    if (!item.id) continue;
+    for (const tag of item.tags ?? []) {
+      const parsed = parseProvenanceTag(tag);
+      if (!parsed) continue;
+      const key = `${parsed.repo}#${parsed.number}`;
+      const prior = tagOwners.get(key);
+      if (prior && prior !== item.id) duplicateTags.add(key);
+      else tagOwners.set(key, item.id);
+    }
+  }
+  const matchedIds: string[] = [];
+  let untaggedNewEntries = 0;
+  for (const entry of prepared) {
+    if (entry.match?.id) {
+      matchedIds.push(entry.match.id);
+      continue;
+    }
+    if (!entry.tags.includes(provenanceTag(repo, entry.issueNumber))) untaggedNewEntries++;
+  }
+  const conflictingTargets = matchedIds.length - new Set(matchedIds).size;
+  if (duplicateTags.size > 0 || untaggedNewEntries > 0 || conflictingTargets > 0) {
+    throw new CommandError(
+      `pm github gate: import plan is not idempotent — ${duplicateTags.size} duplicate provenance tag(s) ` +
+        `in the existing corpus, ${untaggedNewEntries} new entr(y/ies) without a provenance tag, ` +
+        `${conflictingTargets} conflicting target(s). No item was written.`,
+      EXIT_CODE.GENERIC_FAILURE,
+    );
+  }
+  return {
+    provenance_indexed: tagOwners.size,
+    matched_by_provenance: matchedIds.length,
+    new_entries: prepared.length - matchedIds.length,
+  };
+}
+
+/** Receipt of the fail-closed tracker privacy gate embedded in an import result. */
+export interface ImportGateReceipt {
+  /** The gate verdict for the proposed tracker change. */
+  verdict: GateVerdict;
+  /** Number of files whose added lines were scanned. */
+  scanned_files: number;
+  /** Number of findings that survived the allowlist (0 on pass). */
+  findings: number;
+  /** Number of reviewed findings suppressed by the content-hash allowlist. */
+  allowlisted: number;
+}
+
+/**
+ * Run the post-write tracker privacy gate and turn its outcome into a receipt.
+ *
+ * Runs the real gate over the proposed tracker change the import just wrote,
+ * emits the human-readable report to stderr, and throws {@link CommandError}
+ * with the findings (rule + item + field + hash — never the matched content)
+ * when the verdict is fail, so a caller higher in the pipeline (a sync workflow)
+ * never reaches its commit/push step on a gated failure. Gate input failures
+ * (not a Git work tree, unreadable change, malformed allowlist) fail identically.
+ *
+ * @param pmRoot - Workspace root or pm data dir the import wrote to.
+ * @returns The pass receipt, embedded into the import result.
+ */
+function gateImportWrites(pmRoot: string): ImportGateReceipt {
+  let report: GateReport;
+  try {
+    report = runTrackerGate({ pmRoot });
+  } catch (err: unknown) {
+    throw new CommandError(
+      err instanceof GateInputError
+        ? err.message
+        : `pm github gate: could not run the gate — ${err instanceof Error ? err.message : String(err)}`,
+      EXIT_CODE.GENERIC_FAILURE,
+    );
+  }
+  const lines = formatGateReport(report);
+  console.error(lines.join("\n"));
+  if (report.verdict === "fail") {
+    throw new CommandError(lines.join("\n"), EXIT_CODE.GENERIC_FAILURE);
+  }
+  return {
+    verdict: report.verdict,
+    scanned_files: report.scanned_files,
+    findings: report.findings.length,
+    allowlisted: report.allowlisted,
+  };
+}
+
 /**
  * Run the full GitHub issue import flow.
  *
  * Idempotent: items already linked (by provenance tag) to a fetched issue are
  * UPDATEd; new issues are created. Honors `--atomic` (one crash-resumable
  * transaction) versus the per-item `pm` mutation path, optional `--link-deps`,
- * and `--dry-run`. Returns a structured result and throws {@link CommandError}
- * (with a semantic exit code) on failure.
+ * and `--dry-run`. With `--gate` the plan is verified (completeness + provenance
+ * idempotency) BEFORE any mutation, and the proposed tracker change is scanned
+ * by the fail-closed privacy gate AFTER it — a gated failure exits non-zero so
+ * a caller never commits or pushes the change. Returns a structured result and
+ * throws {@link CommandError} (with a semantic exit code) on failure.
  *
  * @param repoArg - The `owner/repo` to import from.
  * @param pmRoot - Workspace root or pm data dir.
@@ -2787,6 +2961,9 @@ export async function runImport(
 
   if (filtered.length === 0) {
     console.error("No issues found.");
+    // Even a no-op gated import must prove the workspace is gateable (a Git work
+    // tree the scanner can read), so the empty-change gate scan runs here too.
+    const emptyGateReceipt = opts.gate && !opts.dryRun ? gateImportWrites(pmRoot) : undefined;
     if (opts.atomic && opts.dryRun) {
       return {
         dryRun: true,
@@ -2794,9 +2971,10 @@ export async function runImport(
         wouldUpdate: 0,
         wouldSkip: 0,
         atomic: true,
+        ...(emptyGateReceipt ? { gate: emptyGateReceipt } : {}),
       };
     }
-    return { imported: 0, updated: 0, skipped: 0 };
+    return { imported: 0, updated: 0, skipped: 0, ...(emptyGateReceipt ? { gate: emptyGateReceipt } : {}) };
   }
 
   console.error(`Found ${filtered.length} issue(s).`);
@@ -2806,14 +2984,25 @@ export async function runImport(
   // reported "would import N, skip 0" where the real run performs updates for
   // already-linked issues. A preview that overstates creates reads as "this will
   // duplicate my whole tracker" and is the one thing --dry-run exists to rule out.
-  const existing = indexByProvenance((dependencies.readItems ?? readPmItems)(pmRoot));
+  const existingItems = (dependencies.readItems ?? readPmItems)(pmRoot);
+  const existing = indexByProvenance(existingItems);
 
   let imported = 0;
   let updated = 0;
   let skipped = 0;
 
-  if (opts.atomic) {
-    const prepared: PreparedGithubImport[] = [];
+  // Gated pipeline, phase 1 — plan BEFORE any mutation. The same prepare step
+  // the write paths use builds every plan entry up front, so completeness
+  // (every fetched issue accounted for exactly once) and idempotency (every
+  // re-import lands on exactly one provenance-tagged item) are proven while
+  // the tracker is still untouched. Both checks throw before any write.
+  let gatePlan: readonly PreparedGithubImport[] | undefined;
+  let gateCompleteness: ImportPlanCompletenessReceipts | undefined;
+  let gateIdempotency: ImportIdempotencyReceipts | undefined;
+  let gatePlanByNumber: Map<number, PreparedGithubImport> | undefined;
+  if (opts.gate) {
+    const planned: PreparedGithubImport[] = [];
+    const skippedNumbers: number[] = [];
     for (const issue of filtered) {
       const entry = await prepareGithubImport(
         issue,
@@ -2824,10 +3013,47 @@ export async function runImport(
         dependencies.fetchIssueComments,
       );
       if (!entry) {
-        skipped++;
+        skippedNumbers.push(issue.number);
         continue;
       }
-      prepared.push(entry);
+      planned.push(entry);
+    }
+    gateCompleteness = verifyImportPlanCompleteness(filtered, planned, skippedNumbers);
+    gateIdempotency = verifyImportIdempotency(
+      existingItems,
+      planned,
+      repo,
+    );
+    gatePlan = planned;
+    gatePlanByNumber = new Map(planned.map((entry) => [entry.issueNumber, entry]));
+    skipped = skippedNumbers.length;
+    console.error(
+      `pm github gate: plan verified — ${gateCompleteness.planned} planned, ${gateCompleteness.skipped} skipped, ` +
+        `${gateIdempotency.matched_by_provenance} matched by provenance, ${gateIdempotency.new_entries} new.`,
+    );
+  }
+
+  if (opts.atomic) {
+    // The gated pipeline already prepared every entry (and counted its skips)
+    // during the pre-mutation plan phase; reuse that plan verbatim so the write
+    // phase cannot diverge from the verified plan.
+    const prepared: PreparedGithubImport[] = gatePlan ? [...gatePlan] : [];
+    if (!gatePlan) {
+      for (const issue of filtered) {
+        const entry = await prepareGithubImport(
+          issue,
+          repo,
+          opts,
+          token,
+          existing.get(`${repo.toLowerCase()}#${issue.number}`),
+          dependencies.fetchIssueComments,
+        );
+        if (!entry) {
+          skipped++;
+          continue;
+        }
+        prepared.push(entry);
+      }
     }
 
     if (prepared.length === 0) {
@@ -2870,6 +3096,7 @@ export async function runImport(
         wouldSkip: skipped,
         atomic: true,
         ...(opts.linkDeps ? { wouldLinkDependencyCandidates: countDependencyRefCandidates(repo, filtered) } : {}),
+        ...(opts.gate ? { gate: { completeness: gateCompleteness, idempotency: gateIdempotency, scan: "post-write" } } : {}),
       };
     }
 
@@ -2901,6 +3128,9 @@ export async function runImport(
     reportDepLink(atomicDepLink);
     // itemIds is an internal post-commit routing map for native comments. Maps
     // serialize as `{}` in JSON, so keep it out of the public command result.
+    // Gated pipeline, phase 2 — the writes are on disk but nothing is committed
+    // or pushed; scan the proposed tracker change now and fail closed.
+    const gateReceipt = opts.gate ? gateImportWrites(pmRoot) : undefined;
     return {
       transactionId: result.transactionId,
       recovered: result.recovered,
@@ -2910,20 +3140,28 @@ export async function runImport(
       skipped,
       atomic: true,
       ...depLinkResultFields(atomicDepLink),
+      ...(gateReceipt ? { gate: gateReceipt } : {}),
     };
   }
 
   for (const issue of filtered) {
-    const prepared = await prepareGithubImport(
-      issue,
-      repo,
-      opts,
-      token,
-      existing.get(`${repo.toLowerCase()}#${issue.number}`),
-      dependencies.fetchIssueComments,
-    );
+    // With --gate, the pre-mutation plan phase already prepared (or explicitly
+    // skipped) every issue; reuse the verified plan instead of re-preparing so
+    // the write phase cannot diverge from it.
+    const prepared = gatePlanByNumber
+      ? gatePlanByNumber.get(issue.number)
+      : await prepareGithubImport(
+          issue,
+          repo,
+          opts,
+          token,
+          existing.get(`${repo.toLowerCase()}#${issue.number}`),
+          dependencies.fetchIssueComments,
+        );
     if (!prepared) {
-      skipped++;
+      // A gated run counted its skips during the verified plan phase; only the
+      // ungated path counts them here.
+      if (!gatePlanByNumber) skipped++;
       continue;
     }
 
@@ -3083,6 +3321,7 @@ export async function runImport(
       wouldSkip: skipped,
       ...(opts.atomic ? { atomic: true } : {}),
       ...(opts.linkDeps ? { wouldLinkDependencyCandidates: countDependencyRefCandidates(repo, filtered) } : {}),
+      ...(opts.gate ? { gate: { completeness: gateCompleteness, idempotency: gateIdempotency, scan: "post-write" } } : {}),
     };
   }
 
@@ -3094,7 +3333,10 @@ export async function runImport(
     ? await linkImportedDependencies(repo, filtered, pmRoot, dependencies)
     : undefined;
   reportDepLink(depLink);
-  return { imported, updated, skipped, ...depLinkResultFields(depLink) };
+  // Gated pipeline, phase 2 — the writes are on disk but nothing is committed or
+  // pushed; scan the proposed tracker change now and fail closed.
+  const gateReceipt = opts.gate ? gateImportWrites(pmRoot) : undefined;
+  return { imported, updated, skipped, ...depLinkResultFields(depLink), ...(gateReceipt ? { gate: gateReceipt } : {}) };
 }
 
 /**
@@ -4880,6 +5122,7 @@ const IMPORT_FLAGS = [
   { long: "--comments-mode", value_name: "body|annotations|both", description: "How to persist fetched GitHub comments: `body` (default, embed in item body), `annotations` (sync to the pm item's native comments collection), or `both`. `annotations`/`both` are idempotent on re-import (dedupe by GitHub comment id)" },
   { long: "--atomic", description: "Commit the complete import as one workspace-writer-locked, crash-resumable transaction (pm-cli >=2026.7.20); compensate applied mutations on failure and report incomplete compensation" },
   { long: "--link-deps", description: "After import, map dependency references in issue bodies (`Blocked by #N`, `Depends on owner/repo#N`, `Blocks #N`) to pm dependency edges between the linked items. Idempotent; skips self- and unresolved references; ordering cycles are reported (via the SDK ordering-cycle advisory), not rejected" },
+  { long: "--gate", description: "Fail-closed privacy gate: verify plan completeness and provenance-tag idempotency before the write, then scan the proposed tracker change for credentials, personal data, and host paths after it; any finding (or unreadable scan input) fails the import so nothing is ever pushed" },
   { long: "--dry-run", description: "Preview without writing" },
   { long: "--type", value_name: "type", description: "Override pm item type (default: Issue)" },
 ];
@@ -4899,6 +5142,11 @@ const SYNC_FLAGS = [
   { long: "--repo", value_name: "owner/repo", description: "Target GitHub repo (required)" },
   { long: "--ids", value_name: "pm-1,pm-2", description: "Only sync these pm item IDs (comma-separated)" },
   { long: "--dry-run", description: "Preview the close/reopen plan without mutating GitHub" },
+];
+
+const GATE_FLAGS = [
+  { long: "--diff", value_name: "file", description: "Scan an explicit unified diff file instead of the staged/working tracker change (fail closed when unreadable)" },
+  { long: "--allowlist", value_name: "file", description: "Explicit content-hash allowlist of reviewed false positives (default: `<repo root>/.pm-github-gate-allowlist.json`; a missing EXPLICIT file fails, a missing default is an empty allowlist)" },
 ];
 
 const VALIDATE_FLAGS = [
@@ -5193,6 +5441,64 @@ export default defineExtension({
       ],
       async run(ctx: CommandHandlerContext) {
         return runImport(ctx.args[0], ctx.pm_root, parseImportOptions(ctx.options));
+      },
+    });
+
+    // -----------------------------------------------------------------------
+    // command — `pm github gate` (fail-closed privacy gate over the proposed
+    // tracker change). Runs BEFORE any push in a sync pipeline; a fail verdict
+    // or an unreadable scan input exits non-zero so nothing downstream commits
+    // or pushes. Findings name rule + item + field + content hash — never the
+    // matched content.
+    // -----------------------------------------------------------------------
+    api.registerCommand({
+      name: "github gate",
+      description:
+        "Fail-closed privacy gate over the proposed tracker change (the staged/working/untracked diff under the resolved pm tracker path, or an explicit --diff file). Fails on credentials (GitHub/npm/AWS/Slack/OpenAI/Anthropic tokens, generic bearers, private-key blocks, high-entropy secret assignments), personal data (non-noreply emails, phone numbers), and host paths (absolute local filesystem paths, home-directory usernames). Reviewed false positives are allowlisted by content hash. Unreadable input or a scanner error fails. Read-only; never mutates anything. Use --json for machine output.",
+      intent: "verify a proposed tracker change before any public branch push",
+      examples: [
+        "pm github gate",
+        "pm github gate --json",
+        "pm github gate --diff pm-sync.patch",
+        "pm github gate --allowlist .pm-github-gate-allowlist.json",
+      ],
+      flags: GATE_FLAGS,
+      failure_hints: [
+        "Run inside the repository holding the pm tracker, or pass --diff <file> for an explicit unified diff.",
+        "A finding names the rule, item, field, and the sha256 of the matched content; allowlist that hash in .pm-github-gate-allowlist.json with a written reason after review.",
+        "The gate scans only added lines — removed content cannot publish anything new.",
+        "pm github import --gate composes this gate into an import: plan completeness and provenance idempotency are verified before the write, the scan runs after it.",
+      ],
+      async run(ctx: CommandHandlerContext) {
+        const diffFile = optionString(ctx.options, "diff");
+        const allowlistFile = optionString(ctx.options, "allowlist");
+        let report: GateReport;
+        try {
+          report = runTrackerGate({
+            pmRoot: ctx.pm_root,
+            ...(diffFile ? { diffFile } : {}),
+            ...(allowlistFile ? { allowlistFile } : {}),
+          });
+        } catch (err: unknown) {
+          // GateInputError carries a user-facing message; anything else is an
+          // unexpected scanner failure. Both fail closed — never pass vacuously.
+          throw new CommandError(
+            err instanceof GateInputError
+              ? err.message
+              : `pm github gate: scanner error — ${err instanceof Error ? err.message : String(err)}`,
+            EXIT_CODE.GENERIC_FAILURE,
+          );
+        }
+        if (ctx.global?.json !== true) {
+          for (const line of formatGateReport(report)) console.error(line);
+        }
+        if (report.verdict === "fail") {
+          throw new CommandError(
+            formatGateReport(report).join("\n"),
+            EXIT_CODE.GENERIC_FAILURE,
+          );
+        }
+        return report;
       },
     });
 
