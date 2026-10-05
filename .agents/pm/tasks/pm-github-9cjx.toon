@@ -6,9 +6,9 @@ status: in_progress
 priority: 1
 tags[5]: all-source,coverage,quality-gate,scripts,tdd
 created_at: "2026-08-17T07:32:29.666Z"
-updated_at: "2026-10-05T08:09:10.457Z"
-assignee: codex-sol
-claim_principal: codex-sol
+updated_at: "2026-10-05T09:26:42.191Z"
+assignee: codex-sol-coverage
+claim_principal: codex-sol-coverage
 author: codex
 estimated_minutes: 960
 acceptance_criteria: "Automatically discover every executable TypeScript production and operational source; require exact 100% statements, branches, functions, and lines; prohibit ignore pragmas, source allowlist blind spots, threshold weakening, vacuous tests, and mocks of the unit under test; exercise GitHub behavior at the HTTP boundary, pm behavior through real SDK/installed-CLI boundaries, and operational scripts through real filesystem/process behavior; prove the gate fails when a new uncovered source or branch is introduced."
@@ -16,10 +16,14 @@ expected_result: "Every executable TypeScript source and operational script is a
 actual_result: The source walker skips scripts and aggregate coverage remains 91.83/82.14/91.75 with thresholds fixed at 88/79/89.
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-github-n3z3,related,"2026-08-17T07:32:29.666Z",codex,"cli:create:dep",detected
-comments[2]{created_at,author,text}:
+comments[6]{created_at,author,text}:
   "2026-10-05T07:52:16.974Z",codex-sol,"Replaced the narrowed coverage wrapper with an explicit authored-module inventory, exact 100 percent thresholds for all four dimensions, stale-LCOV invalidation, and missing-file rejection. Added checked operational-script tests, ESLint enforcement, erasable TypeScript syntax, and a jscpd wrapper that verifies its full source inventory. Typecheck, 122 documented declarations, ESLint, and zero duplication passed. Coverage remains a measured gate rather than an approval claim."
   "2026-10-05T08:09:10.457Z",codex-sol,"Strict all-authored-module run completed with 369 tests passing and no skipped tests. Coverage remained below the unchanged 100/100/100/100 requirement: lines/statements 93.25 percent, branches 84.41 percent, functions 94.92 percent over 11 authored TS/JS modules including operational scripts. LCOV was invalidated on failure. Most remaining uncovered branches and ten uncovered functions are in the pre-existing GitHub Projects sync handlers; this is a release blocker, not a passing gate. The shell release-date verifier remains outside the V8 denominator and is exercised separately."
-files[8]{path,scope}:
+  "2026-10-05T08:58:34.554Z",codex-sol,"Final frozen-source verification at 0b7c4ab: the linked npm coverage command ran all 375 tests with 375 passing, zero failures and zero skips, then correctly exited nonzero at the unchanged 100 percent gate. Complete inventory: 12 authored TS/JS modules including operational scripts. Lines/statements 7739 of 8285 = 93.40 percent; branches 1548 of 1826 = 84.77 percent; functions 188 of 198 = 94.94 percent. Failed LCOV was removed. No source ignores or lowered thresholds were introduced; release remains blocked."
+  "2026-10-05T09:09:52.779Z",codex-sol-coverage,"Resuming the existing strict 12-module coverage implementation. Iteration will use targeted Node and c8 runs, real scratch PM and git projects, and SDK extension harness behavior tests. The complete npm coverage gate is reserved for the orchestrator. Existing unrelated tracker edits are preserved. First priority is Projects sync and apply behavior, then remaining planner and operational failure boundaries."
+  "2026-10-05T09:18:20.026Z",codex-sol-coverage,"Added 18 behavior cases for Projects sync and planners. Targeted Node c8 execution passed 51 of 51 tests, zero skips. Verified preview-only and scoped execution, dry-run override, both conflict preferences, draft and issue mutations, lifecycle close and cancellation metadata, partial and total failures, and a real concurrent local deletion after remote attachment. PM tag ordering is normalized, so the preservation assertion checks membership. No production behavior, dependencies, thresholds, or source inventory changed."
+  "2026-10-05T09:26:42.190Z",codex-sol-coverage,"Native Bun verification passed all 12 Projects harness cases and all 39 planner cases, with per-file timeout 600000. Executable lookup failure fixtures now run in explicit Node subprocesses while registered harness behavior stays native. This follows the existing lifecycle test boundary and prevents temporary PATH changes from reaching the host credential helper. Linked Node tests passed 51 of 51 through pm test; test-result tracking is disabled, so this comment records the receipt."
+files[11]{path,scope}:
   eslint.config.js,project
   package.json,project
   scripts/coverage-gate.ts,project
@@ -27,9 +31,24 @@ files[8]{path,scope}:
   test,project
   test/coverage-gate.test.ts,project
   test/duplication-gate.test.ts,project
+  test/helpers/node-scenario.ts,project
   test/lint-policy.test.ts,project
-tests[1]{command,path,scope,timeout_seconds,note}:
-  npm run coverage,scripts/coverage-gate.ts,project,900,Current ratcheted gate; this item remains open until it measures all executable sources at exact 100/100/100/100.
+  test/project-sync.test.ts,project
+  test/projects.test.ts,project
+tests[2]:
+  - command: npm run coverage
+    path: scripts/coverage-gate.ts
+    scope: project
+    timeout_seconds: 900
+    note: Current ratcheted gate; this item remains open until it measures all executable sources at exact 100/100/100/100.
+  - command: node --test test/project-sync.test.ts test/projects.test.ts
+    scope: project
+    timeout_seconds: 600
+    provenance:
+      author: codex-sol-coverage
+      created_at: "2026-10-05T09:18:36.238Z"
+      source_kind: local_mutation
+      source_ref: feat/import-privacy-gate
 docs[2]{path,scope,note}:
   "https://github.com/unbraind/pm-cli-companion/blob/main/.agents/pm/epics/pm-cli-website-ktip.toon",global,Fleet exact coverage mandate
   "https://github.com/unbraind/pm-cli-companion/blob/main/.agents/pm/issues/pm-cli-website-odki.toon",global,Fleet operational script coverage gap
