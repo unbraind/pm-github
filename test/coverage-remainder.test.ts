@@ -31,6 +31,7 @@ import extension, {
   type ImportOptions,
 } from "../index.ts";
 import { nodeScenario } from "./helpers/node-scenario.ts";
+import { withReadOnlyDirectory } from "./helpers/read-only-directory.ts";
 import { projectItemTag } from "../projects.ts";
 import { captureStderr, jsonResponse, withEnv, withMockGithub } from "./helpers/mock-github-server.ts";
 
@@ -350,16 +351,13 @@ test("comment sync skips a contended lock and reports a per-comment write failur
     const itemFile = fs.readdirSync(path.join(root, ".agents", "pm", "tasks"))[0];
     assert.ok(itemFile);
     const tasksDir = path.join(root, ".agents", "pm", "tasks");
-    fs.chmodSync(tasksDir, 0o555);
-    try {
+    await withReadOnlyDirectory(tasksDir, async () => {
       const failed = await captureStderr(() => syncGithubCommentsToAnnotations(itemId, [
         { id: 5, body: "", user: null, created_at: "" },
       ], path.join(root, ".agents", "pm"), 7));
       assert.equal(failed.result.added, 0);
       assert.match(failed.stderr.join("\n"), /sync failed/);
-    } finally {
-      fs.chmodSync(tasksDir, 0o755);
-    }
+    });
   } finally {
     holder.kill("SIGKILL");
     fs.rmSync(root, { recursive: true, force: true });

@@ -39,6 +39,11 @@ import {
 import type { GhComment } from "../index.ts";
 import { waitForBarrier } from "./helpers/barrier.ts";
 
+// Root ignores directory write permissions, so chmod-based lock fixtures
+// cannot produce their EACCES failures; skip them visibly in that case.
+const runsAsRoot = typeof process.getuid === "function" && process.getuid() === 0;
+const nonRootOnly = { skip: runsAsRoot && "permission-based fixture: root ignores directory write permissions" };
+
 // Minimal factories + workspace helpers --------------------------------------
 
 function ghComment(overrides: Partial<GhComment> = {}): GhComment {
@@ -560,7 +565,7 @@ test("a lock that cannot be stat'd contends within the wait budget instead of sp
   }
 });
 
-test("comment-sync lock degrades when the lock directory cannot be created or written", async () => {
+test("comment-sync lock degrades when the lock directory cannot be created", async () => {
   const root = mkdtempSync(join(tmpdir(), "pm-github-lock-degraded-"));
   try {
     const blocked = importCommentSyncLockPath(root, "pm-file-parent");
@@ -570,20 +575,22 @@ test("comment-sync lock degrades when the lock directory cannot be created or wr
       assert.equal(acq.status, "degraded");
     });
     assert.ok(messages.some((line) => line.includes("lock unavailable")), messages.join(" | "));
-
-    const writable = mkdtempSync(join(tmpdir(), "pm-github-lock-unwritable-"));
-    try {
-      const lockPath = importCommentSyncLockPath(writable, "pm-mode");
-      mkdirSync(dirname(lockPath), { recursive: true });
-      chmodSync(dirname(lockPath), 0o555);
-      const acq = await acquireImportLock(writable, "pm-mode", { waitMs: 50 });
-      assert.equal(acq.status, "degraded");
-    } finally {
-      chmodSync(dirname(importCommentSyncLockPath(writable, "pm-mode")), 0o755);
-      rmSync(writable, { recursive: true, force: true });
-    }
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("comment-sync lock degrades when the lock directory is not writable", nonRootOnly, async () => {
+  const writable = mkdtempSync(join(tmpdir(), "pm-github-lock-unwritable-"));
+  try {
+    const lockPath = importCommentSyncLockPath(writable, "pm-mode");
+    mkdirSync(dirname(lockPath), { recursive: true });
+    chmodSync(dirname(lockPath), 0o555);
+    const acq = await acquireImportLock(writable, "pm-mode", { waitMs: 50 });
+    assert.equal(acq.status, "degraded");
+  } finally {
+    chmodSync(dirname(importCommentSyncLockPath(writable, "pm-mode")), 0o755);
+    rmSync(writable, { recursive: true, force: true });
   }
 });
 
@@ -708,7 +715,7 @@ test("a peer replacing a stale lock before the breaker recheck remains protected
   } finally { boundary(); rmSync(root, { recursive: true, force: true }); }
 });
 
-test("real permission failures during stale unlink and token release retain the lock", async () => {
+test("real permission failures during stale unlink and token release retain the lock", nonRootOnly, async () => {
   const root = mkdtempSync(join(tmpdir(), "pm-lock-permissions-"));
   const lockPath = importCommentSyncLockPath(root, "pm-permission");
   mkdirSync(dirname(lockPath), { recursive: true });

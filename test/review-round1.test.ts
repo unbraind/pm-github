@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { withReadOnlyDirectory } from "./helpers/read-only-directory.ts";
+
 const repoRoot = path.resolve(import.meta.dirname, "..");
 
 test("README gate links resolve to the published command heading", () => {
@@ -29,22 +31,22 @@ test("privacy fixtures never store the complete high-entropy secret literal", ()
   }
 });
 
-test("comment failure fixture restores directory permissions even when sync throws", async () => {
-  const source = fs.readFileSync(path.join(repoRoot, "test/coverage-remainder.test.ts"), "utf8");
-  const modern = source.indexOf('    const tasksDir =');
-  const start = modern >= 0 ? modern : source.indexOf('    fs.chmodSync(path.join(root, ".agents", "pm", "tasks"), 0o555);');
-  assert.ok(start >= 0, "permission fixture exists");
-  const end = source.indexOf('\n  } finally {', start);
-  const block = source.slice(start, end);
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-cleanup-"));
-  const tasksDir = path.join(root, ".agents/pm/tasks");
-  fs.mkdirSync(tasksDir, { recursive: true });
+test("withReadOnlyDirectory restores directory permissions even when the callback throws", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-cleanup-"));
   try {
-    const invoke = new Function("fs", "path", "root", "captureStderr", "syncGithubCommentsToAnnotations", "itemId", "assert", `return (async () => { ${block} })();`);
-    await assert.rejects(invoke(fs, path, root, () => Promise.reject(new Error("forced sync failure")), () => {}, "fixture", assert), /forced sync failure/);
-    assert.equal(fs.statSync(tasksDir).mode & 0o777, 0o755);
+    const before = fs.statSync(dir).mode & 0o777;
+    const observed: number[] = [];
+    await assert.rejects(
+      withReadOnlyDirectory(dir, async () => {
+        observed.push(fs.statSync(dir).mode & 0o777);
+        throw new Error("forced sync failure");
+      }),
+      /forced sync failure/,
+    );
+    assert.deepEqual(observed, [0o555], "the directory is read-only while the callback runs");
+    assert.equal(fs.statSync(dir).mode & 0o777, before, "the original mode is restored after the throw");
   } finally {
-    fs.chmodSync(tasksDir, 0o755);
-    fs.rmSync(root, { recursive: true, force: true });
+    fs.chmodSync(dir, 0o755);
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });

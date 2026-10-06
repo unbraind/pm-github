@@ -92,6 +92,12 @@ repositories and narrow wrappers that delegate valid operations. The complete
 25-case privacy files pass under Node and native Bun; authored production code
 has not changed since the full npm/Bun release checks.
 
+## Historical closing receipts
+
+The receipts in this closing section are historical: they were measured at the
+implementations named above, they cite the 487-test count of that era, and the
+"remain open" note predates the orchestrator's verification.
+
 The final fresh coverage run with every portable fixture again passes 487/487
 without skips, covers all 12 modules at exact 100/100/100/100, and has zero
 uncovered statement/branch counters. Its final receipt contains 8,398 lines and
@@ -109,3 +115,8 @@ Final `npm run test:bun` acceptance returns process exit zero and passes all
 487 cases across all 30 files, with zero failed cases. All final portable
 fixtures, the original deadline checks and the executable workflow battery are
 included. PM items remain open with released claims for orchestrator review.
+
+Current status (review round 3): `pm-github-9cjx` is closed by the orchestrator
+with the exact all-source 100/100/100/100 gate green across the unchanged
+12-module inventory. The closing head passes 504/504 tests; the current head
+passes 505/505 with zero failures or skips.
