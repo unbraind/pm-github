@@ -16,8 +16,8 @@
 //     fallback, the 60s cap.
 //   - fetchAllIssues: Link-header pagination (empty/single/multi page), and the
 //     malformed-JSON / non-array response errors.
-//   - fetchComments: the no-comments short-circuit, pagination, and graceful
-//     handling of a malformed page mid-stream.
+//   - fetchComments: the no-comments short-circuit, pagination, and refusal
+//     of a malformed page mid-stream.
 //   - runImport: the 404 → NOT_FOUND and unauthenticated-403 → token-hint error
 //     mappings (the failure surface the import command exposes to the shell).
 
@@ -516,7 +516,7 @@ test("githubApiBase strips a trailing slash so paths cannot double up", async ()
 // ---------------------------------------------------------------------------
 // Coverage additions: transport dispatch, redirect validation, the 30s
 // request timeout, array/mixed-case header shapes, and the comments non-array
-// break — the remaining reachable arms of the shared request stack.
+// refusal — the remaining reachable arms of the shared request stack.
 // ---------------------------------------------------------------------------
 
 test("fetchJSON reaches an https target through the https transport and reports a refusal", async () => {

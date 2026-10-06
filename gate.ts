@@ -641,7 +641,7 @@ export function runGitDefault(cwd: string, args: readonly string[]): { ok: boole
     // then always reports the failure through `result.error`, so no second
     // "git failed" fallback can ever be needed beyond String(result.error).
     stdout: new TextDecoder("utf-8", { fatal: true }).decode(result.stdout ?? Buffer.alloc(0)),
-    stderr: result.stderr === null ? String(result.error) : new TextDecoder("utf-8", { fatal: true }).decode(result.stderr),
+    stderr: result.stderr ? new TextDecoder("utf-8", { fatal: true }).decode(result.stderr) : String(result.error),
   };
 }
 
