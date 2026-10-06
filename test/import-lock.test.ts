@@ -11,7 +11,7 @@ import { comments as readComments } from "@unbrained/pm-cli/sdk";
 // asserts no duplicate comment markers result.
 
 import assert from "node:assert/strict";
-import test, { mock } from "node:test";
+import test from "node:test";
 import { execFile, execFileSync, spawn, spawnSync } from "node:child_process";
 import fs, {
   chmodSync,
@@ -587,28 +587,45 @@ test("comment-sync lock degrades when the lock directory cannot be created or wr
   }
 });
 
+/** Replace only an injected syscall boundary; restore it under either runtime. */
+function replaceMethod<T extends object, K extends keyof T>(target: T, key: K, implementation: T[K]): () => void {
+  const original = target[key];
+  target[key] = implementation;
+  return () => { target[key] = original; };
+}
+
 test("a failed lock write still releases the partial file when close and unlink fail", async () => {
   const root = mkdtempSync(join(tmpdir(), "pm-github-lock-write-"));
   const originalWrite = fs.writeFileSync;
-  const closeMock = mock.method(fs, "closeSync", () => {
+  const originalClose = fs.closeSync;
+  let descriptor: number | undefined;
+  let closeCalls = 0;
+  let unlinkCalls = 0;
+  const closeMock = replaceMethod(fs, "closeSync", () => {
+    closeCalls++;
     throw Object.assign(new Error("close failed"), { code: "EIO" });
   });
-  const unlinkMock = mock.method(fs, "unlinkSync", () => {
+  const unlinkMock = replaceMethod(fs, "unlinkSync", () => {
+    unlinkCalls++;
     throw Object.assign(new Error("unlink failed"), { code: "EIO" });
   });
-  const writeMock = mock.method(fs, "writeFileSync", ((target: fs.PathOrFileDescriptor, data: string) => {
-    if (typeof target === "number") throw Object.assign(new Error("write failed"), { code: "EIO" });
+  const writeMock = replaceMethod(fs, "writeFileSync", ((target: fs.PathOrFileDescriptor, data: string) => {
+    if (typeof target === "number") {
+      descriptor = target;
+      throw Object.assign(new Error("write failed"), { code: "EIO" });
+    }
     return originalWrite(target, data);
   }) as typeof fs.writeFileSync);
   try {
     const acq = await acquireImportLock(root, "pm-write", { waitMs: 50 });
     assert.equal(acq.status, "degraded");
-    assert.ok(closeMock.mock.calls.length > 0);
-    assert.ok(unlinkMock.mock.calls.length > 0);
+    assert.ok(closeCalls > 0);
+    assert.ok(unlinkCalls > 0);
   } finally {
-    writeMock.mock.restore();
-    closeMock.mock.restore();
-    unlinkMock.mock.restore();
+    writeMock();
+    closeMock();
+    unlinkMock();
+    if (descriptor !== undefined) originalClose(descriptor);
     rmSync(root, { recursive: true, force: true });
   }
 });
@@ -633,7 +650,7 @@ test("a vanished breaker sidecar is ignored and a vanished lock is treated as al
 
     let stats = 0;
     const original = fs.statSync;
-    const statMock = mock.method(fs, "statSync", ((target: fs.PathLike, options?: fs.StatSyncOptions) => {
+    const statMock = replaceMethod(fs, "statSync", ((target: fs.PathLike, options?: fs.StatSyncOptions) => {
       stats++;
       if (stats >= 2 && String(target) === lockPath) {
         rmSync(lockPath, { force: true });
@@ -646,7 +663,7 @@ test("a vanished breaker sidecar is ignored and a vanished lock is treated as al
       assert.equal(acq.status, "acquired");
       if (acq.status === "acquired") acq.lock.release();
     } finally {
-      statMock.mock.restore();
+      statMock();
     }
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -679,7 +696,7 @@ test("a peer replacing a stale lock before the breaker recheck remains protected
   utimesSync(lockPath, new Date(0), new Date(0));
   let checked = 0;
   const original = fs.statSync;
-  const boundary = mock.method(fs, "statSync", ((target: fs.PathLike, options?: fs.StatSyncOptions) => {
+  const boundary = replaceMethod(fs, "statSync", ((target: fs.PathLike, options?: fs.StatSyncOptions) => {
     if (String(target) === lockPath && ++checked === 2) {
       writeFileSync(lockPath, JSON.stringify({ pid: 1, token: "live-peer", created_at: new Date().toISOString() }));
     }
@@ -688,7 +705,7 @@ test("a peer replacing a stale lock before the breaker recheck remains protected
   try {
     assert.equal((await acquireImportLock(root, "pm-peer", { waitMs: 80 })).status, "contended");
     assert.match(readFileSync(lockPath, "utf8"), /live-peer/);
-  } finally { boundary.mock.restore(); rmSync(root, { recursive: true, force: true }); }
+  } finally { boundary(); rmSync(root, { recursive: true, force: true }); }
 });
 
 test("real permission failures during stale unlink and token release retain the lock", async () => {
@@ -699,7 +716,7 @@ test("real permission failures during stale unlink and token release retain the 
   utimesSync(lockPath, new Date(0), new Date(0));
   let checked = 0;
   const original = fs.statSync;
-  const boundary = mock.method(fs, "statSync", ((target: fs.PathLike, options?: fs.StatSyncOptions) => {
+  const boundary = replaceMethod(fs, "statSync", ((target: fs.PathLike, options?: fs.StatSyncOptions) => {
     if (String(target) === lockPath && ++checked === 2) chmodSync(dirname(lockPath), 0o555);
     return original(target, options);
   }) as typeof fs.statSync);
@@ -707,7 +724,7 @@ test("real permission failures during stale unlink and token release retain the 
     assert.equal((await acquireImportLock(root, "pm-permission", { waitMs: 80 })).status, "contended");
     assert.equal(existsSync(lockPath), true);
     chmodSync(dirname(lockPath), 0o755);
-    boundary.mock.restore();
+    boundary();
     rmSync(lockPath);
     rmSync(`${lockPath}.break`, { force: true });
     const acq = await acquireImportLock(root, "pm-permission", { waitMs: 80 });
@@ -718,6 +735,6 @@ test("real permission failures during stale unlink and token release retain the 
       assert.equal(existsSync(lockPath), true);
     }
   } finally {
-    boundary.mock.restore(); chmodSync(dirname(lockPath), 0o755); rmSync(root, { recursive: true, force: true });
+    boundary(); chmodSync(dirname(lockPath), 0o755); rmSync(root, { recursive: true, force: true });
   }
 });

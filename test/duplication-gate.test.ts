@@ -34,7 +34,7 @@ test("duplication gate main entry runs against the supplied root", () => {
     runDuplicationGateIfMain(["node", fileURLToPath(moduleUrl)], moduleUrl, root);
     assert.equal(process.exitCode, 1);
   } finally {
-    process.exitCode = previous;
+    process.exitCode = previous ?? 0;
     rmSync(root, { recursive: true, force: true });
   }
 });

@@ -16,7 +16,7 @@ test("changelog main entry fails closed when the tracker cannot be read", async 
     await generateChangelogIfMain(["node", fileURLToPath(moduleUrl)], moduleUrl, root, []);
     assert.equal(process.exitCode, 1);
   } finally {
-    process.exitCode = previous;
+    process.exitCode = previous ?? 0;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

@@ -1,12 +1,12 @@
 # Coverage gap inventory and closure evidence
 
-The baseline test run had four fixture failures, corrected subsequently. This lists every zero-count statement and branch at that measurement; final acceptance must remeasure frozen source. No exemptions or threshold changes.
+The baseline test run had four fixture failures, corrected subsequently. This lists every zero-count statement and branch at that measurement; final acceptance must remeasure frozen source. No exemptions or threshold changes. The initial gate.ts receipt overlapped scanner edits; its listed coordinates are historical diagnostics, not exact-source evidence. Subsequent full receipts use frozen authored source.
 
 ## gate.ts
 
 Uncovered statement lines: 984, 985, 986, 987, 988, 989, 990, 991, 992, 993, 994, 995.
 
-Uncovered branches (start line:column to end line:column): .
+Uncovered branches: none.
 
 ## index.ts
 
@@ -16,7 +16,7 @@ Uncovered branches (start line:column to end line:column): 1208:33-1208:60, 1227
 
 ## scripts/coverage-gate.ts
 
-Uncovered statement lines: .
+Uncovered statement lines: none.
 
 Uncovered branches (start line:column to end line:column): 102:52-102:110.
 
@@ -71,3 +71,41 @@ The regression covers silent headers and a partial body that never completes
 using two real HTTP connections. Details and before/after receipts are recorded
 in `pm-github-hptv`; this independent defect does not establish the historical
 installed-public-repeat root cause. Full release gates are remeasured after it.
+
+The post-fix full npm release check at `5ed8c47` also passes all 487 tests
+with zero failures or skips. Exact coverage is 8,398/8,398 lines and statements,
+2,219/2,219 branches, and 208/208 functions, with no uncovered counters.
+The same 12-module inventory and every 100% threshold remain unchanged.
+
+The complete `bun run release:check` repeats those same exact counts and all
+487 passing tests, with no failures/skips and every configured release gate
+passing. Four syscall fault fixtures use explicit method replacement/restoration
+because native Bun lacks `node:test`'s `mock.method`; the real files, permission
+changes, live-peer assertions and fault outcomes are unchanged. Focused checks
+pass 4/4 under Node and Bun, and the complete Node lock file passes 24/24.
+
+Privacy executable-lookup fixtures start a real same-runtime child with its PATH
+set at launch. Bun caches startup lookup and falls back to default tool lookup
+for an empty PATH, so the missing-tool control uses a scratch directory with no
+Git executable. Malformed inventory and blob-read controls retain real Git
+repositories and narrow wrappers that delegate valid operations. The complete
+25-case privacy files pass under Node and native Bun; authored production code
+has not changed since the full npm/Bun release checks.
+
+The final fresh coverage run with every portable fixture again passes 487/487
+without skips, covers all 12 modules at exact 100/100/100/100, and has zero
+uncovered statement/branch counters. Its final receipt contains 8,398 lines and
+statements, 2,220 branches and 208 functions, all covered. Earlier complete
+release receipts contain 2,219/2,219 branches; the final fixture receipt is the
+current measurement and remains exact 100 with unchanged production source.
+
+Entry-fixture cleanup explicitly restores `process.exitCode` to the previous
+value or zero. Bun does not clear a prior failure when assigned undefined.
+The four affected Bun files each return exit zero; their combined Node run
+passes all 38 cases. The final native acceptance requires both all 487 cases
+passing across 30 files and a zero command exit status.
+
+Final `npm run test:bun` acceptance returns process exit zero and passes all
+487 cases across all 30 files, with zero failed cases. All final portable
+fixtures, the original deadline checks and the executable workflow battery are
+included. PM items remain open with released claims for orchestrator review.

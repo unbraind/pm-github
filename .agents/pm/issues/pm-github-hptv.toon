@@ -6,11 +6,9 @@ status: in_progress
 priority: 1
 tags: []
 created_at: "2026-10-05T08:28:54.625Z"
-updated_at: "2026-10-06T11:55:38.455Z"
-assignee: codex-sol
-claim_principal: codex-sol
+updated_at: "2026-10-06T12:42:49.423Z"
 author: codex-sol
-comments[10]{created_at,author,text}:
+comments[12]{created_at,author,text}:
   "2026-10-05T09:07:19.298Z",codex-sol,"A fresh bounded native Bun CLI repeat of the latest packed candidate passed in 4.22 seconds with exit zero and byte-identical tracker contents. This contrasts with the earlier long-running repeat, so retain the issue as an intermittent installed-host investigation rather than claiming a consistent Bun failure. All 375 native Bun library and operational tests also pass."
   "2026-10-05T09:55:33.050Z",codex-sol,"The final packed candidate matched all three authored runtime modules byte-for-byte. Its fresh Node public import passed with three issues, a byte-identical second run, zero gate findings, and strict health in 24.94 seconds. A bounded direct native Bun CLI repeat, using the same pinned host and startup executable path, timed out at 45.06 seconds and was terminated with SIGTERM; durable tracker bytes stayed unchanged. This reproduces the intermittent installed-host boundary alongside all 420 passing native Bun library and operational tests. No scratch remote was configured and no public-data push occurred."
   "2026-10-06T11:17:41.296Z",codex-sol,"Packed installed-CLI reproduction with the pinned host passes three consecutive native Bun repeats under the unchanged 45-second watchdog. The complete fixture test took 26.63 seconds, including packing, installation, Node import, and all three repeats; each retained item bytes and unchanged bare-remote refs. Separately reproduced a real dangling comment-lock symlink: open with exclusive creation returns EEXIST while stat returns ENOENT, causing the old immediate-continue path to busy-spin forever. The preserved fix adds sleep and checks the existing wait budget. This is a proven local lock defect, not yet proof of the historical installed-host timeout cause. Further public-data and diagnostic acceptance follows."
@@ -21,6 +19,8 @@ comments[10]{created_at,author,text}:
   "2026-10-06T11:53:54.456Z",codex-sol,"Focused native Bun before-fix reproduction fails deterministically: one local silent-server test reaches 45.00 seconds without the 30-second socket-timeout rejection (38 unrelated tests filtered). Replacing reliance on ClientRequest.setTimeout with an explicit 30-second wall-clock timer, cleared on Promise settlement; the timer destroys the request and rejects directly. Regression now exercises two real responses concurrently: no headers, and headers plus a partial body that never completes. No execution deadline or test timeout was raised. Node and native Bun focused validation is underway."
   "2026-10-06T11:55:13.799Z",codex-sol,"The expanded native regression also caught a second concrete behavior: destroying a partial-response request before rejecting can synchronously emit response end under Bun, resolving the incomplete response instead of rejecting. The deadline callback now rejects first, then destroys. The real silent-server and never-ending partial-body cases test that ordering at the original 30-second limit. Node passes the expanded case; final native focused run and complete gates are being reverified. These are transport-boundary observations, not an assertion about the historical public-data repeat."
   "2026-10-06T11:55:38.455Z",codex-sol,"After-fix focused real-HTTP regression PASS under both runtimes: Node 30.02 seconds, native Bun 30.02 seconds; both silent headers and partial never-ending body reject with the expected 30-second timeout. The test keeps its 45-second harness deadline and asserts completion below 40 seconds. Build:test and ESLint pass. Explicit deadline rejection precedes destroy and its timer is cleared on every Promise settlement. Restarting full npm release checks and all native Bun files on this frozen fix."
+  "2026-10-06T11:58:06.722Z",codex-sol,"Packed acceptance on transport-fix implementation 5ed8c47 PASS: one live public snapshot issue imported with gate PASS, Node import 6.17 seconds, byte-identical Node repeat 5.15 seconds, native Bun repeats 6.06/8.16/4.80 seconds with byte-identical durable data, strict health PASS and no remote. Timings include concurrent full validation load. The linked real timeout regression passes both isolated add verification and pm test --run --only-last --progress; it is recorded alongside the passing watchdog test. No SDK comment-add flakiness reproduced."
+  "2026-10-06T12:42:46.684Z",codex-sol,"Final timeout assurance: full native suite passes 487/487 across 30 files with exit zero; both full release commands pass. The real silent and never-ending-body HTTP controls reject at the original 30-second deadline under Node and Bun; the dangling comment lock honors its existing wait budget. Packed public acceptance after the transport fix passes one nonempty import, unchanged Node and three Bun repeats, gate and strict health without a remote. Historical 45-second repeat cause remains unestablished, but acceptance keeps 45 seconds plus a separate forced-cleanup window and always rejects a timeout. No deterministic SDK comment-add flakiness reproduced."
 files[6]{path,scope}:
   index.ts,project
   test/helpers/bounded-cli.ts,project
@@ -28,8 +28,9 @@ files[6]{path,scope}:
   test/http-boundary.test.ts,project
   test/import-gate.test.ts,project
   test/import-lock.test.ts,project
-tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+tests[2]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
   node --test test/bounded-cli.test.ts,project,60,codex-sol,"2026-10-06T11:37:04.782Z",local_mutation,feat/import-privacy-gate
+  "node --test --test-name-pattern=\"requestOnce fails a request\" test/http-boundary.test.ts",project,60,codex-sol,"2026-10-06T11:56:36.862Z",local_mutation,feat/import-privacy-gate
 docs[1]{path,scope}:
   README.md,project
 body: ""

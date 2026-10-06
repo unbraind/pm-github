@@ -2,7 +2,9 @@
  * Behavioral coverage for the privacy gate script.
  *
  * The gate is a fail-closed release gate, so the tests exercise real git
- * repositories built in temporary directories — never mocks of git itself:
+ * repositories built in temporary directories. Narrow executable wrappers
+ * inject unreadable inventory and blob failures while delegating other queries
+ * to real Git:
  *
  * - the clean path (this repository's rewritten history passes),
  * - every failure path (unapproved author, committer, tagger; each secret
@@ -28,9 +30,7 @@ import { fileURLToPath } from "node:url";
 import {
   extractEmail,
   gitBlobOid,
-  listAllObjects,
   type PrivacyGateResult,
-  readObject,
   runGate,
   runPrivacyGateIfMain,
   main,
@@ -390,79 +390,72 @@ test("privacy gate main entry audits the supplied root", () => {
     assert.match(stderr, /cannot read/);
   } finally {
     process.stderr.write = original;
-    process.exitCode = previous;
+    process.exitCode = previous ?? 0;
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+/** Launch with a startup PATH: Bun retains the original executable lookup path. */
+function privacyProcess(code: string, environment: Record<string, string | undefined>): void {
+  const env = { ...process.env, ...environment };
+  delete env.NODE_TEST_CONTEXT;
+  execFileSync(process.execPath, ["--input-type=module", "--eval", `
+    import assert from 'node:assert/strict';
+    import { execFileSync } from 'node:child_process';
+    import { writeFileSync } from 'node:fs';
+    import { join } from 'node:path';
+    import { runGate, listAllObjects, readObject } from ${JSON.stringify(new URL("../scripts/privacy-gate.ts", import.meta.url).href)};
+    ${code}
+  `], { env, encoding: "utf8", timeout: 30_000 });
+}
 
 test("privacy gate fails closed when git cannot be spawned", () => {
   const root = initRepo("no-git");
   writeAllowlist(root, ["intruder@localhost"]);
-  const previous = process.env.PATH;
-  process.env.PATH = "";
   try {
-    const result = runGate(root);
-    assert.equal(result.exitCode, 1);
-    assert.match(result.stderr, /object enumeration failed|fixture exemption resolution failed|cannot read/);
-    assert.throws(() => listAllObjects(root));
-  } finally {
-    if (previous === undefined) delete process.env.PATH;
-    else process.env.PATH = previous;
-    rmSync(root, { recursive: true, force: true });
-  }
+    privacyProcess(`
+      const root = ${JSON.stringify(root)};
+      const result = runGate(root);
+      assert.equal(result.exitCode, 1);
+      assert.match(result.stderr, /object enumeration failed|fixture exemption resolution failed|cannot read/);
+      assert.throws(() => listAllObjects(root));
+    `, { PATH: root });
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("privacy gate fails closed when object inventory or blob reads are unusable", () => {
   const root = initRepo("bad-git");
+  const bin = mkdtempSync(join(tmpdir(), "pm-github-privacy-git-"));
   try {
     writeAllowlist(root, ["intruder@localhost"]);
     writeFileSync(join(root, "clean.txt"), "clean\n");
     commitAll(root, "clean");
-    const bin = mkdtempSync(join(tmpdir(), "pm-github-privacy-git-"));
     const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
     writeFileSync(join(bin, "git"), `#!/bin/sh
 if [ "$1" = "cat-file" ] && [ "$2" = "--batch-all-objects" ]; then
   printf '%s\n' 'not-a-record'
   exit 0
 fi
-if [ "$1" = "cat-file" ] && [ "$2" = "blob" ]; then
-  echo forced-read-failure >&2
-  exit 1
-fi
 exec "$REAL_GIT" "$@"
 `, { mode: 0o755 });
     chmodSync(join(bin, "git"), 0o755);
-    const previous = process.env.PATH;
-    const previousGit = process.env.REAL_GIT;
-    process.env.PATH = `${bin}${delimiter}${previous ?? ""}`;
-
-    process.env.REAL_GIT = realGit;
-    try {
+    privacyProcess(`
+      const root = ${JSON.stringify(root)};
+      const bin = ${JSON.stringify(bin)};
+      const realGit = ${JSON.stringify(realGit)};
       assert.throws(() => listAllObjects(root), /unreadable record/);
-      const listed = execFileSync(realGit, ["cat-file", "--batch-all-objects", "--batch-check"], { cwd: root, encoding: "utf8" });
-      const blob = listed.split("\n").find((line) => line.includes(" blob "));
-      assert.ok(blob, "fixture commit created a blob");
-      const oid = blob.split(" ")[0]!;
-      // Point the wrapper at real inventory so the scan reaches the blob read.
-      writeFileSync(join(bin, "git"), `#!/bin/sh
-if [ "$1" = "cat-file" ] && [ "$2" = "blob" ]; then
-  echo forced-read-failure >&2
-  exit 1
-fi
-exec "$REAL_GIT" "$@"
-`, { mode: 0o755 });
-      assert.throws(() => readObject(root, "blob", oid), /forced-read-failure/);
+      const listed = execFileSync(realGit, ['cat-file', '--batch-all-objects', '--batch-check'], { cwd: root, encoding: 'utf8' });
+      const blob = listed.split('\\n').find(line => line.includes(' blob '));
+      assert.ok(blob, 'fixture commit created a blob');
+      const oid = blob.split(' ')[0];
+      writeFileSync(join(bin, 'git'), '#!/bin/sh\\nif [ "$1" = "cat-file" ] && [ "$2" = "blob" ]; then\\n  echo forced-read-failure >&2\\n  exit 1\\nfi\\nexec "$REAL_GIT" "$@"\\n', { mode: 0o755 });
+      assert.throws(() => readObject(root, 'blob', oid), /forced-read-failure/);
       const scanned = runGate(root);
       assert.equal(scanned.exitCode, 1);
       assert.match(scanned.stderr, /object scan failed/);
-    } finally {
-      if (previous === undefined) delete process.env.PATH;
-      else process.env.PATH = previous;
-      if (previousGit === undefined) delete process.env.REAL_GIT;
-      else process.env.REAL_GIT = previousGit;
-      rmSync(bin, { recursive: true, force: true });
-    }
+    `, { PATH: bin + delimiter + process.env.PATH, REAL_GIT: realGit });
   } finally {
+    rmSync(bin, { recursive: true, force: true });
     rmSync(root, { recursive: true, force: true });
   }
 });
