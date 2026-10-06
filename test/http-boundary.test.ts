@@ -391,7 +391,7 @@ test("fetchComments pages through the comments Link header", async () => {
   });
 });
 
-test("fetchComments tolerates a malformed page mid-stream (keeps earlier pages)", async () => {
+test("fetchComments rejects a malformed page mid-stream", async () => {
   await withMockGithub((req, res, _body, baseUrl) => {
     if ((req.url ?? "").includes("page=2")) {
       res.setHeader("Content-Type", "text/plain");
@@ -407,8 +407,7 @@ test("fetchComments tolerates a malformed page mid-stream (keeps earlier pages)"
       assignee: null, milestone: null, created_at: "", updated_at: "", html_url: "",
       comments: 1,
     };
-    const out = await fetchComments(issue, "a/b", "t");
-    assert.deepEqual(out.map((c) => c.id), [1], "page-1 comments are kept; the malformed page breaks the loop");
+    await assert.rejects(fetchComments(issue, "a/b", "t"), /not valid JSON/);
   });
 });
 
@@ -588,19 +587,17 @@ test("parseRateLimit drops non-numeric header values", async () => {
   assert.equal(parseRateLimit({ "x-ratelimit-remaining": ["4"] }).low, true);
 });
 
-test("fetchComments stops at a non-array comments page but keeps earlier pages", async () => {
+test("fetchComments rejects a non-array comments page", async () => {
   await withMockGithub((req, res, _body, baseUrl) => {
     if (parseNextLinkHeaderPage(req.url ?? "") === 0) {
       jsonResponse(res, 200, [ghComment(1)], { Link: nextLinkHeader(baseUrl, "/repos/a/b/issues/1/comments?per_page=100&page=2") });
     } else {
-      // A well-formed JSON object (not an array) must end the walk without
-      // throwing and without losing the already-collected page.
+      // A later non-array page must refuse the incomplete read.
       jsonResponse(res, 200, { message: "unexpected shape" });
     }
   }, async () => {
     const issue: GhIssue = { ...ghIssue(1), comments: 2 };
-    const comments = await fetchComments(issue, "a/b", "t");
-    assert.deepEqual(comments.map((c) => c.id), [1]);
+    await assert.rejects(fetchComments(issue, "a/b", "t"), /must be an array/);
   });
 });
 

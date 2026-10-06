@@ -180,8 +180,8 @@ function loadFixtureExemptions(root: string): Map<string, string> {
     if (!/^[0-9a-f]{40}$/.test(source.commit) || !/^test\/[A-Za-z0-9_-]+\.test\.ts$/.test(source.path)) {
       throw new Error("Historical fixture provenance must name an exact commit and a test source.");
     }
-    const resolved = spawnSync("git", ["ls-tree", source.commit, "--", source.path], { cwd: root, encoding: "utf8" });
-    if (resolved.status !== 0 || !resolved.stdout.startsWith(`100644 blob ${oid}\t`)) {
+    const resolved = runGitQuery(root, "historical fixture provenance", ["ls-tree", source.commit, "--", source.path], 16 * 1024 * 1024);
+    if (!resolved.startsWith(`100644 blob ${oid}\t`)) {
       throw new Error("Historical fixture provenance does not match the reviewed blob.");
     }
     fixtureBlobs.add(oid);

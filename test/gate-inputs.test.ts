@@ -78,3 +78,35 @@ test("explicit diff failures preserve gate diagnostics and wrap other filesystem
   fs.mkdirSync(path.join(root, "directory.diff"));
   assert.throws(() => runTrackerGate({ pmRoot: root, diffFile: path.join(root, "directory.diff") }), GateInputError);
 });
+
+test("diff hunk content keeps added plus-plus and removed minus-minus prefixes", () => {
+  const files = parseUnifiedDiff("--- a/item.toon\n+++ b/item.toon\n@@ -1,2 +1,2 @@\n--- old content\n+++ public content\n body: clean\n");
+  assert.deepEqual(files[0]!.addedLines, [{ text: "++ public content", field: "unknown" }]);
+  const token = "ghp_" + "A".repeat(36);
+  assert.ok(scanLineForRuleHits(parseUnifiedDiff(`+++ b/item.toon\n@@ -0,0 +1 @@\n+++ ${token}\n`)[0]!.addedLines[0]!.text).length > 0);
+});
+
+test("Git refuses invalid UTF-8 in both tracked and staged changes", t => {
+  const root = repository(t);
+  const file = path.join(root, ".agents/pm/notes.txt");
+  fs.writeFileSync(file, "public baseline\n");
+  assert.equal(spawnSync("git", ["add", ".agents/pm/notes.txt"], { cwd: root }).status, 0);
+  assert.equal(spawnSync("git", ["commit", "-qm", "Text baseline"], { cwd: root }).status, 0);
+  fs.writeFileSync(file, Buffer.from([0xc3, 0x28, 0x0a]));
+  assert.throws(() => runTrackerGate({ pmRoot: root }), GateInputError);
+  assert.equal(spawnSync("git", ["add", ".agents/pm/notes.txt"], { cwd: root }).status, 0);
+  assert.throws(() => runTrackerGate({ pmRoot: root }), GateInputError);
+});
+
+test("Git tracker scanning canonicalizes a symlinked checkout including operational exclusions", t => {
+  const root = repository(t);
+  const alias = root + "-alias";
+  fs.symlinkSync(root, alias, "dir");
+  t.after(() => fs.unlinkSync(alias));
+  fs.mkdirSync(path.join(root, ".agents/pm/locks"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".agents/pm/locks/transient"), "ghp_" + "A".repeat(36));
+  fs.writeFileSync(path.join(root, ".agents/pm/notes.txt"), "public change\n");
+  const report = runTrackerGate({ pmRoot: alias });
+  assert.equal(report.verdict, "pass");
+  assert.equal(report.scanned_files, 1);
+});

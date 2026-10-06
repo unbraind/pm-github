@@ -9,7 +9,7 @@
 import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { isMainInvocation, nodeToolingExecutable } from "./main-invocation.ts";
 
 /** Configuration cannot exempt sources or lower the required complete gate. */
@@ -49,8 +49,8 @@ const DIMENSIONS = ["lines", "statements", "functions", "branches"] as const;
 export function collectCoverageSources(root: string, target: string): string[] {
   const location = resolve(root, target);
   const repoRelative = relative(root, location);
-  if (repoRelative.startsWith("..") || repoRelative === "") {
-    if (repoRelative !== "") throw new Error("Coverage source escapes the repository.");
+  if (isAbsolute(repoRelative) || repoRelative === ".." || repoRelative.startsWith(`..${sep}`)) {
+    throw new Error("Coverage source escapes the repository.");
   }
   if (!statSync(location).isDirectory()) {
     if (!/\.(?:ts|js)$/.test(location) || location.endsWith(".d.ts")) throw new Error("Coverage source must be an executable module.");

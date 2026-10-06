@@ -1633,9 +1633,9 @@ export async function fetchComments(issue: GhIssue, repo: string, token?: string
     try {
       page = JSON.parse(body);
     } catch {
-      break;
+      throw new CommandError("GitHub comments response is not valid JSON.");
     }
-    if (!Array.isArray(page)) break;
+    if (!Array.isArray(page)) throw new CommandError("GitHub comments response must be an array.");
     comments.push(...(page as GhComment[]));
     nextUrl = parseNextLink(linkHeader);
   }
@@ -3090,7 +3090,7 @@ export async function runImport(
     gatePlanByNumber = new Map(planned.map((entry) => [entry.issueNumber, entry]));
     skipped = skippedNumbers.length;
     if (opts.gate && !opts.dryRun) {
-      const preview = runTrackerGate({ pmRoot, plannedItems: planned.map(entry => ({
+      const preview = runCommandTrackerGate({ pmRoot, plannedItems: planned.map(entry => ({
         itemId: entry.match?.id ?? `github-issue-${entry.issueNumber}`,
         fields: { title: entry.title, description: entry.description, body: entry.body, tags: entry.tags,
           assignee: entry.assignee, sprint: entry.milestone,

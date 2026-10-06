@@ -37,22 +37,19 @@ on:
         required: false
         default: "22.18.0"
 
-# Least privilege for the job's needs: push the sync branch (contents: write)
-# and create/update the review PR (pull-requests: write). Nothing else.
-permissions:
-  contents: write
-  pull-requests: write
-  issues: read
-
 concurrency:
   group: pm-github-sync-${{ inputs.repository }}
   cancel-in-progress: false
 
 jobs:
   gated-sync:
+    # Read issues, push the sync branch, and create/update its review PR.
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: read
     runs-on: ubuntu-latest
     env:
-      GH_TOKEN: ${{ github.token }}
       REPOSITORY: ${{ inputs.repository }}
       SYNC_BRANCH: ${{ inputs.sync-branch }}
       PM_GITHUB_VERSION: ${{ inputs.pm-github-version }}
@@ -63,7 +60,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "${REPOSITORY}" == "${CALLING_REPOSITORY}" ]]
-          [[ "${PM_GITHUB_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "${PM_GITHUB_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]
           [[ "${SYNC_BRANCH}" == automation/* ]]
           git check-ref-format "refs/heads/${SYNC_BRANCH}"
 
@@ -73,6 +70,7 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           ref: main
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -89,8 +87,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch --force origin main
-          sync_lease="$(git ls-remote --heads origin "refs/heads/${SYNC_BRANCH}" | cut -f1)"
+          sync_lease="$(git rev-parse --verify "refs/remotes/origin/${SYNC_BRANCH}" 2>/dev/null || true)"
           printf 'SYNC_LEASE=%s\n' "${sync_lease}" >> "${GITHUB_ENV}"
           git switch --force-create "${SYNC_BRANCH}" origin/main
 
@@ -99,7 +96,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm ci
+          npm ci --ignore-scripts
           printf '%s/node_modules/.bin\n' "${GITHUB_WORKSPACE}" >> "${GITHUB_PATH}"
 
       - name: Install pinned pm-github extension
@@ -116,17 +113,25 @@ jobs:
         run: ./node_modules/.bin/pm github gate --json
 
       - name: Validate GitHub access
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: ./node_modules/.bin/pm github validate --repo "${REPOSITORY}" --json | jq -e ' .ok == true and .repo_accessible == true '
 
       - name: Preview GitHub to pm plan
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: ./node_modules/.bin/pm github import "${REPOSITORY}" --state all --atomic --gate --dry-run --with-comments
 
       # The gate step. A finding (or unreadable scan input) fails this step, so
       # the job never reaches the commit/push below with a leak in the change.
       - name: Gated GitHub to pm import
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: ./node_modules/.bin/pm github import "${REPOSITORY}" --state all --atomic --gate --with-comments
 
       - name: Verify repeat import is a no-op
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -145,6 +150,8 @@ jobs:
         run: ./node_modules/.bin/pm health --strict-exit
 
       - name: Commit gated sync changes and open review PR
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -170,6 +177,7 @@ jobs:
             exit 1
           fi
           git commit -m "chore(pm): sync GitHub issues (gated)"
+          gh auth setup-git
           git push --force-with-lease="refs/heads/${SYNC_BRANCH}:${SYNC_LEASE}" origin "HEAD:refs/heads/${SYNC_BRANCH}"
           body_file="${RUNNER_TEMP}/pm-github-sync-pr.md"
           {

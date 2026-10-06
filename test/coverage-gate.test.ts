@@ -125,3 +125,13 @@ test("real c8 requires both branches and rejects a completely unloaded authored 
     assert.equal(existsSync(join(root, "coverage", "lcov.info")), false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
+
+test("coverage inventory accepts dot-dot names inside the repository and rejects parent escape", () => {
+  const root = coverageFixture();
+  try {
+    mkdirSync(join(root, "..cache"));
+    writeFileSync(join(root, "..cache", "module.ts"), "export const value = 1;\n");
+    assert.deepEqual(collectCoverageSources(root, "..cache"), ["..cache/module.ts"]);
+    assert.throws(() => collectCoverageSources(root, ".."), /escapes the repository/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

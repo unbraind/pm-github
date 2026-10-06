@@ -53,8 +53,8 @@ function importOpts(overrides: Partial<ImportOptions> = {}): ImportOptions {
     dryRun: false,
     atomic: false,
     linkDeps: true,
-    ...overrides,
     gate: false,
+    ...overrides,
   };
 }
 
@@ -447,4 +447,9 @@ test("runImport without --link-deps leaves items free of dependency edges", asyn
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("dependency import options preserve an explicit gate override", () => {
+  assert.equal(importOpts().gate, false);
+  assert.equal(importOpts({ gate: true }).gate, true);
 });

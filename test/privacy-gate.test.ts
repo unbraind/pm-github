@@ -478,3 +478,25 @@ test("privacy gate negative control: a fresh violation introduced after a clean 
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("historical fixture provenance reports Git query failures", () => {
+  const root = initRepo("historical-query");
+  try {
+    writeAllowlist(root, ["intruder@localhost"]);
+    writeFileSync(join(root, "clean.txt"), "public\n");
+    commitAll(root, "baseline");
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+    const commit = "a".repeat(40);
+    const manifestDir = join(root, "test/fixtures/privacy-gate");
+    mkdirSync(manifestDir, { recursive: true });
+    writeFileSync(join(manifestDir, "manifest.json"), JSON.stringify({ ["b".repeat(40)]: { justification: "Synthetic", historical_test: { commit, path: "test/gate.test.ts" } } }));
+    writeFileSync(join(bin, "git"), `#!/bin/sh\nif [ "$1" = "ls-tree" ] && [ "$2" = "${commit}" ]; then\n  echo forced-provenance-failure >&2\n  exit 1\nfi\nexec "$REAL_GIT" "$@"\n`, { mode: 0o755 });
+    privacyProcess(`
+      const result = runGate(${JSON.stringify(root)});
+      assert.equal(result.exitCode, 1);
+      assert.match(result.stderr, /git historical fixture provenance failed: forced-provenance-failure/);
+    `, { PATH: bin + delimiter + process.env.PATH, REAL_GIT: realGit });
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});

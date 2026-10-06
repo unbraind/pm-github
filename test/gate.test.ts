@@ -176,7 +176,7 @@ const AWS_KEY = "AKIA" + "D".repeat(16);
 const SLACK_TOKEN = "xoxb-" + "E".repeat(24);
 const OPENAI_KEY = "sk-" + "F".repeat(28) + "T3BlbkFJ" + "G".repeat(28);
 const ANTHROPIC_KEY = "sk-ant-" + "H".repeat(30);
-const HIGH_ENTROPY_SECRET = "Zj9kP2mQ7xW4nB8vC5tR1sD";
+const HIGH_ENTROPY_SECRET = "Zj9kP2mQ7xW4" + "nB8vC5tR1sD";
 const HOME_PATH = "/" + "home" + "/alice/report.txt";
 const TMP_PATH = "/" + "tmp" + "/scratch.log";
 const WIN_PATH = "C:" + "\\Users" + "\\bob" + "\\debug.log";
@@ -491,14 +491,17 @@ test("collectTrackerChange fails closed outside a Git work tree and on Git failu
     () => runTrackerGate({ pmRoot: "/unused", dependencies: { runGit: failingGit } }),
     GateInputError,
   );
-  const statusFailingGit = (cwd: string, args: readonly string[]) =>
-    args.includes("status")
-      ? { ok: false, stdout: "", stderr: "status boom" }
-      : { ok: true, stdout: path.resolve(cwd), stderr: "" };
-  assert.throws(
-    () => runTrackerGate({ pmRoot: "/unused", dependencies: { runGit: statusFailingGit } }),
-    GateInputError,
-  );
+  const { root } = initGateRepo();
+  try {
+    const statusFailingGit = (cwd: string, args: readonly string[]) =>
+      args.includes("status")
+        ? { ok: false, stdout: "", stderr: "status boom" }
+        : { ok: true, stdout: fs.realpathSync(root), stderr: "" };
+    assert.throws(
+      () => runTrackerGate({ pmRoot: root, dependencies: { runGit: statusFailingGit } }),
+      /git status failed/,
+    );
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test("an oversized untracked tracker file fails closed instead of being skipped", () => {
@@ -528,23 +531,16 @@ test("the default runner is the real git subprocess contract", () => {
 
 
 test("collectTrackerChange fails closed when the tracker escapes the Git work tree", () => {
-  assert.throws(
-    () =>
-      runTrackerGate({
-        pmRoot: "/deep/outside/path",
-        dependencies: {
-          runGit: (cwd, args) =>
-            args.includes("rev-parse")
-              ? { ok: true, stdout: path.join(os.tmpdir(), "elsewhere"), stderr: "" }
-              : { ok: false, stdout: "", stderr: "unused" },
-        },
-      }),
-    (err: unknown) => {
-      assert.ok(err instanceof GateInputError);
-      assert.match(err.message, /escapes the Git work tree/);
-      return true;
-    },
-  );
+  const { root } = initGateRepo();
+  const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), "pm-gate-elsewhere-"));
+  try {
+    assert.throws(() => runTrackerGate({ pmRoot: root, dependencies: {
+      runGit: () => ({ ok: true, stdout: elsewhere, stderr: "" }),
+    } }), (err: unknown) => err instanceof GateInputError && /escapes the Git work tree/.test(err.message));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(elsewhere, { recursive: true, force: true });
+  }
 });
 
 test("a vanished untracked tracker file fails closed", () => {

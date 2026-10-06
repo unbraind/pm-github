@@ -513,13 +513,13 @@ export function parseUnifiedDiff(diffText: string): ChangeFile[] {
     if (raw === "GIT binary patch" || raw.startsWith("Binary files ") || raw.includes("\0")) {
       throw new GateInputError("pm github gate: binary input cannot be privacy-scanned.");
     }
-    if (raw.startsWith("diff --git ") || raw.startsWith("--- ")) {
+    if (raw.startsWith("diff --git ") || (raw.startsWith("--- ") && !(inHunk && oldRemaining > 0))) {
       completeHunk();
       flushFile();
       filePath = "";
       continue;
     }
-    if (raw.startsWith("+++ ")) {
+    if (raw.startsWith("+++ ") && !(inHunk && newRemaining > 0)) {
       completeHunk();
       flushFile();
       filePath = raw.slice(4).split("\t")[0]!.trim();
@@ -634,14 +634,14 @@ function isOperationalTrackerPath(repoRelative: string): boolean {
  * @returns The normalized subprocess result.
  */
 export function runGitDefault(cwd: string, args: readonly string[]): { ok: boolean; stdout: string; stderr: string } {
-  const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 });
+  const result = spawnSync("git", ["-C", cwd, ...args], { maxBuffer: 64 * 1024 * 1024 });
   return {
     ok: result.status === 0,
     // stdout/stderr are nullish only when the child never spawned, and spawnSync
     // then always reports the failure through `result.error`, so no second
     // "git failed" fallback can ever be needed beyond String(result.error).
-    stdout: result.stdout ?? "",
-    stderr: result.stderr ?? String(result.error),
+    stdout: new TextDecoder("utf-8", { fatal: true }).decode(result.stdout ?? Buffer.alloc(0)),
+    stderr: result.stderr === null ? String(result.error) : new TextDecoder("utf-8", { fatal: true }).decode(result.stderr),
   };
 }
 
@@ -683,8 +683,9 @@ export function collectTrackerChange(
         "Run inside the repository, or pass --diff <file> to scan an explicit diff.",
     );
   }
-  const repoRoot = toplevel.stdout.trim();
-  const trackerRel = path.relative(repoRoot, pmDataDir);
+  const repoRoot = fs.realpathSync(toplevel.stdout.trim());
+  const trackerDir = fs.realpathSync(pmDataDir);
+  const trackerRel = path.relative(repoRoot, trackerDir);
   if (trackerRel.startsWith("..")) {
     throw new GateInputError(
       "pm github gate: the resolved pm tracker path escapes the Git work tree; refusing to scan an unclear change.",
@@ -706,7 +707,7 @@ export function collectTrackerChange(
     // Rename/copy entries carry the original path as the next NUL token; it is
     // provenance of the rename, not a second changed path.
     if (xy[0] === "R" || xy[0] === "C" || xy[1] === "R" || xy[1] === "C") index++;
-    if (xy === "??" && isOperationalTrackerPath(path.relative(pmDataDir, path.join(repoRoot, filePath)))) continue;
+    if (xy === "??" && isOperationalTrackerPath(path.relative(trackerDir, path.join(repoRoot, filePath)))) continue;
     if (xy === "??") {
       const absolute = path.join(repoRoot, filePath);
       let size = 0;

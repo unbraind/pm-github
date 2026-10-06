@@ -588,11 +588,11 @@ test("the reusable sync workflow is a workflow_call with explicit pinned inputs"
   assert.match(workflow, /pm-github-version:\n\s+description:[^\n]+\n\s+type: string\n\s+required: true/);
   assert.match(workflow, /repository:\n\s+description:/);
   assert.doesNotMatch(workflow, /^on:\n  schedule:/m, "the schedule stays with the caller");
-  // Least privilege: exactly the two permissions a gated sync needs.
-  const permissions = /^permissions:\n  contents: write\n  pull-requests: write\n/m;
+  // Job permissions cover issue reads, branch pushes and review PR writes.
+  const permissions = /^    permissions:\n      contents: write\n      pull-requests: write\n      issues: read\n/m;
   assert.match(workflow, permissions);
   assert.ok(
-    (workflow.match(/^permissions:/gm) ?? []).length === 1,
+    (workflow.match(/^    permissions:/gm) ?? []).length === 1,
     "no second, broader permission block",
   );
 });
@@ -695,6 +695,7 @@ async function prepareWorkflowFixture(root: string, base: string): Promise<NodeJ
   fs.mkdirSync(tools, { recursive: true });
   fs.writeFileSync(path.join(tools, "gh"), `#!/usr/bin/env bash
 set -euo pipefail
+if [[ "$1" == "auth" && "$2" == "setup-git" ]]; then exit 0; fi
 if [[ "$1" == "--version" ]]; then printf 'gh fixture\\n'; exit 0; fi
 case "$1 $2" in
   "pr list") printf '%s' "\${EXISTING_PR:-}" ;;
@@ -870,4 +871,55 @@ test("packed installed CLI repeats a completed gated import under native Bun wit
       }
     });
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
+test("gated comment imports reject malformed second HTTP pages before writing", async () => {
+  const { root, base, git } = initSyncRepo();
+  try {
+    for (const badPage of ["not JSON", "{}"] ) {
+      await withMockGithub((req, res, _body, baseUrl) => {
+        if ((req.url ?? "").includes("page=2")) { res.end(badPage); return; }
+        if ((req.url ?? "").includes("/comments")) {
+          jsonResponse(res, 200, [{ id: 1, body: "public comment" }], { Link: `<${baseUrl}/repos/acme/widgets/issues/1/comments?page=2>; rel="next"` });
+          return;
+        }
+        jsonResponse(res, 200, [{ ...issue(1, "Public issue", "Public body"), comments: 2 }]);
+      }, async server => {
+        for (const atomic of [true, false]) {
+          await assert.rejects(runGatedImport(root, { gate: true, atomic, "with-comments": true }), /comments for issue #1 could not be read/);
+          assert.equal(git(["status", "--porcelain", "--", ".agents/pm"]).stdout.trim(), "");
+        }
+        assert.equal(server.requests.filter(req => req.url.includes("page=2")).length, 2);
+      });
+    }
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
+test("gated pre-write input errors carry the command exit code", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-preview-error-"));
+  try {
+    await assert.rejects(runImport("acme/widgets", root, parseImportOptions({ gate: true, atomic: true }), {
+      resolveToken: () => undefined, fetchIssues: async () => [issue(1, "Public", "Body")], readItems: () => [],
+    }), error => error instanceof CommandError && error.exitCode === 1 && /not inside a Git work tree/.test(error.message));
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test("workflow input shell accepts numeric same-day pins and refuses floating versions", async () => {
+  for (const [version, valid] of [["2026.10.6", true], ["2026.10.6-1", true], ["2026.10.6-12", true], ["latest", false], ["^2026.10.6", false], ["2026.10.6-beta", false], ["2026.10.6-1; true", false]] as const) {
+    const result = await executeWorkflow(workflowShell(["Validate sync inputs"]), repoRoot, {
+      ...process.env, REPOSITORY: "acme/widgets", CALLING_REPOSITORY: "acme/widgets", SYNC_BRANCH, PM_GITHUB_VERSION: version,
+    });
+    assert.equal(result.code === 0, valid, version);
+  }
+});
+
+test("workflow credentials stay out of install steps and checkout persistence", () => {
+  const steps = workflow.split(/\n      - name: /).slice(1);
+  const tokenSteps = steps.filter(step => step.includes("GH_TOKEN:")).map(step => step.split("\n")[0]);
+  assert.deepEqual(tokenSteps, ["Validate GitHub access", "Preview GitHub to pm plan", "Gated GitHub to pm import", "Verify repeat import is a no-op", "Commit gated sync changes and open review PR"]);
+  assert.doesNotMatch(workflow.slice(0, stepOffset("Validate sync inputs")), /GH_TOKEN:/);
+  assert.match(steps.find(step => step.startsWith("Checkout main"))!, /persist-credentials: false/);
+  assert.match(workflowShell(["Install dependencies"]), /npm ci --ignore-scripts/);
+  assert.doesNotMatch(workflowShell(["Prepare sync branch from main"]), /git fetch|git ls-remote/);
+  assert.match(workflowShell(["Commit gated sync changes and open review PR"]), /gh auth setup-git\n\s*git push/);
 });

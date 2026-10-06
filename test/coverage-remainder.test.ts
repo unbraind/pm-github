@@ -349,13 +349,17 @@ test("comment sync skips a contended lock and reports a per-comment write failur
 
     const itemFile = fs.readdirSync(path.join(root, ".agents", "pm", "tasks"))[0];
     assert.ok(itemFile);
-    fs.chmodSync(path.join(root, ".agents", "pm", "tasks"), 0o555);
-    const failed = await captureStderr(() => syncGithubCommentsToAnnotations(itemId, [
-      { id: 5, body: "", user: null, created_at: "" },
-    ], path.join(root, ".agents", "pm"), 7));
-    fs.chmodSync(path.join(root, ".agents", "pm", "tasks"), 0o755);
-    assert.equal(failed.result.added, 0);
-    assert.match(failed.stderr.join("\n"), /sync failed/);
+    const tasksDir = path.join(root, ".agents", "pm", "tasks");
+    fs.chmodSync(tasksDir, 0o555);
+    try {
+      const failed = await captureStderr(() => syncGithubCommentsToAnnotations(itemId, [
+        { id: 5, body: "", user: null, created_at: "" },
+      ], path.join(root, ".agents", "pm"), 7));
+      assert.equal(failed.result.added, 0);
+      assert.match(failed.stderr.join("\n"), /sync failed/);
+    } finally {
+      fs.chmodSync(tasksDir, 0o755);
+    }
   } finally {
     holder.kill("SIGKILL");
     fs.rmSync(root, { recursive: true, force: true });

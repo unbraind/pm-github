@@ -6,16 +6,18 @@ status: in_progress
 priority: 1
 tags[5]: all-source,coverage,quality-gate,scripts,tdd
 created_at: "2026-08-17T07:32:29.666Z"
-updated_at: "2026-10-06T12:42:48.449Z"
+updated_at: "2026-10-06T14:00:16.233Z"
+assignee: codex-sol
+claim_principal: codex-sol
 author: codex
 estimated_minutes: 960
 acceptance_criteria: "Automatically discover every executable TypeScript production and operational source; require exact 100% statements, branches, functions, and lines; prohibit ignore pragmas, source allowlist blind spots, threshold weakening, vacuous tests, and mocks of the unit under test; exercise GitHub behavior at the HTTP boundary, pm behavior through real SDK/installed-CLI boundaries, and operational scripts through real filesystem/process behavior; prove the gate fails when a new uncovered source or branch is introduced."
 unblock_note: Full source coverage closure is being reverified at unchanged exact thresholds.
 expected_result: "Every executable TypeScript source and operational script is automatically included in measurement and exact statements, branches, functions, and lines all reach 100% through behavioral tests."
-actual_result: "Frozen source ae86e7d: all 420 npm tests pass; lines and statements 8099/8299 (97.59 percent), branches 1859/2083 (89.24 percent), functions 200/200 (100 percent). Exact 100 gate fails and invalidates LCOV. All 420 native Bun tests pass separately."
+actual_result: "Pushed baseline a849280: exact all-source 100/100/100/100 coverage across 12 authored modules; exact-100 gate passes in fresh npm and Bun clones with 489 tests. Review-round-1 verification is pending."
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-github-n3z3,related,"2026-08-17T07:32:29.666Z",codex,"cli:create:dep",detected
-comments[29]{created_at,author,text}:
+comments[31]{created_at,author,text}:
   "2026-10-05T07:52:16.974Z",codex-sol,"Replaced the narrowed coverage wrapper with an explicit authored-module inventory, exact 100 percent thresholds for all four dimensions, stale-LCOV invalidation, and missing-file rejection. Added checked operational-script tests, ESLint enforcement, erasable TypeScript syntax, and a jscpd wrapper that verifies its full source inventory. Typecheck, 122 documented declarations, ESLint, and zero duplication passed. Coverage remains a measured gate rather than an approval claim."
   "2026-10-05T08:09:10.457Z",codex-sol,"Strict all-authored-module run completed with 369 tests passing and no skipped tests. Coverage remained below the unchanged 100/100/100/100 requirement: lines/statements 93.25 percent, branches 84.41 percent, functions 94.92 percent over 11 authored TS/JS modules including operational scripts. LCOV was invalidated on failure. Most remaining uncovered branches and ten uncovered functions are in the pre-existing GitHub Projects sync handlers; this is a release blocker, not a passing gate. The shell release-date verifier remains outside the V8 denominator and is exercised separately."
   "2026-10-05T08:58:34.554Z",codex-sol,"Final frozen-source verification at 0b7c4ab: the linked npm coverage command ran all 375 tests with 375 passing, zero failures and zero skips, then correctly exited nonzero at the unchanged 100 percent gate. Complete inventory: 12 authored TS/JS modules including operational scripts. Lines/statements 7739 of 8285 = 93.40 percent; branches 1548 of 1826 = 84.77 percent; functions 188 of 198 = 94.94 percent. Failed LCOV was removed. No source ignores or lowered thresholds were introduced; release remains blocked."
@@ -45,13 +47,17 @@ comments[29]{created_at,author,text}:
   "2026-10-06T12:33:58.453Z",codex-sol,"The complete native suite has all 487 cases passing across 30 files with zero failed assertions, but its shell result is nonzero. Isolated duplication-gate file reproduces exit one despite 3/3 passing: the script-entry negative control sets process.exitCode=1, and restoring undefined does not clear it under Bun. Four touched entry fixtures now restore previous ?? 0, matching existing docstring/attestation fixture practice. Production source remains unchanged. Checking each affected file exit status and restarting native acceptance to require exit zero as well as zero failed cases."
   "2026-10-06T12:35:41.764Z",codex-sol,"Exit cleanup verified: all four affected Bun entry-fixture files now return process exit zero with zero failed tests; the combined 38-case Node run also passes with zero skips, and lint/build:test pass. The previous complete native run already passed all 487 assertions across 30 files. Running the complete native command once more to obtain an explicit exit-zero receipt. Production code remains unchanged, with final full coverage exact 100/100/100/100."
   "2026-10-06T12:42:45.910Z",codex-sol,"Final native command npm run test:bun PASS with process exit zero: 487 passing cases across all 30 files, zero failed cases. Final source coverage is exact 100/100/100/100 across all 12 authored modules with no ignores/lowered thresholds and no uncovered counters. The complete npm/Bun release checks pass; final fixture-only changes retain byte-identical production implementation 5ed8c47. Portable syscall, startup-PATH and explicit exit-code cleanup fixtures now work under both runtimes. Claims will be released and the item remains open for orchestrator verification."
-files[19]{path,scope}:
+  "2026-10-06T13:55:53.428Z",codex-sol,"Historical actual_result described ae86e7d: 420 tests passed but coverage was 97.59 percent lines/statements, 89.24 percent branches, 100 percent functions and exact-100 failed. The latest pushed baseline a849280 subsequently passed exact all-source 100/100/100/100 in fresh clones; replacing the stale current field, with review-round-1 verification pending."
+  "2026-10-06T14:00:16.233Z",codex-sol,"Review regressions verified red/green for all 16 findings. Linked focused pm test commands pass 8 tests each; result persistence is disabled by existing project policy, so this comment records the receipt. Build:test, ESLint, 130 documented declarations and zero duplication across all 12 authored modules pass. Canonicalization required replacing nonexistent mocked directories in two prior Git failure tests with real fixture directories; their intended status and containment refusal branches pass."
+files[22]{path,scope}:
   eslint.config.js,project
   package.json,project
   projects.ts,project
   scripts/coverage-gate.ts,project
   scripts/duplication-gate.ts,project
+  scripts/generate-changelog.ts,project
   scripts/main-invocation.ts,project
+  scripts/privacy-gate.ts,project
   test,project
   test/coverage-boundaries.test.ts,project
   test/coverage-edges.test.ts,project
@@ -65,7 +71,8 @@ files[19]{path,scope}:
   test/lint-policy.test.ts,project
   test/project-sync.test.ts,project
   test/projects.test.ts,project
-tests[4]:
+  test/review-round1.test.ts,project
+tests[5]:
   - command: npm run coverage
     path: scripts/coverage-gate.ts
     scope: project
@@ -93,6 +100,13 @@ tests[4]:
     provenance:
       author: codex-sol
       created_at: "2026-10-05T09:38:01.943Z"
+      source_kind: local_mutation
+      source_ref: feat/import-privacy-gate
+  - command: "node --test --test-name-pattern=\"README gate links|coverage task current|privacy fixtures never|comment failure fixture|dot-dot names|canonical changelog includes|historical fixture provenance reports|gate override\" test/review-round1.test.ts test/coverage-gate.test.ts test/generate-changelog.test.ts test/privacy-gate.test.ts test/link-deps.test.ts"
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-10-06T13:58:20.374Z"
       source_kind: local_mutation
       source_ref: feat/import-privacy-gate
 docs[3]:
