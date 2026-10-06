@@ -51,8 +51,9 @@ test("canonical changelog includes tagged pending work without closing it or adm
     console.error = (...values: unknown[]) => { diagnostics.push(values.join(" ")); };
     try {
       assert.equal(await generateChangelog(root, []), 1);
-      assert.ok(diagnostics.some(line => line.includes("could not spawn")));
       process.env.PATH = previousPath;
+      assert.equal(await generateChangelog(root, [], () => ({ status: null, signal: null, error: new Error("synthetic spawn failure"), pid: 0, output: [], stdout: "", stderr: "" })), 1);
+      assert.ok(diagnostics.some(line => line.includes("could not spawn")));
       assert.equal(await generateChangelog(root, [], () => ({ status: null, signal: "SIGTERM", pid: 0, output: [], stdout: "", stderr: "" })), 1);
       assert.ok(diagnostics.some(line => line.includes("SIGTERM")));
     } finally {
