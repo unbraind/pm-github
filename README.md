@@ -310,10 +310,6 @@ permissions:
   pull-requests: write
   issues: read
 
-concurrency:
-  group: pm-github-sync
-  cancel-in-progress: false
-
 jobs:
   gated-sync:
     uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@RELEASE_COMMIT_SHA

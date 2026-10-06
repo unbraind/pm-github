@@ -422,6 +422,25 @@ test("scanLineForRuleHits reports every rule firing on one line without dedupe a
 // Git change collection on a real repository
 // ---------------------------------------------------------------------------
 
+test("tracker file names that look like pathspec magic are still scanned", { skip: process.platform === "win32" && "colons and parentheses are not valid Windows file names" }, () => {
+  // git reads a leading ":(attr:x)" and glob characters as pathspec magic
+  // unless told to take paths literally. Tracker paths always start with a
+  // directory today, which keeps the magic inert; the gate passes
+  // --literal-pathspecs so that holds for every layout, and this guards it.
+  const { root, git } = initGateRepo();
+  try {
+    for (const name of [":(attr:x)pm-test-magic.toon", "pm-test-[ab].toon"]) {
+      fs.writeFileSync(path.join(root, ".agents", "pm", "issues", name), `id: pm-test-magic\nbody: "${GH_TOKEN}"\n`);
+      assert.equal(git(["--literal-pathspecs", "add", `.agents/pm/issues/${name}`]).status, 0);
+    }
+    const report = runTrackerGate({ pmRoot: root });
+    assert.strictEqual(report.verdict, "fail");
+    assert.strictEqual(report.findings.filter((finding) => finding.rule === "github-token-classic").length, 2);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("collectTrackerChange scans staged, working, and untracked tracker files", () => {
   const { root, git } = initGateRepo();
   try {

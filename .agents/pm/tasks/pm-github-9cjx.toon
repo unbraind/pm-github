@@ -1,12 +1,12 @@
 id: pm-github-9cjx
 title: Reach exact all-source coverage and include every operational script
-description: "The unchanged all-source gate now measures exact 100 percent lines, statements, branches and functions across all 12 authored TypeScript/JavaScript modules, including operational scripts. The frozen full npm coverage run passes 487 tests with zero failures or skips. Real Git, PM SDK, filesystem and HTTP cases cover reachable paths; removed private-path arms have invariant proofs recorded in comments and docs/coverage-gap-inventory.md. No source ignores or lowered thresholds. Final npm/Bun release receipts and orchestrator review remain separate."
+description: "The unchanged all-source gate measures exact 100 percent lines, statements, branches and functions across all 12 authored TypeScript/JavaScript modules, including operational scripts. At the closing head the npm and Bun release gates each pass 505 tests with zero failures or skips (the 487-test frozen run is historical). Real Git, PM SDK, filesystem and HTTP cases cover reachable paths; removed private-path arms have invariant proofs recorded in comments and docs/coverage-gap-inventory.md. No source ignores or lowered thresholds. Verified and closed by the orchestrator."
 type: Task
 status: closed
 priority: 1
 tags[5]: all-source,coverage,quality-gate,scripts,tdd
 created_at: "2026-08-17T07:32:29.666Z"
-updated_at: "2026-10-06T18:17:36.953Z"
+updated_at: "2026-10-06T19:48:19.546Z"
 closed_at: "2026-10-06T17:04:30.277Z"
 completed_at: "2026-10-06T17:04:30.277Z"
 author: codex

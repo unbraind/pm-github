@@ -693,7 +693,9 @@ export function collectTrackerChange(
   }
   const trackerSpec = trackerRel === "" ? "." : trackerRel;
 
-  const status = runGit(repoRoot, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", trackerSpec]);
+  // Literal pathspecs: a tracker path must never be read as pathspec magic
+  // (":(...)", ":!") or a glob, or its diff could come back empty and unread.
+  const status = runGit(repoRoot, ["--literal-pathspecs", "status", "--porcelain=v1", "-z", "--untracked-files=all", "--", trackerSpec]);
   if (!status.ok) {
     throw new GateInputError("pm github gate: git status failed; refusing to scan incomplete input.");
   }
@@ -730,7 +732,7 @@ export function collectTrackerChange(
     if (xy.includes("D") && !/[AMU]/.test(xy)) continue; // pure deletion
     const addedLines: AddedLine[] = [];
     for (const revision of [["--cached"], []]) {
-      const diff = runGit(repoRoot, ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=2147483647", ...revision, "--", filePath]);
+      const diff = runGit(repoRoot, ["--literal-pathspecs", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=2147483647", ...revision, "--", filePath]);
       if (!diff.ok) {
         throw new GateInputError("pm github gate: git diff failed; refusing to scan incomplete input.");
       }
