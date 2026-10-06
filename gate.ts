@@ -549,7 +549,9 @@ export function parseUnifiedDiff(diffText: string): ChangeFile[] {
       itemId = "";
       continue;
     }
-    if (filePath === "") continue; // headers, index lines, and text before any +++
+    // Header and index lines before a target are metadata, but a hunk is parsed
+    // even without one: its added lines must never pass unscanned.
+    if (filePath === "" && !inHunk && !raw.startsWith("@@")) continue;
     if (raw.startsWith("@@")) {
       completeHunk();
       const hunk = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/.exec(raw);
@@ -566,6 +568,10 @@ export function parseUnifiedDiff(diffText: string): ChangeFile[] {
     if (raw === "" && !inHunk) continue;
     if (!inHunk) throw new GateInputError("pm github gate: content outside a diff hunk.");
     if (raw.startsWith("+")) {
+      // Only `+++ /dev/null` or a header without a ---/+++ pair leaves no
+      // target; Git never adds lines there, so an operator-supplied --diff that
+      // does is malformed and fails closed rather than passing vacuously.
+      if (filePath === "") throw new GateInputError("pm github gate: added diff content has no target file.");
       newRemaining--;
       const text = raw.slice(1);
       if (itemId === "") itemId = itemIdForFile(filePath, text);

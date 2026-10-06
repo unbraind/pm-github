@@ -114,6 +114,13 @@ test("malformed, truncated, and binary diffs fail closed", () => {
     assert.throws(() => parseUnifiedDiff(diff), GateInputError);
   }
   assert.deepEqual(parseUnifiedDiff(""), []);
+  // Added content with no target file is never skipped: Git cannot emit it, so
+  // an operator-supplied diff carrying it is malformed rather than clean.
+  for (const targetless of [`diff --git a/x b/x\n@@ -0,0 +1 @@\n+${GH_TOKEN}`, `--- a/x\n+++ /dev/null\n@@ -0,0 +1 @@\n+${GH_TOKEN}`]) {
+    assert.throws(() => parseUnifiedDiff(targetless), GateInputError);
+  }
+  // A genuine deletion (only `-` lines after +++ /dev/null) still parses.
+  assert.deepEqual(parseUnifiedDiff("--- a/x\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-one\n-two"), []);
 });
 
 test("escaped tokens and Windows paths retain redacted findings", () => {

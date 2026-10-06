@@ -423,7 +423,7 @@ test("privacy gate fails closed when git cannot be spawned", () => {
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("privacy gate fails closed when object inventory or blob reads are unusable", () => {
+test("privacy gate fails closed when object inventory or blob reads are unusable", { skip: process.platform === "win32" && "uses POSIX sh git wrappers" }, () => {
   const root = initRepo("bad-git");
   const bin = mkdtempSync(join(tmpdir(), "pm-github-privacy-git-"));
   try {
@@ -479,7 +479,7 @@ test("privacy gate negative control: a fresh violation introduced after a clean 
   }
 });
 
-test("historical fixture provenance reports Git query failures", () => {
+test("historical fixture provenance reports Git query failures", { skip: process.platform === "win32" && "uses POSIX sh git wrappers" }, () => {
   const root = initRepo("historical-query");
   try {
     writeAllowlist(root, ["intruder@localhost"]);
