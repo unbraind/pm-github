@@ -49,3 +49,19 @@ export function isMainInvocation(argv: readonly string[], moduleUrl: string): bo
   if (entry === undefined) return false;
   return realpathSync(entry) === realpathSync(fileURLToPath(moduleUrl));
 }
+
+/**
+ * Resolve the executable that must run Node-based operational tooling.
+ *
+ * The gate scripts spawn Node-only tools (c8, jscpd). Under native Bun the
+ * host executable cannot run them, so the gates spawn Node itself; under Node
+ * the current executable is already the right interpreter. The versions object
+ * is a parameter so the Bun and Node selections are directly observable without
+ * running under a particular host.
+ *
+ * @param versions - The process `versions` record to inspect.
+ * @returns The executable to spawn for Node-based tooling.
+ */
+export function nodeToolingExecutable(versions: { readonly bun?: string; readonly node?: string }): string {
+  return versions.bun ? "node" : process.execPath;
+}

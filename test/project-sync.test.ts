@@ -289,3 +289,46 @@ test("project sync previews additions without Status and a linked item without a
     assert.match(stderr.join("\n"), /add issue acme\/widgets#7\n/);
   });
 });
+
+test("project sync reports a missing mutation id and malformed linked issue coordinates", async t => {
+  const root = tracker(t);
+  create(root, "Draft with missing remote id");
+  create(root, "Malformed issue", ["gh:broken#7"]);
+  await withMockGithub(board([], (_req, res) => jsonResponse(res, 200, { data: { addProjectV2DraftIssue: { projectItem: {} } } })), async () => {
+    const { stderr } = await captureStderr(() => assert.rejects(sync(root, { push: true, apply: true }), /failed/));
+    assert.match(stderr.join("\n"), /returned no item id/);
+    assert.match(stderr.join("\n"), /could not resolve node id for broken#7/);
+  });
+});
+
+test("project pull-only preview treats an absent board status as no information", async t => {
+  const root = tracker(t);
+  create(root, "Linked", [projectItemTag(REF, "linked")]);
+  await withMockGithub(board([{ id: "linked", content: { __typename: "DraftIssue" } }]), async () => {
+    const { result, stderr } = await captureStderr(() => sync(root, { pull: true }));
+    assert.equal((result.result as { push?: unknown }).push, undefined);
+    assert.match(stderr.join("\n"), /nothing to pull/);
+  });
+});
+
+test("project push preview names a previously unset Status option", async t => {
+  const root = tracker(t);
+  create(root, "Linked", [projectItemTag(REF, "linked")]);
+  await withMockGithub(board([{ id: "linked", content: { __typename: "DraftIssue" } }]), async () => {
+    const { stderr } = await captureStderr(() => sync(root, { push: true }));
+    assert.match(stderr.join("\n"), /\(none\) → Todo/);
+  });
+});
+
+
+test("project push refuses a missing identity from the real attachment response", async t => {
+  const root = tracker(t);
+  create(root, "Linked issue", ["gh:acme/widgets#7"]);
+  await withMockGithub(board([{ fieldValueByName: { name: "Done", optionId: "done" }, content: { __typename: "Issue", number: 7, repository: { nameWithOwner: "acme/widgets" } } }], (_req, res, body) => {
+    const query = (JSON.parse(body) as GraphqlCall).query;
+    jsonResponse(res, 200, { data: query.includes("issueOrPullRequest") ? { repository: { issueOrPullRequest: { id: "issue" } } } : { addProjectV2ItemById: { item: {} } } });
+  }), async () => {
+    const { stderr } = await captureStderr(() => assert.rejects(sync(root, { push: true, apply: true }), /failed/));
+    assert.match(stderr.join("\n"), /returned no item id/);
+  });
+});

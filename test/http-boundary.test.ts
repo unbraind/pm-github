@@ -23,6 +23,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createServer } from "node:http";
 
 import {
   CommandError,
@@ -33,6 +34,8 @@ import {
   fetchJSON,
   githubApiBase,
   parseImportOptions,
+  isRetryableStatus,
+  parseRateLimit,
   runImport,
   type GhIssue,
   type GhComment,
@@ -510,3 +513,94 @@ test("githubApiBase strips a trailing slash so paths cannot double up", async ()
     assert.strictEqual(githubApiBase(), "http://127.0.0.1:39291", "a trailing slash would yield //repos/...");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Coverage additions: transport dispatch, redirect validation, the 30s
+// request timeout, array/mixed-case header shapes, and the comments non-array
+// break — the remaining reachable arms of the shared request stack.
+// ---------------------------------------------------------------------------
+
+test("fetchJSON reaches an https target through the https transport and reports a refusal", async () => {
+  // Port 9 (discard) on loopback is guaranteed-unbound: the request is built
+  // and dispatched through the real https module, then rejected by the OS.
+  await assert.rejects(fetchJSON("https://127.0.0.1:9/repos/a/b"), /ECONNREFUSED/);
+});
+
+test("requestOnce rejects an unparseable redirect Location instead of following it", async () => {
+  await withMockGithub((_req, res) => {
+    // `http://[` is syntactically invalid as an absolute URL, so resolving the
+    // Location fails and the request must fail loudly rather than mis-follow.
+    res.statusCode = 302;
+    res.setHeader("Location", "http://[");
+    res.end();
+  }, async (server) => {
+    await assert.rejects(fetchJSON(`${server.baseUrl}/repos/a/b`), /invalid redirect Location/);
+  });
+});
+
+test("requestOnce fails a request after 30s without a response", { timeout: 45_000 }, async () => {
+  // A server that accepts the connection and never answers exercises the real
+  // 30-second socket idle timeout: the request must be destroyed with the
+  // timeout error, never left hanging.
+  const server = createServer(() => { /* accept and never respond */ });
+  await new Promise<void>((resolve) => { server.listen(0, "127.0.0.1", resolve); });
+  const port = (server.address() as { port: number }).port;
+  try {
+    await assert.rejects(
+      fetchJSON(`http://127.0.0.1:${port}/repos/a/b`),
+      /request timed out after 30s/,
+    );
+  } finally {
+    server.close();
+  }
+});
+
+test("computeBackoffMs reads the first value of repeated array headers", () => {
+  // Node delivers repeated response headers as arrays; the helper must use the
+  // first value, not the raw array.
+  assert.equal(computeBackoffMs({ "retry-after": ["3", "9"] }, 0), 3000);
+  assert.equal(computeBackoffMs({ "retry-after": ["bogus", "2"] }, 0), 1000);
+});
+
+test("isRetryableStatus honors mixed-case and array rate-limit headers", async () => {
+  assert.equal(isRetryableStatus(429, {}), true);
+  assert.equal(isRetryableStatus(500, {}), true);
+  assert.equal(isRetryableStatus(404, {}), false);
+  assert.equal(isRetryableStatus(403, {}), false);
+  // A primary rate limit with a mixed-case header name still reads as retryable.
+  assert.equal(isRetryableStatus(403, { "X-RateLimit-Remaining": "0" }), true);
+  assert.equal(isRetryableStatus(403, { "x-ratelimit-remaining": ["0", "5"] }), true);
+  // A secondary rate limit announced through Retry-After, mixed-case or array.
+  assert.equal(isRetryableStatus(403, { "Retry-After": "120" }), true);
+  assert.equal(isRetryableStatus(403, { "retry-after": ["60"] }), true);
+});
+
+test("parseRateLimit drops non-numeric header values", async () => {
+  assert.deepEqual(
+    parseRateLimit({ "x-ratelimit-remaining": "soon", "x-ratelimit-limit": "many", "x-ratelimit-reset": "later" }),
+    { remaining: undefined, limit: undefined, reset: undefined, low: false },
+  );
+  assert.equal(parseRateLimit({ "x-ratelimit-remaining": ["4"] }).low, true);
+});
+
+test("fetchComments stops at a non-array comments page but keeps earlier pages", async () => {
+  await withMockGithub((req, res, _body, baseUrl) => {
+    if (parseNextLinkHeaderPage(req.url ?? "") === 0) {
+      jsonResponse(res, 200, [ghComment(1)], { Link: nextLinkHeader(baseUrl, "/repos/a/b/issues/1/comments?per_page=100&page=2") });
+    } else {
+      // A well-formed JSON object (not an array) must end the walk without
+      // throwing and without losing the already-collected page.
+      jsonResponse(res, 200, { message: "unexpected shape" });
+    }
+  }, async () => {
+    const issue: GhIssue = { ...ghIssue(1), comments: 2 };
+    const comments = await fetchComments(issue, "a/b", "t");
+    assert.deepEqual(comments.map((c) => c.id), [1]);
+  });
+});
+
+/** Page index encoded in a mock URL's query string (0 when absent). */
+function parseNextLinkHeaderPage(url: string): number {
+  const match = /[?&]page=(\d+)/.exec(url);
+  return match ? Number(match[1]) : 0;
+}

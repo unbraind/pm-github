@@ -11,7 +11,7 @@ import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { collectCoverageSources, type CoverageRunner } from "./coverage-gate.ts";
-import { isMainInvocation } from "./main-invocation.ts";
+import { isMainInvocation, nodeToolingExecutable } from "./main-invocation.ts";
 
 /** Engine counters validated independently of subprocess exit status. */
 interface DuplicationSummary {
@@ -35,7 +35,7 @@ export function runDuplicationGate(root: string, runner: CoverageRunner = spawnS
       const output = join(root, "coverage", `duplication-${minTokens}`);
       rmSync(output, { recursive: true, force: true });
       mkdirSync(output, { recursive: true });
-      const run = runner(process.versions.bun ? "node" : process.execPath, [engine, "--absolute", "--no-gitignore", "--silent", `--threshold=${minTokens === 1 ? 1000000 : 0}`,
+      const run = runner(nodeToolingExecutable(process.versions), [engine, "--absolute", "--no-gitignore", "--silent", `--threshold=${minTokens === 1 ? 1000000 : 0}`,
         `--min-tokens=${minTokens}`, "--min-lines=1", "--reporters=json", `--output=${output}`, ...sources.map(file => join(root, file))],
         { cwd: root, stdio: "inherit" });
       if (run.error || run.status !== 0) throw new Error("Detector failed.");
@@ -56,4 +56,15 @@ export function runDuplicationGate(root: string, runner: CoverageRunner = spawnS
   }
 }
 
-if (isMainInvocation(process.argv, import.meta.url)) process.exitCode = runDuplicationGate(resolve(import.meta.dirname, ".."));
+/**
+ * Run the duplication gate when this file is the process entry point.
+ *
+ * @param argv - Process argv to compare with the module URL.
+ * @param moduleUrl - `import.meta.url` of this module.
+ * @param root - Repository root whose authored sources are scanned.
+ */
+export function runDuplicationGateIfMain(argv: readonly string[], moduleUrl: string, root: string): void {
+  if (isMainInvocation(argv, moduleUrl)) process.exitCode = runDuplicationGate(root);
+}
+
+runDuplicationGateIfMain(process.argv, import.meta.url, resolve(import.meta.dirname, ".."));

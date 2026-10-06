@@ -1,21 +1,23 @@
 id: pm-github-9cjx
 title: Reach exact all-source coverage and include every operational script
-description: "The gate now discovers all 12 authored TypeScript and JavaScript modules, including operational scripts, with exact 100 percent thresholds and no source ignores. Projects planners reach exact 100 in all metrics and every authored function is covered. Aggregate line and branch gaps remain in index.ts, gate.ts, and operational failure boundaries; continue meaningful behavior tests without lowering the gate."
+description: "The unchanged all-source gate now measures exact 100 percent lines, statements, branches and functions across all 12 authored TypeScript/JavaScript modules, including operational scripts. The frozen full npm coverage run passes 487 tests with zero failures or skips. Real Git, PM SDK, filesystem and HTTP cases cover reachable paths; removed private-path arms have invariant proofs recorded in comments and docs/coverage-gap-inventory.md. No source ignores or lowered thresholds. Final npm/Bun release receipts and orchestrator review remain separate."
 type: Task
-status: blocked
+status: in_progress
 priority: 1
 tags[5]: all-source,coverage,quality-gate,scripts,tdd
 created_at: "2026-08-17T07:32:29.666Z"
-updated_at: "2026-10-05T09:57:29.647Z"
+updated_at: "2026-10-06T11:49:57.012Z"
+assignee: codex-sol
+claim_principal: codex-sol
 author: codex
 estimated_minutes: 960
 acceptance_criteria: "Automatically discover every executable TypeScript production and operational source; require exact 100% statements, branches, functions, and lines; prohibit ignore pragmas, source allowlist blind spots, threshold weakening, vacuous tests, and mocks of the unit under test; exercise GitHub behavior at the HTTP boundary, pm behavior through real SDK/installed-CLI boundaries, and operational scripts through real filesystem/process behavior; prove the gate fails when a new uncovered source or branch is introduced."
-blocked_reason: Exact 100 percent coverage is unfinished; continuation stopped at the owner resource limit.
+unblock_note: Full source coverage closure is being reverified at unchanged exact thresholds.
 expected_result: "Every executable TypeScript source and operational script is automatically included in measurement and exact statements, branches, functions, and lines all reach 100% through behavioral tests."
 actual_result: "Frozen source ae86e7d: all 420 npm tests pass; lines and statements 8099/8299 (97.59 percent), branches 1859/2083 (89.24 percent), functions 200/200 (100 percent). Exact 100 gate fails and invalidates LCOV. All 420 native Bun tests pass separately."
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-github-n3z3,related,"2026-08-17T07:32:29.666Z",codex,"cli:create:dep",detected
-comments[11]{created_at,author,text}:
+comments[17]{created_at,author,text}:
   "2026-10-05T07:52:16.974Z",codex-sol,"Replaced the narrowed coverage wrapper with an explicit authored-module inventory, exact 100 percent thresholds for all four dimensions, stale-LCOV invalidation, and missing-file rejection. Added checked operational-script tests, ESLint enforcement, erasable TypeScript syntax, and a jscpd wrapper that verifies its full source inventory. Typecheck, 122 documented declarations, ESLint, and zero duplication passed. Coverage remains a measured gate rather than an approval claim."
   "2026-10-05T08:09:10.457Z",codex-sol,"Strict all-authored-module run completed with 369 tests passing and no skipped tests. Coverage remained below the unchanged 100/100/100/100 requirement: lines/statements 93.25 percent, branches 84.41 percent, functions 94.92 percent over 11 authored TS/JS modules including operational scripts. LCOV was invalidated on failure. Most remaining uncovered branches and ten uncovered functions are in the pre-existing GitHub Projects sync handlers; this is a release blocker, not a passing gate. The shell release-date verifier remains outside the V8 denominator and is exercised separately."
   "2026-10-05T08:58:34.554Z",codex-sol,"Final frozen-source verification at 0b7c4ab: the linked npm coverage command ran all 375 tests with 375 passing, zero failures and zero skips, then correctly exited nonzero at the unchanged 100 percent gate. Complete inventory: 12 authored TS/JS modules including operational scripts. Lines/statements 7739 of 8285 = 93.40 percent; branches 1548 of 1826 = 84.77 percent; functions 188 of 198 = 94.94 percent. Failed LCOV was removed. No source ignores or lowered thresholds were introduced; release remains blocked."
@@ -27,18 +29,28 @@ comments[11]{created_at,author,text}:
   "2026-10-05T09:34:52.514Z",codex-sol,"Stopped the Codex CLI coverage sub-agent immediately after a fresh quota check reported OVER_FORECAST while the other providers remained exhausted, honoring the owner weekly forecast limit. Preserved its focused commits and remaining test files for orchestrator verification. Projects planners reached exact 100 in targeted c8; 12 Projects harness cases, 8 operational boundary cases, and 9 import error cases passed Node and native Bun. Package-wide coverage still requires a fresh frozen-source run and must not be presented as 100. No thresholds, source inventory, or ignores were weakened."
   "2026-10-05T09:41:56.169Z",codex-sol,"Orchestrator verification preserved the interrupted new coverage tests and corrected their fixture setup: explicit repo-local tracker initialization, filename-derived item id expectations, and removal of the linked host package-root environment for the missing-metadata Windows case. The preserved Projects and planner cases pass Node; all 74 preserved cases pass native Bun. The newly linked boundary/import/diff command is being reverified through the PM runner before final broad checks. These are test-fixture corrections; production rejection behavior and the exact gate remain unchanged."
   "2026-10-05T09:45:17.622Z",codex-sol,The corrected linked boundary/import/diff command passes all 23 Node cases through pm test with progress and exit zero. The preserved Projects/planner suites also passed their native behavior checks; the complete 74-case preserved set passed Bun before the environment-isolation correction. Final frozen-source full npm coverage and native Bun checks follow. All useful interrupted files are retained and linked to this item.
-files[15]{path,scope}:
+  "2026-10-06T11:13:02.345Z",codex-sol,"Continuing the interrupted work on the same branch. Reviewing every preserved production change against its invariants, measuring all-source coverage, and adding real Git, filesystem, HTTP, and SDK behavior tests. Exact thresholds stay at 100 in all four dimensions; no ignore pragmas or inventory exclusions. PR 108 already exists and will receive the final measured receipts."
+  "2026-10-06T11:17:43.296Z",codex-sol,"Reviewed the preserved simplifications. Proofs for removed impossible arms: phone regexes guarantee digits; a context-line branch guarantees its leading space; successful encoded spawnSync gives string stdout/stderr while startup failures populate error; fixed valid spawn arguments report missing tools via error/status rather than throwing; nullish SDK fallbacks execute only for a missing injection; fetchJSON resolves only for 2xx; split on a string always returns at least one element; SDK command/import/preflight/search contexts require their arguments and options. Scanner operations on decoded plain strings and arrays have only the explicit malformed-history GateInputError. Restored the formatGateReport empty-field fallback because its exported typed input can contain an empty string. Fixing fixture setup and replacing an always-true assertion; no thresholds or ignores changed."
+  "2026-10-06T11:33:54.300Z",codex-sol,"The second complete npm run passes all 471 tests with zero skips. Coverage is 99.80 percent lines/statements, 97.74 percent branches, and 100 percent functions. Every operational script and gate.ts now measure exact 100 in all dimensions. Remaining index.ts gaps are enumerated from the JSON receipt. Centralizing thrown-value formatting and the identical command gate error boundary preserves behavior while removing duplicated decisions; real collaborator errors are still redacted and fail closed. Additional proven unreachable arms: a search loop cannot execute with an empty match array; fixed gh version spawn reports failures in its result; an atomic dry-run returns before the non-atomic preview; the private Projects add-issue executor receives coordinates populated by its sole planner. Tests retain defaults exposed by public planners."
+  "2026-10-06T11:40:59.548Z",codex-sol,"Third full coverage run: all 484 tests pass; statements, lines and functions are 100%, branches 99.59%. Nine remaining branch locations enumerated from coverage-final.json. Proof for deleting two private-path fallbacks: applyPushEntry receives only planner entries; existing project item indices reject empty ids, and both gqlAddDraft and gqlAddIssue throw before returning an empty id (real GraphQL missing-id tests verify this). The redundant no-item-id guard cannot execute. Pull statusSkipped is appended only inside if(pi.statusName), assigning optionName that same truthy string, so its missing-name fallback cannot execute. Complete PM reads validate tags and body/description strings; the private executor only looks up ids from that complete selected corpus. No coverage exclusions or threshold changes."
+  "2026-10-06T11:43:22.121Z",codex-sol,"The targeted real-command c8 check passes four tests: low unauthenticated quota, human Projects listings, after-command subprocess boundaries, and all four Projects mutation failure boundaries. It covers the remaining reachable branches, including open-board formatting and missing tags. The complete npm release check and all native Bun test files are now running on frozen source. docs/coverage-gap-inventory.md retains every initial uncovered statement and branch plus the final nine-branch inventory and closure proofs."
+  "2026-10-06T11:49:57.012Z",codex-sol,"Frozen full npm coverage PASS: 487 tests, zero failures/skips; all 12 authored modules measure exact 100/100/100/100. JSON receipt has zero uncovered statements or branches. Production dependency audit passes with zero vulnerabilities. The linked PM planner command passes all 39 tests through pm test --run --progress; the linked watchdog command previously passed through the PM runner. Full release completion and native Bun verification follow."
+files[19]{path,scope}:
   eslint.config.js,project
   package.json,project
   projects.ts,project
   scripts/coverage-gate.ts,project
   scripts/duplication-gate.ts,project
+  scripts/main-invocation.ts,project
   test,project
   test/coverage-boundaries.test.ts,project
+  test/coverage-edges.test.ts,project
   test/coverage-gate.test.ts,project
+  test/coverage-remainder.test.ts,project
   test/duplication-gate.test.ts,project
   test/gate-inputs.test.ts,project
   test/helpers/node-scenario.ts,project
+  test/helpers/public-acceptance.ts,project
   test/import-errors.test.ts,project
   test/lint-policy.test.ts,project
   test/project-sync.test.ts,project
@@ -73,7 +85,13 @@ tests[4]:
       created_at: "2026-10-05T09:38:01.943Z"
       source_kind: local_mutation
       source_ref: feat/import-privacy-gate
-docs[2]{path,scope,note}:
-  "https://github.com/unbraind/pm-cli-companion/blob/main/.agents/pm/epics/pm-cli-website-ktip.toon",global,Fleet exact coverage mandate
-  "https://github.com/unbraind/pm-cli-companion/blob/main/.agents/pm/issues/pm-cli-website-odki.toon",global,Fleet operational script coverage gap
+docs[3]:
+  - path: "https://github.com/unbraind/pm-cli-companion/blob/main/.agents/pm/epics/pm-cli-website-ktip.toon"
+    scope: global
+    note: Fleet exact coverage mandate
+  - path: "https://github.com/unbraind/pm-cli-companion/blob/main/.agents/pm/issues/pm-cli-website-odki.toon"
+    scope: global
+    note: Fleet operational script coverage gap
+  - path: docs/coverage-gap-inventory.md
+    scope: project
 body: ""

@@ -36,4 +36,16 @@ export async function generateChangelog(root: string, args: readonly string[]): 
   }
 }
 
-if (isMainInvocation(process.argv, import.meta.url)) process.exitCode = await generateChangelog(resolve(import.meta.dirname, ".."), process.argv.slice(2));
+/**
+ * Generate the changelog when this file is the process entry point.
+ *
+ * @param argv - Process argv to compare with the module URL.
+ * @param moduleUrl - `import.meta.url` of this module.
+ * @param root - Repository containing the tracker and release tags.
+ * @param args - Arguments forwarded to the changelog generator.
+ */
+export async function generateChangelogIfMain(argv: readonly string[], moduleUrl: string, root: string, args: readonly string[]): Promise<void> {
+  if (isMainInvocation(argv, moduleUrl)) process.exitCode = await generateChangelog(root, args);
+}
+
+await generateChangelogIfMain(process.argv, import.meta.url, resolve(import.meta.dirname, ".."), process.argv.slice(2));

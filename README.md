@@ -324,6 +324,23 @@ jobs:
 
 Replace the two release placeholders after the gated extension is published; the current published version does not contain this feature. The calling repo needs `@unbrained/pm-cli` as a devDependency (the workflow's `npm ci` provides the CLI) and its pm tracker at `.agents/pm` committed on `main`.
 
+### Installed CLI timeout acceptance
+
+`node test/helpers/public-acceptance.ts` packs the candidate, installs it beside
+its pinned host CLI in a disposable Git project, retrieves a paginated public
+issue/comment snapshot, and replays the unchanged responses through the installed
+HTTP client. It verifies a nonempty gated Node import, byte-identical Node and
+three native Bun repeats, and strict health. No remote is configured.
+
+Each import retains the original 45-second execution deadline. The acceptance
+watchdog sends SIGTERM to the process group, then SIGKILL after a five-second
+cleanup window; any timeout fails acceptance even if the child later exits zero.
+A real spinning-child negative control verifies forced cleanup and unchanged
+fixture bytes. The comment-lock retry also honors its existing wait budget when
+an exclusive-create collision cannot be statted, including a dangling symlink.
+This reproduced lock defect is separate from the intermittent historical Bun
+repeat: recent packed repeats pass, but its original cause is not established.
+
 ## Validate / diagnostics
 
 ### `pm github validate`

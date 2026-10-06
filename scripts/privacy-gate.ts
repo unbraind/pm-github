@@ -155,17 +155,9 @@ function loadFixtureManifest(root: string): Map<string, FixtureEntry> {
  */
 function listFixtureTreeBlobs(root: string): Set<string> {
   const dir = dirname(FIXTURE_MANIFEST_PATH);
-  const result = spawnSync("git", ["ls-tree", "-r", "HEAD", "--", dir], {
-    cwd: root,
-    encoding: "utf8",
-    maxBuffer: 16 * 1024 * 1024,
-  });
-  if (result.error !== undefined) throw result.error;
-  if (result.status !== 0) {
-    throw new Error(`git ls-tree HEAD -- ${dir} failed: ${result.stderr.trim()}`);
-  }
+  const stdout = runGitQuery(root, `ls-tree HEAD -- ${dir}`, ["ls-tree", "-r", "HEAD", "--", dir], 16 * 1024 * 1024);
   const oids = new Set<string>();
-  for (const line of (result.stdout ?? "").split("\n")) {
+  for (const line of stdout.split("\n")) {
     const match = /^\d+ blob ([0-9a-f]{40})\t/.exec(line);
     if (match?.[1] !== undefined) oids.add(match[1]);
   }
@@ -231,6 +223,34 @@ export function extractEmail(line: string): string | undefined {
 }
 
 /**
+ * Run one read-only git query and return its stdout, with one shared
+ * fail-closed subprocess boundary.
+ *
+ * Every caller needs the same guarantees: a spawn failure (missing git, broken
+ * PATH) propagates as the subprocess error, a non-zero exit propagates as a
+ * labeled diagnostic, and a successful run returns decoded stdout (a string —
+ * spawnSync with an encoding always returns a string for a child that ran).
+ * Centralizing the checks means the spawn-error and status arms are each
+ * verified by one audited implementation instead of per-site copies.
+ *
+ * @param root - Absolute repository root used as the git working directory.
+ * @param label - Diagnostic label naming the git query for non-zero exits.
+ * @param args - Git argument vector.
+ * @param maxBuffer - Largest expected stdout, in bytes.
+ * @returns Decoded stdout of the successful git query.
+ * @throws The spawn error when git cannot be started, or an Error naming the
+ *         query when git exits non-zero.
+ */
+function runGitQuery(root: string, label: string, args: readonly string[], maxBuffer: number): string {
+  const result = spawnSync("git", args, { cwd: root, encoding: "utf8", maxBuffer });
+  if (result.error !== undefined) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`git ${label} failed: ${result.stderr.trim()}`);
+  }
+  return result.stdout;
+}
+
+/**
  * Reads every object in the repository's local store via
  * `git cat-file --batch-all-objects --batch-check`.
  *
@@ -244,21 +264,18 @@ export function extractEmail(line: string): string | undefined {
  *         exits non-zero.
  */
 export function listAllObjects(root: string): [oid: string, type: string][] {
-  const result = spawnSync("git", ["cat-file", "--batch-all-objects", "--batch-check"], {
-    cwd: root,
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-  });
-  if (result.error !== undefined) throw result.error;
-  if (result.status !== 0) {
-    throw new Error(`git cat-file --batch-all-objects failed: ${result.stderr.trim()}`);
-  }
-  return (result.stdout ?? "")
+  return runGitQuery(root, "cat-file --batch-all-objects", ["cat-file", "--batch-all-objects", "--batch-check"], 64 * 1024 * 1024)
     .split("\n")
     .filter((line) => line.trim().length > 0)
-    .map((line) => {
+    .map((line): [string, string] => {
       const parts = line.split(" ");
-      return [parts[0] ?? "", parts[1] ?? ""] as [string, string];
+      // A successful cat-file record is "<oid> <type> <size>". Anything else is
+      // not a readable object inventory, so the gate fails closed instead of
+      // skipping the record and auditing a partial store.
+      if (parts.length < 2 || parts[0] === "" || parts[1] === "") {
+        throw new Error("git cat-file --batch-all-objects returned an unreadable record");
+      }
+      return [parts[0], parts[1]];
     });
 }
 
@@ -272,16 +289,7 @@ export function listAllObjects(root: string): [oid: string, type: string][] {
  * @throws Error when git exits non-zero or cannot be spawned.
  */
 export function readObject(root: string, type: string, oid: string): string {
-  const result = spawnSync("git", ["cat-file", type, oid], {
-    cwd: root,
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-  });
-  if (result.error !== undefined) throw result.error;
-  if (result.status !== 0) {
-    throw new Error(`git cat-file ${type} ${oid} failed: ${result.stderr.trim()}`);
-  }
-  return result.stdout ?? "";
+  return runGitQuery(root, `cat-file ${type} ${oid}`, ["cat-file", type, oid], 64 * 1024 * 1024);
 }
 
 /**
@@ -361,7 +369,7 @@ export function runGate(root: string): PrivacyGateResult {
         // Only the header section (everything before the first blank line) can
         // carry identity headers; message or tag-message lines that merely
         // begin with an identity keyword must not enter this check.
-        const headerSection = content.split("\n\n")[0] ?? "";
+        const headerSection = content.split("\n\n")[0]!; // split() always yields at least one part.
         for (const line of headerSection.split("\n")) {
           // Match the role keyword without requiring a following space: a
           // crafted object with `author<email>` or a tab separator must still
@@ -417,6 +425,15 @@ export function main(root: string): void {
 
 const repoRoot = join(import.meta.dirname, "..");
 
-if (isMainInvocation(process.argv, import.meta.url)) {
-  main(repoRoot);
+/**
+ * Run the privacy gate when this file is the process entry point.
+ *
+ * @param argv - Process argv to compare with the module URL.
+ * @param moduleUrl - `import.meta.url` of this module.
+ * @param root - Repository root to audit.
+ */
+export function runPrivacyGateIfMain(argv: readonly string[], moduleUrl: string, root: string): void {
+  if (isMainInvocation(argv, moduleUrl)) main(root);
 }
+
+runPrivacyGateIfMain(process.argv, import.meta.url, repoRoot);

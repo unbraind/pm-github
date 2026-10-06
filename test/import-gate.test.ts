@@ -33,6 +33,7 @@ import extension, {
   type PmItem,
   type PreparedGithubImport,
 } from "../index.ts";
+import { boundedCli } from "./helpers/bounded-cli.ts";
 import { jsonResponse, withMockGithub, type MockGithubHandler } from "./helpers/mock-github-server.ts";
 
 const MANIFEST_CAPABILITIES = ["commands", "importers", "schema", "hooks", "preflight", "search"] as const;
@@ -787,6 +788,35 @@ test("the executable reusable workflow pushes only a clean import and creates or
         PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE, SYNC_LEASE: lease, EXISTING_PR: "1" });
       assert.equal(update.code, 0, update.stderr + "\n" + update.stdout);
       assert.deepEqual(fs.readFileSync(env.REVIEW_ACTIONS!, "utf8").trim().split("\n"), ["create", "edit"]);
+    });
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
+
+test("packed installed CLI repeats a completed gated import under native Bun within 45 seconds", { timeout: 180_000 }, async () => {
+  const { root, base, bare } = initSyncRepo();
+  try {
+    const env = await prepareWorkflowFixture(root, base);
+    const handle = githubHandler([issue(1, "Synthetic issue", "Reviewed public body.")]);
+    await withMockGithub(handle, async () => {
+      const runEnv = { ...env, PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE };
+      const first = await executeWorkflow(workflowShell(["Gated GitHub to pm import"]), root, runEnv);
+      assert.equal(first.code, 0, first.stderr);
+      const snapshot = () => fs.readdirSync(path.join(root, ".agents/pm/issues")).filter(file => file.endsWith(".toon"))
+        .map(file => fs.readFileSync(path.join(root, ".agents/pm/issues", file), "utf8"));
+      const before = snapshot();
+      assert.equal(before.length, 1);
+      const cli = fs.realpathSync(path.join(root, "node_modules/.bin/pm"));
+      for (let repeat = 0; repeat < 3; repeat++) {
+        const started = Date.now();
+        const result = await boundedCli("bun", ["--bun", cli, "github", "import", "acme/widgets", "--state", "all", "--atomic", "--gate", "--with-comments", "--json"], root, runEnv);
+        assert.equal(result.timedOut, false);
+        assert.equal(result.signal, null, `native Bun repeat ${repeat + 1} exceeded its unchanged 45s budget: ${result.stderr}`);
+        assert.equal(result.code, 0, result.stderr);
+        assert.ok(Date.now() - started < 45_000);
+        assert.deepEqual(snapshot(), before);
+        assert.deepEqual(remoteRefs(bare), ["refs/heads/main"]);
+      }
     });
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });

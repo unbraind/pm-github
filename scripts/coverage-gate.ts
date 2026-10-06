@@ -10,7 +10,7 @@ import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { isMainInvocation } from "./main-invocation.ts";
+import { isMainInvocation, nodeToolingExecutable } from "./main-invocation.ts";
 
 /** Configuration cannot exempt sources or lower the required complete gate. */
 interface CoverageConfig {
@@ -85,7 +85,7 @@ export function runCoverageGate(root: string, runner: CoverageRunner = spawnSync
     const c8 = join(dirname(createRequire(import.meta.url).resolve("c8/package.json")), "bin", "c8.js");
     const coverageEnv: NodeJS.ProcessEnv = { ...process.env, TZ: "UTC" };
     delete coverageEnv.NODE_TEST_CONTEXT;
-    const node = process.versions.bun ? "node" : process.execPath;
+    const node = nodeToolingExecutable(process.versions);
     const result = runner(node, [c8, "--100", "--all", "--exclude-after-remap", "--extension=.ts", "--extension=.js",
       `--reports-dir=${reports}`, `--temp-directory=${join(reports, "v8")}`,
       "--reporter=text", "--reporter=lcov", "--reporter=json-summary", "--reporter=json",
@@ -116,4 +116,18 @@ export function runCoverageGate(root: string, runner: CoverageRunner = spawnSync
   }
 }
 
-if (isMainInvocation(process.argv, import.meta.url)) process.exitCode = runCoverageGate(resolve(import.meta.dirname, ".."));
+/**
+ * Run the coverage gate when this file is the process entry point.
+ *
+ * The check lives in a function so a test can execute the true branch against a
+ * fixture root. The CLI bottom call uses the real argv and this package root.
+ *
+ * @param argv - Process argv to compare with the module URL.
+ * @param moduleUrl - `import.meta.url` of this module.
+ * @param root - Repository root to inventory and test.
+ */
+export function runCoverageGateIfMain(argv: readonly string[], moduleUrl: string, root: string): void {
+  if (isMainInvocation(argv, moduleUrl)) process.exitCode = runCoverageGate(root);
+}
+
+runCoverageGateIfMain(process.argv, import.meta.url, resolve(import.meta.dirname, ".."));

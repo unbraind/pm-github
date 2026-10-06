@@ -11,14 +11,16 @@ import { comments as readComments } from "@unbrained/pm-cli/sdk";
 // asserts no duplicate comment markers result.
 
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { mock } from "node:test";
 import { execFile, execFileSync, spawn, spawnSync } from "node:child_process";
-import {
+import fs, {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -30,6 +32,7 @@ import {
   IMPORT_LOCK_TTL_MS_DEFAULT,
   acquireImportLock,
   importCommentSyncLockPath,
+  isLockOwnerAlive,
   resolvePmDataDir,
   syncGithubCommentsToAnnotations,
 } from "../index.ts";
@@ -528,3 +531,193 @@ test(
     }
   },
 );
+
+test("isLockOwnerAlive rejects non-positive pids and treats EPERM as alive", () => {
+  assert.equal(isLockOwnerAlive(0), false);
+  assert.equal(isLockOwnerAlive(-3), false);
+  assert.equal(isLockOwnerAlive(process.pid), true);
+  const dead = spawnSync(process.execPath, ["-e", ""]);
+  assert.ok(dead.pid && dead.pid > 0);
+  assert.equal(isLockOwnerAlive(dead.pid), false);
+  // Signal 0 against pid 1 as an unprivileged user is EPERM: the process exists.
+  if (typeof process.getuid === "function" && process.getuid() !== 0) {
+    assert.equal(isLockOwnerAlive(1), true);
+  }
+});
+
+test("a lock that cannot be stat'd contends within the wait budget instead of spinning", { timeout: 5_000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), "pm-github-lock-spin-"));
+  try {
+    const lockPath = importCommentSyncLockPath(root, "pm-spin");
+    mkdirSync(dirname(lockPath), { recursive: true });
+    symlinkSync(join(root, "missing-lock-target"), lockPath);
+    const started = Date.now();
+    const acq = await acquireImportLock(root, "pm-spin", { waitMs: 80 });
+    assert.equal(acq.status, "contended");
+    assert.ok(Date.now() - started < 2000, "stat failure must not busy-spin past the wait budget");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("comment-sync lock degrades when the lock directory cannot be created or written", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pm-github-lock-degraded-"));
+  try {
+    const blocked = importCommentSyncLockPath(root, "pm-file-parent");
+    writeFileSync(dirname(blocked), "not a directory\n");
+    const messages = await captureStderr(async () => {
+      const acq = await acquireImportLock(root, "pm-file-parent", { waitMs: 50 });
+      assert.equal(acq.status, "degraded");
+    });
+    assert.ok(messages.some((line) => line.includes("lock unavailable")), messages.join(" | "));
+
+    const writable = mkdtempSync(join(tmpdir(), "pm-github-lock-unwritable-"));
+    try {
+      const lockPath = importCommentSyncLockPath(writable, "pm-mode");
+      mkdirSync(dirname(lockPath), { recursive: true });
+      chmodSync(dirname(lockPath), 0o555);
+      const acq = await acquireImportLock(writable, "pm-mode", { waitMs: 50 });
+      assert.equal(acq.status, "degraded");
+    } finally {
+      chmodSync(dirname(importCommentSyncLockPath(writable, "pm-mode")), 0o755);
+      rmSync(writable, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a failed lock write still releases the partial file when close and unlink fail", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pm-github-lock-write-"));
+  const originalWrite = fs.writeFileSync;
+  const closeMock = mock.method(fs, "closeSync", () => {
+    throw Object.assign(new Error("close failed"), { code: "EIO" });
+  });
+  const unlinkMock = mock.method(fs, "unlinkSync", () => {
+    throw Object.assign(new Error("unlink failed"), { code: "EIO" });
+  });
+  const writeMock = mock.method(fs, "writeFileSync", ((target: fs.PathOrFileDescriptor, data: string) => {
+    if (typeof target === "number") throw Object.assign(new Error("write failed"), { code: "EIO" });
+    return originalWrite(target, data);
+  }) as typeof fs.writeFileSync);
+  try {
+    const acq = await acquireImportLock(root, "pm-write", { waitMs: 50 });
+    assert.equal(acq.status, "degraded");
+    assert.ok(closeMock.mock.calls.length > 0);
+    assert.ok(unlinkMock.mock.calls.length > 0);
+  } finally {
+    writeMock.mock.restore();
+    closeMock.mock.restore();
+    unlinkMock.mock.restore();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a vanished breaker sidecar is ignored and a vanished lock is treated as already gone", async () => {
+  const root = makeWorkspace();
+  try {
+    const dead = spawnSync(process.execPath, ["-e", ""]);
+    assert.ok(dead.pid && dead.pid > 0);
+    const lockPath = plantLock(root, "pm-vanish", {
+      id: "pm-github.comment-sync.pm-vanish",
+      pid: dead.pid,
+      owner: "pm-github",
+      token: "stale",
+      created_at: new Date().toISOString(),
+      ttl_seconds: 300,
+    });
+    symlinkSync(join(root, "missing-sidecar"), `${lockPath}.break`);
+    const blocked = await acquireImportLock(root, "pm-vanish", { waitMs: 80 });
+    assert.equal(blocked.status, "contended");
+    rmSync(`${lockPath}.break`);
+
+    let stats = 0;
+    const original = fs.statSync;
+    const statMock = mock.method(fs, "statSync", ((target: fs.PathLike, options?: fs.StatSyncOptions) => {
+      stats++;
+      if (stats >= 2 && String(target) === lockPath) {
+        rmSync(lockPath, { force: true });
+        throw Object.assign(new Error("gone"), { code: "ENOENT" });
+      }
+      return original(target, options);
+    }) as typeof fs.statSync);
+    try {
+      const acq = await acquireImportLock(root, "pm-vanish", { waitMs: 500 });
+      assert.equal(acq.status, "acquired");
+      if (acq.status === "acquired") acq.lock.release();
+    } finally {
+      statMock.mock.restore();
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("malformed lock payloads use creation time or mtime and release tolerates disappearance", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pm-lock-payload-"));
+  try {
+    const lockPath = importCommentSyncLockPath(root, "pm-payload");
+    mkdirSync(dirname(lockPath), { recursive: true });
+    writeFileSync(lockPath, JSON.stringify({ created_at: new Date().toISOString(), pid: "missing" }));
+    assert.equal((await acquireImportLock(root, "pm-payload", { waitMs: 0 })).status, "contended");
+    writeFileSync(lockPath, "invalid-json");
+    utimesSync(lockPath, new Date(0), new Date(0));
+    const acq = await acquireImportLock(root, "pm-payload", { waitMs: 100 });
+    assert.equal(acq.status, "acquired");
+    if (acq.status === "acquired") {
+      rmSync(lockPath);
+      acq.lock.release();
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("a peer replacing a stale lock before the breaker recheck remains protected", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pm-lock-peer-"));
+  const lockPath = importCommentSyncLockPath(root, "pm-peer");
+  mkdirSync(dirname(lockPath), { recursive: true });
+  writeFileSync(lockPath, "abandoned");
+  utimesSync(lockPath, new Date(0), new Date(0));
+  let checked = 0;
+  const original = fs.statSync;
+  const boundary = mock.method(fs, "statSync", ((target: fs.PathLike, options?: fs.StatSyncOptions) => {
+    if (String(target) === lockPath && ++checked === 2) {
+      writeFileSync(lockPath, JSON.stringify({ pid: 1, token: "live-peer", created_at: new Date().toISOString() }));
+    }
+    return original(target, options);
+  }) as typeof fs.statSync);
+  try {
+    assert.equal((await acquireImportLock(root, "pm-peer", { waitMs: 80 })).status, "contended");
+    assert.match(readFileSync(lockPath, "utf8"), /live-peer/);
+  } finally { boundary.mock.restore(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("real permission failures during stale unlink and token release retain the lock", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pm-lock-permissions-"));
+  const lockPath = importCommentSyncLockPath(root, "pm-permission");
+  mkdirSync(dirname(lockPath), { recursive: true });
+  writeFileSync(lockPath, "abandoned");
+  utimesSync(lockPath, new Date(0), new Date(0));
+  let checked = 0;
+  const original = fs.statSync;
+  const boundary = mock.method(fs, "statSync", ((target: fs.PathLike, options?: fs.StatSyncOptions) => {
+    if (String(target) === lockPath && ++checked === 2) chmodSync(dirname(lockPath), 0o555);
+    return original(target, options);
+  }) as typeof fs.statSync);
+  try {
+    assert.equal((await acquireImportLock(root, "pm-permission", { waitMs: 80 })).status, "contended");
+    assert.equal(existsSync(lockPath), true);
+    chmodSync(dirname(lockPath), 0o755);
+    boundary.mock.restore();
+    rmSync(lockPath);
+    rmSync(`${lockPath}.break`, { force: true });
+    const acq = await acquireImportLock(root, "pm-permission", { waitMs: 80 });
+    assert.equal(acq.status, "acquired");
+    if (acq.status === "acquired") {
+      chmodSync(dirname(lockPath), 0o555);
+      acq.lock.release();
+      assert.equal(existsSync(lockPath), true);
+    }
+  } finally {
+    boundary.mock.restore(); chmodSync(dirname(lockPath), 0o755); rmSync(root, { recursive: true, force: true });
+  }
+});

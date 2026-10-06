@@ -5,7 +5,21 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { create, close } from "@unbrained/pm-cli/sdk";
-import { generateChangelog } from "../scripts/generate-changelog.ts";
+import { fileURLToPath } from "node:url";
+import { generateChangelog, generateChangelogIfMain } from "../scripts/generate-changelog.ts";
+
+test("changelog main entry fails closed when the tracker cannot be read", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-changelog-main-"));
+  const previous = process.exitCode;
+  try {
+    const moduleUrl = new URL("../scripts/generate-changelog.ts", import.meta.url).href;
+    await generateChangelogIfMain(["node", fileURLToPath(moduleUrl)], moduleUrl, root, []);
+    assert.equal(process.exitCode, 1);
+  } finally {
+    process.exitCode = previous;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("canonical changelog includes tagged pending work without closing it or admitting other claims", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-changelog-"));

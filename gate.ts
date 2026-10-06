@@ -227,8 +227,9 @@ const PERSONAL_DATA_RULES: readonly ContentRule[] = [
     rule: "phone-number",
     pattern: /\+\d{1,3}[\s.-]?(?:\d{2,4}[\s.-]?){2,4}\d{2,4}/g,
     // International notation needs a real phone digit count; short sequences
-    // like "+1 2 3" are not phone numbers.
-    confirm: (matched) => (matched.match(/\d/g) ?? []).length >= 8,
+    // like "+1 2 3" are not phone numbers. The pattern guarantees at least one
+    // digit, so the match can never be null here.
+    confirm: (matched) => matched.match(/\d/g)!.length >= 8,
   },
   {
     rule: "phone-number",
@@ -236,7 +237,7 @@ const PERSONAL_DATA_RULES: readonly ContentRule[] = [
     // The North-American grouping is 10 digits by construction; the digit check
     // only guards the parenthesized variant against truncation by surrounding
     // punctuation.
-    confirm: (matched) => (matched.match(/\d/g) ?? []).length === 10,
+    confirm: (matched) => matched.match(/\d/g)!.length === 10,
   },
   {
     rule: "phone-number",
@@ -559,7 +560,8 @@ export function parseUnifiedDiff(diffText: string): ChangeFile[] {
     if (raw.startsWith(" ")) {
       oldRemaining--;
       newRemaining--;
-      walk.push({ text: raw.startsWith(" ") ? raw.slice(1) : raw, added: false });
+      // The enclosing branch guarantees the leading space.
+      walk.push({ text: raw.slice(1), added: false });
       continue;
     }
     if (raw === "" && oldRemaining === 0 && newRemaining === 0) { completeHunk(); continue; }
@@ -635,8 +637,11 @@ export function runGitDefault(cwd: string, args: readonly string[]): { ok: boole
   const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 });
   return {
     ok: result.status === 0,
+    // stdout/stderr are nullish only when the child never spawned, and spawnSync
+    // then always reports the failure through `result.error`, so no second
+    // "git failed" fallback can ever be needed beyond String(result.error).
     stdout: result.stdout ?? "",
-    stderr: result.stderr ?? String(result.error ?? "git failed"),
+    stderr: result.stderr ?? String(result.error),
   };
 }
 
@@ -914,6 +919,9 @@ export function runTrackerGate(input: TrackerGateInput): GateReport {
     }
   } catch (err: unknown) {
     if (err instanceof GateInputError) throw err;
+    // A collaborator error that already carries the gate's own message prefix
+    // (an injected runner raising a gate-scoped diagnostic) must pass through
+    // unwrapped instead of being re-labelled as an unreadable input.
     if (err instanceof Error && err.message.startsWith("pm github gate:")) throw err;
     throw new GateInputError(
       `pm github gate: could not read the proposed tracker change; input is unavailable.`,
@@ -933,35 +941,32 @@ export function runTrackerGate(input: TrackerGateInput): GateReport {
     }
   }
 
-  try {
-    const findings: GateFinding[] = [];
-    let allowlisted = 0;
-    let addedLines = 0;
-    for (const change of files) {
-      addedLines += change.addedLines.length;
-      for (const raw of scanChangeFile(change)) {
-        if (allowlist.has(raw.hash)) {
-          allowlisted++;
-          continue;
-        }
-        findings.push({ rule: raw.rule, item_id: raw.item_id, field: raw.field, hash: raw.hash });
+  // The scan phase below only ever throws GateInputError (malformed history
+  // events); every other operation is pure regex/Map/array work that cannot
+  // throw, so no defensive wrap is needed and a thrown GateInputError already
+  // carries the user-facing message.
+  const findings: GateFinding[] = [];
+  let allowlisted = 0;
+  let addedLines = 0;
+  for (const change of files) {
+    addedLines += change.addedLines.length;
+    for (const raw of scanChangeFile(change)) {
+      if (allowlist.has(raw.hash)) {
+        allowlisted++;
+        continue;
       }
+      findings.push({ rule: raw.rule, item_id: raw.item_id, field: raw.field, hash: raw.hash });
     }
-    return {
-      verdict: findings.length > 0 ? "fail" : "pass",
-      source,
-      scanned_files: files.length,
-      added_lines: addedLines,
-      findings,
-      allowlisted,
-      allowlist_path: allowlistPath ? (input.allowlistFile ? "(explicit allowlist)" : GATE_ALLOWLIST_FILENAME) : "",
-    };
-  } catch (err: unknown) {
-    if (err instanceof GateInputError) throw err;
-    throw new GateInputError(
-      `pm github gate: scanner error; scan did not complete.`,
-    );
   }
+  return {
+    verdict: findings.length > 0 ? "fail" : "pass",
+    source,
+    scanned_files: files.length,
+    added_lines: addedLines,
+    findings,
+    allowlisted,
+    allowlist_path: allowlistPath ? (input.allowlistFile ? "(explicit allowlist)" : GATE_ALLOWLIST_FILENAME) : "",
+  };
 }
 
 /**

@@ -17,12 +17,14 @@ import os from "node:os";
 import path from "node:path";
 
 import { createExtensionTestHarness, type ExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { captureStderr } from "./helpers/mock-github-server.ts";
 
 import { createHash } from "node:crypto";
 import {
   GATE_ALLOWLIST_FILENAME,
   GateInputError,
   attributeToonFields,
+  collectTrackerChange,
   formatGateReport,
   isHighEntropySecretAssignment,
   parseUnifiedDiff,
@@ -33,7 +35,8 @@ import {
   shannonEntropyPerChar,
   type GateReport,
 } from "../gate.ts";
-import extension from "../index.ts";
+import { nodeScenario } from "./helpers/node-scenario.ts";
+import extension, { runCommandTrackerGate } from "../index.ts";
 
 const MANIFEST_CAPABILITIES = ["commands", "importers", "schema", "hooks", "preflight", "search"] as const;
 const harnessPromise: Promise<ExtensionTestHarness> =
@@ -842,4 +845,159 @@ test("pm github gate scans an explicit --diff file and honors --allowlist", asyn
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Coverage additions: default-dependency collection, rename provenance tokens,
+// within-file dedupe, context-only hunks, raw git failure surfaces, and the
+// command's non-JSON report surface.
+// ---------------------------------------------------------------------------
+
+test("collectTrackerChange runs against a real work tree with the default dependencies", () => {
+  const { root } = initGateRepo();
+  try {
+    fs.writeFileSync(path.join(root, ".agents", "pm", "issues", "pm-test-ccdd.toon"),
+      `id: pm-test-ccdd\ntitle: "Fresh item"\nbody: "clean body"\n`);
+    const files = collectTrackerChange(path.join(root, ".agents", "pm"));
+    assert.equal(files.length, 1);
+    assert.equal(files[0]!.filePath, path.join(".agents", "pm", "issues", "pm-test-ccdd.toon"));
+    assert.equal(files[0]!.itemId, "pm-test-ccdd");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a rename entry's original path is skipped and the new path is scanned", () => {
+  const { root, git } = initGateRepo();
+  try {
+    const renamed = path.join(root, ".agents", "pm", "issues", "pm-test-ccdd.toon");
+    assert.equal(git(["mv", ".agents/pm/issues/pm-test-aabb.toon", ".agents/pm/issues/pm-test-ccdd.toon"]).status, 0);
+    fs.writeFileSync(renamed, `id: pm-test-ccdd\ntitle: "Renamed item"\nbody: "token ${GH_TOKEN}"\n`);
+    const report = runTrackerGate({ pmRoot: root });
+    assert.equal(report.verdict, "fail");
+    assert.equal(report.findings.length, 1);
+    assert.equal(report.findings[0]!.item_id, "pm-test-ccdd");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("identical repeated findings inside one file are reported once", () => {
+  const diff = [
+    "--- a/.agents/pm/issues/pm-dedupe.jsonl",
+    "+++ b/.agents/pm/issues/pm-dedupe.jsonl",
+    "@@ -0,0 +1,2 @@",
+    `+{"patch":[{"op":"add","path":"/body","value":"token ${GH_TOKEN}"}]}`,
+    `+{"patch":[{"op":"add","path":"/body","value":"token ${GH_TOKEN}"}]}`,
+  ].join("\n");
+  const { root } = initGateRepo();
+  try {
+    const file = path.join(root, "repeat.diff");
+    fs.writeFileSync(file, diff);
+    const report = runTrackerGate({ pmRoot: root, diffFile: file });
+    assert.equal(report.verdict, "fail");
+    assert.equal(report.findings.length, 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a context-only hunk contributes a scanned file with no added lines", () => {
+  const diff = [
+    "--- a/.agents/pm/issues/pm-context.toon",
+    "+++ b/.agents/pm/issues/pm-context.toon",
+    "@@ -1,1 +1,1 @@",
+    " title: \"Unchanged\"",
+  ].join("\n");
+  const { root } = initGateRepo();
+  try {
+    const file = path.join(root, "context.diff");
+    fs.writeFileSync(file, diff);
+    const report = runTrackerGate({ pmRoot: root, diffFile: file });
+    assert.equal(report.verdict, "pass");
+    assert.equal(report.scanned_files, 1);
+    assert.equal(report.added_lines, 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a finding outside any item is rendered as no item and unknown field", () => {
+  const diff = [
+    "--- /dev/null",
+    "+++ b/notes/general.md",
+    "@@ -0,0 +1 @@",
+    `+shared token ${GH_TOKEN}`,
+  ].join("\n");
+  const { root } = initGateRepo();
+  try {
+    const file = path.join(root, "noitem.diff");
+    fs.writeFileSync(file, diff);
+    const report = runTrackerGate({ pmRoot: root, diffFile: file });
+    assert.equal(report.verdict, "fail");
+    const lines = formatGateReport(report).join("\n");
+    assert.match(lines, /\(no item\)/);
+    assert.match(lines, /github-token-classic/);
+    assert.ok(!lines.includes(GH_TOKEN));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a gate-scoped collaborator error passes through unwrapped", () => {
+  const { root } = initGateRepo();
+  try {
+    // An injected reader that raises its own gate-prefixed diagnostic must
+    // surface verbatim rather than being re-labelled as unreadable input.
+    assert.throws(() => runTrackerGate({
+      pmRoot: root,
+      diffFile: path.join(root, "change.patch"),
+      dependencies: { readFileSync: () => { throw new Error("pm github gate: injected reader failure"); } },
+    }), (err: unknown) => err instanceof Error && /injected reader failure/.test(err.message));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("runGitDefault reports a missing git executable without throwing", () => {
+  // A child process with a PATH that cannot resolve git proves the raw runner
+  // is fail-closed: ENOENT becomes ok:false with the spawn error in stderr.
+  nodeScenario(`
+    import assert from 'node:assert/strict';
+    import { runGitDefault } from ${JSON.stringify(new URL("../gate.ts", import.meta.url).href)};
+    const result = runGitDefault(${JSON.stringify(path.resolve(os.tmpdir()))}, ["status"]);
+    assert.equal(result.ok, false);
+    assert.equal(result.stdout, "");
+    assert.match(result.stderr, /ENOENT/);
+  `, { PATH: "" });
+});
+
+test("the registered gate command prints its report outside JSON mode", async () => {
+  const ext = await harnessPromise;
+  const { root } = initGateRepo();
+  try {
+    const { stderr, result } = await captureStderr(async () =>
+      ext.runCommand({ command: "github gate", global: { json: false }, pmRoot: root }));
+    assert.strictEqual((result as { result: GateReport }).result.verdict, "pass");
+    assert.match(stderr.join("\n"), /pm github gate: PASS/);
+    assert.match(stderr.join("\n"), /0 finding\(s\)/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the shared command gate redacts unexpected Git collaborator errors", () => {
+  const { root } = initGateRepo();
+  try {
+    const original = runGitDefault;
+    let topLevelCalls = 0;
+    assert.throws(() => runCommandTrackerGate({ pmRoot: root, dependencies: {
+      runGit: (cwd, args) => {
+        if (args.join(" ") === "rev-parse --show-toplevel" && ++topLevelCalls === 2) throw new Error("private diagnostic fixture");
+        return original(cwd, args);
+      },
+    } }), (error: unknown) => error instanceof Error && error.message === "pm github gate: scanner error; scan did not complete.");
+    assert.throws(() => runCommandTrackerGate({ pmRoot: path.join(root, "missing") }), /pm github gate:/);
+    assert.equal(runCommandTrackerGate({ pmRoot: root }).verdict, "pass");
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

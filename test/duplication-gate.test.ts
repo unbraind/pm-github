@@ -4,7 +4,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { runDuplicationGate } from "../scripts/duplication-gate.ts";
+import { fileURLToPath } from "node:url";
+import { runDuplicationGate, runDuplicationGateIfMain } from "../scripts/duplication-gate.ts";
 import type { CoverageRunner } from "../scripts/coverage-gate.ts";
 
 /** Create source with enough tokens for both completeness and duplication passes. */
@@ -24,6 +25,19 @@ function detectorReceipt(root: string, sources: number, lines: number, duplicate
     return { status: 0 };
   };
 }
+
+test("duplication gate main entry runs against the supplied root", () => {
+  const root = mkdtempSync(join(tmpdir(), "pm-github-duplication-main-"));
+  const previous = process.exitCode;
+  try {
+    const moduleUrl = new URL("../scripts/duplication-gate.ts", import.meta.url).href;
+    runDuplicationGateIfMain(["node", fileURLToPath(moduleUrl)], moduleUrl, root);
+    assert.equal(process.exitCode, 1);
+  } finally {
+    process.exitCode = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("duplication fails closed on subprocess failures, missing reports, omitted source, and invalid counters", () => {
   const root = duplicationFixture();
