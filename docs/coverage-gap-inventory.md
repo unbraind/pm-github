@@ -50,7 +50,7 @@ and JavaScript modules, including operational scripts, with exact thresholds,
 zero source ignores, and zero skipped executable source. Final full release
 receipts are recorded in the linked PM items.
 
-Final npm release acceptance passes all 487 tests, with zero failures or skips.
+The first full npm release acceptance at `40db9b3` passes all 487 tests, with zero failures or skips.
 The complete receipt covers 8,391/8,391 statements and lines,
 2,218/2,218 branches, and 208/208 functions across the 12-module inventory.
 Every statement and branch counter is positive; no uncovered entries remain.
@@ -58,3 +58,16 @@ The full release command also passes typecheck, build, docstrings, lint,
 zero duplication, Git-object privacy, production audit, packing, changelog,
 and publish attestation. Native Bun and the Bun-invoked release command are
 reported separately in PM evidence.
+
+## Native Bun transport timeout regression
+
+The broad native suite and a focused rerun both showed that a real local
+silent server passed the socket timeout and reached the unchanged 45-second
+test limit. The HTTP client now enforces the original 30 seconds with an
+explicit wall-clock timer, cleared on Promise settlement. The callback rejects
+before destroying the request: native Bun can emit response end synchronously
+on destruction, which must not resolve a truncated timed-out response as success.
+The regression covers silent headers and a partial body that never completes
+using two real HTTP connections. Details and before/after receipts are recorded
+in `pm-github-hptv`; this independent defect does not establish the historical
+installed-public-repeat root cause. Full release gates are remeasured after it.

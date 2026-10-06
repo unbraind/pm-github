@@ -6,7 +6,7 @@ status: in_progress
 priority: 1
 tags[5]: all-source,coverage,quality-gate,scripts,tdd
 created_at: "2026-08-17T07:32:29.666Z"
-updated_at: "2026-10-06T11:49:57.012Z"
+updated_at: "2026-10-06T11:55:39.390Z"
 assignee: codex-sol
 claim_principal: codex-sol
 author: codex
@@ -17,7 +17,7 @@ expected_result: "Every executable TypeScript source and operational script is a
 actual_result: "Frozen source ae86e7d: all 420 npm tests pass; lines and statements 8099/8299 (97.59 percent), branches 1859/2083 (89.24 percent), functions 200/200 (100 percent). Exact 100 gate fails and invalidates LCOV. All 420 native Bun tests pass separately."
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-github-n3z3,related,"2026-08-17T07:32:29.666Z",codex,"cli:create:dep",detected
-comments[17]{created_at,author,text}:
+comments[18]{created_at,author,text}:
   "2026-10-05T07:52:16.974Z",codex-sol,"Replaced the narrowed coverage wrapper with an explicit authored-module inventory, exact 100 percent thresholds for all four dimensions, stale-LCOV invalidation, and missing-file rejection. Added checked operational-script tests, ESLint enforcement, erasable TypeScript syntax, and a jscpd wrapper that verifies its full source inventory. Typecheck, 122 documented declarations, ESLint, and zero duplication passed. Coverage remains a measured gate rather than an approval claim."
   "2026-10-05T08:09:10.457Z",codex-sol,"Strict all-authored-module run completed with 369 tests passing and no skipped tests. Coverage remained below the unchanged 100/100/100/100 requirement: lines/statements 93.25 percent, branches 84.41 percent, functions 94.92 percent over 11 authored TS/JS modules including operational scripts. LCOV was invalidated on failure. Most remaining uncovered branches and ten uncovered functions are in the pre-existing GitHub Projects sync handlers; this is a release blocker, not a passing gate. The shell release-date verifier remains outside the V8 denominator and is exercised separately."
   "2026-10-05T08:58:34.554Z",codex-sol,"Final frozen-source verification at 0b7c4ab: the linked npm coverage command ran all 375 tests with 375 passing, zero failures and zero skips, then correctly exited nonzero at the unchanged 100 percent gate. Complete inventory: 12 authored TS/JS modules including operational scripts. Lines/statements 7739 of 8285 = 93.40 percent; branches 1548 of 1826 = 84.77 percent; functions 188 of 198 = 94.94 percent. Failed LCOV was removed. No source ignores or lowered thresholds were introduced; release remains blocked."
@@ -35,6 +35,7 @@ comments[17]{created_at,author,text}:
   "2026-10-06T11:40:59.548Z",codex-sol,"Third full coverage run: all 484 tests pass; statements, lines and functions are 100%, branches 99.59%. Nine remaining branch locations enumerated from coverage-final.json. Proof for deleting two private-path fallbacks: applyPushEntry receives only planner entries; existing project item indices reject empty ids, and both gqlAddDraft and gqlAddIssue throw before returning an empty id (real GraphQL missing-id tests verify this). The redundant no-item-id guard cannot execute. Pull statusSkipped is appended only inside if(pi.statusName), assigning optionName that same truthy string, so its missing-name fallback cannot execute. Complete PM reads validate tags and body/description strings; the private executor only looks up ids from that complete selected corpus. No coverage exclusions or threshold changes."
   "2026-10-06T11:43:22.121Z",codex-sol,"The targeted real-command c8 check passes four tests: low unauthenticated quota, human Projects listings, after-command subprocess boundaries, and all four Projects mutation failure boundaries. It covers the remaining reachable branches, including open-board formatting and missing tags. The complete npm release check and all native Bun test files are now running on frozen source. docs/coverage-gap-inventory.md retains every initial uncovered statement and branch plus the final nine-branch inventory and closure proofs."
   "2026-10-06T11:49:57.012Z",codex-sol,"Frozen full npm coverage PASS: 487 tests, zero failures/skips; all 12 authored modules measure exact 100/100/100/100. JSON receipt has zero uncovered statements or branches. Production dependency audit passes with zero vulnerabilities. The linked PM planner command passes all 39 tests through pm test --run --progress; the linked watchdog command previously passed through the PM runner. Full release completion and native Bun verification follow."
+  "2026-10-06T11:55:39.390Z",codex-sol,"The first exact-100 full npm release check passed at implementation 40db9b3. Broad native testing then exposed a real HTTP timeout regression, recorded in hptv and fixed without raising deadlines. Source is re-frozen for full npm and native Bun verification; earlier coverage receipts are not claimed for the transport change until remeasured."
 files[19]{path,scope}:
   eslint.config.js,project
   package.json,project

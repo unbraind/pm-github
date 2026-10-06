@@ -336,7 +336,9 @@ Each import retains the original 45-second execution deadline. The acceptance
 watchdog sends SIGTERM to the process group, then SIGKILL after a five-second
 cleanup window; any timeout fails acceptance even if the child later exits zero.
 A real spinning-child negative control verifies forced cleanup and unchanged
-fixture bytes. The comment-lock retry also honors its existing wait budget when
+fixture bytes. The HTTP client also enforces a 30-second wall-clock deadline through redirect
+and response-body completion, even when native socket timeouts do not fire.
+The comment-lock retry honors its existing wait budget when
 an exclusive-create collision cannot be statted, including a dangling symlink.
 This reproduced lock defect is separate from the intermittent historical Bun
 repeat: recent packed repeats pass, but its original cause is not established.

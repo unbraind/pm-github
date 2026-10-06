@@ -364,7 +364,8 @@ function requestOnce(
   payload?: string,
   redirectsLeft = 5,
 ): Promise<FetchResult> {
-  return new Promise((resolve, reject) => {
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  return new Promise<FetchResult>((resolve, reject) => {
     const headers: Record<string, string> = {
       "User-Agent": "pm-github",
       Accept: "application/vnd.github+json",
@@ -418,12 +419,18 @@ function requestOnce(
       });
     });
     req.on("error", reject);
-    req.setTimeout(30000, () => {
-      req.destroy(new Error("request timed out after 30s"));
-    });
+    // A wall-clock deadline also bounds redirects and stalled response bodies.
+    // Bun's ClientRequest socket timeout can fail to fire on a silent server.
+    deadline = setTimeout(() => {
+      const error = new Error("request timed out after 30s");
+      // Reject before destroy: Bun can synchronously emit response end during
+      // destruction, which must never turn a truncated timed-out body into success.
+      reject(error);
+      req.destroy(error);
+    }, 30000);
     if (payload) req.write(payload);
     req.end();
-  });
+  }).finally(() => clearTimeout(deadline));
 }
 
 /**

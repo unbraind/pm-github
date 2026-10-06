@@ -539,18 +539,23 @@ test("requestOnce rejects an unparseable redirect Location instead of following 
 });
 
 test("requestOnce fails a request after 30s without a response", { timeout: 45_000 }, async () => {
-  // A server that accepts the connection and never answers exercises the real
-  // 30-second socket idle timeout: the request must be destroyed with the
-  // timeout error, never left hanging.
-  const server = createServer(() => { /* accept and never respond */ });
+  // Real silent headers and a never-ending response body both retain the
+  // original 30-second deadline, including under native Bun.
+  const server = createServer((req, res) => {
+    if (req.url?.endsWith("stream")) { res.writeHead(200); res.write("partial"); }
+  });
   await new Promise<void>((resolve) => { server.listen(0, "127.0.0.1", resolve); });
   const port = (server.address() as { port: number }).port;
   try {
-    await assert.rejects(
-      fetchJSON(`http://127.0.0.1:${port}/repos/a/b`),
+    const started = performance.now();
+    await Promise.all(["silent", "stream"].map(route => assert.rejects(
+      fetchJSON(`http://127.0.0.1:${port}/repos/a/${route}`),
       /request timed out after 30s/,
-    );
+    )));
+    assert.ok(performance.now() - started >= 29_000);
+    assert.ok(performance.now() - started < 40_000);
   } finally {
+    server.closeAllConnections();
     server.close();
   }
 });
