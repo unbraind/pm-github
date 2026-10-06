@@ -282,6 +282,16 @@ test("personal-data rules: emails and phone numbers, with no-reply exemption", (
   assert.deepStrictEqual(scanLineForRuleHits("2026-10-05T06:04:48.192Z"), []);
 });
 
+test("host-path rule flags host-identifying roots, not slash commands, links or API routes", () => {
+  const rulesOf = (line: string): string[] => scanLineForRuleHits(line).map((hit) => hit.rule);
+  for (const clean of ["/assign @someone", "/label bug", "please `/approve`", "see [docs](/docs/setup.md)", "GET /api/v1 returns 404", "my /homework folder"]) {
+    assert.deepStrictEqual(rulesOf(clean), [], clean);
+  }
+  for (const leak of ["at /" + "home/someone/project", "cd /" + "Users/someone", "read /" + "etc/passwd", "under /" + "root", "mounted (/" + "mnt/data)"]) {
+    assert.deepStrictEqual(rulesOf(leak), ["absolute-host-path"], leak);
+  }
+});
+
 test("host-path rules: absolute paths, windows paths, and home usernames", () => {
   assert.deepStrictEqual(
     scanLineForRuleHits(`crash at ${HOME_PATH}`).map((hit) => hit.rule),

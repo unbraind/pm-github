@@ -257,7 +257,12 @@ const PERSONAL_DATA_RULES: readonly ContentRule[] = [
 const HOST_PATH_RULES: readonly ContentRule[] = [
   {
     rule: "absolute-host-path",
-    pattern: /(?:^|[\s"'`([=,{])\/[A-Za-z0-9._-]+(?:\/[^\s"'`<>),;\]}]*)?/g,
+    // Anchored to roots that identify a host (home, system and mount roots),
+    // so GitHub slash commands (`/assign`), repository-relative links
+    // (`/docs/setup.md`) and API routes (`GET /api/v1`) in issue text are not
+    // flagged; the root must end at a separator or delimiter (`/homework` is
+    // not `/home`).
+    pattern: /(?:^|[\s"'`([=,{])\/(?:home|Users|root|tmp|var|etc|opt|srv|mnt|media|private|Volumes|usr|run|proc|data|nix|scratch|workspace|builds|Library|System)(?=\/|$|[\s"'`<>),;\]}])(?:\/[^\s"'`<>),;\]}]*)?/g,
   },
   {
     rule: "windows-host-path",
@@ -831,7 +836,7 @@ function scanChangeFile(change: ChangeFile): Array<GateFinding & { matched: stri
     { text: change.filePath, field: "file_path" }, ...change.addedLines,
   ];
   for (const line of proposedLines) {
-    const values: Array<{ text: string; field: string; structural?: boolean }> = [];
+    const values: Array<{ text: string; field: string }> = [];
     if (change.filePath.endsWith(".jsonl") && line.field !== "file_path") {
       if (line.text.trim() === "") continue;
       // Structural JSON patch paths are pointers, while their values are data.
@@ -851,7 +856,10 @@ function scanChangeFile(change: ChangeFile): Array<GateFinding & { matched: stri
           const patch = typeof record.op === "string" && ["add", "replace", "remove", "test", "move", "copy"].includes(record.op) && typeof record.path === "string";
           if (patch) {
             for (const key of ["path", "from"]) {
-              if (typeof record[key] === "string") values.push({ text: record[key], field: key, structural: /^\/(?:metadata(?:\/|$)|body(?:\/|$))/.test(record[key]) });
+              // Pointers are scanned like data: the host-path rules are anchored
+              // to host roots, so `/metadata/...` and `/body` pointers never match,
+              // and a secret embedded in a field key is still caught.
+              if (typeof record[key] === "string") values.push({ text: record[key], field: key });
             }
           }
           if (patch && Object.hasOwn(record, "value")) {
@@ -867,7 +875,6 @@ function scanChangeFile(change: ChangeFile): Array<GateFinding & { matched: stri
     } else values.push({ text: line.text, field: line.field });
     for (const value of values) {
       for (const hit of scanLineForRuleHits(value.text)) {
-        if (value.structural && ["absolute-host-path", "windows-host-path", "home-username"].includes(hit.rule)) continue;
         const field = value.field;
         const itemId = change.itemId || itemIdForFile(change.filePath, line.text);
         const key = `${hit.rule}\0${itemId}\0${field}\0${hit.matched}`;
