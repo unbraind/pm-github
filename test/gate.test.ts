@@ -126,6 +126,10 @@ test("escaped tokens and Windows paths retain redacted findings", () => {
   assert.deepEqual(scanLineForRuleHits("clone with `git@github.com:acme/widgets.git`"), []);
   assert.deepEqual(scanLineForRuleHits("git@gitlab.com:group/project.git"), []);
   assert.ok(scanLineForRuleHits("gitlover@example.org").some(hit => hit.rule === "email-address"));
+  // Only the SSH URL shape is exempt: a git@ contact address is still personal data.
+  for (const contact of ["Contact git@example.org", "write to git@example.org: thanks", "agit@github.com:x"]) {
+    assert.ok(scanLineForRuleHits(contact).some(hit => hit.rule === "email-address"), contact);
+  }
   assert.ok(scanLineForRuleHits("person-noreply@example.org").some(hit => hit.rule === "email-address"));
 });
 

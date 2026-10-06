@@ -214,14 +214,18 @@ const CREDENTIAL_RULES: readonly ContentRule[] = [
 const PERSONAL_DATA_RULES: readonly ContentRule[] = [
   {
     rule: "email-address",
-    pattern: /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
+    // An SCP-style SSH clone URL (`git@github.com:owner/repo.git`, the colon
+    // followed directly by a path) names the git service account, not a
+    // person, so the pattern skips exactly that shape; a bare `git@host`
+    // contact address, even before a colon and a space, is still matched.
+    // The lookbehind keeps a match from starting inside a local part.
+    pattern: /(?<![A-Za-z0-9._%+-])(?!git@[A-Za-z0-9.-]+\.[A-Za-z]{2,}:[A-Za-z0-9_~./-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
     // GitHub, GitLab and most mail systems use a "noreply" domain or local part
     // for automated identities; anything else in imported issue text is a real
     // person's address and fails closed.
     confirm: (matched) => {
       const [local, domain] = matched.toLowerCase().split("@");
-      // `git@host` is the SSH service account in clone URLs, not a person.
-      return !/^(?:no-?reply|git)$/.test(local!) && !/(?:^|\.)no-?reply(?:\.|$)/.test(domain!);
+      return !/^(?:no-?reply)$/.test(local!) && !/(?:^|\.)no-?reply(?:\.|$)/.test(domain!);
     },
   },
   {
