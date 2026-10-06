@@ -240,3 +240,33 @@ test("public validate warns at low unauthenticated quota without consulting host
     assert.match(stderr.join("\n"), /raise it \(60→5000\/hr\)/);
   }));
 });
+
+test("validate borrows a synthetic gh credential and forwards it only to the mock API", async t => {
+  const root = tracker(t);
+  const tools = path.join(root, "credential-tools");
+  fs.mkdirSync(tools);
+  const token = "fixture-helper-token";
+  fs.writeFileSync(path.join(tools, "gh"), `#!/bin/sh
+case "$1 $2" in
+  "--version ") printf 'gh fixture\\n' ;;
+  "auth token") printf '  ${token}  \\n' ;;
+  *) exit 1 ;;
+esac
+`, { mode: 0o755 });
+  await withEnv({ GITHUB_TOKEN: undefined, GH_TOKEN: undefined, PATH: tools + path.delimiter + process.env.PATH }, () =>
+    withMockGithub((req, res) => {
+      assert.equal(req.headers.authorization, `Bearer ${token}`);
+      jsonResponse(res, 200, {}, { "x-ratelimit-remaining": "4999", "x-ratelimit-limit": "5000" });
+    }, async server => {
+      const { result, stderr } = await captureStderr(() => command(root, "github validate", { repo: "acme/widgets" }));
+      const report = result.result as github.ValidateReport;
+      assert.equal(report.ok, true);
+      assert.equal(report.gh_cli, true);
+      assert.equal(report.token, true);
+      assert.equal(report.token_source, "gh");
+      assert.equal(report.repo_accessible, true);
+      assert.ok(server.requests.length > 0);
+      assert.match(stderr.join("\n"), /GitHub token resolved via gh CLI/);
+      assert.ok(!stderr.join("\n").includes(token), "validation never prints the borrowed credential");
+    }));
+});

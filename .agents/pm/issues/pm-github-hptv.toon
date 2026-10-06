@@ -6,11 +6,11 @@ status: in_progress
 priority: 1
 tags: []
 created_at: "2026-10-05T08:28:54.625Z"
-updated_at: "2026-10-06T12:59:01.408Z"
+updated_at: "2026-10-06T13:09:41.700Z"
 assignee: codex-sol
 claim_principal: codex-sol
 author: codex-sol
-comments[17]{created_at,author,text}:
+comments[20]{created_at,author,text}:
   "2026-10-05T09:07:19.298Z",codex-sol,"A fresh bounded native Bun CLI repeat of the latest packed candidate passed in 4.22 seconds with exit zero and byte-identical tracker contents. This contrasts with the earlier long-running repeat, so retain the issue as an intermittent installed-host investigation rather than claiming a consistent Bun failure. All 375 native Bun library and operational tests also pass."
   "2026-10-05T09:55:33.050Z",codex-sol,"The final packed candidate matched all three authored runtime modules byte-for-byte. Its fresh Node public import passed with three issues, a byte-identical second run, zero gate findings, and strict health in 24.94 seconds. A bounded direct native Bun CLI repeat, using the same pinned host and startup executable path, timed out at 45.06 seconds and was terminated with SIGTERM; durable tracker bytes stayed unchanged. This reproduces the intermittent installed-host boundary alongside all 420 passing native Bun library and operational tests. No scratch remote was configured and no public-data push occurred."
   "2026-10-06T11:17:41.296Z",codex-sol,"Packed installed-CLI reproduction with the pinned host passes three consecutive native Bun repeats under the unchanged 45-second watchdog. The complete fixture test took 26.63 seconds, including packing, installation, Node import, and all three repeats; each retained item bytes and unchanged bare-remote refs. Separately reproduced a real dangling comment-lock symlink: open with exclusive creation returns EEXIST while stat returns ENOENT, causing the old immediate-continue path to busy-spin forever. The preserved fix adds sleep and checks the existing wait budget. This is a proven local lock defect, not yet proof of the historical installed-host timeout cause. Further public-data and diagnostic acceptance follows."
@@ -28,14 +28,18 @@ comments[17]{created_at,author,text}:
   "2026-10-06T12:57:10.585Z",codex-sol,"Confirmed npm 10 also fails in the package worktree with an external PM_PATH; Git layout and preinstalled merge drivers are not causal. The fix binds package packing to the package-local tracker and leaves caller import commands on their fixture tracker. Added a regression that forces the real prepare hook before packing in a fresh clone and a linked worktree, so npm 11 cannot mask the bug. The reusable caller workflow does not pack this source checkout and its npm ci/merge install run with its own repository tracker."
   "2026-10-06T12:58:11.661Z",codex-sol,"Regression verified red/green: removing only the package-local PM_PATH override fails with the reported outside-repository error; restoring it passes. pm test pm-github-hptv --run --match 'workflow packing isolates' --progress passed. ESLint and test TypeScript build passed. Running all three originally failing acceptance tests plus the layout regression under npm 10 in the worktree before pushing."
   "2026-10-06T12:59:01.408Z",codex-sol,"Both layout regressions fail on reverting the PM_PATH override, including the linked worktree with the pinned CLI. npm 10 exposed a second packing detail after fixing the root mismatch: successful prepare stdout contaminates npm pack --json by default. Packing now explicitly uses --foreground-scripts=false to preserve the JSON receipt; the regression also supplies a conflicting inherited foreground-scripts setting."
-files[6]{path,scope}:
+  "2026-10-06T13:04:14.167Z",codex-sol,"Worktree acceptance under Node 22.23.1/npm 10.9.8 passed all four selected tests: clone/worktree prepare isolation, all adversarial workflow cases, clean create/update review workflow, and the packed native Bun repeat with all three repeats inside 45 seconds. The complete selected run finished in 248.81 seconds under concurrent validation load. Implementation fd0834a is pushed; fresh-clone release gates are in progress."
+  "2026-10-06T13:08:15.645Z",codex-sol,"Pushed CI run for fd0834a passes all 488 tests on Node 22 and Node 26, including the three repaired workflow cases. Both jobs still fail the strict coverage gate at 99.86 percent branches: index.ts lines 274, 4092, and 4117 are the successful gh credential-helper paths. Existing coverage depended on local gh authentication. Adding a deterministic synthetic gh auth success test with a mock server to cover these branches without host credentials."
+  "2026-10-06T13:09:41.700Z",codex-sol,"Deterministic credential-helper regression passes directly and through pm test --run --only-last --progress. It removes both env tokens, shadows gh with a synthetic auth helper, checks trimmed-token Authorization at the mock API, and asserts token_source=gh plus credential redaction. ESLint and build:test pass. Obtained the exact CI Bun 1.3.14 runtime in disposable storage for final fresh-clone gates."
+files[7]{path,scope}:
   index.ts,project
+  test/coverage-edges.test.ts,project
   test/helpers/bounded-cli.ts,project
   test/helpers/public-acceptance.ts,project
   test/http-boundary.test.ts,project
   test/import-gate.test.ts,project
   test/import-lock.test.ts,project
-tests[6]:
+tests[7]:
   - command: node --test test/bounded-cli.test.ts
     scope: project
     timeout_seconds: 60
@@ -78,6 +82,13 @@ tests[6]:
     provenance:
       author: codex-sol
       created_at: "2026-10-06T12:58:13.623Z"
+      source_kind: local_mutation
+      source_ref: feat/import-privacy-gate
+  - command: "node --test --test-name-pattern=\"validate borrows a synthetic gh credential\" test/coverage-edges.test.ts"
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-10-06T13:09:02.337Z"
       source_kind: local_mutation
       source_ref: feat/import-privacy-gate
 docs[1]{path,scope}:
