@@ -6,11 +6,11 @@ status: in_progress
 priority: 1
 tags[5]: "area:ci","area:gates","area:import","area:privacy",changelog-unreleased
 created_at: "2026-10-05T06:09:58.912Z"
-updated_at: "2026-10-06T12:42:50.295Z"
+updated_at: "2026-10-06T17:04:29.518Z"
 author: pi-glm
 acceptance_criteria: A fresh checkout installs the pinned extension and exercises a nonempty issue import; malicious issue-body credential and personal-data fixtures prevent any public branch push; completeness and idempotency are checked before mutation; a clean import opens a reviewable PR with permanent PM links; existing pilot workflows and future rollouts use one audited implementation or equivalent gate.
 blocked_by: pm-github-9cjx
-unblock_note: Final exact coverage and npm/Bun release checks are underway; PR 108 remains open for review.
+unblock_note: Coverage blocker pm-github-9cjx is closed (exact 100/100/100/100 verified); the feature is complete on PR 108 and waits only for review and merge.
 dependencies[2]{id,kind,created_at,author,source_kind,author_source}:
   pm-github-9cjx,blocked_by,"2026-10-05T08:43:10.230Z",codex-sol,"cli:update:blocked_by",detected
   pm-github-hptv,blocked_by,"2026-10-05T08:43:10.230Z",codex-sol,"cli:update:dep",detected

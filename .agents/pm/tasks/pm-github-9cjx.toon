@@ -2,15 +2,17 @@ id: pm-github-9cjx
 title: Reach exact all-source coverage and include every operational script
 description: "The unchanged all-source gate now measures exact 100 percent lines, statements, branches and functions across all 12 authored TypeScript/JavaScript modules, including operational scripts. The frozen full npm coverage run passes 487 tests with zero failures or skips. Real Git, PM SDK, filesystem and HTTP cases cover reachable paths; removed private-path arms have invariant proofs recorded in comments and docs/coverage-gap-inventory.md. No source ignores or lowered thresholds. Final npm/Bun release receipts and orchestrator review remain separate."
 type: Task
-status: in_progress
+status: closed
 priority: 1
 tags[5]: all-source,coverage,quality-gate,scripts,tdd
 created_at: "2026-08-17T07:32:29.666Z"
-updated_at: "2026-10-06T14:33:49.525Z"
+updated_at: "2026-10-06T17:04:30.299Z"
+closed_at: "2026-10-06T17:04:30.277Z"
+completed_at: "2026-10-06T17:04:30.277Z"
 author: codex
 estimated_minutes: 960
 acceptance_criteria: "Automatically discover every executable TypeScript production and operational source; require exact 100% statements, branches, functions, and lines; prohibit ignore pragmas, source allowlist blind spots, threshold weakening, vacuous tests, and mocks of the unit under test; exercise GitHub behavior at the HTTP boundary, pm behavior through real SDK/installed-CLI boundaries, and operational scripts through real filesystem/process behavior; prove the gate fails when a new uncovered source or branch is introduced."
-unblock_note: Full source coverage closure is being reverified at unchanged exact thresholds.
+unblock_note: "Resolved: exact all-source 100/100/100/100 coverage verified in CI and fresh-clone npm/Bun release gates (PR 108)."
 expected_result: "Every executable TypeScript source and operational script is automatically included in measurement and exact statements, branches, functions, and lines all reach 100% through behavioral tests."
 actual_result: Fresh npm and Bun release gates at f572382 pass 503/503 tests with exact all-source 100/100/100/100 across 12 modules. Lines/statements 8406/8406; Node 22 functions 209/209 and branches 2226/2226; Node 26 functions 208/208 and branches 2225/2225. Exact-100 gate passes. CI Node 22/26 and native Bun pass; full native linked changelog/privacy tests pass 29/29.
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
@@ -74,11 +76,6 @@ files[22]{path,scope}:
   test/projects.test.ts,project
   test/review-round1.test.ts,project
 tests[6]:
-  - command: npm run coverage
-    path: scripts/coverage-gate.ts
-    scope: project
-    timeout_seconds: 900
-    note: Current ratcheted gate; this item remains open until it measures all executable sources at exact 100/100/100/100.
   - command: node --test test/project-sync.test.ts test/projects.test.ts
     scope: project
     timeout_seconds: 600
@@ -117,6 +114,16 @@ tests[6]:
       created_at: "2026-10-06T14:30:35.002Z"
       source_kind: local_mutation
       source_ref: feat/import-privacy-gate
+  - command: npm run coverage
+    path: scripts/coverage-gate.ts
+    scope: project
+    timeout_seconds: 900
+    provenance:
+      author: claude-orchestrator
+      created_at: "2026-10-06T17:04:27.440Z"
+      source_kind: local_mutation
+      source_ref: feat/import-privacy-gate
+    note: "Exact 100/100/100/100 gate over every executable source; passes in CI (Node 22 and 26) and in fresh-clone npm and Bun release:check."
 docs[3]:
   - path: "https://github.com/unbraind/pm-cli-companion/blob/main/.agents/pm/epics/pm-cli-website-ktip.toon"
     scope: global
@@ -126,4 +133,5 @@ docs[3]:
     note: Fleet operational script coverage gap
   - path: docs/coverage-gap-inventory.md
     scope: project
+close_reason: "Verified by the orchestrator: PR 108 CI test (22)/(26) green with the exact 100/100/100/100 gate, fresh-clone npm and Bun release:check 504/504 at 7a41660 and later heads; no ignores or lowered thresholds."
 body: ""

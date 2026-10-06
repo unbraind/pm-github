@@ -616,7 +616,8 @@ function sha256Hex(value: string): string {
 }
 
 test("an allowlisted content hash is suppressed and counted, never widened to a pattern", () => {
-  const allowlist = path.join(os.tmpdir(), `gate-allowlist-${process.pid}.json`);
+  const allowlistDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "gate-allowlist-"));
+  const allowlist = path.join(allowlistDirectory, "allowlist.json");
   fs.writeFileSync(
     allowlist,
     JSON.stringify({
@@ -644,7 +645,7 @@ test("an allowlisted content hash is suppressed and counted, never widened to a 
       ["npm-token"],
     );
   } finally {
-    fs.rmSync(allowlist, { force: true });
+    fs.rmSync(allowlistDirectory, { recursive: true, force: true });
   }
 });
 

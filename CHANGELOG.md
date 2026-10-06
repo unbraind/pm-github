@@ -8,6 +8,7 @@
 
 ### Other
 
+- Reach exact all-source coverage and include every operational script ([pm-github-9cjx](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-9cjx.toon))
 - Auto-merge green Dependabot updates and group the pm toolchain into one daily PR ([pm-github-u9df](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-u9df.toon))
 
 ## 2026.9.26 - 2026-09-26
