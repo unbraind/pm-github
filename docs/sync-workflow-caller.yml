@@ -12,5 +12,4 @@ jobs:
   gated-sync:
     uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@RELEASE_COMMIT_SHA
     with:
-      repository: unbraind/pm-graph
       pm-github-version: "RELEASE_VERSION"

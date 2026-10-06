@@ -220,7 +220,8 @@ const PERSONAL_DATA_RULES: readonly ContentRule[] = [
     // person's address and fails closed.
     confirm: (matched) => {
       const [local, domain] = matched.toLowerCase().split("@");
-      return !/^(?:no-?reply)$/.test(local!) && !/(?:^|\.)no-?reply(?:\.|$)/.test(domain!);
+      // `git@host` is the SSH service account in clone URLs, not a person.
+      return !/^(?:no-?reply|git)$/.test(local!) && !/(?:^|\.)no-?reply(?:\.|$)/.test(domain!);
     },
   },
   {
@@ -357,6 +358,9 @@ interface RuleHit {
   readonly index: number;
 }
 
+/** Sticky `\uXXXX` matcher: reads at one offset without copying the line suffix. */
+const UNICODE_ESCAPE = /\\u([0-9a-f]{4})/iy;
+
 /**
  * Scan one added line with every content rule.
  *
@@ -374,7 +378,10 @@ export function scanLineForRuleHits(line: string): RuleHit[] {
   const offsets: number[] = [];
   let decoded = "";
   for (let index = 0; index < line.length; index++) {
-    const unicode = /^\\u([0-9a-f]{4})/i.exec(line.slice(index));
+    // A sticky match at the current offset keeps the decoder linear in the line
+    // length; slicing the suffix per character is quadratic where slices copy.
+    UNICODE_ESCAPE.lastIndex = index;
+    const unicode = line[index] === "\\" ? UNICODE_ESCAPE.exec(line) : null;
     if (unicode) {
       decoded += String.fromCharCode(Number.parseInt(unicode[1]!, 16));
       offsets.push(index);

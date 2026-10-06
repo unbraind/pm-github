@@ -314,7 +314,6 @@ jobs:
   gated-sync:
     uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@RELEASE_COMMIT_SHA
     with:
-      repository: unbraind/pm-graph        # default: the calling repository
       pm-github-version: "RELEASE_VERSION"     # required: exact published version
 ```
 

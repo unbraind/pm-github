@@ -122,6 +122,10 @@ test("escaped tokens and Windows paths retain redacted findings", () => {
   assert.ok(scanLineForRuleHits(JSON.stringify(WIN_PATH)).some(hit => hit.rule === "windows-host-path"));
   assert.ok(scanLineForRuleHits("Authorization: Bearer " + "A".repeat(32)).some(hit => hit.rule === "bearer-token"));
   assert.deepEqual(scanLineForRuleHits("noreply@example.org"), []);
+  // SSH clone URLs name the git service account, not a person.
+  assert.deepEqual(scanLineForRuleHits("clone with `git@github.com:acme/widgets.git`"), []);
+  assert.deepEqual(scanLineForRuleHits("git@gitlab.com:group/project.git"), []);
+  assert.ok(scanLineForRuleHits("gitlover@example.org").some(hit => hit.rule === "email-address"));
   assert.ok(scanLineForRuleHits("person-noreply@example.org").some(hit => hit.rule === "email-address"));
 });
 
