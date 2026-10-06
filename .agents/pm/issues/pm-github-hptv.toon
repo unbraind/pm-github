@@ -6,9 +6,11 @@ status: in_progress
 priority: 1
 tags: []
 created_at: "2026-10-05T08:28:54.625Z"
-updated_at: "2026-10-06T12:42:49.423Z"
+updated_at: "2026-10-06T12:59:01.408Z"
+assignee: codex-sol
+claim_principal: codex-sol
 author: codex-sol
-comments[12]{created_at,author,text}:
+comments[17]{created_at,author,text}:
   "2026-10-05T09:07:19.298Z",codex-sol,"A fresh bounded native Bun CLI repeat of the latest packed candidate passed in 4.22 seconds with exit zero and byte-identical tracker contents. This contrasts with the earlier long-running repeat, so retain the issue as an intermittent installed-host investigation rather than claiming a consistent Bun failure. All 375 native Bun library and operational tests also pass."
   "2026-10-05T09:55:33.050Z",codex-sol,"The final packed candidate matched all three authored runtime modules byte-for-byte. Its fresh Node public import passed with three issues, a byte-identical second run, zero gate findings, and strict health in 24.94 seconds. A bounded direct native Bun CLI repeat, using the same pinned host and startup executable path, timed out at 45.06 seconds and was terminated with SIGTERM; durable tracker bytes stayed unchanged. This reproduces the intermittent installed-host boundary alongside all 420 passing native Bun library and operational tests. No scratch remote was configured and no public-data push occurred."
   "2026-10-06T11:17:41.296Z",codex-sol,"Packed installed-CLI reproduction with the pinned host passes three consecutive native Bun repeats under the unchanged 45-second watchdog. The complete fixture test took 26.63 seconds, including packing, installation, Node import, and all three repeats; each retained item bytes and unchanged bare-remote refs. Separately reproduced a real dangling comment-lock symlink: open with exclusive creation returns EEXIST while stat returns ENOENT, causing the old immediate-continue path to busy-spin forever. The preserved fix adds sleep and checks the existing wait budget. This is a proven local lock defect, not yet proof of the historical installed-host timeout cause. Further public-data and diagnostic acceptance follows."
@@ -21,6 +23,11 @@ comments[12]{created_at,author,text}:
   "2026-10-06T11:55:38.455Z",codex-sol,"After-fix focused real-HTTP regression PASS under both runtimes: Node 30.02 seconds, native Bun 30.02 seconds; both silent headers and partial never-ending body reject with the expected 30-second timeout. The test keeps its 45-second harness deadline and asserts completion below 40 seconds. Build:test and ESLint pass. Explicit deadline rejection precedes destroy and its timer is cleared on every Promise settlement. Restarting full npm release checks and all native Bun files on this frozen fix."
   "2026-10-06T11:58:06.722Z",codex-sol,"Packed acceptance on transport-fix implementation 5ed8c47 PASS: one live public snapshot issue imported with gate PASS, Node import 6.17 seconds, byte-identical Node repeat 5.15 seconds, native Bun repeats 6.06/8.16/4.80 seconds with byte-identical durable data, strict health PASS and no remote. Timings include concurrent full validation load. The linked real timeout regression passes both isolated add verification and pm test --run --only-last --progress; it is recorded alongside the passing watchdog test. No SDK comment-add flakiness reproduced."
   "2026-10-06T12:42:46.684Z",codex-sol,"Final timeout assurance: full native suite passes 487/487 across 30 files with exit zero; both full release commands pass. The real silent and never-ending-body HTTP controls reject at the original 30-second deadline under Node and Bun; the dangling comment lock honors its existing wait budget. Packed public acceptance after the transport fix passes one nonempty import, unchanged Node and three Bun repeats, gate and strict health without a remote. Historical 45-second repeat cause remains unestablished, but acceptance keeps 45 seconds plus a separate forced-cleanup window and always rejects a timeout. No deterministic SDK comment-add flakiness reproduced."
+  "2026-10-06T12:53:57.413Z",codex-sol,"Investigating PR #108 clone-only workflow setup failures. Plan: reproduce in a scratch clone, trace the npm lifecycle trigger and Git layout difference, isolate package preparation from the fixture tracker, then verify regression and full release gates in both layouts."
+  "2026-10-06T12:56:15.328Z",codex-sol,"Reproduced the reported failure in a fresh clone with Node 22 and npm 10.9.8 after building. The failing command is npm pack --ignore-scripts in prepareWorkflowFixture, before pm package install. npm 10 pacote runs prepare despite ignore-scripts; npm 11 checks ignoreScripts and the same clone passes. The fixture passes its external PM_PATH into the package-root hook. Testing the worktree with npm 10 to verify whether Git layout is causal."
+  "2026-10-06T12:57:10.585Z",codex-sol,"Confirmed npm 10 also fails in the package worktree with an external PM_PATH; Git layout and preinstalled merge drivers are not causal. The fix binds package packing to the package-local tracker and leaves caller import commands on their fixture tracker. Added a regression that forces the real prepare hook before packing in a fresh clone and a linked worktree, so npm 11 cannot mask the bug. The reusable caller workflow does not pack this source checkout and its npm ci/merge install run with its own repository tracker."
+  "2026-10-06T12:58:11.661Z",codex-sol,"Regression verified red/green: removing only the package-local PM_PATH override fails with the reported outside-repository error; restoring it passes. pm test pm-github-hptv --run --match 'workflow packing isolates' --progress passed. ESLint and test TypeScript build passed. Running all three originally failing acceptance tests plus the layout regression under npm 10 in the worktree before pushing."
+  "2026-10-06T12:59:01.408Z",codex-sol,"Both layout regressions fail on reverting the PM_PATH override, including the linked worktree with the pinned CLI. npm 10 exposed a second packing detail after fixing the root mismatch: successful prepare stdout contaminates npm pack --json by default. Packing now explicitly uses --foreground-scripts=false to preserve the JSON receipt; the regression also supplies a conflicting inherited foreground-scripts setting."
 files[6]{path,scope}:
   index.ts,project
   test/helpers/bounded-cli.ts,project
@@ -28,9 +35,51 @@ files[6]{path,scope}:
   test/http-boundary.test.ts,project
   test/import-gate.test.ts,project
   test/import-lock.test.ts,project
-tests[2]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
-  node --test test/bounded-cli.test.ts,project,60,codex-sol,"2026-10-06T11:37:04.782Z",local_mutation,feat/import-privacy-gate
-  "node --test --test-name-pattern=\"requestOnce fails a request\" test/http-boundary.test.ts",project,60,codex-sol,"2026-10-06T11:56:36.862Z",local_mutation,feat/import-privacy-gate
+tests[6]:
+  - command: node --test test/bounded-cli.test.ts
+    scope: project
+    timeout_seconds: 60
+    provenance:
+      author: codex-sol
+      created_at: "2026-10-06T11:37:04.782Z"
+      source_kind: local_mutation
+      source_ref: feat/import-privacy-gate
+  - command: "node --test --test-name-pattern=\"requestOnce fails a request\" test/http-boundary.test.ts"
+    scope: project
+    timeout_seconds: 60
+    provenance:
+      author: codex-sol
+      created_at: "2026-10-06T11:56:36.862Z"
+      source_kind: local_mutation
+      source_ref: feat/import-privacy-gate
+  - command: "node --test --test-name-pattern=\"workflow packing isolates\" test/import-gate.test.ts"
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-10-06T12:57:13.194Z"
+      source_kind: local_mutation
+      source_ref: feat/import-privacy-gate
+  - command: "node --test --test-name-pattern=\"executable reusable workflow|packed installed CLI\" test/import-gate.test.ts"
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-10-06T12:57:14.565Z"
+      source_kind: local_mutation
+      source_ref: feat/import-privacy-gate
+  - command: "npm run release:check"
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-10-06T12:58:12.756Z"
+      source_kind: local_mutation
+      source_ref: feat/import-privacy-gate
+  - command: "bun run release:check"
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-10-06T12:58:13.623Z"
+      source_kind: local_mutation
+      source_ref: feat/import-privacy-gate
 docs[1]{path,scope}:
   README.md,project
 body: ""

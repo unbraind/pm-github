@@ -677,6 +677,15 @@ function executeWorkflow(shell: string, root: string, env: NodeJS.ProcessEnv): P
   });
 }
 
+/** Pack from the package tracker, even when npm runs prepare despite --ignore-scripts. */
+function packWorkflowCandidate(packageRoot: string, destination: string, env: NodeJS.ProcessEnv): ReturnType<typeof executeWorkflow> {
+  // npm 10's directory packer still invokes prepare with --ignore-scripts.
+  // Its merge installer must use this checkout's tracker, not the caller fixture.
+  // Keep any lifecycle stdout out of npm's JSON receipt on those versions.
+  return executeWorkflow(`npm pack --ignore-scripts --foreground-scripts=false --json --pack-destination '${destination.replace(/'/g, "'\\''")}'`, packageRoot,
+    { ...env, PM_PATH: path.join(packageRoot, ".agents", "pm") });
+}
+
 /** Install the candidate and create a local gh PR receipt boundary, never a network writer. */
 async function prepareWorkflowFixture(root: string, base: string): Promise<NodeJS.ProcessEnv> {
   const bin = path.join(root, "node_modules", ".bin");
@@ -706,7 +715,7 @@ esac
     PM_GITHUB_VERSION: "2026.10.4", SYNC_BRANCH, SYNC_LEASE: "", RUNNER_TEMP: base,
     GITHUB_ENV: path.join(base, "job-env"), REVIEW_RECEIPT: path.join(base, "review.md"), REVIEW_ACTIONS: path.join(base, "review-actions") };
   const packageRoot = path.resolve(import.meta.dirname, "..");
-  const packed = await executeWorkflow(`npm pack --ignore-scripts --json --pack-destination '${base.replace(/'/g, "'\\''")}'`, packageRoot, env);
+  const packed = await packWorkflowCandidate(packageRoot, base, env);
   assert.equal(packed.code, 0, packed.stderr);
   const [{ filename }] = JSON.parse(packed.stdout) as [{ filename: string }];
   const archive = path.join(base, filename).replace(/'/g, "'\\''");
@@ -719,6 +728,48 @@ esac
 
 const WORKFLOW_IMPORT_SEQUENCE = ["Validate GitHub access", "Preview GitHub to pm plan", "Gated GitHub to pm import",
   "Verify repeat import is a no-op", "Verify strict pm health", "Commit gated sync changes and open review PR"] as const;
+
+test("workflow packing isolates prepare from the caller tracker in clones and linked worktrees", async () => {
+  const { root, base } = initSyncRepo();
+  try {
+    const clone = path.join(base, "package-clone");
+    const worktree = path.join(base, "package-worktree");
+    assert.equal(spawnSync("git", ["clone", "--quiet", "--no-hardlinks", repoRoot, clone]).status, 0);
+    assert.equal(spawnSync("git", ["-C", clone, "worktree", "add", "--quiet", "--detach", worktree]).status, 0);
+    assert.ok(fs.statSync(path.join(clone, ".git")).isDirectory());
+    assert.ok(fs.statSync(path.join(worktree, ".git")).isFile());
+    const tools = path.join(base, "pack-tools");
+    fs.mkdirSync(tools);
+    const npm = await executeWorkflow("command -v npm", repoRoot, process.env);
+    assert.equal(npm.code, 0, npm.stderr);
+    // Exercise npm 10's lifecycle behavior on every npm version: invoke the real
+    // package hook before packing. No stub replaces pm or its merge installer.
+    fs.writeFileSync(path.join(tools, "npm"), `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$PM_PATH" >> "$PACK_PREPARE_RECEIPT"
+PATH="$PWD/node_modules/.bin:$PATH" node scripts/prepare-merge-driver.ts >&2
+exec '${npm.stdout.trim().replace(/'/g, "'\\''")}' "$@"
+`, { mode: 0o755 });
+    const receipt = path.join(base, "prepare-receipt");
+    const env = { ...process.env, PM_PATH: path.join(root, ".agents", "pm"), PACK_PREPARE_RECEIPT: receipt,
+      npm_config_foreground_scripts: "true",
+      PATH: tools + path.delimiter + process.env.PATH };
+    const before = fs.readFileSync(path.join(root, ".agents", "pm", "settings.json"), "utf8");
+    for (const packageRoot of [clone, worktree]) {
+      for (const directory of ["node_modules", "dist"]) {
+        fs.symlinkSync(path.join(repoRoot, directory), path.join(packageRoot, directory), "dir");
+      }
+      const packed = await packWorkflowCandidate(packageRoot, base, env);
+      assert.equal(packed.code, 0, packed.stderr);
+      const [{ filename }] = JSON.parse(packed.stdout) as [{ filename: string }];
+      assert.ok(fs.statSync(path.join(base, filename)).size > 0);
+      assert.equal(fs.readFileSync(path.join(root, ".agents", "pm", "settings.json"), "utf8"), before);
+    }
+    assert.deepEqual(fs.readFileSync(receipt, "utf8").trim().split("\n"),
+      [clone, worktree].map(packageRoot => path.join(packageRoot, ".agents", "pm")));
+    assert.equal(env.PM_PATH, path.join(root, ".agents", "pm"), "caller commands keep their own tracker");
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
 
 test("the executable reusable workflow never publishes each adversarial fixture", async () => {
   const cases = [
