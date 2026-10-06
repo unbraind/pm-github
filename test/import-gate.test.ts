@@ -457,7 +457,7 @@ test("adversarial: token in a body, token in a comment, email, and host path pre
       assert.equal((clean.result as { verdict: string }).verdict, "pass");
 
     });
-    assert.strictEqual(git(["status", "--porcelain"]).status, 0);
+    assert.strictEqual(git(["status", "--porcelain", "--", ".agents/pm"]).stdout.trim(), "");
   } finally {
     fs.rmSync(base, { recursive: true, force: true });
   }
@@ -910,6 +910,21 @@ test("workflow input shell accepts numeric same-day pins and refuses floating ve
       ...process.env, REPOSITORY: "acme/widgets", CALLING_REPOSITORY: "acme/widgets", SYNC_BRANCH, PM_GITHUB_VERSION: version,
     });
     assert.equal(result.code === 0, valid, version);
+    if (!valid) assert.match(result.stdout, /::error::pm-github-version must be an exact numeric version: N\.N\.N or N\.N\.N-N\./);
+  }
+});
+
+test("workflow input shell diagnoses a foreign repository and branch outside automation/", async () => {
+  for (const [input, value, diagnostic] of [
+    ["REPOSITORY", "acme/other", "::error::repository must equal the calling repository (acme/widgets)."],
+    ["SYNC_BRANCH", "feature/sync", "::error::sync-branch must start with automation/."],
+  ] as const) {
+    const result = await executeWorkflow(workflowShell(["Validate sync inputs"]), repoRoot, {
+      ...process.env, REPOSITORY: "acme/widgets", CALLING_REPOSITORY: "acme/widgets", SYNC_BRANCH, PM_GITHUB_VERSION: "2026.10.6",
+      [input]: value,
+    });
+    assert.equal(result.code, 1, input);
+    assert.ok(result.stdout.includes(diagnostic), result.stdout);
   }
 });
 

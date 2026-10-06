@@ -6,9 +6,11 @@ status: in_progress
 priority: 1
 tags: []
 created_at: "2026-10-05T08:28:54.625Z"
-updated_at: "2026-10-06T14:33:50.266Z"
+updated_at: "2026-10-06T15:19:21.145Z"
+assignee: codex-sol
+claim_principal: codex-sol
 author: codex-sol
-comments[28]{created_at,author,text}:
+comments[30]{created_at,author,text}:
   "2026-10-05T09:07:19.298Z",codex-sol,"A fresh bounded native Bun CLI repeat of the latest packed candidate passed in 4.22 seconds with exit zero and byte-identical tracker contents. This contrasts with the earlier long-running repeat, so retain the issue as an intermittent installed-host investigation rather than claiming a consistent Bun failure. All 375 native Bun library and operational tests also pass."
   "2026-10-05T09:55:33.050Z",codex-sol,"The final packed candidate matched all three authored runtime modules byte-for-byte. Its fresh Node public import passed with three issues, a byte-identical second run, zero gate findings, and strict health in 24.94 seconds. A bounded direct native Bun CLI repeat, using the same pinned host and startup executable path, timed out at 45.06 seconds and was terminated with SIGTERM; durable tracker bytes stayed unchanged. This reproduces the intermittent installed-host boundary alongside all 420 passing native Bun library and operational tests. No scratch remote was configured and no public-data push occurred."
   "2026-10-06T11:17:41.296Z",codex-sol,"Packed installed-CLI reproduction with the pinned host passes three consecutive native Bun repeats under the unchanged 45-second watchdog. The complete fixture test took 26.63 seconds, including packing, installation, Node import, and all three repeats; each retained item bytes and unchanged bare-remote refs. Separately reproduced a real dangling comment-lock symlink: open with exclusive creation returns EEXIST while stat returns ENOENT, causing the old immediate-continue path to busy-spin forever. The preserved fix adds sleep and checks the existing wait budget. This is a proven local lock defect, not yet proof of the historical installed-host timeout cause. Further public-data and diagnostic acceptance follows."
@@ -37,10 +39,13 @@ comments[28]{created_at,author,text}:
   "2026-10-06T14:10:27.146Z",codex-sol,"Persistent revert receipts: 4196039888 workflow input shell; 4196039928 malformed second comment HTTP pages; 4196039937 and 4196078374 diff hunk content; 4196039948 tracked/staged invalid UTF-8; 4196078360 workflow credential isolation; 4196078420 symlinked checkout; 4196078439 pre-write command exit code. Each negative control exited 1 after reverting to the reviewed code, and restored code exited 0. The missing-Git follow-up also has an independent failing revert and passing restore. Selected native Bun 1.3.14 gate and workflow regressions pass."
   "2026-10-06T14:20:34.810Z",codex-sol,"Corrected implementation c8b9329 passes both fresh-clone release commands with 503/503 tests and no skips: npm under Node 22.23.1/npm 10.9.8, Bun 1.3.14 with Node 26.7.0 tooling. Both used empty gh configuration and no environment GitHub credentials. A new diagnostic assertion initially failed native Bun because empty PATH prevents the tracker read before generator startup; the fixture now separately injects generator startup and signal outcomes after restoring PATH. Node and native Bun pass this portable fixture, and reverting the diagnostic implementation still fails. Final pushed-head clones will reverify the bundled tracker receipts and test correction."
   "2026-10-06T14:33:50.266Z",codex-sol,"Final source/test head f572382 passes both fresh-clone release commands, 503 tests and exact all-source coverage. Strict clone health with merge drivers passes. Both CI Node jobs and native Bun pass. Local privacy separately audits 3581 objects, including unreachable objects, with approved identities and no secret/host-path findings. Separate upstream PM runner follow-up pm-github-2ao1 records a false empty_run on genuinely passing filtered Bun tests; the full 29-test native command is linked and passes. All 16 round-1 findings are fixed with verified failing revert controls. Items remain open and claims released for orchestrator verification."
-files[10]{path,scope}:
+  "2026-10-06T15:17:49.785Z",codex-sol,"Review round 2 of PR #108: preserve published changelog binning through explicit item release metadata, add actionable diagnostics and real-shell rejection assertions for reusable workflow inputs, and strengthen the malicious-import tracker no-write assertion with a temporary injected-write negative control. Verify all release gates in fresh clones of the pushed branch; leave the item open for orchestrator verification."
+  "2026-10-06T15:19:21.145Z",codex-sol,"Findings 4197056035, 4197055992, and 4197056044 addressed. Set pm-github-7d1h release=2026.8.17 using the CLI and regenerated with npm run changelog:full. Compared every released section byte-for-byte with origin/main: identical; only the added Unreleased entry differs. Real workflow shell tests pass for numeric pins and every rejected repository/version/branch input with its expected ::error:: diagnostic. The adversarial tracker assertion now checks scoped porcelain stdout; temporarily appending a newline to fixture tracker settings made that test fail with M .agents/pm/settings.json and exit 1, then the injection was removed. Focused suite: 3/3 pass. Docstrings: 130 declarations in 11 files; lint, duplication (zero duplicates at the configured threshold), and typecheck pass. Fresh-clone npm and Bun release checks are next."
+files[11]{path,scope}:
   .github/workflows/pm-github-sync.yml,project
   gate.ts,project
   index.ts,project
+  scripts/generate-changelog.ts,project
   test/coverage-edges.test.ts,project
   test/gate-inputs.test.ts,project
   test/helpers/bounded-cli.ts,project
@@ -48,7 +53,7 @@ files[10]{path,scope}:
   test/http-boundary.test.ts,project
   test/import-gate.test.ts,project
   test/import-lock.test.ts,project
-tests[8]:
+tests[9]:
   - command: node --test test/bounded-cli.test.ts
     scope: project
     timeout_seconds: 60
@@ -107,6 +112,15 @@ tests[8]:
       created_at: "2026-10-06T13:58:19.539Z"
       source_kind: local_mutation
       source_ref: feat/import-privacy-gate
-docs[1]{path,scope}:
+  - command: "node --test --test-name-pattern=\"adversarial: token in a body|workflow input shell\" test/import-gate.test.ts"
+    scope: project
+    timeout_seconds: 2400
+    provenance:
+      author: codex-sol
+      created_at: "2026-10-06T15:18:29.770Z"
+      source_kind: local_mutation
+      source_ref: feat/import-privacy-gate
+docs[2]{path,scope}:
+  CHANGELOG.md,project
   README.md,project
 body: ""

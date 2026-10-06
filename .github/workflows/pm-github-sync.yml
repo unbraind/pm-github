@@ -59,9 +59,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "${REPOSITORY}" == "${CALLING_REPOSITORY}" ]]
-          [[ "${PM_GITHUB_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]
-          [[ "${SYNC_BRANCH}" == automation/* ]]
+          [[ "${REPOSITORY}" == "${CALLING_REPOSITORY}" ]] || { echo "::error::repository must equal the calling repository (${CALLING_REPOSITORY})."; exit 1; }
+          [[ "${PM_GITHUB_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]] || { echo "::error::pm-github-version must be an exact numeric version: N.N.N or N.N.N-N."; exit 1; }
+          [[ "${SYNC_BRANCH}" == automation/* ]] || { echo "::error::sync-branch must start with automation/."; exit 1; }
           git check-ref-format "refs/heads/${SYNC_BRANCH}"
 
       - name: Checkout main
