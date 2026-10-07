@@ -570,7 +570,8 @@ test("an oversized untracked tracker file fails closed instead of being skipped"
   try {
     const huge = path.join(root, ".agents", "pm", "issues", "pm-test-huge.toon");
     fs.writeFileSync(huge, "x".repeat(8 * 1024 * 1024 + 1));
-    assert.throws(() => runTrackerGate({ pmRoot: root }), GateInputError);
+    assert.throws(() => runTrackerGate({ pmRoot: root }), (err: unknown) => err instanceof GateInputError
+      && err.message === "pm github gate: an untracked tracker file exceeds the 8388608-byte scan cap; refusing to guess.");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -900,6 +901,10 @@ test("pm github gate scans an explicit --diff file and honors --allowlist", asyn
     assert.strictEqual(report.source, "diff");
     assert.strictEqual(report.allowlisted, 1);
     assert.strictEqual(report.scanned_files, 1);
+    // A malformed allowlist is refused with a clean, redaction-safe diagnostic.
+    fs.writeFileSync(allowlistFile, "{");
+    await assert.rejects(runGateCommand("/unused", { diff: diffFile, allowlist: allowlistFile }),
+      (err: unknown) => err instanceof Error && err.message === "pm github gate: allowlist file is not valid JSON.");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -747,7 +747,7 @@ export function collectTrackerChange(
       }
       if (size > UNTRACKED_FILE_BYTE_CAP) {
         throw new GateInputError(
-          `pm github gate: untracked tracker file is too large to scan ; refusing to guess.`,
+          `pm github gate: an untracked tracker file exceeds the ${UNTRACKED_FILE_BYTE_CAP}-byte scan cap; refusing to guess.`,
         );
       }
       changes.push(wholeFileChange(absolute, filePath, symlink ? (file) => fs.readlinkSync(file) : readFileSync));
@@ -807,7 +807,7 @@ export function readGateAllowlist(
   try {
     parsed = JSON.parse(raw);
   } catch {
-    throw new GateInputError(`pm github gate: allowlist file is not valid JSON: (allowlist)`);
+    throw new GateInputError("pm github gate: allowlist file is not valid JSON.");
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new GateInputError(`pm github gate: allowlist file must be a JSON object keyed by content hash`);
@@ -956,7 +956,7 @@ export function runTrackerGate(input: TrackerGateInput): GateReport {
     // unwrapped instead of being re-labelled as an unreadable input.
     if (err instanceof Error && err.message.startsWith("pm github gate:")) throw err;
     throw new GateInputError(
-      `pm github gate: could not read the proposed tracker change; input is unavailable.`,
+      "pm github gate: could not read the proposed tracker change; input is unavailable.",
     );
   }
 
