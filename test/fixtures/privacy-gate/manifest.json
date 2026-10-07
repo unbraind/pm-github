@@ -19,5 +19,12 @@
   },
   "c93b7ed28c1dd97c0de125b8bbd34d0b7d0bcc07": {
     "justification": "Synthetic review fixture test/fixtures/privacy-gate/synthetic-host-path.txt: token and path values are padded placeholder characters documented in README.md; no real credential or host path."
+  },
+  "68d83c8dc9bfa15914bf503eded87573dcb8a619": {
+    "justification": "Inherited test/gate.test.ts blob in implementation checkpoint contains a literal synthetic private-key header only, without key material. Current fixtures construct the header at runtime. Exact historical blob reviewed; no credential exemption applies to current imports.",
+    "historical_test": {
+      "commit": "434df4237bdf7d5fdd3ddbd7ae42ce10d75e13ae",
+      "path": "test/gate.test.ts"
+    }
   }
 }

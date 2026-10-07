@@ -351,7 +351,7 @@ test("the entry path produces the package verifier's own report for every publis
           `${shape.name}: the exit code must follow the verdict`,
         );
 
-        process.exitCode = savedExitCode;
+        process.exitCode = savedExitCode ?? 0;
         const packageOutput = capture(() => {
           report(verify(fixture), (line) => process.stdout.write(`${line}\n`), (code) => { process.exitCode = code; });
         });
@@ -375,7 +375,7 @@ test("the entry path produces the package verifier's own report for every publis
           assert.doesNotMatch(launcherOutput, /FAIL - /u, `${shape.name}: an attested publish must produce no failure`);
         }
       } finally {
-        process.exitCode = savedExitCode;
+        process.exitCode = savedExitCode ?? 0;
       }
       },
     );

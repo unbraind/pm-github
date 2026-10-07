@@ -6,12 +6,14 @@ import {
   buildProjectImportPlan,
   buildProjectPullPlan,
   buildProjectPushPlan,
+  decodeItemId,
   indexPmByIssue,
   indexPmByProjectItem,
   indexProjectItemsByIssue,
   mapOptionNameToPmStatus,
   parseProjectRef,
   parseProjectItemTag,
+  parseAssignmentMap,
   parseStatusMap,
   projectItemTag,
   resolveOptionForStatus,
@@ -45,6 +47,71 @@ test("parseProjectRef parses owner/number, owner#number, and URLs", () => {
     owner: "steve",
     number: 2,
   });
+});
+
+test("project provenance rejects incomplete hex encodings without accepting another board", () => {
+  for (const invalid of ["", "a", "gg", "00z0"]) assert.equal(decodeItemId(invalid), undefined);
+  assert.equal(decodeItemId(Buffer.from("PVTI_fixture").toString("hex").toUpperCase()), "PVTI_fixture");
+  assert.equal(parseProjectItemTag("gh-project:acme/5#a"), undefined);
+  assert.equal(parseProjectRef("  "), undefined);
+  assert.equal(parseProjectRef("acme/" + "9".repeat(400)), undefined);
+});
+
+test("status mapping falls back only when the board did not provide an explicit matching override", () => {
+  assert.equal(resolveOptionForStatus(undefined, STATUS_FIELD.options)?.id, "opt_todo");
+  assert.equal(resolveOptionForStatus("custom", STATUS_FIELD.options)?.id, "opt_todo");
+  assert.equal(mapOptionNameToPmStatus("Done", new Map([["open", "Queued"]])), "closed");
+  assert.equal(mapOptionNameToPmStatus("Unrecognized", new Map()), undefined);
+  assert.equal(parseStatusMap([" = Todo", "open = "]), undefined);
+  assert.deepEqual(parseAssignmentMap(["Bug=defect"]), new Map([["Bug", "defect"]]));
+});
+
+test("project indexes omit redacted content and tolerate missing local provenance", () => {
+  assert.equal(indexPmByProjectItem([{ id: "unlinked" }], REF).size, 0);
+  assert.equal(indexPmByIssue([{ id: "unlinked" }]).size, 0);
+  assert.equal(indexProjectItemsByIssue([{ id: "redacted", content: null } as unknown as ProjectItem]).size, 0);
+  assert.equal(indexProjectItemsByIssue([{ id: "no-number", content: { typename: "Issue", title: "", repo: "acme/widgets" } }]).size, 0);
+});
+
+test("push planning reconciles issue links, stale board links, missing metadata, and boards without Status", () => {
+  const board: ProjectItem[] = [{ id: "issue", content: { typename: "Issue", title: "", repo: "acme/widgets", number: 7 } }];
+  const local = [
+    null, {}, { id: "default" },
+    { id: "issue", tags: ["unrelated", "gh:acme/widgets#7"] },
+    { id: "stale", tags: [projectItemTag({ owner: "acme", number: 2 }, "foreign"), projectItemTag(REF, "gone")] },
+  ];
+  const plan = buildProjectPushPlan(local, REF, board, undefined);
+  assert.equal(plan.entries.length, 3);
+  assert.equal(plan.entries[0].title, "(untitled)");
+  assert.equal(plan.entries[0].action, "add-draft");
+  assert.equal(plan.entries[1].action, "noop");
+  assert.equal(plan.entries[1].reason, "project has no Status field");
+  assert.equal(plan.entries[2].action, "add-draft");
+  const unmapped = buildProjectPushPlan([{ id: "linked", status: "blocked", tags: ["gh:acme/widgets#7"] }], REF, board, STATUS_FIELD);
+  assert.equal(unmapped.entries[0].reason, 'pm status "blocked" has no matching board option');
+});
+
+test("pull planning uses issue provenance with missing local metadata and leaves absent statuses alone", () => {
+  const local = [{ id: "linked", tags: ["gh:acme/widgets#7"] }];
+  const plan = buildProjectPullPlan(local, REF, [
+    { id: "issue", statusName: "Done", content: { typename: "Issue", title: "", repo: "ACME/widgets", number: 7 } },
+    { id: "no-status", content: { typename: "Issue", title: "", repo: "acme/widgets", number: 7 } },
+    { id: "unlinked", content: { typename: "Issue", title: "", repo: "acme/widgets" } },
+  ]);
+  assert.deepEqual(plan.entries, [{ itemId: "issue", pmId: "linked", title: "(untitled)", fromStatus: "open", toStatus: "closed" }]);
+  assert.deepEqual(plan.statusSkipped, []);
+});
+
+test("import planning recovers untitled and canceled items using issue provenance", () => {
+  const plan = buildProjectImportPlan([
+    { id: "cancel", content: { typename: "Issue", title: "", repo: "acme/widgets", number: 7, state: "closed", stateReason: "not_planned" } },
+    { id: "blank", content: { typename: "DraftIssue", title: "  " } },
+  ], REF, [{ id: "linked", tags: ["gh:acme/widgets#7"] }]);
+  assert.equal(plan[0].action, "update");
+  assert.equal(plan[0].pmId, "linked");
+  assert.equal(plan[0].status, "canceled");
+  assert.equal(plan[0].title, "(project item cancel)");
+  assert.equal(plan[1].title, "(project item blank)");
 });
 
 test("parseProjectRef rejects garbage", () => {

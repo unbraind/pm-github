@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import * as sdk from "@unbrained/pm-cli/sdk";
 
 import {
   CommandError,
@@ -305,7 +306,6 @@ test("atomic update and close commit together", async () => {
 test("a failed atomic batch compensates every applied create", async () => {
   const root = freshTracker();
   try {
-    const sdk = await import("@unbrained/pm-cli/sdk");
     const wrappingCommit = async (options: Parameters<typeof sdk.commitItemMutations>[0]) => {
       const settings = await sdk.readSettings(options.pmRoot);
       const brokenId = sdk.normalizeItemId("github-broken", settings.id_prefix);
@@ -346,7 +346,6 @@ test("a failed atomic batch compensates every applied create", async () => {
 test("a failed mixed batch restores pre-existing updates and closes", async () => {
   const root = freshTracker();
   try {
-    const sdk = await import("@unbrained/pm-cli/sdk");
     const initialEntries = [entry(30, "Original update target"), entry(31, "Original close target")];
     const initial = await importGithubAtomic(root, "acme/widgets", initialEntries);
     const updateId = initial.itemIds.get(30);

@@ -2,6 +2,7 @@
 //
 // Capabilities (see manifest.json):
 //   commands   — `pm gh-issues import` (legacy) + `pm github sync` +
+//                `pm github gate` (fail-closed pre-push privacy gate) +
 //                `pm github project list|fields|import|sync` (Projects v2)
 //   importers  — `pm github import <owner/repo>` (idempotent native import)
 //   exporters  — `pm github export` (render pm items as a GitHub-issues payload)
@@ -47,6 +48,18 @@ import {
 import { collectNewOrderingCycleWarnings as sdkCollectNewOrderingCycleWarnings } from "@unbrained/pm-cli/sdk/graph";
 
 import {
+  type TrackerGateInput,
+  type GateReport,
+  type GateVerdict,
+  GateInputError,
+  formatGateReport,
+  runTrackerGate,
+  resolvePmDataDir,
+} from "./gate.ts";
+
+export { resolvePmDataDir } from "./gate.ts";
+
+import {
   type ProjectItem,
   type ProjectItemContent,
   type ProjectMeta,
@@ -58,6 +71,7 @@ import {
   parseProjectItemTag,
   parseProjectRef,
   parseStatusMap,
+  parseAssignmentMap,
   projectItemTag,
 } from "./projects.ts";
 
@@ -167,6 +181,10 @@ export interface ImportOptions {
   atomic: boolean;
   /** When true, run the `--link-deps` dependency-edge second pass after import. */
   linkDeps: boolean;
+  /** When true, verify plan completeness + provenance idempotency before the
+   *  write, and run the fail-closed tracker privacy gate after it, failing the
+   *  import (non-zero) on any credential, personal-data, or host-path finding. */
+  gate: boolean;
 }
 
 type CommitItemMutations = (
@@ -246,19 +264,19 @@ export interface FetchResult {
 export function resolveGitHubToken(): string | undefined {
   const envToken = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
   if (envToken && envToken.trim()) return envToken.trim();
-  try {
-    const result = spawnSync("gh", ["auth", "token"], { encoding: "utf-8" });
-    if (result.status === 0) {
-      const token = result.stdout.trim();
-      if (token) return token;
-    }
-  } catch {
-    // gh not installed — fall back to unauthenticated requests.
+  // spawnSync never throws for a missing executable: it reports ENOENT through
+  // `result.error`/`status: null` (verified against the Node subprocess
+  // contract), and the arguments here are fixed and valid, so there is no
+  // throwable failure left — the status check below is the whole boundary.
+  const result = spawnSync("gh", ["auth", "token"], { encoding: "utf-8", env: { ...process.env } });
+  if (result.status === 0) {
+    const token = result.stdout.trim();
+    if (token) return token;
   }
   return undefined;
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number) => new Promise((r) => { setTimeout(r, ms); });
 
 /**
  * Decide whether the Authorization token may be forwarded across a redirect.
@@ -346,7 +364,8 @@ function requestOnce(
   payload?: string,
   redirectsLeft = 5,
 ): Promise<FetchResult> {
-  return new Promise((resolve, reject) => {
+  let deadline: ReturnType<typeof setTimeout> | undefined;
+  return new Promise<FetchResult>((resolve, reject) => {
     const headers: Record<string, string> = {
       "User-Agent": "pm-github",
       Accept: "application/vnd.github+json",
@@ -363,7 +382,7 @@ function requestOnce(
     const target = new URL(url);
     const transport = target.protocol === "http:" ? http : https;
     const req = transport.request(target, { method, headers }, (res) => {
-      const status = res.statusCode ?? 0;
+      const status = res.statusCode!; // Node guarantees an Integer statusCode on every ClientResponse.
       if (status >= 300 && status < 400 && res.headers.location) {
         // Drain the redirect response so the socket is returned to the pool.
         res.resume();
@@ -400,12 +419,18 @@ function requestOnce(
       });
     });
     req.on("error", reject);
-    req.setTimeout(30000, () => {
-      req.destroy(new Error("request timed out after 30s"));
-    });
+    // A wall-clock deadline also bounds redirects and stalled response bodies.
+    // Bun's ClientRequest socket timeout can fail to fire on a silent server.
+    deadline = setTimeout(() => {
+      const error = new Error("request timed out after 30s");
+      // Reject before destroy: Bun can synchronously emit response end during
+      // destruction, which must never turn a truncated timed-out body into success.
+      reject(error);
+      req.destroy(error);
+    }, 30000);
     if (payload) req.write(payload);
     req.end();
-  });
+  }).finally(() => clearTimeout(deadline));
 }
 
 /**
@@ -518,7 +543,22 @@ export function formatRateLimit(info: RateLimitInfo): string | undefined {
 
 // Decide whether a failed HTTP response is worth retrying: 429, any 5xx, or a
 // 403 that is actually a primary/secondary rate-limit wall (remaining=0).
-function isRetryableStatus(status: number, headers: Record<string, string | string[] | undefined>): boolean {
+//
+/**
+ * Decide whether a failed HTTP response is worth retrying.
+ *
+ * Retries 429, any 5xx, and a 403 that is actually a primary/secondary
+ * rate-limit wall (remaining=0 or a Retry-After). Mixed-case header keys are
+ * honored defensively: Node's HTTP client lowercases response names, but the
+ * shared headers record also serves boundary tests that pass other shapes.
+ *
+ * @internal Exported only so the HTTP-boundary tests can drive the real
+ * decision. `stripInternal` keeps it out of the published `.d.ts`.
+ * @param status - The HTTP status code of the failed response.
+ * @param headers - The response headers to read the rate-limit hints from.
+ * @returns True when the request should be retried with backoff.
+ */
+export function isRetryableStatus(status: number, headers: Record<string, string | string[] | undefined>): boolean {
   if (status === 429) return true;
   if (status >= 500) return true;
   // Secondary/primary rate limit surfaces as 403 with remaining=0.
@@ -610,7 +650,7 @@ export function optionString(options: Record<string, unknown>, ...keys: string[]
 
 // Whether an option key was explicitly provided (even if empty/falsey).
 export function optionProvided(options: Record<string, unknown>, ...keys: string[]): boolean {
-  return keys.some((k) => Object.prototype.hasOwnProperty.call(options, k));
+  return keys.some((k) => Object.hasOwn(options, k));
 }
 
 // Parse a `--since` value into an ISO timestamp the GitHub `since` query param
@@ -651,17 +691,7 @@ export function parseLabelMap(
 ): Map<string, string> | undefined {
   const lookup = keys.length > 0 ? keys : ["label-map", "labelMap"];
   const raw = optionCsv(options, ...lookup);
-  if (raw.length === 0) return undefined;
-  const map = new Map<string, string>();
-  for (const entry of raw) {
-    const eq = entry.indexOf("=");
-    if (eq <= 0) continue; // need a non-empty "from" before the '='
-    const from = entry.slice(0, eq).trim();
-    const to = entry.slice(eq + 1).trim();
-    if (!from || !to) continue;
-    map.set(from, to);
-  }
-  return map.size > 0 ? map : undefined;
+  return parseAssignmentMap(raw);
 }
 
 // Apply a label translation table to a list of labels. Labels with a mapping
@@ -1123,7 +1153,7 @@ export function readPmItems(
   const result = spawnSync(
     command,
     args,
-    { encoding: "utf-8", maxBuffer },
+    { encoding: "utf-8", maxBuffer, env: { ...process.env } },
   );
   // A buffer overrun kills the child with status null and no stderr, so name the
   // real cause instead of reporting an unexplained failure.
@@ -1210,6 +1240,11 @@ export function indexByProvenance(items: PmItem[]): Map<string, PmItem> {
   return index;
 }
 
+/** Render thrown values consistently across subprocess, SDK, and HTTP boundaries. */
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 // ---------------------------------------------------------------------------
 // Atomic GitHub issue import (pm-cli >= 2026.7.20 commitItemMutations)
 // ---------------------------------------------------------------------------
@@ -1292,18 +1327,22 @@ async function resolveAtomicSdkFunctions(opts: AtomicImportOptions): Promise<{
   normalizeItemId: NormalizeItemId;
   readSettings: ReadSettings;
 }> {
-  const needsSdk = !opts.commitItemMutations || !opts.normalizeItemId || !opts.readSettings;
   return {
+    // Each `??` fallback runs only when the injected option is absent, so the
+    // SDK function is always the value handed onward; a separate `needsSdk ?`
+    // branch inside the fallback can never select anything else (when every
+    // option is injected the fallbacks do not run at all), so the SDK binding
+    // is passed directly.
     commitItemMutations: opts.commitItemMutations ?? assertSdkFunction<CommitItemMutations>(
-      needsSdk ? sdkCommitItemMutations : undefined,
+      sdkCommitItemMutations,
       "commitItemMutations",
     ),
     normalizeItemId: opts.normalizeItemId ?? assertSdkFunction<NormalizeItemId>(
-      needsSdk ? sdkNormalizeItemId : undefined,
+      sdkNormalizeItemId,
       "normalizeItemId",
     ),
     readSettings: opts.readSettings ?? assertSdkFunction<ReadSettings>(
-      needsSdk ? sdkReadSettings : undefined,
+      sdkReadSettings,
       "readSettings",
     ),
   };
@@ -1512,7 +1551,7 @@ export async function importGithubAtomic(
       itemIds,
     };
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     if (err instanceof AggregateError || /compensation failed/i.test(msg)) {
       throw new CommandError(
         `Atomic GitHub import failed and compensation was incomplete. The tracker may contain partially applied state; retry the same import to resume transaction ${transactionId}, then inspect its durable journal if recovery still fails. Underlying error: ${msg}`,
@@ -1594,9 +1633,9 @@ export async function fetchComments(issue: GhIssue, repo: string, token?: string
     try {
       page = JSON.parse(body);
     } catch {
-      break;
+      throw new CommandError("GitHub comments response is not valid JSON.");
     }
-    if (!Array.isArray(page)) break;
+    if (!Array.isArray(page)) throw new CommandError("GitHub comments response must be an array.");
     comments.push(...(page as GhComment[]));
     nextUrl = parseNextLink(linkHeader);
   }
@@ -1705,27 +1744,6 @@ export type ImportLockAcquisition =
   | { status: "degraded" };
 
 /**
- * Resolve the pm data dir from the `pmRoot` a command handler receives.
- *
- * The host may hand either the workspace root (the dir containing `.agents/pm`)
- * or the data dir itself — the pm CLI accepts both for `--path`. This returns
- * the dir that actually holds `settings.json` and `locks/`, defaulting to
- * `pmRoot` unchanged when no nested `.agents/pm` exists.
- *
- * @param pmRoot - The path supplied by the extension host.
- * @returns The resolved pm data directory.
- */
-export function resolvePmDataDir(pmRoot: string): string {
-  const nested = path.join(pmRoot, ".agents", "pm");
-  try {
-    if (fs.statSync(nested).isDirectory()) return nested;
-  } catch {
-    // Not the workspace-root form — assume pmRoot already is the data dir.
-  }
-  return pmRoot;
-}
-
-/**
  * Absolute lock file path for one item's comment-sync critical section.
  *
  * The item id is sanitized defensively: pm ids are already filename-safe, but
@@ -1772,13 +1790,17 @@ function readImportLockPayload(lockPath: string): ImportLockPayload | undefined 
  *
  * Signals the PID with signal 0 (no effect); `EPERM` means the process exists
  * but belongs to another user (still alive), while `ESRCH` means it is gone.
- * Non-numeric or non-positive PIDs are treated as not-alive.
+ * Non-positive PIDs are treated as not-alive. The sole production caller already
+ * rejects non-numeric PIDs before calling, so this function does not re-check the type.
  *
- * @param pid - The recorded owner PID (untyped at the call site).
+ * @internal Exported so the lock tests can drive the PID boundary directly.
+ * `stripInternal` keeps it out of the published declarations.
+ * @param pid - The recorded owner PID. Callers pass a positive integer; non-positive
+ * values are rejected here so a direct call cannot signal the process group.
  * @returns True when the PID names a live process.
  */
-function isLockOwnerAlive(pid: unknown): boolean {
-  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return false;
+export function isLockOwnerAlive(pid: number): boolean {
+  if (pid <= 0) return false;
   try {
     process.kill(pid, 0);
     return true;
@@ -1946,7 +1968,7 @@ export async function acquireImportLock(
     lockPath = importCommentSyncLockPath(pmRoot, itemId);
     fs.mkdirSync(path.dirname(lockPath), { recursive: true });
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     console.error(`pm-github: comment-sync lock unavailable (${msg}) — proceeding without cross-process serialization`);
     return { status: "degraded" };
   }
@@ -2009,17 +2031,22 @@ export async function acquireImportLock(
       }
       const code = (err as NodeJS.ErrnoException)?.code;
       if (code !== "EEXIST") {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         console.error(`pm-github: comment-sync lock failed (${msg}) — proceeding without cross-process serialization`);
         return { status: "degraded" };
       }
-      // The lock exists. If it vanished before we could stat it, retry at once.
+      // The lock exists for open(O_EXCL) but cannot be stat'd (it vanished, or
+      // it is a broken symlink). Retry, but honor the wait budget: a persistent
+      // stat failure must not busy-spin the process until an external killer.
       let existing: ImportLockPayload | undefined;
       let mtimeMs = Number.NaN;
       try {
         mtimeMs = fs.statSync(lockPath).mtimeMs;
         existing = readImportLockPayload(lockPath);
       } catch {
+        const vanishedForMs = Date.now() - startedAt;
+        if (vanishedForMs >= waitMs) return { status: "contended" };
+        await sleep(Math.min(backoffMs, Math.max(1, waitMs - vanishedForMs)));
         continue;
       }
       const staleReason = importLockStaleReason(lockPath, existing, mtimeMs, ttlMs);
@@ -2157,30 +2184,32 @@ export function parseCreatedItemId(stdout: string): string | undefined {
  *
  * Idempotent: comments already present (matched by their marker id) are skipped,
  * so re-running import never duplicates. Each GitHub comment becomes one pm
- * comment authored by the GitHub login. Failures are logged and never abort the
- * import; a contended or unavailable lock degrades gracefully (see
- * {@link acquireImportLock}).
+ * comment authored by the GitHub login. Failures are reported in the returned
+ * `failed` count and logged, never thrown: a contended or unavailable lock, an
+ * unreadable existing-comment collection, and each refused add all count every
+ * comment that did not land (see {@link acquireImportLock}). Gated callers turn
+ * a non-zero `failed` count into a fail-closed refusal; ungated ones continue.
  *
  * @param itemId - The pm item to append comments to.
  * @param comments - The GitHub comments to sync.
  * @param pmRoot - Workspace root or pm data dir.
  * @param issueNumber - The source issue number (for log prefixes).
- * @returns How many comments were added and how many skipped as duplicates.
+ * @returns How many comments were added, skipped as duplicates, and not written.
  */
 export async function syncGithubCommentsToAnnotations(
   itemId: string,
   comments: GhComment[],
   pmRoot: string,
   issueNumber: number,
-): Promise<{ added: number; skipped: number }> {
-  if (comments.length === 0) return { added: 0, skipped: 0 };
+): Promise<{ added: number; skipped: number; failed: number }> {
+  if (comments.length === 0) return { added: 0, skipped: 0, failed: 0 };
   const acquisition = await acquireImportLock(pmRoot, itemId);
   if (acquisition.status === "contended") {
     console.error(
       `#${issueNumber}: comment sync for ${itemId} skipped — another import holds the ` +
         `comment-sync lock; re-run import to pick up the comments`,
     );
-    return { added: 0, skipped: 0 };
+    return { added: 0, skipped: 0, failed: comments.length };
   }
   const release = acquisition.status === "acquired" ? () => acquisition.lock.release() : () => {};
   try {
@@ -2189,13 +2218,14 @@ export async function syncGithubCommentsToAnnotations(
       const list: CommentsResult = await pmCommentsFn(itemId, {}, { pmRoot });
       existing = list.comments;
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       console.error(`#${issueNumber}: could not read existing comments for ${itemId} — ${msg}`);
-      return { added: 0, skipped: 0 };
+      return { added: 0, skipped: 0, failed: comments.length };
     }
     const synced = extractSyncedCommentIds(existing);
     let added = 0;
     let skipped = 0;
+    let failed = 0;
     for (const c of comments) {
       if (synced.has(c.id)) {
         skipped++;
@@ -2206,11 +2236,12 @@ export async function syncGithubCommentsToAnnotations(
         await pmCommentsFn(itemId, { add: buildCommentText(c), author }, { pmRoot });
         added++;
       } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage(err);
         console.error(`#${issueNumber}: comment ${c.id} sync failed — ${msg}`);
+        failed++;
       }
     }
-    return { added, skipped };
+    return { added, skipped, failed };
   } finally {
     release();
   }
@@ -2315,6 +2346,7 @@ export function parseImportOptions(options: Record<string, unknown>): ImportOpti
     dryRun: optionEnabled(options, "dry-run", "dryRun"),
     atomic: optionEnabled(options, "atomic"),
     linkDeps: optionEnabled(options, "link-deps", "linkDeps"),
+    gate: optionEnabled(options, "gate"),
   };
 }
 
@@ -2323,7 +2355,7 @@ export function parseImportOptions(options: Record<string, unknown>): ImportOpti
 // error-handling shape.
 function pmRun(args: string[]): { ok: boolean; stderr: string; stdout: string } {
   const maxBuffer = pmJsonMaxBuffer();
-  const result = spawnSync("pm", args, { encoding: "utf-8", maxBuffer });
+  const result = spawnSync("pm", args, { encoding: "utf-8", maxBuffer, env: { ...process.env } });
   return { ok: result.status === 0, stderr: result.stderr || "", stdout: result.stdout || "" };
 }
 
@@ -2630,7 +2662,7 @@ export async function linkImportedDependencies(
       linked: 0,
       unresolved: 0,
       orderingCycleWarnings: [],
-      failures: [`dependency linking skipped: ${err instanceof Error ? err.message : String(err)}`],
+      failures: [`dependency linking skipped: ${errorMessage(err)}`],
     };
   }
 
@@ -2663,7 +2695,7 @@ export async function linkImportedDependencies(
         for (const w of collect(before, after, id)) warnings.add(w);
       }
     } catch (err: unknown) {
-      failures.push(`ordering-cycle advisory skipped: ${err instanceof Error ? err.message : String(err)}`);
+      failures.push(`ordering-cycle advisory skipped: ${errorMessage(err)}`);
     }
   }
   return { linked, unresolved, orderingCycleWarnings: [...warnings], failures };
@@ -2708,7 +2740,9 @@ async function prepareGithubImport(
     try {
       comments = await fetchIssueComments!(issue, repo, token);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
+      if (opts.gate) throw new CommandError(`pm github gate: comments for issue #${issue.number} could not be read.`);
+      // The gated case throws above, so this diagnostic always names the plain path.
       console.error(`#${issue.number}: failed to fetch comments — ${msg}`);
     }
   }
@@ -2735,14 +2769,219 @@ async function prepareGithubImport(
   };
 }
 
+/** Receipts from the gated import's completeness check. */
+export interface ImportPlanCompletenessReceipts {
+  /** Number of issues the fetch delivered after filtering. */
+  readonly fetched: number;
+  /** Number of issues the plan prepares to import or update. */
+  readonly planned: number;
+  /** Number of issues the plan explicitly skips (e.g. empty titles). */
+  readonly skipped: number;
+}
+
+/** Receipts from the gated import's idempotency check. */
+export interface ImportIdempotencyReceipts {
+  /** Distinct `gh:owner/repo#N` provenance keys in the existing corpus. */
+  readonly provenance_indexed: number;
+  /** Number of plan entries matched to an existing item via its provenance tag. */
+  readonly matched_by_provenance: number;
+  /** Number of plan entries that will be born new; each must carry its tag. */
+  readonly new_entries: number;
+}
+
+/**
+ * Verify that a gated import's plan accounts for every fetched issue exactly once.
+ *
+ * An import that silently drops an issue (or plans one twice) would leave the
+ * tracker out of sync with GitHub while reporting success, and the sync PR
+ * would then publish an incomplete state. The check is fail-closed: every
+ * filtered issue number must appear in the prepared entries or the explicit
+ * skip list exactly once, nothing outside the fetched set may appear, and the
+ * counts must reconcile. A violation throws {@link CommandError} before any
+ * mutation happens.
+ *
+ * @param issues - The filtered issues the fetch delivered.
+ * @param prepared - The plan entries built from them.
+ * @param skippedNumbers - Issue numbers the plan explicitly skips.
+ * @returns The reconciled counts on success.
+ */
+export function verifyImportPlanCompleteness(
+  issues: readonly GhIssue[],
+  prepared: readonly PreparedGithubImport[],
+  skippedNumbers: readonly number[],
+): ImportPlanCompletenessReceipts {
+  const fetched = new Set(issues.map((issue) => issue.number));
+  const planned = new Set<number>();
+  let duplicates = 0;
+  for (const entry of prepared) {
+    if (planned.has(entry.issueNumber)) duplicates++;
+    planned.add(entry.issueNumber);
+  }
+  const skippedSet = new Set(skippedNumbers);
+  const unaccounted = [...fetched].filter(
+    (number) => !planned.has(number) && !skippedSet.has(number),
+  );
+  const foreign = [...planned, ...skippedNumbers].filter(
+    (number) => !fetched.has(number),
+  );
+  const countsReconcile = prepared.length + skippedNumbers.length === issues.length;
+  const overlapping = skippedNumbers.some((number) => planned.has(number));
+  const duplicateFetch = fetched.size !== issues.length;
+  const duplicateSkip = skippedSet.size !== skippedNumbers.length;
+  if (overlapping || duplicateFetch || duplicateSkip || duplicates > 0 || unaccounted.length > 0 || foreign.length > 0 || !countsReconcile) {
+    throw new CommandError(
+      `pm github gate: import plan is incomplete — fetched ${issues.length}, planned ${prepared.length}, ` +
+        `skipped ${skippedNumbers.length}; duplicates ${duplicates}, unaccounted [${unaccounted.join(", ")}], ` +
+        `out-of-plan [${foreign.join(", ")}]. No item was written.`,
+      EXIT_CODE.GENERIC_FAILURE,
+    );
+  }
+  return { fetched: issues.length, planned: prepared.length, skipped: skippedNumbers.length };
+}
+
+/**
+ * Verify that a gated import's plan keeps a second run a no-op via provenance tags.
+ *
+ * Idempotency is only real when every re-import lands on exactly one item: a
+ * corpus with two items sharing a `gh:owner/repo#N` tag updates one and lets the
+ * other drift, and a plan entry targeting a second entry's item would write the
+ * same item twice. The check fails closed on duplicate provenance tags in the
+ * existing corpus, on plan entries that would create a new item without its
+ * provenance tag, and on two plan entries resolving to the same existing item.
+ *
+ * @param existing - The complete existing pm item corpus.
+ * @param prepared - The plan entries about to be written.
+ * @param repo - The `owner/repo` being imported from.
+ * @returns The provenance idempotency receipts on success.
+ */
+export function verifyImportIdempotency(
+  existing: readonly PmItem[],
+  prepared: readonly PreparedGithubImport[],
+  repo: string,
+): ImportIdempotencyReceipts {
+  const tagOwners = new Map<string, string>();
+  const duplicateTags = new Set<string>();
+  for (const item of existing) {
+    if (!item.id) continue;
+    for (const tag of item.tags ?? []) {
+      const parsed = parseProvenanceTag(tag);
+      if (!parsed) continue;
+      const key = `${parsed.repo}#${parsed.number}`;
+      const prior = tagOwners.get(key);
+      if (prior && prior !== item.id) duplicateTags.add(key);
+      else tagOwners.set(key, item.id);
+    }
+  }
+  const matchedIds: string[] = [];
+  let untaggedNewEntries = 0;
+  for (const entry of prepared) {
+    if (entry.match?.id) {
+      matchedIds.push(entry.match.id);
+      continue;
+    }
+    if (!entry.tags.includes(provenanceTag(repo, entry.issueNumber))) untaggedNewEntries++;
+  }
+  const conflictingTargets = matchedIds.length - new Set(matchedIds).size;
+  if (duplicateTags.size > 0 || untaggedNewEntries > 0 || conflictingTargets > 0) {
+    throw new CommandError(
+      `pm github gate: import plan is not idempotent — ${duplicateTags.size} duplicate provenance tag(s) ` +
+        `in the existing corpus, ${untaggedNewEntries} new entr(y/ies) without a provenance tag, ` +
+        `${conflictingTargets} conflicting target(s). No item was written.`,
+      EXIT_CODE.GENERIC_FAILURE,
+    );
+  }
+  return {
+    provenance_indexed: tagOwners.size,
+    matched_by_provenance: matchedIds.length,
+    new_entries: prepared.length - matchedIds.length,
+  };
+}
+
+/**
+ * Verify the persisted corpus actually contains every issue in the written plan.
+ *
+ * A recovered SDK journal alone is insufficient evidence after local files are
+ * reset or removed. Require unique durable provenance before a caller may push.
+ *
+ * @param existing - Complete post-write item corpus.
+ * @param prepared - Every entry the verified plan required.
+ * @param repo - Source repository whose provenance must be present.
+ * @returns Number of durable issue identities verified.
+ */
+export function verifyImportedProvenance(existing: PmItem[], prepared: readonly PreparedGithubImport[], repo: string): number {
+  const index = indexByProvenance(existing);
+  const persisted = prepared.map(entry => ({ ...entry, match: index.get(`${repo.toLowerCase()}#${entry.issueNumber}`) }));
+  if (persisted.some(entry => !entry.match?.id)) throw new CommandError("pm github gate: persisted corpus does not account for the complete import plan. Nothing may be pushed.");
+  verifyImportIdempotency(existing, persisted, repo);
+  return persisted.length;
+}
+
+/** Receipt of the fail-closed tracker privacy gate embedded in an import result. */
+export interface ImportGateReceipt {
+  /** The gate verdict for the proposed tracker change. */
+  verdict: GateVerdict;
+  /** Number of files whose added lines were scanned. */
+  scanned_files: number;
+  /** Number of findings that survived the allowlist (0 on pass). */
+  findings: number;
+  /** Number of reviewed findings suppressed by the content-hash allowlist. */
+  allowlisted: number;
+}
+
+/**
+ * Execute the real tracker gate with the shared fail-closed command error boundary.
+ *
+ * @internal Exported to verify collaborator failures against real Git fixtures.
+ * @param input - Tracker root and optional gate input dependencies.
+ * @returns A completed gate report; unexpected errors are redacted.
+ */
+export function runCommandTrackerGate(input: TrackerGateInput): GateReport {
+  try {
+    return runTrackerGate(input);
+  } catch (error: unknown) {
+    throw new CommandError(error instanceof GateInputError ? error.message : "pm github gate: scanner error; scan did not complete.", EXIT_CODE.GENERIC_FAILURE);
+  }
+}
+
+/**
+ * Run the post-write tracker privacy gate and turn its outcome into a receipt.
+ *
+ * Runs the real gate over the proposed tracker change the import just wrote,
+ * emits the human-readable report to stderr, and throws {@link CommandError}
+ * with the findings (rule + item + field + hash — never the matched content)
+ * when the verdict is fail, so a caller higher in the pipeline (a sync workflow)
+ * never reaches its commit/push step on a gated failure. Gate input failures
+ * (not a Git work tree, unreadable change, malformed allowlist) fail identically.
+ *
+ * @param pmRoot - Workspace root or pm data dir the import wrote to.
+ * @returns The pass receipt, embedded into the import result.
+ */
+function gateImportWrites(pmRoot: string): ImportGateReceipt {
+  const report = runCommandTrackerGate({ pmRoot });
+  const lines = formatGateReport(report);
+  console.error(lines.join("\n"));
+  if (report.verdict === "fail") {
+    throw new CommandError(JSON.stringify({ ...report, error: "pm github gate: FAIL" }), EXIT_CODE.GENERIC_FAILURE);
+  }
+  return {
+    verdict: report.verdict,
+    scanned_files: report.scanned_files,
+    findings: report.findings.length,
+    allowlisted: report.allowlisted,
+  };
+}
+
 /**
  * Run the full GitHub issue import flow.
  *
  * Idempotent: items already linked (by provenance tag) to a fetched issue are
  * UPDATEd; new issues are created. Honors `--atomic` (one crash-resumable
  * transaction) versus the per-item `pm` mutation path, optional `--link-deps`,
- * and `--dry-run`. Returns a structured result and throws {@link CommandError}
- * (with a semantic exit code) on failure.
+ * and `--dry-run`. With `--gate` the plan is verified (completeness + provenance
+ * idempotency) BEFORE any mutation, and the proposed tracker change is scanned
+ * by the fail-closed privacy gate AFTER it — a gated failure exits non-zero so
+ * a caller never commits or pushes the change. Returns a structured result and
+ * throws {@link CommandError} (with a semantic exit code) on failure.
  *
  * @param repoArg - The `owner/repo` to import from.
  * @param pmRoot - Workspace root or pm data dir.
@@ -2775,7 +3014,7 @@ export async function runImport(
   try {
     fetched = await (dependencies.fetchIssues ?? fetchAllIssues)(repo, opts, token);
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errorMessage(err);
     const hint = !token && /HTTP 403/.test(msg)
       ? " — set GITHUB_TOKEN/GH_TOKEN or run `gh auth login` to raise the rate limit (60→5000/hr) and reach private repos"
       : "";
@@ -2787,6 +3026,9 @@ export async function runImport(
 
   if (filtered.length === 0) {
     console.error("No issues found.");
+    // Even a no-op gated import must prove the workspace is gateable (a Git work
+    // tree the scanner can read), so the empty-change gate scan runs here too.
+    const emptyGateReceipt = opts.gate && !opts.dryRun ? gateImportWrites(pmRoot) : undefined;
     if (opts.atomic && opts.dryRun) {
       return {
         dryRun: true,
@@ -2796,7 +3038,7 @@ export async function runImport(
         atomic: true,
       };
     }
-    return { imported: 0, updated: 0, skipped: 0 };
+    return { imported: 0, updated: 0, skipped: 0, ...(emptyGateReceipt ? { gate: emptyGateReceipt } : {}) };
   }
 
   console.error(`Found ${filtered.length} issue(s).`);
@@ -2806,14 +3048,29 @@ export async function runImport(
   // reported "would import N, skip 0" where the real run performs updates for
   // already-linked issues. A preview that overstates creates reads as "this will
   // duplicate my whole tracker" and is the one thing --dry-run exists to rule out.
-  const existing = indexByProvenance((dependencies.readItems ?? readPmItems)(pmRoot));
+  const existingItems = (dependencies.readItems ?? readPmItems)(pmRoot);
+  const existing = indexByProvenance(existingItems);
 
   let imported = 0;
   let updated = 0;
   let skipped = 0;
+  // Planned native comments the write phase could not land (contended lock,
+  // refused add, unparsable created id). Ungated runs warn and continue; gated
+  // runs add this to the plan-divergence refusal at the end.
+  let commentWriteFailures = 0;
 
-  if (opts.atomic) {
-    const prepared: PreparedGithubImport[] = [];
+  // Gated pipeline, phase 1 — plan BEFORE any mutation. The same prepare step
+  // the write paths use builds every plan entry up front, so completeness
+  // (every fetched issue accounted for exactly once) and idempotency (every
+  // re-import lands on exactly one provenance-tagged item) are proven while
+  // the tracker is still untouched. Both checks throw before any write.
+  let gatePlan: readonly PreparedGithubImport[] | undefined;
+  let gateCompleteness: ImportPlanCompletenessReceipts | undefined;
+  let gateIdempotency: ImportIdempotencyReceipts | undefined;
+  let gatePlanByNumber: Map<number, PreparedGithubImport> | undefined;
+  if (opts.gate || opts.atomic) {
+    const planned: PreparedGithubImport[] = [];
+    const skippedNumbers: number[] = [];
     for (const issue of filtered) {
       const entry = await prepareGithubImport(
         issue,
@@ -2824,11 +3081,46 @@ export async function runImport(
         dependencies.fetchIssueComments,
       );
       if (!entry) {
-        skipped++;
+        skippedNumbers.push(issue.number);
         continue;
       }
-      prepared.push(entry);
+      planned.push(entry);
     }
+    if (opts.gate) {
+    gateCompleteness = verifyImportPlanCompleteness(filtered, planned, skippedNumbers);
+    gateIdempotency = verifyImportIdempotency(
+      existingItems,
+      planned,
+      repo,
+    );
+    }
+    gatePlan = planned;
+    gatePlanByNumber = new Map(planned.map((entry) => [entry.issueNumber, entry]));
+    skipped = skippedNumbers.length;
+    if (opts.gate && !opts.dryRun) {
+      const preview = runCommandTrackerGate({ pmRoot, plannedItems: planned.map(entry => ({
+        itemId: entry.match?.id ?? `github-issue-${entry.issueNumber}`,
+        fields: { title: entry.title, description: entry.description, body: entry.body, tags: entry.tags,
+          assignee: entry.assignee, sprint: entry.milestone,
+          comments: entry.syncAnnotations ? entry.comments.map(comment => ({
+            author: comment.user?.login, text: comment.body, created_at: comment.created_at,
+          })) : [] },
+      })) });
+      if (preview.verdict === "fail") throw new CommandError(JSON.stringify({ ...preview, error: "pm github gate: FAIL before write" }));
+    }
+    if (opts.gate) console.error(
+      `pm github gate: plan verified — ${gateCompleteness!.planned} planned, ${gateCompleteness!.skipped} skipped, ` +
+        `${gateIdempotency!.matched_by_provenance} matched by provenance, ${gateIdempotency!.new_entries} new.`,
+    );
+  }
+
+  const gatePlanFields = opts.gate ? { gate: { completeness: gateCompleteness, idempotency: gateIdempotency, scan: "post-write" } } : {};
+
+  if (opts.atomic) {
+    // The gated pipeline already prepared every entry (and counted its skips)
+    // during the pre-mutation plan phase; reuse that plan verbatim so the write
+    // phase cannot diverge from the verified plan.
+    const prepared: PreparedGithubImport[] = [...gatePlan!];
 
     if (prepared.length === 0) {
       if (opts.dryRun) {
@@ -2852,7 +3144,7 @@ export async function runImport(
       updated = prepared.length - imported;
       for (const entry of prepared) {
         const action = entry.match?.id ? "update" : "import";
-        console.error(`  [dry-run][atomic] #${entry.issueNumber} ${action}: ${entry.title} (${entry.status})`);
+        console.error(`  [dry-run][atomic] #${entry.issueNumber} ${action}: ${opts.gate ? "(gated title)" : entry.title} (${entry.status})`);
       }
       console.error(
         `[dry-run] Atomic plan would import ${imported}, update ${updated}, skip ${skipped}.`,
@@ -2870,22 +3162,32 @@ export async function runImport(
         wouldSkip: skipped,
         atomic: true,
         ...(opts.linkDeps ? { wouldLinkDependencyCandidates: countDependencyRefCandidates(repo, filtered) } : {}),
+        ...gatePlanFields,
       };
     }
 
     const result = await (dependencies.commitAtomic ?? importGithubAtomic)(pmRoot, repo, prepared);
+    if (opts.gate) verifyImportedProvenance((dependencies.readItems ?? readPmItems)(pmRoot), prepared, repo);
+    // Planned native comments are part of the verified plan: a contended lock,
+    // a refused add, or a committed entry whose created id is missing from the
+    // post-commit routing map all leave planned comments unwritten, so they are
+    // counted and gated runs fail closed below instead of exiting clean.
+    let commentWriteFailures = 0;
     for (const entry of prepared) {
       if (!entry.syncAnnotations) continue;
       const itemId = result.itemIds.get(entry.issueNumber);
       if (itemId) {
-        await syncGithubCommentsToAnnotations(
+        commentWriteFailures += (await syncGithubCommentsToAnnotations(
           itemId,
           entry.comments,
           pmRoot,
           entry.issueNumber,
-        );
+        )).failed;
+      } else {
+        commentWriteFailures += entry.comments.length;
       }
     }
+    failClosedOnPlanDivergence(opts.gate, skipped, skipped, commentWriteFailures);
     if (result.recovered) {
       console.error(
         `Atomic import recovered transaction ${result.transactionId} covering ${result.recoveredItems ?? prepared.length} item(s).`,
@@ -2901,6 +3203,9 @@ export async function runImport(
     reportDepLink(atomicDepLink);
     // itemIds is an internal post-commit routing map for native comments. Maps
     // serialize as `{}` in JSON, so keep it out of the public command result.
+    // Gated pipeline, phase 2 — the writes are on disk but nothing is committed
+    // or pushed; scan the proposed tracker change now and fail closed.
+    const gateReceipt = opts.gate ? gateImportWrites(pmRoot) : undefined;
     return {
       transactionId: result.transactionId,
       recovered: result.recovered,
@@ -2910,20 +3215,28 @@ export async function runImport(
       skipped,
       atomic: true,
       ...depLinkResultFields(atomicDepLink),
+      ...(gateReceipt ? { gate: gateReceipt } : {}),
     };
   }
 
   for (const issue of filtered) {
-    const prepared = await prepareGithubImport(
-      issue,
-      repo,
-      opts,
-      token,
-      existing.get(`${repo.toLowerCase()}#${issue.number}`),
-      dependencies.fetchIssueComments,
-    );
+    // With --gate, the pre-mutation plan phase already prepared (or explicitly
+    // skipped) every issue; reuse the verified plan instead of re-preparing so
+    // the write phase cannot diverge from it.
+    const prepared = gatePlanByNumber
+      ? gatePlanByNumber.get(issue.number)
+      : await prepareGithubImport(
+          issue,
+          repo,
+          opts,
+          token,
+          existing.get(`${repo.toLowerCase()}#${issue.number}`),
+          dependencies.fetchIssueComments,
+        );
     if (!prepared) {
-      skipped++;
+      // A gated run counted its skips during the verified plan phase; only the
+      // ungated path counts them here.
+      if (!gatePlanByNumber) skipped++;
       continue;
     }
 
@@ -2961,8 +3274,8 @@ export async function runImport(
 
     if (opts.dryRun) {
       const action = match?.id ? "update" : "import";
-      const metadata = labels.length > 0 ? `${status}, ${labels.join(",")}` : status;
-      console.error(`  [dry-run] #${issue.number} ${action}: ${title} (${metadata})`);
+      const metadata = !opts.gate && labels.length > 0 ? `${status}, ${labels.join(",")}` : status;
+      console.error(`  [dry-run] #${issue.number} ${action}: ${opts.gate ? "(gated title)" : title} (${metadata})`);
       if (match?.id) updated++;
       else imported++;
       continue;
@@ -3006,7 +3319,7 @@ export async function runImport(
         }
       }
       if (syncAnnotations) {
-        await syncGithubCommentsToAnnotations(match.id, comments, pmRoot, issue.number);
+        commentWriteFailures += (await syncGithubCommentsToAnnotations(match.id, comments, pmRoot, issue.number)).failed;
       }
       updated++;
       continue;
@@ -3060,9 +3373,13 @@ export async function runImport(
     }
     if (syncAnnotations) {
       if (createdId) {
-        await syncGithubCommentsToAnnotations(createdId, comments, pmRoot, issue.number);
+        commentWriteFailures += (await syncGithubCommentsToAnnotations(createdId, comments, pmRoot, issue.number)).failed;
       } else {
+        // Without the created id the planned comments cannot be written; the
+        // gated plan-divergence refusal below turns that into a fail-closed exit
+        // while ungated runs keep today's warn-and-continue behaviour.
         console.error(`#${issue.number}: could not parse created item id — comments not synced`);
+        commentWriteFailures += comments.length;
       }
     }
     imported++;
@@ -3081,8 +3398,8 @@ export async function runImport(
       wouldImport: imported,
       wouldUpdate: updated,
       wouldSkip: skipped,
-      ...(opts.atomic ? { atomic: true } : {}),
       ...(opts.linkDeps ? { wouldLinkDependencyCandidates: countDependencyRefCandidates(repo, filtered) } : {}),
+      ...gatePlanFields,
     };
   }
 
@@ -3090,11 +3407,26 @@ export async function runImport(
   if (imported === 0 && updated === 0 && skipped > 0) {
     throw new CommandError(`Imported 0 issue(s); ${skipped} failed.`);
   }
+  // A gated import is all-or-nothing in effect: a planned write that failed
+  // (an update, close or reopen reconciliation) or a planned native comment
+  // that was not written leaves the tracker different from the verified plan,
+  // and provenance alone cannot see that, because the item still carries its
+  // tag. Fail closed before anything can be pushed.
+  failClosedOnPlanDivergence(
+    opts.gate,
+    gateCompleteness?.skipped ?? skipped,
+    skipped,
+    commentWriteFailures,
+  );
   const depLink = opts.linkDeps
     ? await linkImportedDependencies(repo, filtered, pmRoot, dependencies)
     : undefined;
   reportDepLink(depLink);
-  return { imported, updated, skipped, ...depLinkResultFields(depLink) };
+  // Gated pipeline, phase 2 — the writes are on disk but nothing is committed or
+  // pushed; scan the proposed tracker change now and fail closed.
+  if (opts.gate) verifyImportedProvenance((dependencies.readItems ?? readPmItems)(pmRoot), gatePlan!, repo);
+  const gateReceipt = opts.gate ? gateImportWrites(pmRoot) : undefined;
+  return { imported, updated, skipped, ...depLinkResultFields(depLink), ...(gateReceipt ? { gate: gateReceipt } : {}) };
 }
 
 /**
@@ -3131,6 +3463,37 @@ function depLinkResultFields(
   };
 }
 
+/**
+ * Fail a gated import when the writes diverged from the verified plan.
+ *
+ * A gated import is all-or-nothing in effect: a planned item write that failed
+ * (an update, close or reopen reconciliation), a planned native comment that
+ * was not written, or a comment collection left unreachable by an unparsable
+ * created id all leave the tracker different from the verified plan — and
+ * provenance alone cannot see that, because the item still carries its tag and
+ * missing content cannot leak anything into the post-write privacy scan. Both
+ * the non-atomic and the atomic import path funnel their divergence here and
+ * fail closed before anything can be pushed; ungated imports already warned.
+ *
+ * @param gate - Whether the import runs gated; ungated runs never throw here.
+ * @param plannedSkipped - Issues the verified plan already accounted as skipped.
+ * @param actualSkipped - Issues the write phase actually skipped.
+ * @param commentFailures - Planned native comments that were not written.
+ * @throws CommandError when any planned write or comment failed on a gated run.
+ */
+function failClosedOnPlanDivergence(
+  gate: boolean,
+  plannedSkipped: number,
+  actualSkipped: number,
+  commentFailures: number,
+): void {
+  const failed = actualSkipped - plannedSkipped + commentFailures;
+  if (!gate || failed <= 0) return;
+  throw new CommandError(
+    `pm github gate: ${failed} planned write(s) failed; the tracker does not match the verified plan. Nothing may be pushed.`,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Sync core — push pm status changes back to GitHub (close / reopen)
 // ---------------------------------------------------------------------------
@@ -3156,6 +3519,20 @@ export interface SyncPlanEntry {
   from: "open" | "closed";
   /** Desired GitHub state derived from the pm status. */
   to: "open" | "closed";
+}
+
+/**
+ * Require every requested item before a remote sync or export can begin.
+ *
+ * @param items - Complete local corpus.
+ * @param requested - Selected ids, or an empty list for the complete corpus.
+ * @returns Matched items in corpus order.
+ * @throws CommandError when any requested identity is absent.
+ */
+function requireRequestedItems(items: PmItem[], requested: string[]): PmItem[] {
+  const scoped = scopeItemsByIds(items, requested.length > 0 ? requested : undefined);
+  if (scoped.missing.length > 0) throw new CommandError(`--ids included unknown pm item id(s): ${scoped.missing.join(", ")}`, EXIT_CODE.NOT_FOUND);
+  return scoped.selected;
 }
 
 // Build the pm → GitHub issue sync plan: for each pm item linked to `repo`, emit
@@ -3186,8 +3563,8 @@ export function planSync(items: PmItem[], repo: string): SyncPlanEntry[] {
 // Command handler for `pm github sync`: preview or apply the pm → GitHub issue
 // sync plan, scoped by --ids and honoring --dry-run / --apply.
 async function runSync(ctx: CommandHandlerContext) {
-  const options = ctx.options || {};
-  const repo = optionString(options, "repo") || (ctx.args?.[0] as string | undefined);
+  const options = ctx.options;
+  const repo = optionString(options, "repo") || (ctx.args[0] as string | undefined);
   const dryRun = optionEnabled(options, "dry-run", "dryRun");
   const idsProvided = optionProvided(options, "ids");
   const scopedIds = optionCsv(options, "ids");
@@ -3215,15 +3592,8 @@ async function runSync(ctx: CommandHandlerContext) {
     );
   }
 
-  const allItems = readPmItems(ctx.pm_root);
-  const scoped = scopeItemsByIds(allItems, scopedIds.length > 0 ? scopedIds : undefined);
-  if (scoped.missing.length > 0) {
-    throw new CommandError(
-      `--ids included unknown pm item id(s): ${scoped.missing.join(", ")}`,
-      EXIT_CODE.NOT_FOUND,
-    );
-  }
-  const plan = planSync(scoped.selected, repo);
+  const selected = requireRequestedItems(readPmItems(ctx.pm_root), scopedIds);
+  const plan = planSync(selected, repo);
 
   if (plan.length === 0) {
     const scopeNote = scopedIds.length > 0 ? ` from --ids (${scopedIds.join(", ")})` : "";
@@ -3251,7 +3621,7 @@ async function runSync(ctx: CommandHandlerContext) {
       );
       current = JSON.parse(body) as GhIssue;
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       console.error(`#${entry.number}: could not read upstream state — ${msg}`);
       skipped++;
       continue;
@@ -3275,7 +3645,7 @@ async function runSync(ctx: CommandHandlerContext) {
       console.error(`#${entry.number} "${entry.title}": ${current.state} → ${entry.to}`);
       synced++;
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       console.error(`#${entry.number}: PATCH failed — ${msg}`);
       skipped++;
     }
@@ -3450,7 +3820,7 @@ export async function applyExportPlan(
     } catch (err: unknown) {
       // Isolate the failure: record it and keep going so one bad item never
       // abandons the items that follow it (and that may already be writable).
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = errorMessage(err);
       const label = entry.action === "update" && entry.number !== undefined
         ? `#${entry.number}`
         : entry.id ?? `"${p.title}"`;
@@ -3530,10 +3900,10 @@ export function applyOutcomeError(
  * duplicated; `--label-map` translates pm tags to GitHub labels.
  */
 async function runExport(ctx: CommandHandlerContext) {
-  const options = ctx.options || {};
-  const jsonMode = ctx.global?.json === true;
+  const options = ctx.options;
+  const jsonMode = ctx.global.json === true;
   const format = optionString(options, "format") || "json";
-  const repo = optionString(options, "repo") || ctx.args?.[0];
+  const repo = optionString(options, "repo") || ctx.args[0];
   const apply = exportWillApply(options);
   const idsProvided = optionProvided(options, "ids");
   const scopedIds = optionCsv(options, "ids");
@@ -3545,15 +3915,8 @@ async function runExport(ctx: CommandHandlerContext) {
     );
   }
 
-  const allItems = readPmItems(ctx.pm_root);
-  const scoped = scopeItemsByIds(allItems, scopedIds.length > 0 ? scopedIds : undefined);
-  if (scoped.missing.length > 0) {
-    throw new CommandError(
-      `--ids included unknown pm item id(s): ${scoped.missing.join(", ")}`,
-      EXIT_CODE.NOT_FOUND,
-    );
-  }
-  const plan = buildExportPlan(scoped.selected, repo, labelMap);
+  const selected = requireRequestedItems(readPmItems(ctx.pm_root), scopedIds);
+  const plan = buildExportPlan(selected, repo, labelMap);
   const creates = plan.filter((e) => e.action === "create").length;
   const updates = plan.filter((e) => e.action === "update").length;
 
@@ -3578,7 +3941,7 @@ async function runExport(ctx: CommandHandlerContext) {
         console.error(JSON.stringify(plan, null, 2));
       }
       const scopeNote = scopedIds.length > 0
-        ? ` Scoped to ${scoped.selected.length} item(s) via --ids.`
+        ? ` Scoped to ${selected.length} item(s) via --ids.`
         : "";
       const labelNote = labelMap && labelMap.size > 0
         ? ` Label map applied (${labelMap.size} mapping(s)).`
@@ -3710,7 +4073,7 @@ export function mapSearchHits(
     // (0, 1] so hits clear pm's default score threshold.
     hits.push({
       id: item.id,
-      score: matchedNumbers.length > 0 ? rank / matchedNumbers.length : 1,
+      score: rank / matchedNumbers.length,
       matched_fields: [`github:${repoLc}#${number}`],
     });
     rank--;
@@ -3779,12 +4142,8 @@ export interface ValidateReport {
 
 // Detect whether the `gh` CLI is installed and runnable on PATH.
 function detectGhCli(): boolean {
-  try {
-    const r = spawnSync("gh", ["--version"], { encoding: "utf-8" });
-    return r.status === 0;
-  } catch {
-    return false;
-  }
+  const r = spawnSync("gh", ["--version"], { encoding: "utf-8", env: { ...process.env } });
+  return r.status === 0;
 }
 
 // Report which token source is active: `env` (GITHUB_TOKEN/GH_TOKEN), `gh` (gh
@@ -3798,8 +4157,8 @@ function detectTokenSource(): "env" | "gh" | "none" {
 // Command handler for `pm github validate`: checks token source, gh CLI, rate
 // limit, and the reachable issue counts for the configured repo.
 async function runValidate(ctx: CommandHandlerContext): Promise<ValidateReport> {
-  const options = ctx.options || {};
-  const repo = optionString(options, "repo") || (ctx.args?.[0] as string | undefined);
+  const options = ctx.options;
+  const repo = optionString(options, "repo") || (ctx.args[0] as string | undefined);
   const gh_cli = detectGhCli();
   const token_source = detectTokenSource();
   const token = resolveGitHubToken();
@@ -3829,7 +4188,7 @@ async function runValidate(ctx: CommandHandlerContext): Promise<ValidateReport> 
       report.repo = repo;
       try {
         const res = await fetchJSON(`${githubApiBase()}/repos/${repo}`, token);
-        report.repo_accessible = res.status >= 200 && res.status < 300;
+        report.repo_accessible = true;
         report.repo_status = res.status;
         const rate = parseRateLimit(res.headers);
         if (rate.remaining !== undefined) report.rate_limit_remaining = rate.remaining;
@@ -3845,16 +4204,13 @@ async function runValidate(ctx: CommandHandlerContext): Promise<ValidateReport> 
               ".",
           );
         }
-        if (report.repo_accessible) {
-          report.messages.push(`Repo ${repo} is accessible (HTTP ${res.status}).`);
-        } else {
-          report.ok = false;
-          report.messages.push(`Repo ${repo} returned HTTP ${res.status}.`);
-        }
+        // fetchJSON only resolves for 2xx; every other status throws into the catch
+        // below, so a returned response is accessible by construction.
+        report.messages.push(`Repo ${repo} is accessible (HTTP ${res.status}).`);
       } catch (err: unknown) {
         report.ok = false;
         report.repo_accessible = false;
-        report.messages.push(`Repo ${repo} check failed: ${err instanceof Error ? err.message : String(err)}`);
+        report.messages.push(`Repo ${repo} check failed: ${errorMessage(err)}`);
       }
     }
   } else {
@@ -4205,7 +4561,7 @@ async function gqlAddDraft(
   token: string | undefined,
 ): Promise<string> {
   const q = `mutation($p:ID!,$t:String!,$b:String){ addProjectV2DraftIssue(input:{projectId:$p,title:$t,body:$b}){ projectItem{ id } } }`;
-  const d = await githubGraphQL<GraphqlAddDraftData>(token, q, { p: projectId, t: title, b: body ?? "" });
+  const d = await githubGraphQL<GraphqlAddDraftData>(token, q, { p: projectId, t: title, b: body });
   const id = d.addProjectV2DraftIssue?.projectItem?.id;
   if (!id) throw new CommandError("addProjectV2DraftIssue returned no item id.");
   return id;
@@ -4373,8 +4729,8 @@ export async function listOwnerProjectsV2Nodes(
  * @param ctx - The command-handler context.
  */
 async function runProjectList(ctx: CommandHandlerContext) {
-  const options = ctx.options || {};
-  const owner = optionString(options, "owner") || (ctx.args?.[0] as string | undefined);
+  const options = ctx.options;
+  const owner = optionString(options, "owner") || (ctx.args[0] as string | undefined);
   if (!owner) {
     throw new CommandError(
       "Usage: pm github project list <owner>  (a GitHub user or org login)",
@@ -4390,7 +4746,7 @@ async function runProjectList(ctx: CommandHandlerContext) {
     closed: !!n.closed,
     description: n.shortDescription ?? undefined,
   }));
-  if (ctx.global?.json !== true) {
+  if (ctx.global.json !== true) {
     if (projects.length === 0) {
       console.error(`No Projects v2 found for ${owner} (or none accessible with the resolved token).`);
     } else {
@@ -4401,6 +4757,22 @@ async function runProjectList(ctx: CommandHandlerContext) {
     }
   }
   return { owner, projects };
+}
+
+/**
+ * Require a valid owner/number board reference before a project command can run.
+ *
+ * Resolves positional and --project forms identically for fields, import, and
+ * sync; a malformed reference exits before any GraphQL request or mutation.
+ *
+ * @param ctx - The host command context.
+ * @param usage - Command-specific recovery instruction.
+ * @returns The parsed project identity.
+ */
+function requireProjectRef(ctx: CommandHandlerContext, usage: string): ProjectRef {
+  const ref = parseProjectRef(optionString(ctx.options, "project") || ctx.args[0]);
+  if (!ref) throw new CommandError(usage, EXIT_CODE.USAGE);
+  return ref;
 }
 
 // --- project fields --------------------------------------------------------
@@ -4414,14 +4786,8 @@ async function runProjectList(ctx: CommandHandlerContext) {
  * @param ctx - The command-handler context.
  */
 async function runProjectFields(ctx: CommandHandlerContext) {
-  const options = ctx.options || {};
-  const ref = parseProjectRef(optionString(options, "project") || (ctx.args?.[0] as string | undefined));
-  if (!ref) {
-    throw new CommandError(
-      "Usage: pm github project fields <owner/number>  (e.g. pm github project fields unbraind/5)",
-      EXIT_CODE.USAGE,
-    );
-  }
+  const options = ctx.options;
+  const ref = requireProjectRef(ctx, "Usage: pm github project fields <owner/number>  (e.g. pm github project fields unbraind/5)");
   const token = resolveGitHubToken();
   const meta = await resolveProject(ref, token);
   const q = `
@@ -4438,7 +4804,7 @@ async function runProjectFields(ctx: CommandHandlerContext) {
     type: f.dataType ?? f.__typename,
     options: Array.isArray(f.options) ? f.options.map((o) => o.name) : undefined,
   }));
-  if (ctx.global?.json !== true) {
+  if (ctx.global.json !== true) {
     console.error(`Project ${ref.owner}/${ref.number} — ${meta.title} (${meta.ownerType})`);
     console.error(`  ${meta.url}`);
     console.error(`  Status field: ${meta.statusField ? meta.statusField.options.map((o) => o.name).join(" | ") : "(none — pushes cannot set status)"}`);
@@ -4462,14 +4828,8 @@ async function runProjectFields(ctx: CommandHandlerContext) {
  * @param ctx - The command-handler context.
  */
 async function runProjectImport(ctx: CommandHandlerContext) {
-  const options = ctx.options || {};
-  const ref = parseProjectRef(optionString(options, "project") || (ctx.args?.[0] as string | undefined));
-  if (!ref) {
-    throw new CommandError(
-      "Usage: pm github project import <owner/number> [--dry-run] [--status-map pm=Option,...] [--type <type>]",
-      EXIT_CODE.USAGE,
-    );
-  }
+  const options = ctx.options;
+  const ref = requireProjectRef(ctx, "Usage: pm github project import <owner/number> [--dry-run] [--status-map pm=Option,...] [--type <type>]");
   const dryRun = optionEnabled(options, "dry-run", "dryRun");
   const itemType = optionString(options, "type") || "Task";
   const statusMap = parseStatusMap(optionCsv(options, "status-map", "statusMap"));
@@ -4591,26 +4951,24 @@ async function applyPushEntry(
     let itemId = entry.itemId;
     if (entry.action === "add-draft") {
       const pm = pmById.get(entry.pmId);
-      itemId = await gqlAddDraft(meta.id, entry.title, pm?.body || pm?.description, token);
+      itemId = await gqlAddDraft(meta.id, entry.title, pm!.body || pm!.description!, token);
     } else if (entry.action === "add-issue") {
-      if (!entry.issueRepo || typeof entry.issueNumber !== "number") {
-        return { changed: false, error: "add-issue entry missing issue coordinates" };
-      }
-      const contentId = await gqlResolveIssueNodeId(entry.issueRepo, entry.issueNumber, token);
+      // The private executor receives only buildProjectPushPlan entries. Its
+      // add-issue arm always sets both coordinates from a parsed provenance tag.
+      const contentId = await gqlResolveIssueNodeId(entry.issueRepo!, entry.issueNumber!, token);
       if (!contentId) return { changed: false, error: `could not resolve node id for ${entry.issueRepo}#${entry.issueNumber}` };
       itemId = await gqlAddIssue(meta.id, contentId, token);
     }
-    if (!itemId) return { changed: false, error: "no project item id to act on" };
 
     if (entry.targetOptionId && meta.statusField) {
-      await gqlSetStatus(meta.id, itemId, meta.statusField.id, entry.targetOptionId, token);
+      await gqlSetStatus(meta.id, itemId!, meta.statusField.id, entry.targetOptionId, token);
     }
     // Ensure the pm item carries the project provenance tag so future syncs are
     // idempotent (never strips existing tags; only adds the missing one).
     const pm = pmById.get(entry.pmId);
     if (pm?.id) {
-      const tag = projectItemTag(ref, itemId);
-      const existingTags = pm.tags ?? [];
+      const tag = projectItemTag(ref, itemId!);
+      const existingTags = pm.tags!;
       if (!existingTags.includes(tag)) {
         const upd = pmRun([
           "--path", pmRoot, "update", pm.id,
@@ -4622,7 +4980,7 @@ async function applyPushEntry(
     }
     return { changed: true };
   } catch (err: unknown) {
-    return { changed: false, error: err instanceof Error ? err.message : String(err) };
+    return { changed: false, error: errorMessage(err) };
   }
 }
 
@@ -4703,14 +5061,8 @@ interface PullPlanEntryLike {
  * @param ctx - The command-handler context.
  */
 async function runProjectSync(ctx: CommandHandlerContext) {
-  const options = ctx.options || {};
-  const ref = parseProjectRef(optionString(options, "project") || (ctx.args?.[0] as string | undefined));
-  if (!ref) {
-    throw new CommandError(
-      "Usage: pm github project sync <owner/number> [--push|--pull] [--apply] [--ids pm-1,..] [--status-map pm=Option,..] [--no-add-missing] [--prefer pm|github]",
-      EXIT_CODE.USAGE,
-    );
-  }
+  const options = ctx.options;
+  const ref = requireProjectRef(ctx, "Usage: pm github project sync <owner/number> [--push|--pull] [--apply] [--ids pm-1,..] [--status-map pm=Option,..] [--no-add-missing] [--prefer pm|github]");
 
   const wantPush = optionEnabled(options, "push");
   const wantPull = optionEnabled(options, "pull");
@@ -4788,7 +5140,7 @@ async function runProjectSync(ctx: CommandHandlerContext) {
       console.error(`[dry-run] pull (project ${ref.owner}/${ref.number} → pm):`);
       for (const e of pullActionable) console.error(`  ${e.pmId} "${e.title}": ${e.fromStatus} → ${e.toStatus}`);
       for (const s of pullPlan.statusSkipped) {
-        console.error(`  [skip] item ${s.itemId}: board status "${s.optionName ?? "(none)"}" maps to no pm status`);
+        console.error(`  [skip] item ${s.itemId}: board status "${s.optionName}" maps to no pm status`);
       }
       if (pullActionable.length === 0) console.error("  (nothing to pull)");
     }
@@ -4805,7 +5157,7 @@ async function runProjectSync(ctx: CommandHandlerContext) {
   let pushFailed = 0;
   if (applyPush && pushPlan) {
     for (const e of pushActionable) {
-      if (prefer === "github" && e.action === "set-status" && pullItemIds.has(e.itemId ?? "")) {
+      if (prefer === "github" && e.action === "set-status" && pullItemIds.has(e.itemId!)) {
         continue; // pull wins for this linked item
       }
       const r = await applyPushEntry(e, meta, ref, pmById, ctx.pm_root, token);
@@ -4880,6 +5232,7 @@ const IMPORT_FLAGS = [
   { long: "--comments-mode", value_name: "body|annotations|both", description: "How to persist fetched GitHub comments: `body` (default, embed in item body), `annotations` (sync to the pm item's native comments collection), or `both`. `annotations`/`both` are idempotent on re-import (dedupe by GitHub comment id)" },
   { long: "--atomic", description: "Commit the complete import as one workspace-writer-locked, crash-resumable transaction (pm-cli >=2026.7.20); compensate applied mutations on failure and report incomplete compensation" },
   { long: "--link-deps", description: "After import, map dependency references in issue bodies (`Blocked by #N`, `Depends on owner/repo#N`, `Blocks #N`) to pm dependency edges between the linked items. Idempotent; skips self- and unresolved references; ordering cycles are reported (via the SDK ordering-cycle advisory), not rejected" },
+  { long: "--gate", description: "Fail-closed privacy gate: verify plan completeness and provenance-tag idempotency before the write, then scan the proposed tracker change for credentials, personal data, and host paths after it; any finding (or unreadable scan input) fails the import so nothing is ever pushed" },
   { long: "--dry-run", description: "Preview without writing" },
   { long: "--type", value_name: "type", description: "Override pm item type (default: Issue)" },
 ];
@@ -4899,6 +5252,11 @@ const SYNC_FLAGS = [
   { long: "--repo", value_name: "owner/repo", description: "Target GitHub repo (required)" },
   { long: "--ids", value_name: "pm-1,pm-2", description: "Only sync these pm item IDs (comma-separated)" },
   { long: "--dry-run", description: "Preview the close/reopen plan without mutating GitHub" },
+];
+
+const GATE_FLAGS = [
+  { long: "--diff", value_name: "file", description: "Scan an explicit unified diff file instead of the staged/working tracker change (fail closed when unreadable)" },
+  { long: "--allowlist", value_name: "file", description: "Explicit content-hash allowlist of reviewed false positives (default: `<repo root>/.pm-github-gate-allowlist.json`; a missing EXPLICIT file fails, a missing default is an empty allowlist)" },
 ];
 
 const VALIDATE_FLAGS = [
@@ -4982,7 +5340,7 @@ export default defineExtension({
         "github project sync",
       ],
       run: (ctx: PreflightOverrideContext) => {
-        if (isMutatingGithubCommand(ctx.command, ctx.options || {})) {
+        if (isMutatingGithubCommand(ctx.command, ctx.options)) {
           if (!resolveGitHubToken()) {
             console.error(
               "[pm-github preflight] this github command mutates remote state but no GitHub " +
@@ -4998,7 +5356,7 @@ export default defineExtension({
     // importer — `pm github import <owner/repo>` (idempotent native pipeline)
     // -----------------------------------------------------------------------
     api.registerImporter("github", async (ctx: ImportExportContext) => {
-      return runImport(ctx.args?.[0], ctx.pm_root, parseImportOptions(ctx.options || {}));
+      return runImport(ctx.args[0], ctx.pm_root, parseImportOptions(ctx.options));
     }, {
       description:
         "Fetch GitHub issues from a repo and create/update pm items (idempotent " +
@@ -5069,7 +5427,7 @@ export default defineExtension({
       api.registerSearchProvider({
         name: "github",
         async query(qctx: SearchProviderQueryContext) {
-          const repo = resolveSearchRepo(qctx.options || {});
+          const repo = resolveSearchRepo(qctx.options);
           if (!repo) return [];
           const token = resolveGitHubToken();
           let matchedNumbers: number[];
@@ -5104,12 +5462,12 @@ export default defineExtension({
       if (!ctx.ok) return;
       if (ctx.command !== "close" && ctx.command !== "update") return;
       // Only nudge for items that are actually linked to GitHub.
-      const id = ctx.args?.[0];
+      const id = ctx.args[0];
       if (!id || !ctx.pm_root) return;
       const res = spawnSync(
         "pm",
         ["--path", ctx.pm_root, "--json", "show", id],
-        { encoding: "utf-8", maxBuffer: pmJsonMaxBuffer() },
+        { encoding: "utf-8", maxBuffer: pmJsonMaxBuffer(), env: { ...process.env } },
       );
       if (res.status !== 0) return;
       let repo: string | undefined;
@@ -5197,6 +5555,52 @@ export default defineExtension({
     });
 
     // -----------------------------------------------------------------------
+    // command — `pm github gate` (fail-closed privacy gate over the proposed
+    // tracker change). Runs BEFORE any push in a sync pipeline; a fail verdict
+    // or an unreadable scan input exits non-zero so nothing downstream commits
+    // or pushes. Findings name rule + item + field + content hash — never the
+    // matched content.
+    // -----------------------------------------------------------------------
+    api.registerCommand({
+      name: "github gate",
+      description:
+        "Fail-closed privacy gate over the proposed tracker change (the staged/working/untracked diff under the resolved pm tracker path, or an explicit --diff file). Fails on credentials (GitHub/npm/AWS/Slack/OpenAI/Anthropic tokens, generic bearers, private-key blocks, high-entropy secret assignments), personal data (non-noreply emails, phone numbers), and host paths (absolute local filesystem paths, home-directory usernames). Reviewed false positives are allowlisted by content hash. Unreadable input or a scanner error fails. Read-only; never mutates anything. Use --json for machine output.",
+      intent: "verify a proposed tracker change before any public branch push",
+      examples: [
+        "pm github gate",
+        "pm github gate --json",
+        "pm github gate --diff pm-sync.patch",
+        "pm github gate --allowlist .pm-github-gate-allowlist.json",
+      ],
+      flags: GATE_FLAGS,
+      failure_hints: [
+        "Run inside the repository holding the pm tracker, or pass --diff <file> for an explicit unified diff.",
+        "A finding names the rule, item, field, and the sha256 of the matched content; allowlist that hash in .pm-github-gate-allowlist.json with a written reason after review.",
+        "The gate scans only added lines — removed content cannot publish anything new.",
+        "pm github import --gate composes this gate into an import: plan completeness and provenance idempotency are verified before the write, the scan runs after it.",
+      ],
+      async run(ctx: CommandHandlerContext) {
+        const diffFile = optionString(ctx.options, "diff");
+        const allowlistFile = optionString(ctx.options, "allowlist");
+        const report = runCommandTrackerGate({
+          pmRoot: ctx.pm_root,
+          ...(diffFile ? { diffFile } : {}),
+          ...(allowlistFile ? { allowlistFile } : {}),
+        });
+        if (ctx.global.json !== true) {
+          for (const line of formatGateReport(report)) console.error(line);
+        }
+        if (report.verdict === "fail") {
+          throw new CommandError(
+            JSON.stringify({ ...report, error: "pm github gate: FAIL" }),
+            EXIT_CODE.GENERIC_FAILURE,
+          );
+        }
+        return report;
+      },
+    });
+
+    // -----------------------------------------------------------------------
     // command — `pm github validate` (diagnostics: gh/token/repo reachability)
     // -----------------------------------------------------------------------
     api.registerCommand({
@@ -5219,7 +5623,7 @@ export default defineExtension({
       ],
       async run(ctx: CommandHandlerContext) {
         const report = await runValidate(ctx);
-        const jsonMode = ctx.global?.json === true;
+        const jsonMode = ctx.global.json === true;
         if (!jsonMode) {
           for (const line of report.messages) console.error(line);
         }

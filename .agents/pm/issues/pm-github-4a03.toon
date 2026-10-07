@@ -1,0 +1,14 @@
+id: pm-github-4a03
+title: Guard stale completed SDK import journals after local tracker files are reset
+description: A synthetic import into a real Git worktree completes an atomic journal. Resetting the worktree to its pre-import baseline removes the imported files while ignored completed journals persist. A subsequent import can report recovered success without restoring the absent items. The gated importer now verifies durable post-write provenance and refuses any push; follow up with a minimal SDK reproduction and dependency-level recovery repair.
+type: Issue
+status: open
+priority: 1
+tags[3]: "area:import","area:sdk","type:defect"
+created_at: "2026-10-05T07:36:59.028Z"
+updated_at: "2026-10-05T07:43:25.513Z"
+author: codex-sol
+files[2]{path,scope}:
+  index.ts,project
+  test/import-gate.test.ts,project
+body: ""

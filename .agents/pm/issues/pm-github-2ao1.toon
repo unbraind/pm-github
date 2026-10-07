@@ -1,0 +1,22 @@
+id: pm-github-2ao1
+title: PM CLI filtered native Bun tests falsely report an empty run
+description: "Pinned PM CLI/SDK 2026.10.4 recognizes the native Bun name filter but its positive execution receipt patterns omit Bun output. A real linked Bun 1.3.14 command executes two tests, reports 2 pass and Ran 2 tests, exits zero, then pm test changes the outcome to empty_run with missing_positive_execution_receipt. Track upstream parser compatibility separately from the package review fixes; do not patch the protected CLI here."
+type: Issue
+status: open
+priority: 2
+tags[3]: bun,testing,upstream
+created_at: "2026-10-06T14:30:31.652Z"
+updated_at: "2026-10-06T15:37:56.669Z"
+author: codex-sol
+repro_steps: "Link bun test --timeout 600000 -t \"canonical changelog includes|historical fixture provenance reports\" ./test/generate-changelog.test.ts ./test/privacy-gate.test.ts; run the linked test with pm test --run --only-last --progress and compare Bun output with the final run_results row."
+expected_result: "A positive native Bun execution receipt is accepted, while zero-test filtered Bun runs remain refused."
+actual_result: Bun executes and passes two tests with exit zero; pm test reports empty_run after failing to recognize the positive receipt.
+comments[2]{created_at,author,text}:
+  "2026-10-06T14:32:03.841Z",codex-sol,"Reproduced through the pinned installed CLI using native Bun 1.3.14: subprocess exit zero, two genuine passing tests and a Ran 2 tests receipt; run_results is rewritten to failed/empty_run with missing_positive_execution_receipt. Read-only SDK inspection confirms the positive receipt patterns accept Node-style tests/pass counters and passed wording, but omit Bun pass-count order and Ran wording. This is an upstream test-runner compatibility follow-up, outside PR round-1 source fixes. No CLI dependency files were changed. The package registers the full native test files instead of the unsupported filtered command."
+  "2026-10-06T15:37:56.669Z",claude-orchestrator,"Reproduced by the orchestrator on PM CLI 2026.10.6 + Bun 1.3.5 in a clean tracker: 'bun test --test-name-pattern alpha test/x.test.ts' (2 pass, 1 filtered out, exit 0) is reported status failed, exit_code 1, failure_category empty_run; the unfiltered command passes. Filed upstream: https://github.com/unbraind/pm-cli/issues/1418"
+files[2]{path,scope}:
+  test/generate-changelog.test.ts,project
+  test/privacy-gate.test.ts,project
+docs[1]{path,scope}:
+  README.md,project
+body: ""

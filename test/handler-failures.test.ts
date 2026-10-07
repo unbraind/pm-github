@@ -74,7 +74,9 @@ function pmSetup(root: string, args: readonly string[]): void {
 // `pm list --all` still works. Used for the no-token guards whose handlers read
 // the tracker before checking the token.
 const PM_BIN_DIR = fileURLToPath(new URL("../node_modules/.bin", import.meta.url));
-const GH_FREE_PATH = `${PM_BIN_DIR}${path.delimiter}${path.dirname(process.execPath)}`;
+const nodeExecutable = spawnSync("node", ["-p", "process.execPath"], { encoding: "utf8" }).stdout.trim();
+assert.ok(nodeExecutable, "pm fixture executables require Node");
+const GH_FREE_PATH = `${PM_BIN_DIR}${path.delimiter}${path.dirname(nodeExecutable)}`;
 
 /** Create a throwaway pm workspace (`pm init test`) and return its root. */
 function freshTracker(): string {

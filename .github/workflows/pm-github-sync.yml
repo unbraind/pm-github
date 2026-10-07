@@ -1,0 +1,230 @@
+# Reusable, fail-closed gated sync: GitHub issues → pm tracker → review PR.
+#
+# Fleet repos call this from their own scheduled caller workflow (see
+# docs/sync-workflow-caller.yml); the schedule stays with the caller, the
+# audited implementation stays here in pm-github.
+#
+# Pipeline order is the safety property: validate → dry-run plan → gated import
+# (plan completeness + provenance idempotency verified BEFORE the write, then
+# the fail-closed privacy gate scans the proposed tracker change AFTER it) →
+# strict pm health → and only then commit + push + PR. `--gate` exits non-zero
+# on any credential, personal-data, or host-path finding — or on any unreadable
+# scan input — so this job can never reach the push step with a leak in the
+# change. Actions are pinned by SHA.
+
+name: Gated GitHub issues → pm sync
+
+on:
+  workflow_call:
+    inputs:
+      repository:
+        description: "owner/repo whose issues are imported (defaults to the calling repository)"
+        type: string
+        required: false
+        default: ${{ github.repository }}
+      pm-github-version:
+        description: "Exact published pm-github version to install (pin; never a floating tag or latest)"
+        type: string
+        required: true
+      sync-branch:
+        description: "Branch the gated import commits to and the review PR is opened from"
+        type: string
+        required: false
+        default: "automation/pm-github-sync"
+      node-version:
+        description: "Node.js version for the pm CLI"
+        type: string
+        required: false
+        default: "22.18.0"
+
+concurrency:
+  group: pm-github-sync-${{ inputs.repository }}
+  cancel-in-progress: false
+
+# No workflow-wide grant: the job below requests exactly what it needs.
+permissions: {}
+
+jobs:
+  gated-sync:
+    # Read issues, push the sync branch, and create/update its review PR.
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: read
+    runs-on: ubuntu-latest
+    env:
+      REPOSITORY: ${{ inputs.repository }}
+      SYNC_BRANCH: ${{ inputs.sync-branch }}
+      PM_GITHUB_VERSION: ${{ inputs.pm-github-version }}
+      CALLING_REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Validate sync inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${REPOSITORY}" == "${CALLING_REPOSITORY}" ]] || { echo "::error::repository must equal the calling repository (${CALLING_REPOSITORY})."; exit 1; }
+          [[ "${PM_GITHUB_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]] || { echo "::error::pm-github-version must be an exact numeric version: N.N.N or N.N.N-N."; exit 1; }
+          [[ "${SYNC_BRANCH}" == automation/* ]] || { echo "::error::sync-branch must start with automation/."; exit 1; }
+          git check-ref-format "refs/heads/${SYNC_BRANCH}"
+
+      - name: Checkout main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          ref: main
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      # Always rebuild the sync branch from current main: the branch only ever
+      # holds automated sync commits, so a reset keeps the PR a clean review of
+      # exactly this run's proposed change instead of an ever-growing merge.
+      - name: Prepare sync branch from main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          sync_lease="$(git rev-parse --verify "refs/remotes/origin/${SYNC_BRANCH}" 2>/dev/null || true)"
+          printf 'SYNC_LEASE=%s\n' "${sync_lease}" >> "${GITHUB_ENV}"
+          git switch --force-create "${SYNC_BRANCH}" origin/main
+
+      # The calling repo's own devDependency provides the pm CLI (npm ci).
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          printf '%s/node_modules/.bin\n' "${GITHUB_WORKSPACE}" >> "${GITHUB_PATH}"
+
+      - name: Install pinned pm-github extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./node_modules/.bin/pm package install "npm:pm-github@${PM_GITHUB_VERSION}" --project
+          node -e 'if (require("./.agents/pm/extensions/pm-github/package.json").version !== process.argv[1]) process.exit(1)' "${PM_GITHUB_VERSION}"
+
+      - name: Configure PM merge drivers
+        run: ./node_modules/.bin/pm merge install
+
+      - name: Verify gate is available
+        run: ./node_modules/.bin/pm github gate --json
+
+      - name: Validate GitHub access
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./node_modules/.bin/pm github validate --repo "${REPOSITORY}" --json | jq -e ' .ok == true and .repo_accessible == true '
+
+      - name: Preview GitHub to pm plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./node_modules/.bin/pm github import "${REPOSITORY}" --state all --atomic --gate --dry-run --with-comments
+
+      # The gate step. A finding (or unreadable scan input) fails this step, so
+      # the job never reaches the commit/push below with a leak in the change.
+      - name: Gated GitHub to pm import
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./node_modules/.bin/pm github import "${REPOSITORY}" --state all --atomic --gate --with-comments
+
+      - name: Verify repeat import is a no-op
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          paths_file="${RUNNER_TEMP}/pm-github-tracker-paths"
+          git ls-files -z --modified --deleted --others --exclude-standard -- .agents/pm > "${paths_file}"
+          node -e 'const fs = require("node:fs"); const file = process.argv[1]; const paths = fs.readFileSync(file, "utf8").split("\0").filter(p => p && !["extensions", "locks", "checkpoints"].includes(p.slice(".agents/pm/".length).split("/")[0])); fs.writeFileSync(file, paths.map(p => p + "\0").join(""));' "${paths_file}"
+          if [[ -s "${paths_file}" ]]; then
+            git --literal-pathspecs add --pathspec-from-file="${paths_file}" --pathspec-file-nul
+          fi
+          ./node_modules/.bin/pm github import "${REPOSITORY}" --state all --atomic --gate --with-comments
+          git diff --exit-code -- .agents/pm ':(exclude,glob).agents/pm/extensions/**' ':(exclude,glob).agents/pm/locks/**' ':(exclude,glob).agents/pm/checkpoints/**'
+          [[ -z "$(git ls-files --others --exclude-standard -- .agents/pm ':(exclude,glob).agents/pm/extensions/**' ':(exclude,glob).agents/pm/locks/**' ':(exclude,glob).agents/pm/checkpoints/**')" ]]
+          ./node_modules/.bin/pm github gate --json
+
+      - name: Verify strict pm health
+        run: ./node_modules/.bin/pm health --strict-exit
+
+      - name: Commit gated sync changes and open review PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./node_modules/.bin/pm github gate --json
+          # gh pr list --head matches branch names, and a fork can open a PR
+          # from a branch with the same name, so filter the results to PRs whose
+          # head repository is this repository (never trust .[0] alone).
+          own_open_pr() {
+            gh pr list -R "${REPOSITORY}" --head "${SYNC_BRANCH}" --base main --state open \
+              --json number,headRepository,headRepositoryOwner,isCrossRepository \
+              | jq -r --arg repository "${REPOSITORY}" \
+                '[ .[] | select(.isCrossRepository == false and (.headRepositoryOwner.login + "/" + .headRepository.name) == $repository) | .number ][0] // empty'
+          }
+          close_own_open_pr() {
+            local number
+            number="$(own_open_pr)"
+            if [[ -n "${number}" ]]; then
+              gh pr close "${number}" -R "${REPOSITORY}" --comment "The tracker already matches GitHub, so this sync no longer proposes a change; closing this review PR."
+            fi
+          }
+          # Installing the pinned extension can add it to an explicit
+          # extensions.enabled list, and pm records that settings change in the
+          # workspace history. Both are setup state, not synced data, so neither
+          # reaches the commit (the extension is not needed after the gate).
+          for setup_path in .agents/pm/settings.json .agents/pm/history/_workspace.jsonl; do
+            if git cat-file -e "HEAD:${setup_path}" 2>/dev/null; then
+              git restore --source=HEAD --staged --worktree -- "${setup_path}"
+            else
+              git rm -q --cached --ignore-unmatch -- "${setup_path}"
+              rm -f -- "${setup_path}"
+            fi
+          done
+          if git diff --cached --quiet; then
+            echo "GitHub issues already match the pm tracker; no PR is needed."
+            # A stale own review PR would still look actionable although this
+            # run has no change to propose, so close it before returning.
+            close_own_open_pr
+            exit 0
+          fi
+          git diff --cached --check
+          links_file="${RUNNER_TEMP}/pm-github-sync-links.md"
+          : > "${links_file}"
+          while IFS= read -r changed; do
+            case "${changed}" in
+              .agents/pm/*/*.toon)
+                item_id="${changed##*/}"
+                item_id="${item_id%.toon}"
+                # The main link is the permanent one after merge; the branch link
+                # shows the proposed item while the review PR is open.
+                printf -- '- [%s](https://github.com/%s/blob/main/%s) ([proposed](https://github.com/%s/blob/%s/%s))\n' "${item_id}" "${REPOSITORY}" "${changed}" "${REPOSITORY}" "${SYNC_BRANCH}" "${changed}" >> "${links_file}"
+                ;;
+            esac
+          done < <(git diff --cached --name-only -- .agents/pm)
+          if [[ ! -s "${links_file}" ]]; then
+            echo "::error::The sync changed tracker state but no item link could be generated."
+            exit 1
+          fi
+          git commit -m "chore(pm): sync GitHub issues (gated)"
+          gh auth setup-git
+          git push --force-with-lease="refs/heads/${SYNC_BRANCH}:${SYNC_LEASE}" origin "HEAD:refs/heads/${SYNC_BRANCH}"
+          body_file="${RUNNER_TEMP}/pm-github-sync-pr.md"
+          {
+            printf '%s\n\n' "Automated pm-github issue synchronization for ${REPOSITORY}."
+            printf '%s\n\n' "The import ran with \`--gate\`: the plan was verified for completeness and provenance idempotency before the write, and the proposed tracker change passed the fail-closed privacy gate before anything was committed. \`main\` is never pushed directly."
+            printf '%s\n\n' "Tracker items changed:"
+            cat "${links_file}"
+          } > "${body_file}"
+          pr_number="$(own_open_pr)"
+          if [[ -z "${pr_number}" ]]; then
+            gh pr create -R "${REPOSITORY}" --base main --head "${SYNC_BRANCH}" --title "chore(pm): sync GitHub issues (gated)" --body-file "${body_file}"
+          else
+            gh pr edit "${pr_number}" -R "${REPOSITORY}" --body-file "${body_file}"
+          fi

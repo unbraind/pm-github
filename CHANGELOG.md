@@ -2,8 +2,17 @@
 
 ## Unreleased
 
+### Added
+
+- Fail-closed privacy gate for automated GitHub issue imports and one reusable sync workflow ([pm-github-f1at](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-f1at.toon))
+
+### Fixed
+
+- Root CI runs skip the read-only-directory comment-sync fixtures visibly instead of failing them ([pm-github-rap0](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-rap0.toon))
+
 ### Other
 
+- Reach exact all-source coverage and include every operational script ([pm-github-9cjx](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-9cjx.toon))
 - Auto-merge green Dependabot updates and group the pm toolchain into one daily PR ([pm-github-u9df](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-u9df.toon))
 
 ## 2026.9.26 - 2026-09-26

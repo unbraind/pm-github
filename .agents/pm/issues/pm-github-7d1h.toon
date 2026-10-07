@@ -6,11 +6,12 @@ status: closed
 priority: 2
 tags: []
 created_at: "2026-08-16T00:35:13.077Z"
-updated_at: "2026-08-16T03:00:52.637Z"
+updated_at: "2026-10-06T15:18:15.655Z"
 closed_at: "2026-08-16T01:32:11.608Z"
 completed_at: "2026-08-16T01:32:11.608Z"
 author: claude-code
 acceptance_criteria: "manifest.json declares a top-level pm_min_version equal to the peerDependencies floor; the devDependency on the CLI is an exact pin at or above that floor; removing the manifest floor, loosening the pin to a caret range, or changing either floor independently each fail the test"
+release: 2026.8.17
 resolution: "manifest.json declares pm_min_version 2026.8.3, equal to the peerDependencies floor, and devDependencies exact-pins the CLI at 2026.8.15. compatibility-floor.test.ts asserts three properties and each now has its own failing mutation: rewriting the peer range to an exact pin, removing or changing the manifest floor, and loosening the dev pin to a caret range. A fourth mutation covers the parse guard added during review."
 expected_result: "A host CLI older than the package's declared floor is refused before the extension loads, on every install path — including a globally installed CLI that npm never sees."
 actual_result: "npm refused a locally resolved dependency below 2026.8.3, while the pm CLI accepted any host at or above 2026.7.28 — a span of releases in which the package loaded against a CLI its own peer declaration says it does not support."

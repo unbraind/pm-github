@@ -26,7 +26,7 @@ jobs:
           fetch-tags: true
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -70,6 +70,12 @@ jobs:
       - name: Verify complete docstring coverage
         run: npm run docstring
 
+      - name: ESLint source policy
+        run: npm run lint
+
+      - name: Complete source duplication gate
+        run: npm run duplication
+
       # Fail-closed identity / secret / host-path audit over the local object
       # store (pm-github-zqad). In CI this is evidence about refs and tags; the
       # local release:check run additionally covers unreachable objects.
@@ -93,3 +99,6 @@ jobs:
 
       - name: Verify Bun can install the package graph
         run: bun install --no-save
+
+      - name: Verify native Bun extension behavior
+        run: npm run test:bun

@@ -18,6 +18,10 @@ import test, { after } from "node:test";
 const root = process.cwd();
 const launcher = join(root, "scripts", "prepare-merge-driver.ts");
 const hostPath = `${join(root, "node_modules", ".bin")}${delimiter}${process.env.PATH ?? ""}`;
+// The package hook explicitly invokes `node`, including during Bun installs.
+// Resolve that executable before fixtures deliberately narrow their PATH.
+const nodeExecutable = spawnSync("node", ["-p", "process.execPath"], { encoding: "utf8" }).stdout.trim();
+assert.ok(nodeExecutable, "the package prepare hook requires Node");
 const scratch = mkdtempSync(join(tmpdir(), "prepare-merge-driver-"));
 after(() => rmSync(scratch, { recursive: true, force: true }));
 
@@ -69,7 +73,7 @@ function stubPm(name: string, status: number, body = ""): string {
 
 /** Run the launcher as npm's `prepare` hook would: as the entry point, from `cwd`, with `path` as PATH. */
 function prepare(cwd: string, path: string): SpawnSyncReturns<string> {
-  return spawnSync(process.execPath, [launcher], { cwd, encoding: "utf8", env: { ...process.env, PATH: path, NODE_PATH: "" } });
+  return spawnSync(nodeExecutable, [launcher], { cwd, encoding: "utf8", env: { ...process.env, PATH: path, NODE_PATH: "" } });
 }
 
 /** The merge drivers registered in a checkout's LOCAL Git config, by name. */
@@ -124,7 +128,7 @@ test("a looping lookup path preserves the original installer error", () => {
   const directory = checkout("lookup-loop", "absent");
   const lookup = join(directory, "lookup");
   symlinkSync(lookup, lookup, "junction");
-  const result = spawnSync(process.execPath, [launcher], {
+  const result = spawnSync(nodeExecutable, [launcher], {
     cwd: directory,
     encoding: "utf8",
     env: { ...process.env, PATH: hostPath, NODE_PATH: lookup },

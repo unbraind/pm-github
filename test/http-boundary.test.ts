@@ -16,13 +16,14 @@
 //     fallback, the 60s cap.
 //   - fetchAllIssues: Link-header pagination (empty/single/multi page), and the
 //     malformed-JSON / non-array response errors.
-//   - fetchComments: the no-comments short-circuit, pagination, and graceful
-//     handling of a malformed page mid-stream.
+//   - fetchComments: the no-comments short-circuit, pagination, and refusal
+//     of a malformed page mid-stream.
 //   - runImport: the 404 → NOT_FOUND and unauthenticated-403 → token-hint error
 //     mappings (the failure surface the import command exposes to the shell).
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createServer } from "node:http";
 
 import {
   CommandError,
@@ -33,7 +34,11 @@ import {
   fetchJSON,
   githubApiBase,
   parseImportOptions,
+  isRetryableStatus,
+  parseRateLimit,
   runImport,
+  type GhIssue,
+  type GhComment,
 } from "../index.ts";
 
 import {
@@ -51,7 +56,7 @@ const IMPORT_OPTS = parseImportOptions({});
 
 // Minimal GitHub issue factory for the pagination fixtures. Typed against the
 // exported GhIssue so a field rename fails the compile.
-function ghIssue(number: number): import("../index.ts").GhIssue {
+function ghIssue(number: number): GhIssue {
   return {
     number,
     title: `t${number}`,
@@ -66,7 +71,7 @@ function ghIssue(number: number): import("../index.ts").GhIssue {
   };
 }
 
-function ghComment(id: number): import("../index.ts").GhComment {
+function ghComment(id: number): GhComment {
   return { id, user: { login: "alice" }, created_at: "2026-01-01T00:00:00Z", body: `c${id}` };
 }
 
@@ -355,7 +360,7 @@ test("fetchAllIssues throws on a non-array (object) response", async () => {
 
 test("fetchComments skips the network entirely when the issue has no comments", async () => {
   await withMockGithub((_req, res) => jsonResponse(res, 200, []), async (server) => {
-    const issue: import("../index.ts").GhIssue = {
+    const issue: GhIssue = {
       number: 1, title: "t", body: null, state: "open", labels: [],
       assignee: null, milestone: null, created_at: "", updated_at: "", html_url: "",
       comments: 0,
@@ -376,7 +381,7 @@ test("fetchComments pages through the comments Link header", async () => {
       });
     }
   }, async () => {
-    const issue: import("../index.ts").GhIssue = {
+    const issue: GhIssue = {
       number: 1, title: "t", body: null, state: "open", labels: [],
       assignee: null, milestone: null, created_at: "", updated_at: "", html_url: "",
       comments: 3,
@@ -386,7 +391,7 @@ test("fetchComments pages through the comments Link header", async () => {
   });
 });
 
-test("fetchComments tolerates a malformed page mid-stream (keeps earlier pages)", async () => {
+test("fetchComments rejects a malformed page mid-stream", async () => {
   await withMockGithub((req, res, _body, baseUrl) => {
     if ((req.url ?? "").includes("page=2")) {
       res.setHeader("Content-Type", "text/plain");
@@ -397,13 +402,12 @@ test("fetchComments tolerates a malformed page mid-stream (keeps earlier pages)"
       });
     }
   }, async () => {
-    const issue: import("../index.ts").GhIssue = {
+    const issue: GhIssue = {
       number: 1, title: "t", body: null, state: "open", labels: [],
       assignee: null, milestone: null, created_at: "", updated_at: "", html_url: "",
       comments: 1,
     };
-    const out = await fetchComments(issue, "a/b", "t");
-    assert.deepEqual(out.map((c) => c.id), [1], "page-1 comments are kept; the malformed page breaks the loop");
+    await assert.rejects(fetchComments(issue, "a/b", "t"), /not valid JSON/);
   });
 });
 
@@ -508,3 +512,97 @@ test("githubApiBase strips a trailing slash so paths cannot double up", async ()
     assert.strictEqual(githubApiBase(), "http://127.0.0.1:39291", "a trailing slash would yield //repos/...");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Coverage additions: transport dispatch, redirect validation, the 30s
+// request timeout, array/mixed-case header shapes, and the comments non-array
+// refusal — the remaining reachable arms of the shared request stack.
+// ---------------------------------------------------------------------------
+
+test("fetchJSON reaches an https target through the https transport and reports a refusal", async () => {
+  // Port 9 (discard) on loopback is guaranteed-unbound: the request is built
+  // and dispatched through the real https module, then rejected by the OS.
+  await assert.rejects(fetchJSON("https://127.0.0.1:9/repos/a/b"), /ECONNREFUSED/);
+});
+
+test("requestOnce rejects an unparseable redirect Location instead of following it", async () => {
+  await withMockGithub((_req, res) => {
+    // `http://[` is syntactically invalid as an absolute URL, so resolving the
+    // Location fails and the request must fail loudly rather than mis-follow.
+    res.statusCode = 302;
+    res.setHeader("Location", "http://[");
+    res.end();
+  }, async (server) => {
+    await assert.rejects(fetchJSON(`${server.baseUrl}/repos/a/b`), /invalid redirect Location/);
+  });
+});
+
+test("requestOnce fails a request after 30s without a response", { timeout: 45_000 }, async () => {
+  // Real silent headers and a never-ending response body both retain the
+  // original 30-second deadline, including under native Bun.
+  const server = createServer((req, res) => {
+    if (req.url?.endsWith("stream")) { res.writeHead(200); res.write("partial"); }
+  });
+  await new Promise<void>((resolve) => { server.listen(0, "127.0.0.1", resolve); });
+  const port = (server.address() as { port: number }).port;
+  try {
+    const started = performance.now();
+    await Promise.all(["silent", "stream"].map(route => assert.rejects(
+      fetchJSON(`http://127.0.0.1:${port}/repos/a/${route}`),
+      /request timed out after 30s/,
+    )));
+    assert.ok(performance.now() - started >= 29_000);
+    assert.ok(performance.now() - started < 40_000);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => { server.close(() => resolve()); });
+  }
+});
+
+test("computeBackoffMs reads the first value of repeated array headers", () => {
+  // Node delivers repeated response headers as arrays; the helper must use the
+  // first value, not the raw array.
+  assert.equal(computeBackoffMs({ "retry-after": ["3", "9"] }, 0), 3000);
+  assert.equal(computeBackoffMs({ "retry-after": ["bogus", "2"] }, 0), 1000);
+});
+
+test("isRetryableStatus honors mixed-case and array rate-limit headers", async () => {
+  assert.equal(isRetryableStatus(429, {}), true);
+  assert.equal(isRetryableStatus(500, {}), true);
+  assert.equal(isRetryableStatus(404, {}), false);
+  assert.equal(isRetryableStatus(403, {}), false);
+  // A primary rate limit with a mixed-case header name still reads as retryable.
+  assert.equal(isRetryableStatus(403, { "X-RateLimit-Remaining": "0" }), true);
+  assert.equal(isRetryableStatus(403, { "x-ratelimit-remaining": ["0", "5"] }), true);
+  // A secondary rate limit announced through Retry-After, mixed-case or array.
+  assert.equal(isRetryableStatus(403, { "Retry-After": "120" }), true);
+  assert.equal(isRetryableStatus(403, { "retry-after": ["60"] }), true);
+});
+
+test("parseRateLimit drops non-numeric header values", async () => {
+  assert.deepEqual(
+    parseRateLimit({ "x-ratelimit-remaining": "soon", "x-ratelimit-limit": "many", "x-ratelimit-reset": "later" }),
+    { remaining: undefined, limit: undefined, reset: undefined, low: false },
+  );
+  assert.equal(parseRateLimit({ "x-ratelimit-remaining": ["4"] }).low, true);
+});
+
+test("fetchComments rejects a non-array comments page", async () => {
+  await withMockGithub((req, res, _body, baseUrl) => {
+    if (parseNextLinkHeaderPage(req.url ?? "") === 0) {
+      jsonResponse(res, 200, [ghComment(1)], { Link: nextLinkHeader(baseUrl, "/repos/a/b/issues/1/comments?per_page=100&page=2") });
+    } else {
+      // A later non-array page must refuse the incomplete read.
+      jsonResponse(res, 200, { message: "unexpected shape" });
+    }
+  }, async () => {
+    const issue: GhIssue = { ...ghIssue(1), comments: 2 };
+    await assert.rejects(fetchComments(issue, "a/b", "t"), /must be an array/);
+  });
+});
+
+/** Page index encoded in a mock URL's query string (0 when absent). */
+function parseNextLinkHeaderPage(url: string): number {
+  const match = /[?&]page=(\d+)/.exec(url);
+  return match ? Number(match[1]) : 0;
+}

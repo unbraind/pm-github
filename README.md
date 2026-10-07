@@ -23,7 +23,7 @@ pm install npm:pm-github --global
 |---|---|
 | `importers` | `pm github import <owner/repo>` — idempotent native import pipeline |
 | `importers` (exporter) | `pm github export` — pm items → GitHub issues (dry-run by default; upsert) |
-| `commands` | `pm gh-issues import` (legacy import alias), `pm github sync` (push status), `pm github validate` (diagnostics), `pm github project list\|fields\|import\|sync` (Projects v2) |
+| `commands` | `pm gh-issues import` (legacy import alias), `pm github sync` (push status), `pm github gate` (fail-closed pre-push privacy gate), `pm github validate` (diagnostics), `pm github project list\|fields\|import\|sync` (Projects v2) |
 | `schema` | declares `github_url`, `github_number`, `github_state`, `github_author`, `github_created_at`, `github_updated_at` item fields |
 | `hooks` | `afterCommand` — opt-in sync reminder (`PM_GITHUB_SYNC`) for linked items |
 | `preflight` | early warning when a mutating github command lacks a token |
@@ -91,6 +91,7 @@ pm github import owner/repo --dry-run
 | `--comments-mode <mode>` | `body`\|`annotations`\|`both` | How fetched GitHub comments are persisted (default `body`). `annotations` syncs comments into the pm item's native comments collection via the SDK; `both` writes the body section AND native comments. `annotations`/`both` are idempotent on re-import (dedupe by GitHub comment id) |
 | `--atomic` | boolean | Commit every create, update, close, and reopen in one workspace-writer-locked, crash-resumable transaction (requires pm CLI/SDK >=2026.7.20). Normal failure compensation restores updated/closed items and deletes newly created items; an incomplete compensation is reported explicitly for retry or repair. |
 | `--link-deps` | boolean | After import, map dependency references in issue **bodies** (`Blocked by #N`, `Depends on owner/repo#N`, `Blocks #N`) to pm dependency edges between the linked items. Idempotent, best-effort, and re-runnable; see [Dependency linking](#dependency-linking---link-deps) below. |
+| `--gate` | boolean | Fail-closed privacy gate: verify plan completeness (every fetched issue accounted for exactly once) and provenance idempotency (every re-import lands on exactly one `gh:owner/repo#N`-tagged item) BEFORE the write, then scan the proposed tracker change with [`pm github gate`](#pm-github-gate) AFTER it. Any finding — or any unreadable scan input — exits non-zero so an automated pipeline can never commit or push the change. Embeds `gate` receipts in the result. |
 | `--dry-run` | boolean | Preview without writing |
 | `--type <type>` | string | Override pm item type (default: Issue) |
 
@@ -248,6 +249,95 @@ pm search "uppercase dashes" --semantic        # hits = imported items whose ups
 
 Enable it by setting `search.provider` to `"github"` in `.agents/pm/settings.json` and pointing it at a repo via the `PM_GITHUB_REPO` env var.
 
+## Privacy gate
+
+### `pm github gate`
+
+GitHub issue text is untrusted: anyone who can open an issue can put a credential, a personal email, or a host path in it. An automated import writes that text into the pm tracker, and a sync pipeline then pushes the tracker to a public branch — publishing the leak with it. `pm github gate` is the fail-closed step between the write and any push:
+
+```bash
+pm github gate                       # scan the proposed tracker change in the working tree
+pm github gate --json               # machine-readable report (also via the global --json)
+pm github gate --diff sync.patch     # scan an explicit unified diff file instead
+pm github gate --allowlist .pm-github-gate-allowlist.json
+```
+
+It scans **only the proposed change** — the added lines and their filenames in the staged/working/untracked diff under the resolved pm tracker path (never a hardcoded `.agents/pm`; the SDK-resolved path wins), or an explicit `--diff` file — so pre-existing reviewed content is not re-litigated on every run, and removed content (which cannot publish anything new) is never scanned. A finding in a filename uses `field: "file_path"` and redacts a sensitive item id. It fails closed (non-zero, machine-readable report with `item_id` + `field` + `rule` + the sha256 `hash` of the matched content, **never the matched content itself**) on:
+
+- **credentials** — GitHub (`ghp_/gho_/ghu_/ghs_/ghr_` and fine-grained `github_pat_`), npm, AWS access key ids, Slack (including app and cookie credentials), OpenAI, Anthropic tokens, generic `Authorization: Bearer` values, `-----BEGIN … PRIVATE KEY-----` blocks, and high-entropy assignments to secret-named identifiers (`token = "…"`, `api_key: …`, `accessToken: …`) whose value has high measured entropy. UUID-shaped credential values and values containing dates receive the same checks;
+- **personal data** — email addresses other than no-reply identities (`@users.noreply.github.com`, `noreply@…`, `@noreply.…`), phone numbers in international (`+…`) or North-American (`(555) 123-4567`, `555-123-4567`) notation, and unformatted numbers under phone/tel/mobile contact labels;
+- **host paths** — absolute local filesystem paths (POSIX home/system directories and Windows drive paths with either separator), and named home-directory references.
+
+Unreadable input, malformed or truncated diffs, binary input, invalid UTF-8, Git failures, malformed allowlists, and scanner errors fail the gate. Untracked operational state in the tracker root (`locks/`, `extensions/`, `checkpoints/`) is excluded. Explicitly staged operational files remain in scope. Staged and unstaged changes are scanned separately, including staged content that the working copy subsequently removed.
+
+**False positives** are allowlisted by *content hash*, not by pattern: put the sha256 from the finding into `.pm-github-gate-allowlist.json` at the repository root (or pass `--allowlist <file>`) with a written justification. An entry suppresses exactly the reviewed content, can never widen to a pattern, and a missing justification fails the gate:
+
+```json
+{
+  "<sha256 of the reviewed finding content>": { "reason": "Reviewed: public support address in the import docs item." }
+}
+```
+
+### `pm github import --gate`
+
+`--gate` composes the gate into the import pipeline, in the order a sync workflow needs:
+
+1. **dry-run plan** — every fetched issue is prepared up front;
+2. **completeness check** — every fetched issue is accounted for exactly once (planned or explicitly skipped), nothing outside the fetch appears, counts reconcile — all before any mutation;
+3. **idempotency check** — no duplicate `gh:owner/repo#N` provenance tags in the existing corpus, every new entry born with its tag, no two plan entries resolving to the same item — so a second run reuses the existing item;
+4. **write** — the ordinary (atomic or per-item) import;
+5. **gate** — the proposed tracker change is scanned; a finding exits non-zero, so the caller never commits or pushes.
+
+Rendered values are also scanned in memory before mutation, so a known finding cannot be written to disk. After mutation, the importer verifies that every planned provenance tag exists exactly once, then scans the tracker diff. A completed SDK journal cannot substitute for missing item files.
+
+The `gate` receipt reports the verdict, scanned file count, findings, and allowlisted count. With `--json`, successful reports go to stdout; failures use the host CLI's JSON error envelope on stderr, with the redacted gate report serialized in `detail` (`jq ' .detail | fromjson ' gate-error.json`). Unreadable inputs produce a nonzero JSON refusal.
+
+## Automated sync workflow
+
+Fleet repos sync their issues into pm through ONE audited implementation: the reusable `workflow_call` workflow at [`.github/workflows/pm-github-sync.yml`](.github/workflows/pm-github-sync.yml) in this repository. It runs the gated pipeline in fail-closed order — checkout → install the **pinned** extension → `pm github validate` → dry-run plan → **gated import** → verify the repeat import is a no-op → `pm health --strict-exit` → and only then commit, push the sync branch, and open/update a review PR whose body links every changed item as `https://github.com/<repo>/blob/main/.agents/pm/<folder>/<id>.toon`. Because `--gate` exits non-zero on any finding, the job can never reach the push step with a leak in the change. Actions are pinned by commit SHA; permissions are least-privilege (`contents: write`, `pull-requests: write`, `issues: read`).
+
+A fleet repo owns the schedule and calls it with the pinned versions (see [`docs/sync-workflow-caller.yml`](docs/sync-workflow-caller.yml)):
+
+```yaml
+name: Sync GitHub issues into pm
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: read
+
+jobs:
+  gated-sync:
+    uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@RELEASE_COMMIT_SHA
+    with:
+      pm-github-version: "RELEASE_VERSION"     # required: exact published version
+```
+
+Replace the two release placeholders after the gated extension is published; the current published version does not contain this feature. The calling repo needs `@unbrained/pm-cli` as a devDependency (the workflow's `npm ci` provides the CLI) and its pm tracker at `.agents/pm` committed on `main`. Under **Settings → Actions → General → Workflow permissions** it must also allow read and write token permissions and enable **Allow GitHub Actions to create and approve pull requests** (an organization can disable this), or the run pushes the sync branch and then fails to open the review PR. A PR that `GITHUB_TOKEN` opens or edits does not trigger `pull_request` workflows, so the sync PR gets no CI checks until a maintainer re-runs them (for example by closing and reopening the PR); the reusable workflow always uses the job's `GITHUB_TOKEN`.
+
+### Installed CLI timeout acceptance
+
+`node test/helpers/public-acceptance.ts` packs the candidate, installs it beside
+its pinned host CLI in a disposable Git project, retrieves a paginated public
+issue/comment snapshot, and replays the unchanged responses through the installed
+HTTP client. It verifies a nonempty gated Node import, byte-identical Node and
+three native Bun repeats, and strict health. No remote is configured.
+
+Each import retains the original 45-second execution deadline. The acceptance
+watchdog sends SIGTERM to the process group, then SIGKILL after a five-second
+cleanup window; any timeout fails acceptance even if the child later exits zero.
+A real spinning-child negative control verifies forced cleanup and unchanged
+fixture bytes. The HTTP client also enforces a 30-second wall-clock deadline through redirect
+and response-body completion, even when native socket timeouts do not fire.
+The comment-lock retry honors its existing wait budget when
+an exclusive-create collision cannot be statted, including a dangling symlink.
+This reproduced lock defect is separate from the intermittent historical Bun
+repeat: recent packed repeats pass, but its original cause is not established.
+
 ## Validate / diagnostics
 
 ### `pm github validate`
@@ -266,7 +356,9 @@ MIT
 
 ## Release Automation
 
-This package is release-ready for GitHub, npm, and Bun-compatible installs. CI runs type checking, build, production dependency audit, package packing, Bun install verification, and pm-changelog validation. The daily release workflow publishes only when commits exist after the latest release tag and uses pm-changelog to generate CHANGELOG.md and GitHub release notes.
+Release checks require type checking, docstrings, ESLint, zero source duplication, exact 100/100/100/100 coverage across authored TypeScript and JavaScript modules including operational scripts, production dependency audit, package packing, Bun behavior, strict PM health, and pm-changelog validation. Unloaded modules count at zero; no source ignores or lowered thresholds are accepted. Coverage shortfalls block release. The shell changelog-date verifier is exercised separately and is outside the V8 percentage denominator. The daily release workflow publishes only when commits exist after the latest release tag and uses pm-changelog to generate CHANGELOG.md and GitHub release notes.
+
+`npm run changelog:full` reads the complete tracker through the SDK and feeds pm-changelog. Closed work supplies release history; the explicit `changelog-unreleased` tag includes a pending candidate without closing its PM item. Other open work stays excluded.
 
 ## Multi-agent merge safety
 

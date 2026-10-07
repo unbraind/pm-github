@@ -1,3 +1,4 @@
+import { comments as readComments } from "@unbrained/pm-cli/sdk";
 // Unit + workspace integration tests for `--comments-mode` (native comment sync).
 //
 // The default (`body`) mode must remain byte-identical to the pre-2026.7.14
@@ -276,7 +277,7 @@ test("syncGithubCommentsToAnnotations populates the native comments collection v
     assert.strictEqual(skipped, 0);
 
     // Read back through the public SDK surface and assert structure.
-    const { comments: pmComments } = await import("@unbrained/pm-cli/sdk").then((m) => m.comments(id, {}, { pmRoot: root }));
+    const { comments: pmComments } = await readComments(id, {}, { pmRoot: root });
     assert.strictEqual(pmComments.length, 2, "two comments should be stored");
     assert.strictEqual(pmComments[0].author, "alice");
     assert.strictEqual(pmComments[1].author, "bob");
@@ -309,7 +310,7 @@ test("re-running sync does not duplicate comments (dedupe by GitHub comment id)"
     assert.strictEqual(r2.added, 1, "only the new comment should be added on re-sync");
     assert.strictEqual(r2.skipped, 2, "the two already-synced comments should be skipped");
 
-    const { comments: pmComments } = await import("@unbrained/pm-cli/sdk").then((m) => m.comments(id, {}, { pmRoot: root }));
+    const { comments: pmComments } = await readComments(id, {}, { pmRoot: root });
     assert.strictEqual(pmComments.length, 3, "exactly three comments after re-sync — no duplicates");
   } finally {
     rmSync(root, { recursive: true, force: true });

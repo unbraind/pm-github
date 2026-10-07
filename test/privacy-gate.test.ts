@@ -2,7 +2,9 @@
  * Behavioral coverage for the privacy gate script.
  *
  * The gate is a fail-closed release gate, so the tests exercise real git
- * repositories built in temporary directories — never mocks of git itself:
+ * repositories built in temporary directories. Narrow executable wrappers
+ * inject unreadable inventory and blob failures while delegating other queries
+ * to real Git:
  *
  * - the clean path (this repository's rewritten history passes),
  * - every failure path (unapproved author, committer, tagger; each secret
@@ -19,16 +21,19 @@
 
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import test from "node:test";
 
+import { fileURLToPath } from "node:url";
 import {
   extractEmail,
   gitBlobOid,
   type PrivacyGateResult,
   runGate,
+  runPrivacyGateIfMain,
+  main,
   scanBlob,
 } from "../scripts/privacy-gate.ts";
 
@@ -238,7 +243,6 @@ test("extractEmail parses git header shapes and rejects malformed lines", () => 
 });
 
 test("privacy gate CLI entry point writes streams and sets exit code", async () => {
-  const { main } = await import("../scripts/privacy-gate.ts");
   const cleanRoot = repoRoot;
   let stdout = "";
   let stderr = "";
@@ -272,7 +276,7 @@ test("privacy gate CLI entry point writes streams and sets exit code", async () 
   } finally {
     process.stdout.write = originalWrite;
     process.stderr.write = originalErrWrite;
-    process.exitCode = originalExit;
+    process.exitCode = originalExit ?? 0;
   }
 });
 
@@ -370,6 +374,92 @@ test("privacy gate ignores manifest exemptions for blobs outside the fixture dir
   }
 });
 
+test("privacy gate main entry audits the supplied root", () => {
+  const root = initRepo("main-entry");
+  const previous = process.exitCode;
+  let stderr = "";
+  const original = process.stderr.write.bind(process.stderr);
+  process.stderr.write = (chunk: Uint8Array | string): boolean => {
+    stderr += String(chunk);
+    return true;
+  };
+  try {
+    const moduleUrl = new URL("../scripts/privacy-gate.ts", import.meta.url).href;
+    runPrivacyGateIfMain(["node", fileURLToPath(moduleUrl)], moduleUrl, root);
+    assert.equal(process.exitCode, 1);
+    assert.match(stderr, /cannot read/);
+  } finally {
+    process.stderr.write = original;
+    process.exitCode = previous ?? 0;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+/** Launch with a startup PATH: Bun retains the original executable lookup path. */
+function privacyProcess(code: string, environment: Record<string, string | undefined>): void {
+  const env = { ...process.env, ...environment };
+  delete env.NODE_TEST_CONTEXT;
+  execFileSync(process.execPath, ["--input-type=module", "--eval", `
+    import assert from 'node:assert/strict';
+    import { execFileSync } from 'node:child_process';
+    import { writeFileSync } from 'node:fs';
+    import { join } from 'node:path';
+    import { runGate, listAllObjects, readObject } from ${JSON.stringify(new URL("../scripts/privacy-gate.ts", import.meta.url).href)};
+    ${code}
+  `], { env, encoding: "utf8", timeout: 30_000 });
+}
+
+test("privacy gate fails closed when git cannot be spawned", () => {
+  const root = initRepo("no-git");
+  writeAllowlist(root, ["intruder@localhost"]);
+  try {
+    privacyProcess(`
+      const root = ${JSON.stringify(root)};
+      const result = runGate(root);
+      assert.equal(result.exitCode, 1);
+      assert.match(result.stderr, /object enumeration failed|fixture exemption resolution failed|cannot read/);
+      assert.throws(() => listAllObjects(root));
+    `, { PATH: root });
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("privacy gate fails closed when object inventory or blob reads are unusable", { skip: process.platform === "win32" && "uses POSIX sh git wrappers" }, () => {
+  const root = initRepo("bad-git");
+  const bin = mkdtempSync(join(tmpdir(), "pm-github-privacy-git-"));
+  try {
+    writeAllowlist(root, ["intruder@localhost"]);
+    writeFileSync(join(root, "clean.txt"), "clean\n");
+    commitAll(root, "clean");
+    const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+    writeFileSync(join(bin, "git"), `#!/bin/sh
+if [ "$1" = "cat-file" ] && [ "$2" = "--batch-all-objects" ]; then
+  printf '%s\n' 'not-a-record'
+  exit 0
+fi
+exec "$REAL_GIT" "$@"
+`, { mode: 0o755 });
+    chmodSync(join(bin, "git"), 0o755);
+    privacyProcess(`
+      const root = ${JSON.stringify(root)};
+      const bin = ${JSON.stringify(bin)};
+      const realGit = ${JSON.stringify(realGit)};
+      assert.throws(() => listAllObjects(root), /unreadable record/);
+      const listed = execFileSync(realGit, ['cat-file', '--batch-all-objects', '--batch-check'], { cwd: root, encoding: 'utf8' });
+      const blob = listed.split('\\n').find(line => line.includes(' blob '));
+      assert.ok(blob, 'fixture commit created a blob');
+      const oid = blob.split(' ')[0];
+      writeFileSync(join(bin, 'git'), '#!/bin/sh\\nif [ "$1" = "cat-file" ] && [ "$2" = "blob" ]; then\\n  echo forced-read-failure >&2\\n  exit 1\\nfi\\nexec "$REAL_GIT" "$@"\\n', { mode: 0o755 });
+      assert.throws(() => readObject(root, 'blob', oid), /forced-read-failure/);
+      const scanned = runGate(root);
+      assert.equal(scanned.exitCode, 1);
+      assert.match(scanned.stderr, /object scan failed/);
+    `, { PATH: bin + delimiter + process.env.PATH, REAL_GIT: realGit });
+  } finally {
+    rmSync(bin, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("privacy gate negative control: a fresh violation introduced after a clean pass fails", () => {
   const root = initRepo("negative-control");
   try {
@@ -387,4 +477,35 @@ test("privacy gate negative control: a fresh violation introduced after a clean 
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("historical fixture provenance reports Git query failures", { skip: process.platform === "win32" && "uses POSIX sh git wrappers" }, () => {
+  const root = initRepo("historical-query");
+  try {
+    writeAllowlist(root, ["intruder@localhost"]);
+    writeFileSync(join(root, "clean.txt"), "public\n");
+    commitAll(root, "baseline");
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+    const commit = "a".repeat(40);
+    const manifestDir = join(root, "test/fixtures/privacy-gate");
+    mkdirSync(manifestDir, { recursive: true });
+    // A blob the repository holds must have resolvable provenance.
+    const present = execFileSync("git", ["-C", root, "hash-object", "clean.txt"], { encoding: "utf8" }).trim();
+    writeFileSync(join(manifestDir, "manifest.json"), JSON.stringify({ [present]: { justification: "Synthetic", historical_test: { commit, path: "test/gate.test.ts" } } }));
+    writeFileSync(join(bin, "git"), `#!/bin/sh\nif [ "$1" = "ls-tree" ] && [ "$2" = "${commit}" ]; then\n  echo forced-provenance-failure >&2\n  exit 1\nfi\nexec "$REAL_GIT" "$@"\n`, { mode: 0o755 });
+    privacyProcess(`
+      const result = runGate(${JSON.stringify(root)});
+      assert.equal(result.exitCode, 1);
+      assert.match(result.stderr, /git historical fixture provenance failed: forced-provenance-failure/);
+    `, { PATH: bin + delimiter + process.env.PATH, REAL_GIT: realGit });
+    // A blob absent from the object store needs no exemption, so its provenance
+    // commit is never queried: after a squash merge that commit is unreachable.
+    writeFileSync(join(manifestDir, "manifest.json"), JSON.stringify({ ["b".repeat(40)]: { justification: "Synthetic", historical_test: { commit, path: "test/gate.test.ts" } } }));
+    privacyProcess(`
+      const result = runGate(${JSON.stringify(root)});
+      assert.doesNotMatch(result.stderr, /historical fixture provenance/);
+    `, { PATH: bin + delimiter + process.env.PATH, REAL_GIT: realGit });
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

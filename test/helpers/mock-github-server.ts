@@ -106,7 +106,7 @@ export function startMockGithub(handler: MockGithubHandler): Promise<MockGithubS
         baseUrl,
         requests,
         close: () =>
-          new Promise<void>((resolveClose) => server.close(() => resolveClose())),
+          new Promise<void>((resolveClose) => { server.close(() => resolveClose()); }),
       });
     });
   });
@@ -127,6 +127,10 @@ export function jsonResponse(
     for (const [k, v] of Object.entries(headers)) res.setHeader(k, v);
   }
   res.setHeader("Content-Type", "application/json");
+  // Synchronous real-CLI work can outlast an idle keep-alive socket between
+  // requests. Close fixture connections explicitly rather than reuse a stale
+  // socket when the event loop resumes after git/PM subprocesses.
+  res.setHeader("Connection", "close");
   res.end(typeof body === "string" ? body : JSON.stringify(body));
 }
 
