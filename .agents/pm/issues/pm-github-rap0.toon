@@ -1,12 +1,12 @@
 id: pm-github-rap0
-title: "The comment-sync per-comment write-failure test is root-sensitive: withReadOnlyDirectory cannot make the tasks directory unwritable for root"
+title: Root CI runs skip the read-only-directory comment-sync fixtures visibly instead of failing them
 description: "The review-round1 new Function test removal moved the chmod 0o555/finally cleanup of the comment-sync write-failure fixture into the exported withReadOnlyDirectory test helper. Root ignores directory write permissions, so under a root CI runner the helper applies no read-only mode, the fixture write succeeds, and the per-comment write-failure assertions in the comment-sync coverage test fail. Review round 3 guarded the equivalent import-lock fixtures with a visible node:test root skip (CodeRabbit 4198811222); the same non-root-only skip should cover this helper-based fixture so a root run skips visibly instead of failing."
 type: Issue
 status: closed
 priority: 2
 tags[3]: ci,root,tests
 created_at: "2026-10-06T18:29:11.654Z"
-updated_at: "2026-10-07T08:33:51.539Z"
+updated_at: "2026-10-07T12:39:24.056Z"
 closed_at: "2026-10-07T08:33:51.527Z"
 completed_at: "2026-10-07T08:33:51.527Z"
 author: pi-gh-cr3b

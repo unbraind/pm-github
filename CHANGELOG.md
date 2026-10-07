@@ -8,7 +8,7 @@
 
 ### Fixed
 
-- The comment-sync per-comment write-failure test is root-sensitive: withReadOnlyDirectory cannot make the tasks directory unwritable for root ([pm-github-rap0](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-rap0.toon))
+- Root CI runs skip the read-only-directory comment-sync fixtures visibly instead of failing them ([pm-github-rap0](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-rap0.toon))
 
 ### Other
 
