@@ -6,9 +6,7 @@ status: in_progress
 priority: 1
 tags: []
 created_at: "2026-10-05T08:28:54.625Z"
-updated_at: "2026-10-07T07:12:00.358Z"
-assignee: pi-glm
-claim_principal: pi-glm
+updated_at: "2026-10-07T07:12:11.960Z"
 author: codex-sol
 comments[51]{created_at,author,text}:
   "2026-10-05T09:07:19.298Z",codex-sol,"A fresh bounded native Bun CLI repeat of the latest packed candidate passed in 4.22 seconds with exit zero and byte-identical tracker contents. This contrasts with the earlier long-running repeat, so retain the issue as an intermittent installed-host investigation rather than claiming a consistent Bun failure. All 375 native Bun library and operational tests also pass."
