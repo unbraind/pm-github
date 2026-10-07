@@ -1,4 +1,8 @@
 # Replace release placeholders after the gated extension is published.
+# Repository setup: Settings -> Actions -> General -> Workflow permissions must allow
+# read and write permissions and enable "Allow GitHub Actions to create and approve
+# pull requests" (off by default for new personal repositories; an organization can
+# disable it). Without it the sync branch is pushed but the review PR is not opened.
 name: Sync GitHub issues into pm
 on:
   schedule:

@@ -827,7 +827,11 @@ test("the executable reusable workflow pushes only a clean import and creates or
         PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE });
       assert.equal(result.code, 0, result.stderr + "\n" + result.stdout);
       assert.deepEqual(remoteRefs(bare), ["refs/heads/" + SYNC_BRANCH, "refs/heads/main"].sort());
-      assert.match(fs.readFileSync(env.REVIEW_RECEIPT!, "utf8"), /https:\/\/github\.com\/acme\/widgets\/blob\/main\/\.agents\/pm\/issues\/[^)]+\.toon/);
+      const review = fs.readFileSync(env.REVIEW_RECEIPT!, "utf8");
+      assert.match(review, /https:\/\/github\.com\/acme\/widgets\/blob\/main\/\.agents\/pm\/issues\/[^)]+\.toon/);
+      // While the PR is open the main link may not resolve yet, so each item
+      // also links its proposed version on the sync branch.
+      assert.ok(review.includes(`([proposed](https://github.com/acme/widgets/blob/${SYNC_BRANCH}/.agents/pm/issues/`), review);
       const lease = git(["rev-parse", "HEAD"]).stdout.trim();
       // Each Actions job starts from a fresh checkout, without old local journals.
       const nextRoot = path.join(base, "next-work");

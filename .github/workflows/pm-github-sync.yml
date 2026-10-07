@@ -183,7 +183,9 @@ jobs:
               .agents/pm/*/*.toon)
                 item_id="${changed##*/}"
                 item_id="${item_id%.toon}"
-                printf -- '- [%s](https://github.com/%s/blob/main/%s)\n' "${item_id}" "${REPOSITORY}" "${changed}" >> "${links_file}"
+                # The main link is the permanent one after merge; the branch link
+                # shows the proposed item while the review PR is open.
+                printf -- '- [%s](https://github.com/%s/blob/main/%s) ([proposed](https://github.com/%s/blob/%s/%s))\n' "${item_id}" "${REPOSITORY}" "${changed}" "${REPOSITORY}" "${SYNC_BRANCH}" "${changed}" >> "${links_file}"
                 ;;
             esac
           done < <(git diff --cached --name-only -- .agents/pm)
