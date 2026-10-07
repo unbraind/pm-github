@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Bound native Bun CLI repeats of a completed public atomic import ([pm-github-hptv](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-hptv.toon))
 - Root CI runs skip the read-only-directory comment-sync fixtures visibly instead of failing them ([pm-github-rap0](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-rap0.toon))
 
 ### Other
