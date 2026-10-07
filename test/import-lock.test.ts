@@ -525,12 +525,12 @@ test(
       );
 
       // The loser's re-run must be a clean no-op (idempotency preserved).
-      const r3 = await new Promise<{ added: number; skipped: number }>((resolve, reject) => {
+      const r3 = await new Promise<{ added: number; skipped: number; failed: number }>((resolve, reject) => {
         execFile(process.execPath, [CHILD_SCRIPT, id, root], { env }, (err, stdout) =>
           err ? reject(err) : resolve(JSON.parse(stdout.trim())),
         );
       });
-      assert.deepEqual(r3, { added: 0, skipped: comments.length });
+      assert.deepEqual(r3, { added: 0, skipped: comments.length, failed: 0 });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

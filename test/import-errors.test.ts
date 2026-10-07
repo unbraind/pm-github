@@ -118,7 +118,7 @@ test("comment sync degrades on an unavailable lock directory and handles a missi
   fs.rmSync(path.join(root, "locks"), { recursive: true, force: true });
   fs.writeFileSync(path.join(root, "locks"), "Fixture blocks the lock directory");
   const { stderr, result } = await captureStderr(() => syncGithubCommentsToAnnotations("fixture-missing", [{ id: 1, user: null, body: "A comment", created_at: "2026-01-01T00:00:00Z" }], root, 1));
-  assert.deepEqual(result, { added: 0, skipped: 0 });
+  assert.deepEqual(result, { added: 0, skipped: 0, failed: 1 });
   assert.match(stderr.join("\n"), /lock unavailable/);
   assert.match(stderr.join("\n"), /could not read existing comments/);
 });

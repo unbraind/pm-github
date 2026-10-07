@@ -289,6 +289,154 @@ test("a gated non-atomic import fails closed when a planned write fails", async 
   }
 });
 
+// A gated --comments-mode annotations|both import must be all-or-nothing for
+// native comments too: a contended comment-sync lock, a refused per-comment
+// add, and an unparsable created id all leave planned comments unwritten while
+// every other check stays green, so the plan-divergence refusal is the only
+// thing that can fail the run closed. The ungated twins pin the unchanged
+// warn-and-continue behaviour.
+
+test("a gated import fails closed when the comment-sync lock is contended", async () => {
+  const root = gitTracker("pm-github-gated-lock-");
+  const holder = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" });
+  try {
+    assert.ok(holder.pid && holder.pid > 0);
+    const lockPath = importCommentSyncLockPath(root, "pm-existing");
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: holder.pid, token: "held", created_at: new Date().toISOString() }) + "\n");
+    await withFakePm(`exit 0`, async () => {
+      const gated = await captureStderr(() => assert.rejects(runImport("acme/widgets", root, opts({ gate: true, "comments-mode": "annotations" }), {
+        resolveToken: () => "tok",
+        readItems: () => [{ id: "pm-existing", title: "old", status: "open", tags: ["gh:acme/widgets#7"] }],
+        fetchIssues: async () => [issue({ comments: 1 })],
+        fetchIssueComments: async () => [{ id: 3, user: { login: "octo" }, created_at: "2026-01-01T00:00:00Z", body: "held note" }],
+      }), /planned write\(s\) failed/));
+      assert.match(gated.stderr.join("\n"), /another import holds the comment-sync lock/);
+    });
+  } finally {
+    holder.kill("SIGKILL");
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a gated import fails closed when a per-comment add fails mid-sync", async () => {
+  const root = gitTracker("pm-github-gated-add-fail-");
+  const tracker = path.join(root, ".agents", "pm");
+  const created = spawnSync(REAL_PM, ["--path", tracker, "create", "task", "Commented", "--tags", "gh:acme/widgets#7", "--description", "d"], { encoding: "utf8" });
+  assert.equal(created.status, 0, created.stderr);
+  const listed = spawnSync(REAL_PM, ["--pm-path", root, "--json", "list", "--full"], { encoding: "utf8" });
+  const itemId = (JSON.parse(listed.stdout) as { items?: Array<{ id: string }> }).items?.[0]?.id;
+  assert.ok(itemId);
+  const syncedComment = { id: 21, user: { login: "octo" }, created_at: "2026-01-01T00:00:00Z", body: "already synced" };
+  const failingComment = { id: 22, user: { login: "octo" }, created_at: "2026-01-02T00:00:00Z", body: "cannot land" };
+  // Land the first comment while the tasks directory is still writable so the
+  // gated run below proves the loop continues past it: one skip, one failure.
+  await syncGithubCommentsToAnnotations(itemId, [syncedComment], tracker, 7);
+  const tasksDir = path.join(tracker, "tasks");
+  try {
+    await withReadOnlyDirectory(tasksDir, async () => {
+      await withFakePm(`exit 0`, async () => {
+        const gated = await captureStderr(() => assert.rejects(runImport("acme/widgets", root, opts({ gate: true, "comments-mode": "annotations" }), {
+          resolveToken: () => "tok",
+          readItems: () => [{ id: itemId, title: "old", status: "open", tags: ["gh:acme/widgets#7"] }],
+          fetchIssues: async () => [issue({ comments: 2 })],
+          fetchIssueComments: async () => [syncedComment, failingComment],
+        }), /planned write\(s\) failed/));
+        assert.match(gated.stderr.join("\n"), /comment 22 sync failed/);
+      });
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a gated import fails closed when a created id cannot be parsed with annotations sync on", async () => {
+  const root = gitTracker("pm-github-gated-unparsed-");
+  try {
+    await withFakePm(`
+      json=0
+      for arg in "$@"; do
+        if [ "$arg" = "--json" ]; then json=1; fi
+      done
+      if [ "$json" = "1" ]; then printf '%s\\n' 'not-json'; exit 0; fi
+      exit 0
+    `, async () => {
+      const gated = await captureStderr(() => assert.rejects(runImport("acme/widgets", root, opts({ gate: true, "comments-mode": "annotations" }), {
+        resolveToken: () => "tok",
+        readItems: () => [],
+        fetchIssues: async () => [issue({ comments: 1 })],
+        fetchIssueComments: async () => [{ id: 31, user: { login: "octo" }, created_at: "2026-01-01T00:00:00Z", body: "note" }],
+      }), /planned write\(s\) failed/));
+      assert.match(gated.stderr.join("\n"), /could not parse created item id — comments not synced/);
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a gated atomic import fails closed when committed items lack their planned comments", async () => {
+  const root = gitTracker("pm-github-gated-atomic-comments-");
+  const tracker = path.join(root, ".agents", "pm");
+  try {
+    await assert.rejects(captureStderr(() => runImport("acme/widgets", tracker, opts({ atomic: true, gate: true, "comments-mode": "annotations" }), {
+      resolveToken: () => "tok",
+      readItems: () => [{ id: "pm-fresh", title: "t", status: "open", tags: ["gh:acme/widgets#7"] }],
+      fetchIssues: async () => [issue({ comments: 1 })],
+      fetchIssueComments: async () => [{ id: 41, user: { login: "octo" }, created_at: "2026-01-01T00:00:00Z", body: "note" }],
+      // The commit "succeeds" but routes no created id, so the planned comment
+      // is unreachable — only the comment-failure count can fail the run closed.
+      commitAtomic: async () => ({ transactionId: "tx-comments", recovered: false, imported: 1, updated: 0, itemIds: new Map() }),
+    })), /planned write\(s\) failed/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the same comment-sync failures without --gate still import with a warning", async () => {
+  const root = gitTracker("pm-github-ungated-comments-");
+  const tracker = path.join(root, ".agents", "pm");
+  const created = spawnSync(REAL_PM, ["--path", tracker, "create", "task", "Commented", "--tags", "gh:acme/widgets#7", "--description", "d"], { encoding: "utf8" });
+  assert.equal(created.status, 0, created.stderr);
+  const listed = spawnSync(REAL_PM, ["--pm-path", root, "--json", "list", "--full"], { encoding: "utf8" });
+  const itemId = (JSON.parse(listed.stdout) as { items?: Array<{ id: string }> }).items?.[0]?.id;
+  assert.ok(itemId);
+  const failingComment = { id: 52, user: { login: "octo" }, created_at: "2026-01-01T00:00:00Z", body: "cannot land" };
+  const holder = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" });
+  try {
+    assert.ok(holder.pid && holder.pid > 0);
+    const lockPath = importCommentSyncLockPath(root, itemId);
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: holder.pid, token: "held", created_at: new Date().toISOString() }) + "\n");
+    await withFakePm(`exit 0`, async () => {
+      const contended = await captureStderr(() => runImport("acme/widgets", root, opts({ "comments-mode": "annotations" }), {
+        resolveToken: () => "tok",
+        readItems: () => [{ id: itemId, title: "old", status: "open", tags: ["gh:acme/widgets#7"] }],
+        fetchIssues: async () => [issue({ comments: 1 })],
+        fetchIssueComments: async () => [failingComment],
+      }));
+      assert.ok("updated" in contended.result && contended.result.updated === 1);
+      assert.match(contended.stderr.join("\n"), /another import holds the comment-sync lock/);
+    });
+    fs.rmSync(lockPath, { force: true });
+    const tasksDir = path.join(tracker, "tasks");
+    await withReadOnlyDirectory(tasksDir, async () => {
+      await withFakePm(`exit 0`, async () => {
+        const refused = await captureStderr(() => runImport("acme/widgets", root, opts({ "comments-mode": "annotations" }), {
+          resolveToken: () => "tok",
+          readItems: () => [{ id: itemId, title: "old", status: "open", tags: ["gh:acme/widgets#7"] }],
+          fetchIssues: async () => [issue({ comments: 1 })],
+          fetchIssueComments: async () => [failingComment],
+        }));
+        assert.ok("updated" in refused.result && refused.result.updated === 1);
+        assert.match(refused.stderr.join("\n"), /comment 52 sync failed/);
+      });
+    });
+  } finally {
+    holder.kill("SIGKILL");
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("non-atomic import reports update, close, reopen, and unparsed-id failures", async () => {
   const root = gitTracker("pm-github-import-fail-");
   const listed = spawnSync(REAL_PM, ["--pm-path", root, "--json", "list", "--full"], { encoding: "utf8" });

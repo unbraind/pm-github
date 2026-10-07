@@ -2184,30 +2184,32 @@ export function parseCreatedItemId(stdout: string): string | undefined {
  *
  * Idempotent: comments already present (matched by their marker id) are skipped,
  * so re-running import never duplicates. Each GitHub comment becomes one pm
- * comment authored by the GitHub login. Failures are logged and never abort the
- * import; a contended or unavailable lock degrades gracefully (see
- * {@link acquireImportLock}).
+ * comment authored by the GitHub login. Failures are reported in the returned
+ * `failed` count and logged, never thrown: a contended or unavailable lock, an
+ * unreadable existing-comment collection, and each refused add all count every
+ * comment that did not land (see {@link acquireImportLock}). Gated callers turn
+ * a non-zero `failed` count into a fail-closed refusal; ungated ones continue.
  *
  * @param itemId - The pm item to append comments to.
  * @param comments - The GitHub comments to sync.
  * @param pmRoot - Workspace root or pm data dir.
  * @param issueNumber - The source issue number (for log prefixes).
- * @returns How many comments were added and how many skipped as duplicates.
+ * @returns How many comments were added, skipped as duplicates, and not written.
  */
 export async function syncGithubCommentsToAnnotations(
   itemId: string,
   comments: GhComment[],
   pmRoot: string,
   issueNumber: number,
-): Promise<{ added: number; skipped: number }> {
-  if (comments.length === 0) return { added: 0, skipped: 0 };
+): Promise<{ added: number; skipped: number; failed: number }> {
+  if (comments.length === 0) return { added: 0, skipped: 0, failed: 0 };
   const acquisition = await acquireImportLock(pmRoot, itemId);
   if (acquisition.status === "contended") {
     console.error(
       `#${issueNumber}: comment sync for ${itemId} skipped — another import holds the ` +
         `comment-sync lock; re-run import to pick up the comments`,
     );
-    return { added: 0, skipped: 0 };
+    return { added: 0, skipped: 0, failed: comments.length };
   }
   const release = acquisition.status === "acquired" ? () => acquisition.lock.release() : () => {};
   try {
@@ -2218,11 +2220,12 @@ export async function syncGithubCommentsToAnnotations(
     } catch (err: unknown) {
       const msg = errorMessage(err);
       console.error(`#${issueNumber}: could not read existing comments for ${itemId} — ${msg}`);
-      return { added: 0, skipped: 0 };
+      return { added: 0, skipped: 0, failed: comments.length };
     }
     const synced = extractSyncedCommentIds(existing);
     let added = 0;
     let skipped = 0;
+    let failed = 0;
     for (const c of comments) {
       if (synced.has(c.id)) {
         skipped++;
@@ -2235,9 +2238,10 @@ export async function syncGithubCommentsToAnnotations(
       } catch (err: unknown) {
         const msg = errorMessage(err);
         console.error(`#${issueNumber}: comment ${c.id} sync failed — ${msg}`);
+        failed++;
       }
     }
-    return { added, skipped };
+    return { added, skipped, failed };
   } finally {
     release();
   }
@@ -3050,6 +3054,10 @@ export async function runImport(
   let imported = 0;
   let updated = 0;
   let skipped = 0;
+  // Planned native comments the write phase could not land (contended lock,
+  // refused add, unparsable created id). Ungated runs warn and continue; gated
+  // runs add this to the plan-divergence refusal at the end.
+  let commentWriteFailures = 0;
 
   // Gated pipeline, phase 1 — plan BEFORE any mutation. The same prepare step
   // the write paths use builds every plan entry up front, so completeness
@@ -3160,18 +3168,26 @@ export async function runImport(
 
     const result = await (dependencies.commitAtomic ?? importGithubAtomic)(pmRoot, repo, prepared);
     if (opts.gate) verifyImportedProvenance((dependencies.readItems ?? readPmItems)(pmRoot), prepared, repo);
+    // Planned native comments are part of the verified plan: a contended lock,
+    // a refused add, or a committed entry whose created id is missing from the
+    // post-commit routing map all leave planned comments unwritten, so they are
+    // counted and gated runs fail closed below instead of exiting clean.
+    let commentWriteFailures = 0;
     for (const entry of prepared) {
       if (!entry.syncAnnotations) continue;
       const itemId = result.itemIds.get(entry.issueNumber);
       if (itemId) {
-        await syncGithubCommentsToAnnotations(
+        commentWriteFailures += (await syncGithubCommentsToAnnotations(
           itemId,
           entry.comments,
           pmRoot,
           entry.issueNumber,
-        );
+        )).failed;
+      } else {
+        commentWriteFailures += entry.comments.length;
       }
     }
+    failClosedOnPlanDivergence(opts.gate, skipped, skipped, commentWriteFailures);
     if (result.recovered) {
       console.error(
         `Atomic import recovered transaction ${result.transactionId} covering ${result.recoveredItems ?? prepared.length} item(s).`,
@@ -3303,7 +3319,7 @@ export async function runImport(
         }
       }
       if (syncAnnotations) {
-        await syncGithubCommentsToAnnotations(match.id, comments, pmRoot, issue.number);
+        commentWriteFailures += (await syncGithubCommentsToAnnotations(match.id, comments, pmRoot, issue.number)).failed;
       }
       updated++;
       continue;
@@ -3357,9 +3373,13 @@ export async function runImport(
     }
     if (syncAnnotations) {
       if (createdId) {
-        await syncGithubCommentsToAnnotations(createdId, comments, pmRoot, issue.number);
+        commentWriteFailures += (await syncGithubCommentsToAnnotations(createdId, comments, pmRoot, issue.number)).failed;
       } else {
+        // Without the created id the planned comments cannot be written; the
+        // gated plan-divergence refusal below turns that into a fail-closed exit
+        // while ungated runs keep today's warn-and-continue behaviour.
         console.error(`#${issue.number}: could not parse created item id — comments not synced`);
+        commentWriteFailures += comments.length;
       }
     }
     imported++;
@@ -3388,14 +3408,16 @@ export async function runImport(
     throw new CommandError(`Imported 0 issue(s); ${skipped} failed.`);
   }
   // A gated import is all-or-nothing in effect: a planned write that failed
-  // (an update, close or reopen reconciliation) leaves the tracker different
-  // from the verified plan, and provenance alone cannot see that, because the
-  // item still carries its tag. Fail closed before anything can be pushed.
-  if (opts.gate && skipped !== gateCompleteness!.skipped) {
-    throw new CommandError(
-      `pm github gate: ${skipped - gateCompleteness!.skipped} planned write(s) failed; the tracker does not match the verified plan. Nothing may be pushed.`,
-    );
-  }
+  // (an update, close or reopen reconciliation) or a planned native comment
+  // that was not written leaves the tracker different from the verified plan,
+  // and provenance alone cannot see that, because the item still carries its
+  // tag. Fail closed before anything can be pushed.
+  failClosedOnPlanDivergence(
+    opts.gate,
+    gateCompleteness?.skipped ?? skipped,
+    skipped,
+    commentWriteFailures,
+  );
   const depLink = opts.linkDeps
     ? await linkImportedDependencies(repo, filtered, pmRoot, dependencies)
     : undefined;
@@ -3439,6 +3461,37 @@ function depLinkResultFields(
     orderingCycleWarnings: result.orderingCycleWarnings,
     ...(result.failures.length > 0 ? { dependencyLinkFailures: result.failures } : {}),
   };
+}
+
+/**
+ * Fail a gated import when the writes diverged from the verified plan.
+ *
+ * A gated import is all-or-nothing in effect: a planned item write that failed
+ * (an update, close or reopen reconciliation), a planned native comment that
+ * was not written, or a comment collection left unreachable by an unparsable
+ * created id all leave the tracker different from the verified plan — and
+ * provenance alone cannot see that, because the item still carries its tag and
+ * missing content cannot leak anything into the post-write privacy scan. Both
+ * the non-atomic and the atomic import path funnel their divergence here and
+ * fail closed before anything can be pushed; ungated imports already warned.
+ *
+ * @param gate - Whether the import runs gated; ungated runs never throw here.
+ * @param plannedSkipped - Issues the verified plan already accounted as skipped.
+ * @param actualSkipped - Issues the write phase actually skipped.
+ * @param commentFailures - Planned native comments that were not written.
+ * @throws CommandError when any planned write or comment failed on a gated run.
+ */
+function failClosedOnPlanDivergence(
+  gate: boolean,
+  plannedSkipped: number,
+  actualSkipped: number,
+  commentFailures: number,
+): void {
+  const failed = actualSkipped - plannedSkipped + commentFailures;
+  if (!gate || failed <= 0) return;
+  throw new CommandError(
+    `pm github gate: ${failed} planned write(s) failed; the tracker does not match the verified plan. Nothing may be pushed.`,
+  );
 }
 
 // ---------------------------------------------------------------------------
