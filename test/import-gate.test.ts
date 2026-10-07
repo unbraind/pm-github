@@ -76,16 +76,6 @@ function issue(number: number, title: string, body: string | null): GhIssue {
 }
 
 /**
- * Build the mock GitHub handler serving one issues page plus per-issue comments.
- *
- * Comments are served for every issue so the `--with-comments` paths can embed
- * adversarial comment fixtures exactly as the real REST API would deliver them.
- *
- * @param issues - The issues the "repository" holds.
- * @param commentsByNumber - Comment fixtures keyed by issue number.
- * @returns The request handler.
- */
-/**
  * Build one plan entry for the pure verification functions.
  *
  * Only the fields the verifiers read (issue number, tags, match) vary; the rest
@@ -154,6 +144,16 @@ test("a real completed SDK journal with reset item files cannot authorize a push
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 
+/**
+ * Build the mock GitHub handler serving one issues page plus per-issue comments.
+ *
+ * Comments are served for every issue so the `--with-comments` paths can embed
+ * adversarial comment fixtures exactly as the real REST API would deliver them.
+ *
+ * @param issues - The issues the "repository" holds.
+ * @param commentsByNumber - Comment fixtures keyed by issue number.
+ * @returns The request handler.
+ */
 function githubHandler(
   issues: readonly GhIssue[],
   commentsByNumber: ReadonlyMap<number, readonly GhComment[]> = new Map(),
@@ -386,8 +386,8 @@ test("a gated import refuses to write when the corpus cannot yield an idempotent
       },
     );
     assert.ok(
-      messages.some((message) => /pm github gate: plan verified|Fetching issues/.test(message)),
-      "the gate runs its plan phase before failing",
+      !messages.some((message) => /pm github gate: plan verified/.test(message)),
+      "the idempotency refusal happens before the plan is reported as verified",
     );
   } finally {
     console.error = originalError;
