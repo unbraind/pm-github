@@ -259,6 +259,36 @@ test("gated atomic import reports a recovered journal and fails closed after a p
   }
 });
 
+test("a gated non-atomic import fails closed when a planned write fails", async () => {
+  // The close reconciliation is refused: the item keeps its provenance tag, so
+  // only the write count can show that the tracker no longer matches the plan.
+  const root = gitTracker("pm-github-gated-write-fail-");
+  try {
+    await withFakePm(`
+      for arg in "$@"; do
+        if [ "$arg" = "close" ]; then echo close-refused >&2; exit 1; fi
+      done
+      exit 0
+    `, async () => {
+      await captureStderr(() => assert.rejects(runImport("acme/widgets", root, opts({ gate: true }), {
+        resolveToken: () => "tok",
+        readItems: () => [
+          { id: "pm-existing", title: "old", status: "open", tags: ["gh:acme/widgets#8"] },
+          { id: "pm-clean", title: "old", status: "open", tags: ["gh:acme/widgets#9"] },
+        ],
+        // #9 updates cleanly, so the import is not an all-failed run; only the
+        // write count can show that #8's close never happened.
+        fetchIssues: async () => [
+          issue({ number: 8, state: "closed", state_reason: "completed", closed_at: "2026-02-01T00:00:00Z" }),
+          issue({ number: 9 }),
+        ],
+      }), /planned write\(s\) failed/));
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("non-atomic import reports update, close, reopen, and unparsed-id failures", async () => {
   const root = gitTracker("pm-github-import-fail-");
   const listed = spawnSync(REAL_PM, ["--pm-path", root, "--json", "list", "--full"], { encoding: "utf8" });

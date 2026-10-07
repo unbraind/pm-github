@@ -3387,6 +3387,15 @@ export async function runImport(
   if (imported === 0 && updated === 0 && skipped > 0) {
     throw new CommandError(`Imported 0 issue(s); ${skipped} failed.`);
   }
+  // A gated import is all-or-nothing in effect: a planned write that failed
+  // (an update, close or reopen reconciliation) leaves the tracker different
+  // from the verified plan, and provenance alone cannot see that, because the
+  // item still carries its tag. Fail closed before anything can be pushed.
+  if (opts.gate && skipped !== gateCompleteness!.skipped) {
+    throw new CommandError(
+      `pm github gate: ${skipped - gateCompleteness!.skipped} planned write(s) failed; the tracker does not match the verified plan. Nothing may be pushed.`,
+    );
+  }
   const depLink = opts.linkDeps
     ? await linkImportedDependencies(repo, filtered, pmRoot, dependencies)
     : undefined;
