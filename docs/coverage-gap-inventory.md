@@ -118,5 +118,6 @@ included. PM items remain open with released claims for orchestrator review.
 
 Current status (review round 3): `pm-github-9cjx` is closed by the orchestrator
 with the exact all-source 100/100/100/100 gate green across the unchanged
-12-module inventory. The closing head passes 504/504 tests; the current head
-passes 505/505 with zero failures or skips.
+12-module inventory. The authoritative closing count is 504/504 tests at the
+closing head `7a41660`; the 505/505 figure is a later-head measurement taken
+after later review rounds added tests, with zero failures or skips.
