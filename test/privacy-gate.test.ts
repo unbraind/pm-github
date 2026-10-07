@@ -491,12 +491,21 @@ test("historical fixture provenance reports Git query failures", { skip: process
     const commit = "a".repeat(40);
     const manifestDir = join(root, "test/fixtures/privacy-gate");
     mkdirSync(manifestDir, { recursive: true });
-    writeFileSync(join(manifestDir, "manifest.json"), JSON.stringify({ ["b".repeat(40)]: { justification: "Synthetic", historical_test: { commit, path: "test/gate.test.ts" } } }));
+    // A blob the repository holds must have resolvable provenance.
+    const present = execFileSync("git", ["-C", root, "hash-object", "clean.txt"], { encoding: "utf8" }).trim();
+    writeFileSync(join(manifestDir, "manifest.json"), JSON.stringify({ [present]: { justification: "Synthetic", historical_test: { commit, path: "test/gate.test.ts" } } }));
     writeFileSync(join(bin, "git"), `#!/bin/sh\nif [ "$1" = "ls-tree" ] && [ "$2" = "${commit}" ]; then\n  echo forced-provenance-failure >&2\n  exit 1\nfi\nexec "$REAL_GIT" "$@"\n`, { mode: 0o755 });
     privacyProcess(`
       const result = runGate(${JSON.stringify(root)});
       assert.equal(result.exitCode, 1);
       assert.match(result.stderr, /git historical fixture provenance failed: forced-provenance-failure/);
+    `, { PATH: bin + delimiter + process.env.PATH, REAL_GIT: realGit });
+    // A blob absent from the object store needs no exemption, so its provenance
+    // commit is never queried: after a squash merge that commit is unreachable.
+    writeFileSync(join(manifestDir, "manifest.json"), JSON.stringify({ ["b".repeat(40)]: { justification: "Synthetic", historical_test: { commit, path: "test/gate.test.ts" } } }));
+    privacyProcess(`
+      const result = runGate(${JSON.stringify(root)});
+      assert.doesNotMatch(result.stderr, /historical fixture provenance/);
     `, { PATH: bin + delimiter + process.env.PATH, REAL_GIT: realGit });
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

@@ -168,15 +168,21 @@ function listFixtureTreeBlobs(root: string): Set<string> {
  * Builds the effective fixture exemption set: manifest keys intersected with
  * the blobs actually present under the fixture directory at HEAD.
  *
+ * Historical entries are resolved only for blobs the audited object inventory
+ * holds: a blob absent from the store needs no exemption, and the commit that
+ * pins its provenance may be unreachable once a branch is squash-merged. A
+ * present blob whose provenance does not match still fails closed.
+ *
  * @param root - Absolute repository root.
+ * @param presentBlobs - Blob object ids in the audited object inventory.
  * @returns Map from exemptable Git blob object id to its justification.
  */
-function loadFixtureExemptions(root: string): Map<string, string> {
+function loadFixtureExemptions(root: string, presentBlobs: ReadonlySet<string>): Map<string, string> {
   const manifest = loadFixtureManifest(root);
   const fixtureBlobs = listFixtureTreeBlobs(root);
   for (const [oid, entry] of manifest) {
     const source = entry.historical_test;
-    if (!source) continue;
+    if (!source || !presentBlobs.has(oid)) continue;
     if (!/^[0-9a-f]{40}$/.test(source.commit) || !/^test\/[A-Za-z0-9_-]+\.test\.ts$/.test(source.path)) {
       throw new Error("Historical fixture provenance must name an exact commit and a test source.");
     }
@@ -354,7 +360,7 @@ export function runGate(root: string): PrivacyGateResult {
   const findings: Finding[] = [];
   let exemptions: Map<string, string>;
   try {
-    exemptions = loadFixtureExemptions(root);
+    exemptions = loadFixtureExemptions(root, new Set(objects.filter(([, type]) => type === "blob").map(([oid]) => oid)));
   } catch (error) {
     return {
       exitCode: 1,
