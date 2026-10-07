@@ -266,12 +266,15 @@ const HOST_PATH_RULES: readonly ContentRule[] = [
     // so GitHub slash commands (`/assign`), repository-relative links
     // (`/docs/setup.md`) and API routes (`GET /api/v1`) in issue text are not
     // flagged; the root must end at a separator or delimiter (`/homework` is
-    // not `/home`).
-    pattern: /(?:^|[\s"'`([=,{])\/(?:home|Users|root|tmp|var|etc|opt|srv|mnt|media|private|Volumes|usr|run|proc|data|nix|scratch|workspace|builds|Library|System)(?=\/|$|[\s"'`<>),;\]}])(?:\/[^\s"'`<>),;\]}]*)?/g,
+    // not `/home`). The lead-in is a lookbehind so the match is the path
+    // itself; it also admits `file://` URLs and `label:` prefixes (`cwd:/home/…`),
+    // whose two-character minimum leaves drive letters to the Windows rule.
+    pattern: /(?<=^|[\s"'`([=,{]|[A-Za-z0-9_]{2}:|file:\/\/)\/(?:home|Users|root|tmp|var|etc|opt|srv|mnt|media|private|Volumes|usr|run|proc|data|nix|scratch|workspace|builds|Library|System)(?=\/|$|[\s"'`<>),;\]}])(?:\/[^\s"'`<>),;\]}]*)?/g,
   },
   {
     rule: "windows-host-path",
-    pattern: /(?<![A-Za-z0-9_:/])[A-Za-z]:[\\/][^\s"'`<>),;\]}]+/g,
+    // A drive letter at a token start, or as a `file:///C:/…` URL path.
+    pattern: /(?:(?<![A-Za-z0-9_:/])|(?<=file:\/\/\/))[A-Za-z]:[\\/][^\s"'`<>),;\]}]+/g,
   },
   {
     rule: "home-username",
@@ -404,8 +407,7 @@ export function scanLineForRuleHits(line: string): RuleHit[] {
     rule.pattern.lastIndex = 0;
     for (let match = rule.pattern.exec(decoded); match; match = rule.pattern.exec(decoded)) {
       if (!rule.confirm || rule.confirm(match[0])) {
-        const matched = rule.rule === "absolute-host-path" ? match[0].slice(match[0].indexOf("/"))
-          : rule.rule === "home-username" ? match[0].slice(match[0].indexOf("~")) : match[0];
+        const matched = rule.rule === "home-username" ? match[0].slice(match[0].indexOf("~")) : match[0];
         hits.push({ rule: rule.rule, matched, index: offsets[match.index]! });
       }
     }

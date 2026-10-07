@@ -307,6 +307,23 @@ test("host-path rule flags host-identifying roots, not slash commands, links or 
   }
 });
 
+test("host-path rules see paths behind file:// URLs and label colons, hashing only the path", () => {
+  const hitsOf = (line: string): string[] => scanLineForRuleHits(line).map((hit) => `${hit.rule} ${hit.matched}`);
+  const home = "/" + "home/someone/report.txt";
+  assert.deepStrictEqual(hitsOf(`open file://${home}`), [`absolute-host-path ${home}`]);
+  assert.deepStrictEqual(hitsOf("file://" + "/" + "Users/someone/x"), ["absolute-host-path /" + "Users/someone/x"]);
+  assert.deepStrictEqual(hitsOf(`cwd:${home}`), [`absolute-host-path ${home}`]);
+  assert.deepStrictEqual(hitsOf("log:/" + "tmp/x"), ["absolute-host-path /" + "tmp/x"]);
+  const drive = "C:/" + "Users/someone/x";
+  assert.deepStrictEqual(hitsOf(`file:///${drive}`), [`windows-host-path ${drive}`]);
+  // A drive path is one Windows finding, never also a POSIX root after its colon.
+  assert.deepStrictEqual(hitsOf(`at ${drive}`), [`windows-host-path ${drive}`]);
+  // URLs, ports, slash commands and API routes stay clean.
+  for (const clean of ["https://example.com/root/path", "http://localhost:8080/" + "tmp/x", "https://example.com:443/" + "home/x", "file://server/share", "/assign @someone", "GET /api/v1 returns 404"]) {
+    assert.deepStrictEqual(hitsOf(clean), [], clean);
+  }
+});
+
 test("host-path rules: absolute paths, windows paths, and home usernames", () => {
   assert.deepStrictEqual(
     scanLineForRuleHits(`crash at ${HOME_PATH}`).map((hit) => hit.rule),
