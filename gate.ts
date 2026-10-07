@@ -885,6 +885,9 @@ function scanChangeFile(change: ChangeFile): Array<GateFinding & { matched: stri
           }
           for (const [key, value] of Object.entries(record)) {
             if (patch && ["op", "path", "value", "from"].includes(key)) continue;
+            // Keys are data too: a credential used as an object key must not pass
+            // unscanned (a .toon line with the same content is scanned as text).
+            values.push({ text: key, field: entry.field });
             pending.push({ value, field: key === "metadata" || key === "patch" ? entry.field : key });
           }
         }

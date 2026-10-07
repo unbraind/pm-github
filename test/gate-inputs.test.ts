@@ -70,6 +70,19 @@ test("history patch attribution handles root pointers, metadata roots, and copy 
   assert.deepEqual(new Set(report.findings.map(f => f.field)), new Set(["unknown", "metadata", "body"]));
 });
 
+test("history object keys are scanned like values", t => {
+  // A .toon line is scanned as raw text, so a credential used as a JSON object
+  // key in history must fail the gate the same way.
+  const root = repository(t);
+  const token = "ghp_" + "C".repeat(36);
+  const proposal = path.join(root, "proposal.diff");
+  const row = { patch: [{ op: "add", path: "/metadata/x", value: { [token]: "clean" } }] };
+  fs.writeFileSync(proposal, `--- /dev/null\n+++ b/history/item.jsonl\n@@ -0,0 +1 @@\n+${JSON.stringify(row)}\n`);
+  const report = runTrackerGate({ pmRoot: root, diffFile: proposal });
+  assert.equal(report.verdict, "fail");
+  assert.ok(report.findings.some(f => f.rule === "github-token-classic"));
+});
+
 test("explicit diff failures preserve gate diagnostics and wrap other filesystem failures", t => {
   const root = repository(t);
   const proposal = path.join(root, "proposal.diff");
