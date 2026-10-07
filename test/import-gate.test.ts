@@ -845,6 +845,34 @@ test("the executable reusable workflow pushes only a clean import and creates or
 });
 
 
+test("an install-only settings change never reaches the sync commit", async () => {
+  const { root, base, bare, git } = initSyncRepo();
+  try {
+    // The caller restricts extensions to an explicit list without pm-github, so
+    // installing the pinned extension edits settings.json in the checkout.
+    const settingsPath = path.join(root, ".agents", "pm", "settings.json");
+    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as { extensions: { enabled: string[] } };
+    settings.extensions.enabled = ["pm-other"];
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+    assert.equal(git(["commit", "-qam", "restrict enabled extensions"]).status, 0);
+    assert.equal(git(["push", "-q", bare, "main"]).status, 0);
+    const env = await prepareWorkflowFixture(root, base);
+    assert.notEqual(git(["diff", "--quiet", "--", ".agents/pm/settings.json"]).status, 0, "precondition: install edits settings.json");
+    assert.equal(git(["switch", "-c", SYNC_BRANCH]).status, 0);
+    await withMockGithub((req, res, url, server) => {
+      if (req.url === "/repos/acme/widgets") jsonResponse(res, 200, { private: false });
+      else githubHandler([])(req, res, url, server);
+    }, async () => {
+      const result = await executeWorkflow(workflowShell(WORKFLOW_IMPORT_SEQUENCE), root, { ...env,
+        PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE });
+      assert.equal(result.code, 0, result.stderr + "\n" + result.stdout);
+      assert.match(result.stdout, /no PR is needed/);
+      assert.equal(fs.existsSync(env.REVIEW_ACTIONS!), false, "no review PR was created or edited");
+      assert.deepEqual(remoteRefs(bare), ["refs/heads/main"]);
+    });
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
 test("packed installed CLI repeats a completed gated import under native Bun within 45 seconds", { timeout: 180_000 }, async () => {
   const { root, base, bare } = initSyncRepo();
   try {

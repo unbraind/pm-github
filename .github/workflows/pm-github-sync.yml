@@ -41,6 +41,9 @@ concurrency:
   group: pm-github-sync-${{ inputs.repository }}
   cancel-in-progress: false
 
+# No workflow-wide grant: the job below requests exactly what it needs.
+permissions: {}
+
 jobs:
   gated-sync:
     # Read issues, push the sync branch, and create/update its review PR.
@@ -156,6 +159,18 @@ jobs:
         run: |
           set -euo pipefail
           ./node_modules/.bin/pm github gate --json
+          # Installing the pinned extension can add it to an explicit
+          # extensions.enabled list, and pm records that settings change in the
+          # workspace history. Both are setup state, not synced data, so neither
+          # reaches the commit (the extension is not needed after the gate).
+          for setup_path in .agents/pm/settings.json .agents/pm/history/_workspace.jsonl; do
+            if git cat-file -e "HEAD:${setup_path}" 2>/dev/null; then
+              git restore --source=HEAD --staged --worktree -- "${setup_path}"
+            else
+              git rm -q --cached --ignore-unmatch -- "${setup_path}"
+              rm -f -- "${setup_path}"
+            fi
+          done
           if git diff --cached --quiet; then
             echo "GitHub issues already match the pm tracker; no PR is needed."
             exit 0
