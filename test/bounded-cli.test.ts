@@ -23,3 +23,15 @@ test("the acceptance watchdog passes normal exits and force-kills a CPU spin ign
   assert.ok(stalled.seconds < 3);
   assert.deepEqual(fs.readFileSync(tracker), before);
 });
+
+test("multibyte output split across stream chunks decodes intact", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pm-cli-utf8-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  // Write the two bytes of "é" in separate writes with a pause between them,
+  // so the parent receives them as two chunks.
+  const script = "const b=Buffer.from('é');process.stdout.write(b.subarray(0,1));setTimeout(()=>{process.stdout.write(b.subarray(1));process.stderr.write(b.subarray(0,1));setTimeout(()=>process.stderr.write(b.subarray(1)),100)},100)";
+  const result = await boundedCli(process.execPath, ["-e", script], root, process.env);
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout, "é");
+  assert.equal(result.stderr, "é");
+});

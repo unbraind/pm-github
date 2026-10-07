@@ -29,8 +29,12 @@ export function boundedCli(command: string, args: string[], cwd: string, env: No
       kill("SIGTERM");
       cleanup = setTimeout(() => kill("SIGKILL"), cleanupMs);
     }, deadlineMs);
-    child.stdout.on("data", chunk => { stdout += String(chunk); });
-    child.stderr.on("data", chunk => { stderr += String(chunk); });
+    // Decode the streams, not each chunk: a multibyte character split across
+    // two chunks would otherwise become two U+FFFD replacement characters.
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => { stdout += chunk; });
+    child.stderr.on("data", (chunk: string) => { stderr += chunk; });
     child.on("error", error => { clearTimeout(deadline); if (cleanup) clearTimeout(cleanup); reject(error); });
     child.on("close", (code, signal) => {
       clearTimeout(deadline);

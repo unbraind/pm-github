@@ -317,7 +317,7 @@ jobs:
       pm-github-version: "RELEASE_VERSION"     # required: exact published version
 ```
 
-Replace the two release placeholders after the gated extension is published; the current published version does not contain this feature. The calling repo needs `@unbrained/pm-cli` as a devDependency (the workflow's `npm ci` provides the CLI) and its pm tracker at `.agents/pm` committed on `main`.
+Replace the two release placeholders after the gated extension is published; the current published version does not contain this feature. The calling repo needs `@unbrained/pm-cli` as a devDependency (the workflow's `npm ci` provides the CLI) and its pm tracker at `.agents/pm` committed on `main`. Under **Settings → Actions → General → Workflow permissions** it must also allow read and write token permissions and enable **Allow GitHub Actions to create and approve pull requests** (an organization can disable this), or the run pushes the sync branch and then fails to open the review PR. A PR that `GITHUB_TOKEN` opens or edits does not trigger `pull_request` workflows, so the sync PR gets no CI checks until a maintainer re-runs them (or the caller supplies a GitHub App or fine-grained token for the PR step).
 
 ### Installed CLI timeout acceptance
 
