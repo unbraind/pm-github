@@ -32,6 +32,11 @@ import extension, {
 } from "../index.ts";
 import { nodeScenario } from "./helpers/node-scenario.ts";
 import { withReadOnlyDirectory } from "./helpers/read-only-directory.ts";
+
+// Root ignores directory write permissions, so read-only-directory fixtures
+// cannot produce their write failures there; skip them visibly in that case.
+const runsAsRoot = typeof process.getuid === "function" && process.getuid() === 0;
+const nonRootOnly = { skip: runsAsRoot && "permission-based fixture: root ignores directory write permissions" };
 import { projectItemTag } from "../projects.ts";
 import { captureStderr, jsonResponse, withEnv, withMockGithub } from "./helpers/mock-github-server.ts";
 
@@ -319,7 +324,7 @@ test("a gated import fails closed when the comment-sync lock is contended", asyn
   }
 });
 
-test("a gated import fails closed when a per-comment add fails mid-sync", async () => {
+test("a gated import fails closed when a per-comment add fails mid-sync", nonRootOnly, async () => {
   const root = gitTracker("pm-github-gated-add-fail-");
   const tracker = path.join(root, ".agents", "pm");
   const created = spawnSync(REAL_PM, ["--path", tracker, "create", "task", "Commented", "--tags", "gh:acme/widgets#7", "--description", "d"], { encoding: "utf8" });
@@ -392,7 +397,7 @@ test("a gated atomic import fails closed when committed items lack their planned
   }
 });
 
-test("the same comment-sync failures without --gate still import with a warning", async () => {
+test("the same comment-sync failures without --gate still import with a warning", nonRootOnly, async () => {
   const root = gitTracker("pm-github-ungated-comments-");
   const tracker = path.join(root, ".agents", "pm");
   const created = spawnSync(REAL_PM, ["--path", tracker, "create", "task", "Commented", "--tags", "gh:acme/widgets#7", "--description", "d"], { encoding: "utf8" });
@@ -506,7 +511,7 @@ test("non-atomic import reports update, close, reopen, and unparsed-id failures"
   }
 });
 
-test("comment sync skips a contended lock and reports a per-comment write failure", async () => {
+test("comment sync skips a contended lock and reports a per-comment write failure", nonRootOnly, async () => {
   const root = gitTracker("pm-github-comments-");
   const holder = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" });
   try {

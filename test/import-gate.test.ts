@@ -670,8 +670,12 @@ function executeWorkflow(shell: string, root: string, env: NodeJS.ProcessEnv): P
     const child = spawn("bash", ["-c", "set -euo pipefail\n" + shell], { cwd: root, env });
     let stdout = "";
     let stderr = "";
-    child.stdout.on("data", chunk => { stdout += String(chunk); });
-    child.stderr.on("data", chunk => { stderr += String(chunk); });
+    // Decode the streams, not each chunk, so a multibyte character split
+    // across two chunks is not turned into replacement characters.
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => { stdout += chunk; });
+    child.stderr.on("data", (chunk: string) => { stderr += chunk; });
     child.on("error", reject);
     child.on("close", code => resolve({ code, stdout, stderr }));
   });

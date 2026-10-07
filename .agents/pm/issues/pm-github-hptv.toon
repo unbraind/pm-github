@@ -6,9 +6,9 @@ status: in_progress
 priority: 1
 tags: []
 created_at: "2026-10-05T08:28:54.625Z"
-updated_at: "2026-10-07T07:31:19.560Z"
+updated_at: "2026-10-07T08:33:52.212Z"
 author: codex-sol
-comments[52]{created_at,author,text}:
+comments[53]{created_at,author,text}:
   "2026-10-05T09:07:19.298Z",codex-sol,"A fresh bounded native Bun CLI repeat of the latest packed candidate passed in 4.22 seconds with exit zero and byte-identical tracker contents. This contrasts with the earlier long-running repeat, so retain the issue as an intermittent installed-host investigation rather than claiming a consistent Bun failure. All 375 native Bun library and operational tests also pass."
   "2026-10-05T09:55:33.050Z",codex-sol,"The final packed candidate matched all three authored runtime modules byte-for-byte. Its fresh Node public import passed with three issues, a byte-identical second run, zero gate findings, and strict health in 24.94 seconds. A bounded direct native Bun CLI repeat, using the same pinned host and startup executable path, timed out at 45.06 seconds and was terminated with SIGTERM; durable tracker bytes stayed unchanged. This reproduces the intermittent installed-host boundary alongside all 420 passing native Bun library and operational tests. No scratch remote was configured and no public-data push occurred."
   "2026-10-06T11:17:41.296Z",codex-sol,"Packed installed-CLI reproduction with the pinned host passes three consecutive native Bun repeats under the unchanged 45-second watchdog. The complete fixture test took 26.63 seconds, including packing, installation, Node import, and all three repeats; each retained item bytes and unchanged bare-remote refs. Separately reproduced a real dangling comment-lock symlink: open with exclusive creation returns EEXIST while stat returns ENOENT, causing the old immediate-continue path to busy-spin forever. The preserved fix adds sleep and checks the existing wait budget. This is a proven local lock defect, not yet proof of the historical installed-host timeout cause. Further public-data and diagnostic acceptance follows."
@@ -61,6 +61,7 @@ comments[52]{created_at,author,text}:
   "2026-10-07T07:11:56.715Z",pi-glm,"Committed as 0ad387f (gate fix + regression tests), pi-glm. The doc-count fix follows in its own commit."
   "2026-10-07T07:12:00.358Z",pi-glm,"Both findings landed (pi-glm): 0ad387f fail-closed gated comment writes + regression tests; dc87f02 coverage-gap inventory now calls 504/504 at 7a41660 authoritative and 505/505 a later-head measurement. Pushing the branch now."
   "2026-10-07T07:31:19.560Z",claude-orchestrator,"CodeRabbit full review at 011f850 (2 findings), fixed by the orchestrator: review-PR bodies now add a 'proposed' link to each item on SYNC_BRANCH next to the permanent main link (main links don't resolve, or show the old version, until merge); the executed workflow test asserts it and fails on revert. docs/sync-workflow-caller.yml now states the 'Allow GitHub Actions to create and approve pull requests' + read/write workflow-permissions requirement."
+  "2026-10-07T08:33:52.212Z",claude-orchestrator,"CodeRabbit full review at 7e981cb (2 findings), fixed by the orchestrator: the three read-only-directory comment-failure tests skip visibly under root (closes pm-github-rap0), and executeWorkflow in test/import-gate.test.ts decodes child streams with setEncoding('utf8') like bounded-cli.ts."
 files[15]{path,scope}:
   .github/workflows/pm-github-sync.yml,project
   docs/coverage-gap-inventory.md,project
