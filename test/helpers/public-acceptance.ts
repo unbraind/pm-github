@@ -19,8 +19,17 @@ const env: NodeJS.ProcessEnv & { PM_PATH: string } = { ...process.env, PM_AUTHOR
 delete env.PM_GITHUB_API_BASE;
 delete env.NODE_TEST_CONTEXT;
 delete env.NODE_V8_COVERAGE;
-function setup(bin: string, args: string[], cwd = root): string {
-  const result = spawnSync(bin, args, { cwd, env, encoding: "utf8", timeout: 45000 });
+/**
+ * Run a fixture command and require success.
+ *
+ * @param bin - Executable to run.
+ * @param args - Arguments for the executable.
+ * @param cwd - Working directory (the fixture workspace by default).
+ * @param environment - Environment for this call (the fixture env by default).
+ * @returns The command's stdout.
+ */
+function setup(bin: string, args: string[], cwd = root, environment: NodeJS.ProcessEnv = env): string {
+  const result = spawnSync(bin, args, { cwd, env: environment, encoding: "utf8", timeout: 45000 });
   assert.equal(result.status, 0, result.stderr);
   return result.stdout;
 }
@@ -55,7 +64,11 @@ try {
   setup("git", ["config", "user.name", "Fixture"]);
   setup("git", ["config", "user.email", "fixture@example.invalid"]);
   setup("node", [cli, "--path", env.PM_PATH, "init", "fixture"]);
-  const packed = JSON.parse(setup("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", base], packageRoot)) as [{ filename: string }];
+  // npm 10 runs `prepare` even with --ignore-scripts: give it this checkout's
+  // tracker (not the fixture PM_PATH) and keep its stdout out of the JSON
+  // receipt, exactly like packWorkflowCandidate in test/import-gate.test.ts.
+  const packed = JSON.parse(setup("npm", ["pack", "--ignore-scripts", "--foreground-scripts=false", "--json", "--pack-destination", base], packageRoot,
+    { ...env, PM_PATH: path.join(packageRoot, ".agents", "pm") })) as [{ filename: string }];
   setup("node", [cli, "package", "install", path.join(base, packed[0].filename), "--project"]);
   const args = [cli, "github", "import", "unbraind/pm-todos", "--state", "all", "--since", "2026-10-01T00:00:00Z", "--atomic", "--gate", "--with-comments", "--json"];
   console.log("public snapshot: imported through the packed Node/Bun CLI HTTP boundary");

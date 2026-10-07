@@ -6,9 +6,11 @@ status: in_progress
 priority: 1
 tags: []
 created_at: "2026-10-05T08:28:54.625Z"
-updated_at: "2026-10-07T08:33:52.212Z"
+updated_at: "2026-10-07T10:02:42.448Z"
+assignee: pi-glm
+claim_principal: pi-glm
 author: codex-sol
-comments[53]{created_at,author,text}:
+comments[56]{created_at,author,text}:
   "2026-10-05T09:07:19.298Z",codex-sol,"A fresh bounded native Bun CLI repeat of the latest packed candidate passed in 4.22 seconds with exit zero and byte-identical tracker contents. This contrasts with the earlier long-running repeat, so retain the issue as an intermittent installed-host investigation rather than claiming a consistent Bun failure. All 375 native Bun library and operational tests also pass."
   "2026-10-05T09:55:33.050Z",codex-sol,"The final packed candidate matched all three authored runtime modules byte-for-byte. Its fresh Node public import passed with three issues, a byte-identical second run, zero gate findings, and strict health in 24.94 seconds. A bounded direct native Bun CLI repeat, using the same pinned host and startup executable path, timed out at 45.06 seconds and was terminated with SIGTERM; durable tracker bytes stayed unchanged. This reproduces the intermittent installed-host boundary alongside all 420 passing native Bun library and operational tests. No scratch remote was configured and no public-data push occurred."
   "2026-10-06T11:17:41.296Z",codex-sol,"Packed installed-CLI reproduction with the pinned host passes three consecutive native Bun repeats under the unchanged 45-second watchdog. The complete fixture test took 26.63 seconds, including packing, installation, Node import, and all three repeats; each retained item bytes and unchanged bare-remote refs. Separately reproduced a real dangling comment-lock symlink: open with exclusive creation returns EEXIST while stat returns ENOENT, causing the old immediate-continue path to busy-spin forever. The preserved fix adds sleep and checks the existing wait budget. This is a proven local lock defect, not yet proof of the historical installed-host timeout cause. Further public-data and diagnostic acceptance follows."
@@ -62,6 +64,9 @@ comments[53]{created_at,author,text}:
   "2026-10-07T07:12:00.358Z",pi-glm,"Both findings landed (pi-glm): 0ad387f fail-closed gated comment writes + regression tests; dc87f02 coverage-gap inventory now calls 504/504 at 7a41660 authoritative and 505/505 a later-head measurement. Pushing the branch now."
   "2026-10-07T07:31:19.560Z",claude-orchestrator,"CodeRabbit full review at 011f850 (2 findings), fixed by the orchestrator: review-PR bodies now add a 'proposed' link to each item on SYNC_BRANCH next to the permanent main link (main links don't resolve, or show the old version, until merge); the executed workflow test asserts it and fails on revert. docs/sync-workflow-caller.yml now states the 'Allow GitHub Actions to create and approve pull requests' + read/write workflow-permissions requirement."
   "2026-10-07T08:33:52.212Z",claude-orchestrator,"CodeRabbit full review at 7e981cb (2 findings), fixed by the orchestrator: the three read-only-directory comment-failure tests skip visibly under root (closes pm-github-rap0), and executeWorkflow in test/import-gate.test.ts decodes child streams with setEncoding('utf8') like bounded-cli.ts."
+  "2026-10-07T09:33:28.837Z",pi-glm,"Starting review round 2 (CodeRabbit findings 4205293132, 4205293127, 4205293135): (1) select the review PR by head repository, not just branch name; (2) close an own open sync PR on a no-change run; (3) isolate the public-acceptance npm pack like packWorkflowCandidate."
+  "2026-10-07T10:02:37.579Z",pi-glm,"Review round 2 dispositions. Finding 4205293132 (accepted, Major): the review-PR lookup now asks gh pr list for number,headRepository,headRepositoryOwner,isCrossRepository and selects in the step, with jq, only an OPEN PR whose head repository is ${REPOSITORY} (jq-side first-match, so no head/SIGPIPE hazard under pipefail); a fork PR with the same branch name is never edited and a new own PR is created instead. Finding 4205293127 (accepted, Minor): on a no-change run (`git diff --cached --quiet`), the workflow now closes the own open sync PR (same head-repository rule) with a short comment that the tracker already matches GitHub, then exits 0. Finding 4205293135 (accepted, Minor): the public acceptance helper's npm pack now uses the package-local PM_PATH and --foreground-scripts=false, the same npm-10 isolation as packWorkflowCandidate."
+  "2026-10-07T10:02:38.250Z",pi-glm,"Fail-on-revert proof (temporary workflow copies, no stash): reverting the workflow to the pre-fix first-listed-PR lookup and no-close path makes 'the workflow never edits a fork PR sharing the sync branch name' and 'a no-change run closes an own open sync PR and exits successfully' fail; a partial revert that closes the first listed PR without the head-repository filter makes 'a no-change run with only a fork PR sharing the branch name closes nothing' fail. npm-10 proof for finding 4205293135: with a scratch npm@10 (10.9.9) first on PATH, the helper's pre-fix pack invocation exits 3 because npm 10 still runs prepare with --ignore-scripts and it fails with the fixture PM_PATH (outside the repository); the fixed invocation with the package-local PM_PATH and --foreground-scripts=false exits 0 and the --json receipt parses to the tarball filename."
 files[15]{path,scope}:
   .github/workflows/pm-github-sync.yml,project
   docs/coverage-gap-inventory.md,project
@@ -78,7 +83,7 @@ files[15]{path,scope}:
   test/import-gate.test.ts,project
   test/import-lock.test.ts,project
   test/review-round1.test.ts,project
-tests[16]:
+tests[18]:
   - command: node --test test/bounded-cli.test.ts
     scope: project
     timeout_seconds: 60
@@ -193,6 +198,20 @@ tests[16]:
     provenance:
       author: pi-glm
       created_at: "2026-10-07T07:11:24.149Z"
+      source_kind: local_mutation
+      source_ref: feat/import-privacy-gate
+  - command: "node --test --test-name-pattern=\"fork PR|no-change|install-only settings change|clean import and creates\" test/import-gate.test.ts"
+    scope: project
+    provenance:
+      author: pi-glm
+      created_at: "2026-10-07T10:02:41.652Z"
+      source_kind: local_mutation
+      source_ref: feat/import-privacy-gate
+  - command: "npm run release:check && bun run release:check"
+    scope: project
+    provenance:
+      author: pi-glm
+      created_at: "2026-10-07T10:02:42.405Z"
       source_kind: local_mutation
       source_ref: feat/import-privacy-gate
 docs[3]{path,scope}:

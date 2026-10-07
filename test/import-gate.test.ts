@@ -702,7 +702,17 @@ set -euo pipefail
 if [[ "$1" == "auth" && "$2" == "setup-git" ]]; then exit 0; fi
 if [[ "$1" == "--version" ]]; then printf 'gh fixture\\n'; exit 0; fi
 case "$1 $2" in
-  "pr list") printf '%s' "\${EXISTING_PR:-}" ;;
+  "pr list")
+    entries=""
+    if [[ -n "\${OWN_OPEN_PR:-}" ]]; then
+      entries+="{\\"number\\":\${OWN_OPEN_PR},\\"headRepository\\":{\\"name\\":\\"\${REPOSITORY#*/}\\"},\\"headRepositoryOwner\\":{\\"login\\":\\"\${REPOSITORY%%/*}\\"},\\"isCrossRepository\\":false},"
+    fi
+    # A fork can open a PR from a branch with the same name as the sync branch.
+    if [[ -n "\${FORK_OPEN_PR:-}" ]]; then
+      entries+="{\\"number\\":\${FORK_OPEN_PR},\\"headRepository\\":{\\"name\\":\\"widgets-fork\\"},\\"headRepositoryOwner\\":{\\"login\\":\\"fixture-fork\\"},\\"isCrossRepository\\":true},"
+    fi
+    printf '[%s]' "\${entries%,}"
+    ;;
   "pr create"|"pr edit")
     printf '%s\\n' "$2" >> "\${REVIEW_ACTIONS}"
     while [[ $# -gt 0 ]]; do
@@ -710,6 +720,13 @@ case "$1 $2" in
       shift
     done
     printf 'https://example.invalid/review/1\\n'
+    ;;
+  "pr close")
+    printf 'close\\n' >> "\${REVIEW_ACTIONS}"
+    while [[ $# -gt 0 ]]; do
+      if [[ "$1" == "--comment" ]]; then printf '%s\\n' "$2" >> "\${REVIEW_RECEIPT}.close-comment"; break; fi
+      shift
+    done
     ;;
   *) exit 1 ;;
 esac
@@ -845,15 +862,48 @@ test("the executable reusable workflow pushes only a clean import and creates or
       assert.equal(spawnSync("git", ["-C", nextRoot, "config", "user.name", "Fixture"]).status, 0);
       assert.equal(spawnSync("git", ["-C", nextRoot, "config", "user.email", "fixture@users.noreply.github.com"]).status, 0);
       const update = await executeWorkflow(workflowShell(WORKFLOW_IMPORT_SEQUENCE), nextRoot, { ...nextEnv,
-        PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE, SYNC_LEASE: lease, EXISTING_PR: "1" });
+        PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE, SYNC_LEASE: lease, OWN_OPEN_PR: "1" });
       assert.equal(update.code, 0, update.stderr + "\n" + update.stdout);
       assert.deepEqual(fs.readFileSync(env.REVIEW_ACTIONS!, "utf8").trim().split("\n"), ["create", "edit"]);
     });
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 
+test("the workflow never edits a fork PR sharing the sync branch name", async () => {
+  const { root, base, bare, git } = initSyncRepo();
+  try {
+    const env = await prepareWorkflowFixture(root, base);
+    assert.equal(git(["switch", "-c", SYNC_BRANCH]).status, 0);
+    const handle = githubHandler([issue(1, "Synthetic issue", "Reviewed public body.")]);
+    await withMockGithub((req, res, url, server) => {
+      if (req.url === "/repos/acme/widgets") jsonResponse(res, 200, { private: false });
+      else handle(req, res, url, server);
+    }, async () => {
+      // gh pr list --head matches branch names, so the only listed PR is a
+      // fork PR opened from a branch with the same name as the sync branch.
+      const result = await executeWorkflow(workflowShell(WORKFLOW_IMPORT_SEQUENCE), root, { ...env,
+        PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE, FORK_OPEN_PR: "7" });
+      assert.equal(result.code, 0, result.stderr + "\n" + result.stdout);
+      assert.deepEqual(fs.readFileSync(env.REVIEW_ACTIONS!, "utf8").trim().split("\n"), ["create"],
+        "the fork PR is never edited; the workflow opens its own review PR instead");
+      assert.ok(fs.readFileSync(env.REVIEW_RECEIPT!, "utf8").length > 0);
+      assert.deepEqual(remoteRefs(bare), ["refs/heads/" + SYNC_BRANCH, "refs/heads/main"].sort());
+    });
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
 
-test("an install-only settings change never reaches the sync commit", async () => {
+
+/**
+ * Replay the full import sequence on a fixture whose tracker already matches
+ * GitHub, so the run proposes no change ("no PR is needed").
+ *
+ * @param prListOverrides - Environment shaping which open PRs `gh pr list` lists.
+ * @returns The exit code, output, recorded review-PR actions and remote refs.
+ */
+async function replayNoChangeSequence(prListOverrides: NodeJS.ProcessEnv): Promise<{
+  code: number | null; stdout: string; stderr: string;
+  reviewActions: string[] | undefined; refs: string[];
+}> {
   const { root, base, bare, git } = initSyncRepo();
   try {
     // The caller restricts extensions to an explicit list without pm-github, so
@@ -867,18 +917,43 @@ test("an install-only settings change never reaches the sync commit", async () =
     const env = await prepareWorkflowFixture(root, base);
     assert.notEqual(git(["diff", "--quiet", "--", ".agents/pm/settings.json"]).status, 0, "precondition: install edits settings.json");
     assert.equal(git(["switch", "-c", SYNC_BRANCH]).status, 0);
+    let result: Awaited<ReturnType<typeof executeWorkflow>> | undefined;
     await withMockGithub((req, res, url, server) => {
       if (req.url === "/repos/acme/widgets") jsonResponse(res, 200, { private: false });
       else githubHandler([])(req, res, url, server);
     }, async () => {
-      const result = await executeWorkflow(workflowShell(WORKFLOW_IMPORT_SEQUENCE), root, { ...env,
-        PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE });
-      assert.equal(result.code, 0, result.stderr + "\n" + result.stdout);
-      assert.match(result.stdout, /no PR is needed/);
-      assert.equal(fs.existsSync(env.REVIEW_ACTIONS!), false, "no review PR was created or edited");
-      assert.deepEqual(remoteRefs(bare), ["refs/heads/main"]);
+      result = await executeWorkflow(workflowShell(WORKFLOW_IMPORT_SEQUENCE), root, { ...env,
+        PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE, ...prListOverrides });
     });
+    const actionsPath = env.REVIEW_ACTIONS!;
+    return { code: result!.code, stdout: result!.stdout, stderr: result!.stderr,
+      reviewActions: fs.existsSync(actionsPath) ? fs.readFileSync(actionsPath, "utf8").trim().split("\n") : undefined,
+      refs: remoteRefs(bare) };
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
+}
+
+test("an install-only settings change never reaches the sync commit", async () => {
+  const run = await replayNoChangeSequence({});
+  assert.equal(run.code, 0, run.stderr + "\n" + run.stdout);
+  assert.match(run.stdout, /no PR is needed/);
+  assert.equal(run.reviewActions, undefined, "no review PR was created, edited or closed");
+  assert.deepEqual(run.refs, ["refs/heads/main"]);
+});
+
+test("a no-change run closes an own open sync PR and exits successfully", async () => {
+  const run = await replayNoChangeSequence({ OWN_OPEN_PR: "1" });
+  assert.equal(run.code, 0, run.stderr + "\n" + run.stdout);
+  assert.match(run.stdout, /no PR is needed/);
+  assert.deepEqual(run.reviewActions, ["close"], "the stale own review PR is closed");
+  assert.deepEqual(run.refs, ["refs/heads/main"], "a no-change run pushes nothing");
+});
+
+test("a no-change run with only a fork PR sharing the branch name closes nothing", async () => {
+  const run = await replayNoChangeSequence({ FORK_OPEN_PR: "7" });
+  assert.equal(run.code, 0, run.stderr + "\n" + run.stdout);
+  assert.match(run.stdout, /no PR is needed/);
+  assert.equal(run.reviewActions, undefined, "a foreign fork PR is never touched");
+  assert.deepEqual(run.refs, ["refs/heads/main"]);
 });
 
 test("packed installed CLI repeats a completed gated import under native Bun within 45 seconds", { timeout: 180_000 }, async () => {

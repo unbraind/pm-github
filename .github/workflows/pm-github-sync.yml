@@ -159,6 +159,22 @@ jobs:
         run: |
           set -euo pipefail
           ./node_modules/.bin/pm github gate --json
+          # gh pr list --head matches branch names, and a fork can open a PR
+          # from a branch with the same name, so filter the results to PRs whose
+          # head repository is this repository (never trust .[0] alone).
+          own_open_pr() {
+            gh pr list -R "${REPOSITORY}" --head "${SYNC_BRANCH}" --base main --state open \
+              --json number,headRepository,headRepositoryOwner,isCrossRepository \
+              | jq -r --arg repository "${REPOSITORY}" \
+                '[ .[] | select(.isCrossRepository == false and (.headRepositoryOwner.login + "/" + .headRepository.name) == $repository) | .number ][0] // empty'
+          }
+          close_own_open_pr() {
+            local number
+            number="$(own_open_pr)"
+            if [[ -n "${number}" ]]; then
+              gh pr close "${number}" -R "${REPOSITORY}" --comment "The tracker already matches GitHub, so this sync no longer proposes a change; closing this review PR."
+            fi
+          }
           # Installing the pinned extension can add it to an explicit
           # extensions.enabled list, and pm records that settings change in the
           # workspace history. Both are setup state, not synced data, so neither
@@ -173,6 +189,9 @@ jobs:
           done
           if git diff --cached --quiet; then
             echo "GitHub issues already match the pm tracker; no PR is needed."
+            # A stale own review PR would still look actionable although this
+            # run has no change to propose, so close it before returning.
+            close_own_open_pr
             exit 0
           fi
           git diff --cached --check
@@ -203,7 +222,7 @@ jobs:
             printf '%s\n\n' "Tracker items changed:"
             cat "${links_file}"
           } > "${body_file}"
-          pr_number="$(gh pr list -R "${REPOSITORY}" --head "${SYNC_BRANCH}" --base main --state open --json number --jq '.[0].number // empty')"
+          pr_number="$(own_open_pr)"
           if [[ -z "${pr_number}" ]]; then
             gh pr create -R "${REPOSITORY}" --base main --head "${SYNC_BRANCH}" --title "chore(pm): sync GitHub issues (gated)" --body-file "${body_file}"
           else
