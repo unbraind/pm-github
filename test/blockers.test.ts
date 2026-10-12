@@ -209,8 +209,8 @@ test("resolveBlockerReferences leaves hint-dependent forms unresolved without a 
   const parsed = github.parseBlockerReferences("#7 GH-12");
   const resolved = github.resolveBlockerReferences(parsed, undefined, undefined);
   assert.deepEqual(resolved.map((r) => [r.key, r.repo, r.form]), [
-    ["gh_dash:GH-12#12", undefined, "gh_dash"],
-    ["bare_hash:#7#7", undefined, "bare_hash"],
+    ["unresolved:#12", undefined, "gh_dash"],
+    ["unresolved:#7", undefined, "bare_hash"],
   ]);
   // An item repo hint alone is enough when --repo is absent.
   assert.deepEqual(
@@ -612,6 +612,7 @@ test("--comment survives a contended lock, a degraded lock, and reports write fa
 test("pm github blockers rejects malformed --repo, empty --ids, unknown --ids, and a missing token", async (t) => {
   const root = tracker(t);
   await withEnv({ GH_TOKEN: "ghp-test" }, async () => {
+    assert.equal((await runBlockers(root, { repo: "unbraind/.github" })).candidates, 0);
     await assertRejectsWithExitCode(runBlockers(root, { repo: "not-a-repo" }), 2, /--repo must be owner\/repo/);
     await assertRejectsWithExitCode(runBlockers(root, { ids: "" }), 2, /--ids requires at least one pm item id/);
     await assertRejectsWithExitCode(runBlockers(root, { ids: "fixture-nope" }), 3, /unknown pm item id\(s\): fixture-nope/);
@@ -769,4 +770,28 @@ test("partial-only alerts and unresolved bare references return complete reports
     assert.equal(unresolved.exit_code, undefined);
     assert.equal(unresolved.items[0].references[0].state, "unresolved");
   }));
+});
+
+
+test("marker extraction finishes on repeated unclosed marker prefixes", () => {
+  const script = `import { extractBlockerCommentMarkers } from './index.ts';
+    const text = '<!--pm-github:blockers:' + '<!--pm-github:blockers:!'.repeat(40000);
+    console.log(extractBlockerCommentMarkers([{ text }]).size);`;
+  const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+    cwd: path.resolve(import.meta.dirname, ".."), encoding: "utf8", timeout: 10000, killSignal: "SIGKILL",
+  });
+  assert.equal(result.status, 0, result.error?.message ?? result.stderr);
+  assert.equal(result.stdout.trim(), "0");
+});
+
+
+test("reference resolution accepts GitHub repo names and rejects unsafe provenance hints", () => {
+  const refs = github.parseBlockerReferences("UNBRAIND/.github#7 HTTP://GitHub.com/UNBRAIND/.github/issues/7 GH-7 #7 .github#7");
+  assert.equal(github.resolveBlockerReferences(refs, undefined, "UNBRAIND/.github").length, 1);
+  assert.equal(github.resolveBlockerReferences(github.parseBlockerReferences("GH-7 #7"), undefined, undefined).length, 1);
+  assert.equal(github.resolveBlockerReferences(github.parseBlockerReferences("#7"), 'bad"/hint', undefined)[0].repo, undefined);
+  const item: github.BlockerPmItem = { id: "fixture-hint", title: "Hint", status: "blocked", description: "GH-7", dependencies: [], comments: [], tags: ['gh:bad"/hint#1', "gh:UNBRAIND/.github#1"] };
+  assert.equal(github.collectBlockerReferences(item, undefined)[0].repo, "unbraind/.github");
+  const marker = github.buildBlockerClearedComment(refState({ repo: "unbraind/.github" }));
+  assert.equal(github.extractBlockerCommentMarkers([{ text: marker }]).size, 1);
 });

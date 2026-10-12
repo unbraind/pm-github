@@ -4041,7 +4041,7 @@ export const BLOCKER_TERMINAL_STATUSES: ReadonlySet<string> = new Set(["closed",
 export const BLOCKER_STATES_BATCH_SIZE = 25;
 
 /** Shape an `owner/repo` (or `--repo`) hint must have before it resolves bare references. */
-const BLOCKER_REPO_SHAPE = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+const BLOCKER_REPO_SHAPE = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+$/;
 
 /** The syntactic form a parsed GitHub reference was recognized in. */
 export type BlockerReferenceForm =
@@ -4065,7 +4065,7 @@ export interface ParsedBlockerReference {
 
 /** A deduplicated, hint-resolved GitHub reference. `key` is its stable identity. */
 export interface BlockerReference {
-  /** Stable dedupe/lookup key: `owner/repo#N` when resolved, else the raw form plus number. */
+  /** Stable dedupe/lookup key: `owner/repo#N` when resolved, a normalized unresolved reference otherwise. */
   key: string;
   /** `owner/repo` (lowercase); `undefined` when no hint could resolve the reference. */
   repo?: string;
@@ -4151,10 +4151,10 @@ export interface BlockersReport {
 // The prefix class excludes word characters, path separators, dots, and colons,
 // so `https://github.com/o/r/issues/N` (slash before owner) and
 // `github.com/o/r#N` never produce a second, shorter match inside a URL.
-const BLOCKER_URL_RE = /https:\/\/(?:www\.)?github\.com\/([A-Za-z0-9][A-Za-z0-9_.-]*)\/([A-Za-z0-9][A-Za-z0-9_.-]*)\/(?:issues|pull)\/([1-9]\d{0,8})(?!\w)/g;
-const BLOCKER_OWNER_REPO_RE = /(^|[^\w./:-])([A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9][A-Za-z0-9_.-]*)#([1-9]\d{0,8})(?!\w)/g;
+const BLOCKER_URL_RE = /https?:\/\/(?:www\.)?github\.com\/([A-Za-z0-9][A-Za-z0-9_.-]*)\/([A-Za-z0-9_.-]+)\/(?:issues|pull)\/([1-9]\d{0,8})(?!\w)/gi;
+const BLOCKER_OWNER_REPO_RE = /(^|[^\w./:-])([A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+)#([1-9]\d{0,8})(?!\w)/g;
 const BLOCKER_GH_DASH_RE = /\bGH-([1-9]\d{0,8})\b/gi;
-const BLOCKER_SHORT_REPO_RE = /(^|[^\w./:-])([A-Za-z0-9][A-Za-z0-9_-]*)#([1-9]\d{0,8})(?!\w)/g;
+const BLOCKER_SHORT_REPO_RE = /(^|[^\w./:-])([A-Za-z0-9_.-]+)#([1-9]\d{0,8})(?!\w)/g;
 const BLOCKER_BARE_HASH_RE = /(^|[^\w./:#-])#([1-9]\d{0,8})(?!\w)/g;
 
 /**
@@ -4234,13 +4234,15 @@ export function resolveBlockerReferences(
     let repo = ref.repo;
     if (repo === undefined) {
       for (const hint of [itemRepo, fallbackRepo]) {
-        if (hint === undefined) continue;
-        if (ref.form === "short_repo_hash" && hint.split("/")[1] !== ref.raw.split("#")[0]) continue;
+        if (hint === undefined || !BLOCKER_REPO_SHAPE.test(hint)) continue;
+        if (ref.form === "short_repo_hash" && hint.split("/")[1]!.toLowerCase() !== ref.raw.split("#")[0]!.toLowerCase()) continue;
         repo = hint.toLowerCase();
         break;
       }
     }
-    const key = repo === undefined ? `${ref.form}:${ref.raw}#${ref.number}` : `${repo}#${ref.number}`;
+    const key = repo === undefined
+      ? (ref.form === "short_repo_hash" ? `unresolved:${ref.raw.toLowerCase()}` : `unresolved:#${ref.number}`)
+      : `${repo}#${ref.number}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push({ key, ...(repo === undefined ? {} : { repo }), number: ref.number, form: ref.form, raw: ref.raw });
@@ -4273,7 +4275,7 @@ export function collectBlockerReferences(item: BlockerPmItem, fallbackRepo: stri
   const itemRepo = (() => {
     for (const tag of item.tags ?? []) {
       const provenance = parseProvenanceTag(tag);
-      if (provenance) return provenance.repo;
+      if (provenance && BLOCKER_REPO_SHAPE.test(provenance.repo)) return provenance.repo;
     }
     return undefined;
   })();
@@ -4283,7 +4285,7 @@ export function collectBlockerReferences(item: BlockerPmItem, fallbackRepo: stri
 
 /** Classify external dependency targets that explicitly name GitHub issues or PRs. */
 function isGithubBlockerDependency(target: string): boolean {
-  return isExternalDependencyReference(target) && /^(?:github:|https:\/\/(?:www\.)?github\.com\/)/i.test(target)
+  return isExternalDependencyReference(target) && /^(?:github:|https?:\/\/(?:www\.)?github\.com\/)/i.test(target)
     && parseBlockerReferences(target).length > 0;
 }
 
@@ -4694,7 +4696,7 @@ export function blockerItemVerdict(states: readonly BlockerReferenceState[]): Bl
 }
 
 /** Marker a blockers comment carries so re-runs can skip it (`pm-github:blockers:…`). */
-export const BLOCKERS_COMMENT_MARKER_REGEX = /<!--\s*pm-github:blockers:([^#\s]+)#(\d+):(closed|merged):([^\s]+)\s*-->/g;
+export const BLOCKERS_COMMENT_MARKER_REGEX = /<!--\s*pm-github:blockers:([A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+)#(\d+):(closed|merged):([^\s<>]+)\s*-->/g;
 
 /**
  * Build the idempotency marker for one cleared blocker reference.
