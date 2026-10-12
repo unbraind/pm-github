@@ -1,0 +1,1 @@
+{"data":{"r0":{"i0_0":{"state":"OPEN","stateReason":null,"closedAt":null,"url":"https://github.com/unbraind/pm-cli/issues/1246"},"p0_0":null}},"errors":[{"type":"NOT_FOUND","path":["r0","p0_0"],"locations":[{"line":4,"column":5}],"message":"Could not resolve to a PullRequest with the number of 1246."}]}

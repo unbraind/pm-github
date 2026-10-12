@@ -44,7 +44,7 @@
     "test:bun": "bun_status=0; for test_file in test/*.test.ts; do bun test --timeout 600000 \"$test_file\" || bun_status=1; done; exit \"$bun_status\""
   },
   "peerDependencies": {
-    "@unbrained/pm-cli": ">=2026.8.20"
+    "@unbrained/pm-cli": ">=2026.10.5"
   },
   "devDependencies": {
     "@babel/eslint-parser": "8.0.6",

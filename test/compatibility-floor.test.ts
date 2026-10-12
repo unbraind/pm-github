@@ -33,7 +33,7 @@ const changelog = readFileSync(resolve(repoRoot, "CHANGELOG.md"), "utf8");
 
 const CLI = "@unbrained/pm-cli";
 const EXACT_VERSION = /^\d+\.\d+\.\d+$/;
-const CANONICAL_LIST_FLOOR = "2026.8.20";
+const BLOCKER_SDK_FLOOR = "2026.10.5";
 
 /**
  * Two independent systems enforce the pm CLI compatibility floor, and each reads
@@ -97,8 +97,8 @@ test("the extension manifest declares the same floor the CLI actually enforces",
   );
   assert.strictEqual(
     declared,
-    CANONICAL_LIST_FLOOR,
-    "the canonical list --all invocation requires the pm CLI 2026.8.20 host contract",
+    BLOCKER_SDK_FLOOR,
+    "blocker complete reads and structured command exit codes require the pm CLI 2026.10.5 host contract",
   );
   assert.ok(
     !Object.hasOwn(extensionManifest, "pm"),
@@ -137,8 +137,8 @@ test("the development dependency is an exact pin at or above the declared floor"
   // CI pins the newest fleet CLI so its checks exercise the current host,
   // while the manifest remains a compatibility minimum for consumers.
   assert.ok(
-    atOrAbove(dev, CANONICAL_LIST_FLOOR),
-    `the pinned development CLI ${dev} must satisfy the canonical host floor ${CANONICAL_LIST_FLOOR}`,
+    atOrAbove(dev, BLOCKER_SDK_FLOOR),
+    `the pinned development CLI ${dev} must satisfy the canonical host floor ${BLOCKER_SDK_FLOOR}`,
   );
 });
 

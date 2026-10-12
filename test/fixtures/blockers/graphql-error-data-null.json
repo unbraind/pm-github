@@ -1,0 +1,1 @@
+{"errors":[{"path":["query","viewerNonsenseField"],"extensions":{"code":"undefinedField","typeName":"Query","fieldName":"viewerNonsenseField"},"locations":[{"line":1,"column":9}],"message":"Field 'viewerNonsenseField' doesn't exist on type 'Query'"}]}

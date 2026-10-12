@@ -41,7 +41,11 @@ const harnessPromise: Promise<ExtensionTestHarness> =
   createExtensionTestHarness(extension, { capabilities: [...MANIFEST_CAPABILITIES] });
 
 const PM_BIN = process.platform === "win32" ? "pm.cmd" : "pm";
-const PM_SPAWN_OPTS = { encoding: "utf-8" as const, shell: process.platform === "win32" };
+// Real scratch trackers must not inherit unrelated globally installed extensions.
+const fixtureGlobalRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-gate-global-"));
+test.after(() => fs.rmSync(fixtureGlobalRoot, { recursive: true, force: true }));
+const PM_SPAWN_OPTS = { encoding: "utf-8" as const, shell: process.platform === "win32",
+  env: { ...process.env, PM_GLOBAL_PATH: fixtureGlobalRoot } };
 const SYNC_BRANCH = "automation/pm-github-sync";
 
 // --- Fake-but-well-formed malicious fixtures, assembled from parts.
@@ -733,7 +737,7 @@ esac
 `, { mode: 0o755 });
   const env = { ...process.env, PATH: tools + path.delimiter + bin + path.delimiter + process.env.PATH,
     GH_TOKEN: "synthetic-test-token", GITHUB_TOKEN: "synthetic-test-token", PM_AUTHOR: "codex-sol",
-    PM_PATH: path.join(root, ".agents", "pm"), REPOSITORY: "acme/widgets", CALLING_REPOSITORY: "acme/widgets",
+    PM_GLOBAL_PATH: fixtureGlobalRoot, PM_PATH: path.join(root, ".agents", "pm"), REPOSITORY: "acme/widgets", CALLING_REPOSITORY: "acme/widgets",
     PM_GITHUB_VERSION: "2026.10.4", SYNC_BRANCH, SYNC_LEASE: "", RUNNER_TEMP: base,
     GITHUB_ENV: path.join(base, "job-env"), REVIEW_RECEIPT: path.join(base, "review.md"), REVIEW_ACTIONS: path.join(base, "review-actions") };
   const packageRoot = path.resolve(import.meta.dirname, "..");
@@ -748,7 +752,7 @@ esac
   return env;
 }
 
-const WORKFLOW_IMPORT_SEQUENCE = ["Validate GitHub access", "Preview GitHub to pm plan", "Gated GitHub to pm import",
+const WORKFLOW_IMPORT_SEQUENCE = ["Validate GitHub access", "Revalidate GitHub blockers (report only)", "Preview GitHub to pm plan", "Gated GitHub to pm import",
   "Verify repeat import is a no-op", "Verify strict pm health", "Commit gated sync changes and open review PR"] as const;
 
 test("workflow packing isolates prepare from the caller tracker in clones and linked worktrees", async () => {
@@ -1042,10 +1046,33 @@ test("workflow input shell diagnoses a foreign repository and branch outside aut
 test("workflow credentials stay out of install steps and checkout persistence", () => {
   const steps = workflow.split(/\n      - name: /).slice(1);
   const tokenSteps = steps.filter(step => step.includes("GH_TOKEN:")).map(step => step.split("\n")[0]);
-  assert.deepEqual(tokenSteps, ["Validate GitHub access", "Preview GitHub to pm plan", "Gated GitHub to pm import", "Verify repeat import is a no-op", "Commit gated sync changes and open review PR"]);
+  assert.deepEqual(tokenSteps, ["Validate GitHub access", "Revalidate GitHub blockers (report only)", "Preview GitHub to pm plan", "Gated GitHub to pm import", "Verify repeat import is a no-op", "Commit gated sync changes and open review PR"]);
   assert.doesNotMatch(workflow.slice(0, stepOffset("Validate sync inputs")), /GH_TOKEN:/);
   assert.match(steps.find(step => step.startsWith("Checkout main"))!, /persist-credentials: false/);
   assert.match(workflowShell(["Install dependencies"]), /npm ci --ignore-scripts/);
   assert.doesNotMatch(workflowShell(["Prepare sync branch from main"]), /git fetch|git ls-remote/);
   assert.match(workflowShell(["Commit gated sync changes and open review PR"]), /gh auth setup-git\n\s*git push/);
+});
+
+test("scheduled blocker report warns on clearance, preserves items, and fails on query errors", async () => {
+  const { root, base } = initSyncRepo();
+  try {
+    const env = await prepareWorkflowFixture(root, base);
+    const created = spawnSync(PM_BIN, ["--pm-path", path.join(root, ".agents", "pm"), "create", "task", "Closed upstream blocker", "--blocked-reason", "unbraind/pm-cli#854", "--json"], { ...PM_SPAWN_OPTS, cwd: root, env });
+    assert.equal(created.status, 0, created.stderr);
+    const id = (JSON.parse(created.stdout) as { id: string }).id;
+    assert.ok(id);
+    assert.equal(spawnSync(PM_BIN, ["--pm-path", path.join(root, ".agents", "pm"), "update", id, "--status", "blocked"], { ...PM_SPAWN_OPTS, cwd: root, env }).status, 0);
+    const itemPath = path.join(root, ".agents", "pm", "tasks", `${id}.toon`);
+    const before = fs.readFileSync(itemPath, "utf8");
+    for (const [file,expected] of [["issue-854-closed.json", 0], ["graphql-error-data-null.json", 1]] as const) {
+      await withMockGithub((_req, res) => jsonResponse(res, 200, fs.readFileSync(path.join(repoRoot, "test", "fixtures", "blockers", file), "utf8")), async server => {
+        const result = await executeWorkflow(workflowShell(["Revalidate GitHub blockers (report only)"]), root, { ...env, PM_GITHUB_API_BASE: server.baseUrl });
+        assert.equal(result.code, expected, result.stderr);
+        if (expected === 0) assert.match(result.stdout, /::warning::GitHub blockers have cleared/);
+        else assert.doesNotMatch(result.stdout, /::warning::/);
+        assert.equal(fs.readFileSync(itemPath, "utf8"), before);
+      });
+    }
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
