@@ -110,6 +110,9 @@ checks.
 
 ```bash
 pm github import unbraind/pm-cli
+pm github import owner/repo --issue 189
+pm github import owner/repo --issue '189,#190,owner/repo#191'
+pm github import owner/repo --limit 10
 pm github import owner/repo --state all
 pm github import owner/repo --labels bug,enhancement
 pm github import owner/repo --since 2026-01-01T00:00:00Z   # incremental sync
@@ -125,6 +128,8 @@ pm github import owner/repo --dry-run
 
 | Flag | Type | Description |
 |---|---|---|
+| `--issue <N[,N...]>` | string | Fetch only selected issue endpoints; accepts numbers, `#N`, and same-repo `owner/repo#N` references. Conflicts with `--state`, `--all`, `--labels`, `--since`, `--assignee`, `--milestone`, and `--limit`. |
+| `--limit <n>` | positive integer | Cap list-mode imports, newest-updated first. Returns `limit` and `truncated` (true when more matching issues exist). Invalid with `--issue`. |
 | `--all` | boolean | Include closed issues (shorthand for `--state all`) |
 | `--state <state>` | string | `open` \| `closed` \| `all` (default: open) |
 | `--labels <labels>` | string | Comma-separated label filter |
@@ -142,6 +147,10 @@ pm github import owner/repo --dry-run
 | `--type <type>` | string | Override pm item type (default: Issue) |
 
 Each imported item records GitHub provenance: the `gh:owner/repo#N` idempotency tag, a `github_author:<login>` tag, and an enriched description (`author @<login> · state reason <reason> · created <iso> · updated <iso>`). GitHub issues closed as `not_planned` import as pm `canceled` instead of `closed`, preserving the difference between completed work and deliberately dropped work. The integration declares the `github_url`, `github_number`, `github_state`, `github_author`, `github_created_at`, and `github_updated_at` schema fields.
+
+`--issue` deduplicates references and fetches each selected issue directly, including closed issues, without listing the repository. Every selected number is fetched and checked before any tracker write. A missing number fails the whole import; `--dry-run` instead reports `missingIssues` and previews the available selection. Pull request numbers require `--include-prs`. Selection combines with comment modes, dependency linking, atomic imports, gates, dry runs, and custom item types, preserving provenance-based re-import idempotency.
+
+`--limit` bounds the matching list after PR, draft, and milestone filters. Pagination stops once one extra matching issue establishes truncation, so at most `n + 1` eligible issues are retained; GitHub pages may also contain excluded entries. Without a limit, existing list ordering is unchanged.
 
 `--atomic` derives its durable transaction identity from the repository, complete rendered issue state, and exact ordered mutation plan (including target item ids), and derives each create id from the stable `owner/repo#number` external key rather than fetch position. Retrying the same response in a different order therefore resumes without duplicates; changed content, workspace prefixes, or resolved targets create a fresh compatible transaction. Native comment annotations run only after the item transaction commits and retain their cross-process deduplication lock.
 

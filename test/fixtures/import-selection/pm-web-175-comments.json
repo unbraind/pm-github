@@ -1,0 +1,8 @@
+[
+  {
+    "id": 6105893043,
+    "created_at": "2026-10-11T05:37:03Z",
+    "body": "Merged main and resolved the SDK 2026.10.10 conflicts while retaining the newer deterministic canonical discovery and unpublished npm-link guard. The catalog now lists all 22 public fleet identities with verified package/manifest/README facts; native Rust has an explicit non-npm boundary. Added real built HTTP install, enable and command acceptance plus behavioral revert proofs, regenerated dist/changelog, and reconciled tracker histories without dropping either side. Focused checks pass. The full npm gate is running, and CI now runs both required release commands with isolated Git identity and unchanged thresholds. No PR merge or deployment was performed.",
+    "user": null
+  }
+]
