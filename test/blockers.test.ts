@@ -24,6 +24,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { comments as readComments } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import { decodeToonItemContent } from "../node_modules/@unbrained/pm-cli/dist/core/item/toon-decode.js";
 import extension, * as github from "../index.ts";
 import type { MockGithubHandler } from "./helpers/mock-github-server.ts";
 import { captureStderr, jsonResponse, withEnv, withMockGithub } from "./helpers/mock-github-server.ts";
@@ -221,6 +222,22 @@ test("resolveBlockerReferences leaves hint-dependent forms unresolved without a 
 
 // Candidate selection ----------------------------------------------------------
 
+test("collectBlockerReferences excludes every own provenance key from all text sources", () => {
+  const item: github.BlockerPmItem = {
+    id: "fixture-imported", title: "Imported issue", status: "blocked",
+    tags: ["ordinary", "gh:Unbraind/pm-cli#1", "gh:unbraind/pm-web#2"],
+    description: "GH issue #1: https://github.com/unbraind/pm-cli/issues/1",
+    blockedReason: "unbraind/pm-cli#854 and unbraind/pm-web#2",
+    blockedBy: "github:unbraind/pm-cli#1",
+    dependencies: [{ id: "github:unbraind/pm-web#2", kind: "blocked_by" }],
+    comments: [{ text: "Self: GH-1; actual blocker: #854; other: unbraind/pm-web#854" }],
+  };
+  assert.deepEqual(github.collectBlockerReferences(item, "other/repo").map(ref => ref.key),
+    ["unbraind/pm-cli#854", "unbraind/pm-web#854"]);
+  assert.deepEqual(github.collectBlockerReferences({ ...item, tags: ["ordinary"] }, "unbraind/pm-cli")
+    .map(ref => ref.key), ["unbraind/pm-cli#1", "unbraind/pm-cli#854", "unbraind/pm-web#2", "unbraind/pm-web#854"]);
+});
+
 test("selectBlockerCandidates keeps blocked items and external blocked_by dependencies, nothing else", () => {
   const item = (overrides: Partial<github.BlockerPmItem>): github.BlockerPmItem => ({
     id: "fixture-x",
@@ -409,6 +426,38 @@ test("blocker comments are built with a state-identity marker and detected idemp
 });
 
 // End-to-end: the real handler, real trackers, recorded real responses ----------
+
+test("imported blocker candidates clear only real blockers and never their own provenance", async (t) => {
+  const root = tracker(t);
+  const blocked = createItem(root, "Imported open issue", ["--tags", "gh:unbraind/pm-cli#1246",
+    "--description", "GH issue #1246: https://github.com/unbraind/pm-cli/issues/1246",
+    "--blocked-reason", "unbraind/pm-cli#854"]);
+  const selfOnly = createItem(root, "Imported closed issue", ["--tags", "gh:unbraind/pm-cli#854",
+    "--description", "GH issue #854: https://github.com/unbraind/pm-cli/issues/854"]);
+  for (const id of [blocked, selfOnly]) pm(root, ["update", id, "--status", "blocked"]);
+  await withEnv({ GH_TOKEN: "ghp-test" }, () => withMockGithub(
+    graphqlFixtureHandler([["query", fixture("issue-854-closed.json")]]), async (server) => {
+      const report = await runBlockers(root, { comment: true });
+      assert.equal(report.exit_code, 4);
+      const actual = report.items.find(item => item.id === blocked)!;
+      assert.equal(actual.verdict, "cleared");
+      assert.deepEqual(actual.references.map(ref => ref.number), [854]);
+      assert.deepEqual(report.comment, { requested: true, dry_run: false, added: 1, skipped: 0, failed: 0 });
+      assert.equal((await readComments(blocked, {}, { pmRoot: root })).comments.length, 1);
+      const own = report.items.find(item => item.id === selfOnly)!;
+      assert.equal(own.verdict, "unresolvable");
+      assert.deepEqual(own.references, []);
+      assert.equal((await readComments(selfOnly, {}, { pmRoot: root })).comments.length, 0);
+      assert.ok(server.requests.every(request => !request.body.includes("number: 1246")));
+      const alone = await runBlockers(root, { ids: selfOnly, comment: true });
+      assert.equal(alone.exit_code ?? 0, 0);
+      assert.equal(alone.counts.cleared, 0);
+      for (const id of [blocked, selfOnly]) {
+        const stored = JSON.parse(pm(root, ["get", id, "--json"])) as { item: { status: string } };
+        assert.equal(stored.item.status, "blocked");
+      }
+    }));
+});
 
 /** The full mixed scenario: one cleared (closed issue), one partially cleared
  * (closed + open), one cleared via a merged PR comment, one not-found, one
@@ -709,8 +758,10 @@ test("actual CLI renders cleared reports through the host in JSON and TOON with 
     assert.equal(report.items[0].references[0].closed_at, "2026-08-01T15:24:48Z");
     const toon = await cli(root, ["github", "blockers"]);
     assert.equal(toon.code, 4, toon.stderr);
-    assert.match(toon.stdout, /verdict: "cleared"/);
-    assert.match(toon.stdout, /command: "github blockers"/);
+    const rendered = decodeToonItemContent(toon.stdout).value as github.BlockersReport;
+    assert.equal(rendered.items[0].verdict, "cleared");
+    assert.equal(rendered.command, "github blockers");
+    assert.equal(rendered.items[0].references[0].closed_at, report.items[0].references[0].closed_at);
   }));
   assert.equal(fs.readFileSync(path.join(root, "tasks", `${id}.toon`), "utf8"), before);
 });

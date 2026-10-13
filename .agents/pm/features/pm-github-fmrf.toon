@@ -6,9 +6,11 @@ status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-12T10:46:45.720Z"
-updated_at: "2026-10-12T13:12:30.216Z"
+updated_at: "2026-10-13T14:06:22.744Z"
+assignee: pi-agent
+claim_principal: pi-agent
 author: pi-gh-blockers
-comments[19]{created_at,author,text}:
+comments[25]{created_at,author,text}:
   "2026-10-12T10:46:49.828Z",pi-gh-blockers,"Claimed and started. Companion item: https://github.com/unbraind/pm-cli-website/blob/main/.agents/pm/features/pm-cli-website-5o9j.toon — this implements the blocker-revalidation capability the companion item calls for, in pm-github where the GitHub client, auth handling and provenance model already live. Design summary: complete pm list read (same receipts as import), candidate selection = status blocked OR non-terminal with an external GitHub blocked_by dependency, reference parsing across blocked_reason/description/comments, batched GraphQL state queries, report-only verdicts, idempotent --comment, wired into the reusable scheduled sync workflow as a report-only step."
   "2026-10-12T10:55:14.500Z",pi-gh-blockers,"Implementation drafted in the package worktree: complete-read refactor (runCompletePmList shared by readPmItems and the new readBlockerPmItems), BlockerPmItem decoder validating blocked_reason/blocked_by/dependencies/comments on top of the existing complete-corpus receipts, reference parser (URL, owner/repo#N, GH-N, name#N, bare #N; gitlab/jira/linear locators masked, github: locator scheme unwrapped), hint resolution against the item's gh: provenance repo then --repo, batched GraphQL state query (issue+pullRequest per number, repos deduped+sorted so recorded fixtures stay stable), verdict function, idempotent --comment with per-item lock, report + exit codes (0 nothing cleared, 4 cleared, 2 usage/token, 1 total state failure). Real GraphQL fixtures recorded from api.github.com: unbraind/pm-cli#854 closed 2026-08-01 (the motivating blocker), #1246 open, PR #34 merged, #999999 not found, plus a repository-not-found and a data-null error response."
   "2026-10-12T11:10:45.144Z",codex-sol,"Continuation audit: prior implementation and fixtures inspected; no gates or workflow integration were completed. Correcting host-rendered reports/exit status, complete SDK reads, GitHub-only dependency selection, partial error handling, and one comment per cleared item before validating. Companion scope remains pm-cli-website-5o9j."
@@ -28,6 +30,12 @@ comments[19]{created_at,author,text}:
   "2026-10-12T12:58:08.241Z",codex-sol,"Corrected pm-linked blocker suite passed 32/32, zero failures/skips/cancellations/todos, using pm test pm-github-fmrf --run --only-index 1 --progress --timeout 600. The marker performance test and repository/provenance regressions are included. Both complete release runs have passed their adversarial workflow fixtures; final receipts remain pending."
   "2026-10-12T13:03:23.942Z",codex-sol,"Corrected-source final certification supersedes the earlier source receipts: npm run release:check and bun run release:check both passed with required HOME/Git identity isolation, 553/553 tests each and zero failure/skip/cancel/todo. Bun ran in an identical isolated source copy with independent coverage output. Both coverage receipts matched: 12 authored modules, 9486/9486 lines and statements, 232/232 functions, 2484/2484 branches, exact 100/100/100/100 at unchanged thresholds. All remaining release checks passed. Linked suite 32/32, scheduled acceptance 1/1, packed Node/native Bun 2/2, parser/verdict revert proofs 0/2 each, old-marker-regex revert 0/1 with bounded timeout. Implementation/test checksums stayed unchanged across these runs. Pushing the correction to PR 115 for final-head CodeQL verification."
   "2026-10-12T13:12:30.216Z",codex-sol,"Final correction 50c41c6166d9333e2259e8dc9b3ead68a3ade4da reached PR 115 after transient commit_refs push rejections. CodeQL results check 114825479059 succeeded with No new alerts and zero annotations; the codeql workflow and Semgrep also succeeded. The previous polynomial marker alert is remediated. Node 22/26 CI is still running; neutral/skipped/unavailable reviewers are not approval. All implementation/test bytes remain identical to the npm/Bun 553-test, exact-coverage receipts. Claim remains released and item in_progress for orchestrator verification. No merges, tags, releases or publications were made."
+  "2026-10-13T12:06:42.543Z",codex-agent,"Revalidating PR #115 against current main. Confirmed the host TOON scalar assertion failure and own-provenance blocker contamination. Will parse rendered output, exclude all own provenance keys, add unit and real-tracker regressions, prove failure with only collectBlockerReferences reverted, and rerun unchanged npm/Bun release gates. CI also showed a telemetry cleanup race; investigating during validation."
+  "2026-10-13T12:12:13.255Z",codex-agent,"Both review findings are fixed. TOON CLI output is decoded through the installed host parser and asserted structurally. collectBlockerReferences excludes every own provenance key after resolution. New unit and real-tracker regressions pass 2/2, covering mixed-case tags, multiple provenance keys, all text sources, cross-repository blockers, true cleared annotations and false-clearance prevention without status changes. CI telemetry teardown now uses bounded recursive-remove retries; no telemetry configuration changed. Behavioral revert and full PM-linked/npm/Bun validation are running."
+  "2026-10-13T12:14:12.776Z",codex-agent,"Behavioral revert proof passed: in a disposable candidate copy, restoring only collectBlockerReferences while keeping both new tests unchanged made both fail by assertion (0/2 pass, exit 1). The unit restored two own-provenance keys; the real-tracker scenario failed its clearance/exit assertion when the unwanted own issue contaminated the query. Command: node --test --test-name-pattern=\"imported blocker candidates|collectBlockerReferences excludes\" test/blockers.test.ts. Fixed source passed the same command 2/2; production source stayed unchanged and these tests import TypeScript, so no dist rebuild was required. The initial disposable-copy attempt lacked a sibling module and was discarded as infrastructure failure, not revert evidence."
+  "2026-10-13T12:23:21.752Z",codex-agent,"PM-linked blocker suite hit its 600-second run budget under shared-runner contention; this is a timeout receipt, not acceptance. The scheduled-report linked command is still running. Increasing the blocker suite stored budget to 1200 seconds and queuing its rerun after full release gates finish to reduce duplicated load. Full coverage currently reports no assertion failures; exact npm/Bun gate receipts remain pending."
+  "2026-10-13T13:35:26.787Z",codex-agent,"The sibling PR release run exposed an outer native Bun fixture timeout during packing/setup plus the initial Node import. Increased only the outer fixture budget from 180 to 900 seconds in both branches; the three native Bun repeats still each enforce the unchanged 45-second runtime deadline and byte/exit assertions. Stopped the superseded npm run before restarting against this test change; its partial receipt is not a passing gate. Queuing clean npm/Bun gates and isolated PM-linked execution. The blocker collection code and its 2/2 positive, 0/2 assertion-based behavioral revert proof remain unchanged."
+  "2026-10-13T14:06:22.744Z",pi-agent,"Continuation takeover (previous agent stopped for quota). Re-reviewing the 5 uncommitted files in the package worktree, then merging current main (which now includes PR #116) and re-validating both CodeRabbit findings: the own-provenance blocker reference fix and the TOON quoting test. The local packed-Bun fixture timeout stays a runner-contention artifact, so its 180-second outer budget will be restored rather than raised."
 files[7]{path,scope}:
   index.ts,project
   manifest.json,project
@@ -36,9 +44,24 @@ files[7]{path,scope}:
   test/blockers.test.ts,project
   test/compatibility-floor.test.ts,project
   test/import-gate.test.ts,project
-tests[2]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
-  npm run build && node --test test/blockers.test.ts,project,codex-sol,"2026-10-12T11:26:22.651Z",local_mutation,feat/blocker-revalidation
-  "node --test --test-name-pattern=\"scheduled blocker report\" test/import-gate.test.ts",project,codex-sol,"2026-10-12T11:44:17.430Z",local_mutation,feat/blocker-revalidation
+tests[2]:
+  - command: npm run build && node --test test/blockers.test.ts
+    scope: project
+    timeout_seconds: 1800
+    provenance:
+      author: codex-sol
+      created_at: "2026-10-12T11:26:22.651Z"
+      source_kind: local_mutation
+      source_ref: feat/blocker-revalidation
+    updated_by: codex-agent
+    updated_at: "2026-10-13T13:35:18.976Z"
+  - command: "node --test --test-name-pattern=\"scheduled blocker report\" test/import-gate.test.ts"
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-10-12T11:44:17.430Z"
+      source_kind: local_mutation
+      source_ref: feat/blocker-revalidation
 docs[3]{path,scope}:
   .github/workflows/pm-github-sync.yml,project
   README.md,project

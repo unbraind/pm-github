@@ -4257,7 +4257,8 @@ export function resolveBlockerReferences(
  * item-level `blocked_by` field, `blocked_reason`, `description`, and every
  * stored comment. A `blocked_reason` is a static string that nothing re-reads —
  * that is exactly the staleness this command exists to surface — so comments
- * (including the latest ones) are scanned too.
+ * (including the latest ones) are scanned too. References matching any of the
+ * item's own GitHub provenance tags are excluded: an issue cannot block itself.
  *
  * @param item - One complete item from {@link decodeBlockerPmItems}.
  * @param fallbackRepo - The `--repo` hint, when given.
@@ -4280,7 +4281,11 @@ export function collectBlockerReferences(item: BlockerPmItem, fallbackRepo: stri
     return undefined;
   })();
   const parsed = texts.flatMap((text) => parseBlockerReferences(text));
-  return resolveBlockerReferences(parsed, itemRepo, fallbackRepo);
+  const ownKeys = new Set((item.tags ?? []).flatMap((tag) => {
+    const provenance = parseProvenanceTag(tag);
+    return provenance ? [`${provenance.repo}#${provenance.number}`] : [];
+  }));
+  return resolveBlockerReferences(parsed, itemRepo, fallbackRepo).filter((ref) => !ownKeys.has(ref.key));
 }
 
 /** Classify external dependency targets that explicitly name GitHub issues or PRs. */
