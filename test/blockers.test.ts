@@ -24,7 +24,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { comments as readComments } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
-import { decodeToonItemContent } from "../node_modules/@unbrained/pm-cli/dist/core/item/toon-decode.js";
+// Decode TOON CLI output with the same public TOON parser the pm CLI itself uses
+// (@toon-format/toon 4.1.1, the version pm-cli's decoder delegates to). The SDK
+// does not export a decoder and the repo's lint policy bans inline import(), so
+// this is the public import path — no reliance on pm-cli's private dist layout.
+import { decode as decodeToon } from "@toon-format/toon";
 import extension, * as github from "../index.ts";
 import type { MockGithubHandler } from "./helpers/mock-github-server.ts";
 import { captureStderr, jsonResponse, withEnv, withMockGithub } from "./helpers/mock-github-server.ts";
@@ -562,7 +566,7 @@ test("pm github blockers reports a bare #N against --repo and an unresolvable re
     }));
 });
 
-test("pm github blockers exits 1 when every reference state failed to resolve", async (t) => {
+test("pm github blockers exits 1 when any reference state query fails", async (t) => {
   const root = tracker(t);
   const id = createItem(root, "Blocked on the guard", ["--blocked-reason", "Externally blocked on unbraind/pm-cli#854"]);
   pm(root, ["update", id, "--status", "blocked"]);
@@ -746,7 +750,9 @@ test("actual CLI renders cleared reports through the host in JSON and TOON with 
   const source = path.resolve(import.meta.dirname, "..");
   fs.cpSync(path.join(source, "dist"), path.join(installed, "dist"), { recursive: true });
   for (const name of ["manifest.json", "package.json"]) fs.copyFileSync(path.join(source, name), path.join(installed, name));
-  fs.symlinkSync(path.join(source, "node_modules"), path.join(installed, "node_modules"), "dir");
+  // Junction on Windows: a real directory symlink needs symlink privileges or
+  // Developer Mode, and would fail with EPERM; Node ignores the type elsewhere.
+  fs.symlinkSync(path.join(source, "node_modules"), path.join(installed, "node_modules"), process.platform === "win32" ? "junction" : "dir");
   const id = createItem(root, "Closed external blocker", ["--blocked-reason", "unbraind/pm-cli#854"]);
   pm(root, ["update", id, "--status", "blocked"]);
   const before = fs.readFileSync(path.join(root, "tasks", `${id}.toon`), "utf8");
@@ -758,7 +764,7 @@ test("actual CLI renders cleared reports through the host in JSON and TOON with 
     assert.equal(report.items[0].references[0].closed_at, "2026-08-01T15:24:48Z");
     const toon = await cli(root, ["github", "blockers"]);
     assert.equal(toon.code, 4, toon.stderr);
-    const rendered = decodeToonItemContent(toon.stdout).value as github.BlockersReport;
+    const rendered = decodeToon(toon.stdout) as unknown as github.BlockersReport;
     assert.equal(rendered.items[0].verdict, "cleared");
     assert.equal(rendered.command, "github blockers");
     assert.equal(rendered.items[0].references[0].closed_at, report.items[0].references[0].closed_at);

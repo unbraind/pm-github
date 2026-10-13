@@ -4936,8 +4936,8 @@ export async function appendBlockerComments(
  * nothing is unblocked or edited; `--comment` only appends idempotent comments.
  * Exit codes: 0 when nothing cleared, {@link EXIT_CODE.BLOCKERS_CLEARED} when
  * something cleared or partially cleared, {@link EXIT_CODE.USAGE} for usage or a
- * missing token, {@link EXIT_CODE.GENERIC_FAILURE} when the state of every
- * reference failed to resolve.
+ * missing token, {@link EXIT_CODE.GENERIC_FAILURE} when any reference state query
+ * or any requested comment failed (takes precedence over 4).
  *
  * @param ctx - The host command-handler context.
  * @returns The full report for the host renderer (JSON/TOON).
@@ -6683,7 +6683,8 @@ export default defineExtension({
     // reopens, or edits any item; --comment only appends idempotent comments.
     // Exit codes: 0 nothing cleared; 4 something cleared or partially cleared
     // (so CI and the scheduled sync can alert); 2 usage/missing token;
-    // 1 failure (e.g. every reference's state failed to resolve).
+    // 1 failure (any reference state query or requested comment failed, which
+    // takes precedence over 4).
     // -----------------------------------------------------------------------
     api.registerCommand({
       name: "github blockers",
