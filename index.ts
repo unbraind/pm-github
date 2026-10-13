@@ -155,6 +155,10 @@ const COMMENTS_MODES: readonly CommentsMode[] = ["body", "annotations", "both"];
  * of the import path consumes a typed shape rather than re-parsing strings.
  */
 export interface ImportOptions {
+  /** Explicit comma-separated issue numbers or same-repository references. */
+  issue?: string;
+  /** Positive cap on list-mode issues, ordered by latest update. */
+  limit?: number;
   /** GitHub issue state to fetch: `open`, `closed`, or `all`. */
   state: "open" | "closed" | "all";
   /** Comma-separated label filter applied server-side. */
@@ -1579,7 +1583,9 @@ export async function importGithubAtomic(
 // are honored server-side; `milestone` is filtered client-side (the REST API
 // keys milestones by number, not title).
 export function buildIssuesUrl(repo: string, opts: ImportOptions): string {
-  let url = `${githubApiBase()}/repos/${repo}/issues?state=${opts.state}&per_page=100`;
+  const pageSize = opts.limit === undefined ? 100 : Math.min(100, opts.limit + 1);
+  let url = `${githubApiBase()}/repos/${repo}/issues?state=${opts.state}&per_page=${pageSize}`;
+  if (opts.limit !== undefined) url += "&sort=updated&direction=desc";
   if (opts.labels) url += `&labels=${encodeURIComponent(opts.labels)}`;
   if (opts.since) url += `&since=${encodeURIComponent(opts.since)}`;
   if (opts.assignee) url += `&assignee=${encodeURIComponent(opts.assignee)}`;
@@ -1588,7 +1594,8 @@ export function buildIssuesUrl(repo: string, opts: ImportOptions): string {
 
 /**
  * Page through GitHub's issues REST endpoint, following the Link header, applying
- * the import filters, and returning the full issue list.
+ * the import filters, and returning the issue list. Limited runs stop after
+ * retaining the cap plus one matching issue so callers can report truncation.
  *
  * @internal Exported only so the HTTP-boundary tests can drive the real client.
  * `stripInternal` keeps it out of the published `.d.ts`, so this is NOT a public API
@@ -1608,10 +1615,54 @@ export async function fetchAllIssues(repo: string, opts: ImportOptions, token?: 
     if (!Array.isArray(page)) {
       throw new Error("Unexpected GitHub API response (expected an array of issues).");
     }
-    issues.push(...(page as GhIssue[]));
+    const fetched = page as GhIssue[];
+    issues.push(...(opts.limit === undefined ? fetched : applyClientFilters(fetched, opts)));
+    // One extra eligible issue proves truncation without draining the repo.
+    if (opts.limit !== undefined && issues.length > opts.limit) return issues.slice(0, opts.limit + 1);
     nextUrl = parseNextLink(linkHeader);
   }
   return issues;
+}
+
+/** Parse, deduplicate, and validate selected issue references before any fetch. */
+export function parseIssueNumbers(repo: string, input: string): number[] {
+  const numbers = new Set<number>();
+  for (const reference of input.split(",")) {
+    const match = /^(?:([^/#\s]+\/[^/#\s]+)#|#)?([1-9]\d*)$/.exec(reference.trim());
+    if (!match || !Number.isSafeInteger(Number(match[2]))) {
+      throw new CommandError("--issue must contain positive issue numbers, #N, or owner/repo#N references.", EXIT_CODE.USAGE);
+    }
+    if (match[1] && match[1].toLowerCase() !== repo.toLowerCase()) {
+      throw new CommandError(`--issue reference ${reference.trim()} conflicts with repository ${repo}.`, EXIT_CODE.USAGE);
+    }
+    numbers.add(Number(match[2]));
+  }
+  return [...numbers];
+}
+
+/** Fetch only selected REST issue endpoints, refusing PRs and missing numbers before writes. */
+async function fetchSelectedIssues(repo: string, numbers: readonly number[], opts: ImportOptions, token?: string): Promise<{ issues: GhIssue[]; missingIssues: number[] }> {
+  const issues: GhIssue[] = [];
+  const missingIssues: number[] = [];
+  for (const number of numbers) {
+    let body: string;
+    try {
+      ({ body } = await fetchJSON(`${githubApiBase()}/repos/${repo}/issues/${number}`, token));
+    } catch (err: unknown) {
+      if (!/HTTP 404/.test(errorMessage(err))) throw err;
+      if (!opts.dryRun) throw new Error(`GitHub issue ${repo}#${number} was not found (HTTP 404); no issues were imported.`);
+      missingIssues.push(number);
+      console.error(`[dry-run] Missing issue: ${repo}#${number} (HTTP 404).`);
+      continue;
+    }
+    const issue = JSON.parse(body) as GhIssue;
+    if (issue.number !== number) throw new Error(`Unexpected GitHub issue response for ${repo}#${number}.`);
+    if (issue.pull_request && !opts.includePrs) {
+      throw new Error(`${repo}#${number} is a pull request; use --include-prs to import it. No issues were imported.`);
+    }
+    issues.push(issue);
+  }
+  return { issues, missingIssues };
 }
 
 /**
@@ -2295,6 +2346,21 @@ export function applyClientFilters(issues: GhIssue[], opts: ImportOptions): GhIs
  * @returns The normalized import options.
  */
 export function parseImportOptions(options: Record<string, unknown>): ImportOptions {
+  const issue = optionString(options, "issue");
+  if (optionProvided(options, "issue")) {
+    if (!issue) throw new CommandError("--issue requires a non-empty issue list.", EXIT_CODE.USAGE);
+    for (const flag of ["state", "all", "labels", "since", "assignee", "milestone", "limit"]) {
+      if (optionProvided(options, flag)) throw new CommandError(`--issue conflicts with --${flag}.`, EXIT_CODE.USAGE);
+    }
+  }
+  let limit: number | undefined;
+  if (optionProvided(options, "limit")) {
+    const input = optionString(options, "limit");
+    if (!input || !/^[1-9]\d*$/.test(input) || !Number.isSafeInteger(Number(input))) {
+      throw new CommandError("--limit must be a positive integer.", EXIT_CODE.USAGE);
+    }
+    limit = Number(input);
+  }
   // --state takes precedence; --all is the legacy shorthand for "all".
   const stateOpt = optionString(options, "state") as ImportOptions["state"] | undefined;
   const includeAll = optionEnabled(options, "all");
@@ -2333,6 +2399,8 @@ export function parseImportOptions(options: Record<string, unknown>): ImportOpti
     commentsMode = "both";
   }
   return {
+    issue,
+    limit,
     state,
     labels: optionString(options, "labels"),
     since,
@@ -2999,11 +3067,13 @@ export async function runImport(
       "Usage: pm github import <owner/repo> [--all|--state open|closed|all] " +
         "[--labels bug,enhancement] [--since <iso>] [--assignee <login>] " +
         "[--milestone <name>] [--include-prs] [--skip-drafts] [--with-comments] " +
-        "[--comments-mode body|annotations|both] [--atomic]",
+        "[--comments-mode body|annotations|both] [--atomic] [--issue <N[,N...]> | --limit <n>] " +
+        "[--link-deps] [--gate] [--dry-run] [--type <type>]",
       EXIT_CODE.USAGE,
     );
   }
   const repo = repoArg;
+  const selectedNumbers = opts.issue === undefined ? undefined : parseIssueNumbers(repo, opts.issue);
 
   const token = (dependencies.resolveToken ?? resolveGitHubToken)();
   console.error(
@@ -3011,8 +3081,13 @@ export async function runImport(
   );
 
   let fetched: GhIssue[];
+  let missingIssues: number[] = [];
   try {
-    fetched = await (dependencies.fetchIssues ?? fetchAllIssues)(repo, opts, token);
+    if (selectedNumbers) {
+      ({ issues: fetched, missingIssues } = await fetchSelectedIssues(repo, selectedNumbers, opts, token));
+    } else {
+      fetched = await (dependencies.fetchIssues ?? fetchAllIssues)(repo, opts, token);
+    }
   } catch (err: unknown) {
     const msg = errorMessage(err);
     const hint = !token && /HTTP 403/.test(msg)
@@ -3022,23 +3097,30 @@ export async function runImport(
     throw new CommandError(`Failed to fetch issues from ${repo}: ${msg}${hint}`, exitCode);
   }
 
-  const filtered = applyClientFilters(fetched, opts);
+  const eligible = applyClientFilters(fetched, opts);
+  const filtered = opts.limit === undefined ? eligible : eligible.slice(0, opts.limit);
+  const fetchFields = {
+    ...(opts.limit === undefined ? {} : { limit: opts.limit, truncated: eligible.length > opts.limit }),
+    ...(missingIssues.length === 0 ? {} : { missingIssues }),
+  };
+  if (opts.limit !== undefined && eligible.length > opts.limit) console.error(`Issue list truncated at --limit ${opts.limit}.`);
 
   if (filtered.length === 0) {
     console.error("No issues found.");
     // Even a no-op gated import must prove the workspace is gateable (a Git work
     // tree the scanner can read), so the empty-change gate scan runs here too.
     const emptyGateReceipt = opts.gate && !opts.dryRun ? gateImportWrites(pmRoot) : undefined;
-    if (opts.atomic && opts.dryRun) {
+    if (opts.dryRun && (opts.atomic || missingIssues.length > 0)) {
       return {
         dryRun: true,
         wouldImport: 0,
         wouldUpdate: 0,
         wouldSkip: 0,
-        atomic: true,
+        ...(opts.atomic ? { atomic: true } : {}),
+        ...fetchFields,
       };
     }
-    return { imported: 0, updated: 0, skipped: 0, ...(emptyGateReceipt ? { gate: emptyGateReceipt } : {}) };
+    return { imported: 0, updated: 0, skipped: 0, ...fetchFields, ...(emptyGateReceipt ? { gate: emptyGateReceipt } : {}) };
   }
 
   console.error(`Found ${filtered.length} issue(s).`);
@@ -3131,6 +3213,7 @@ export async function runImport(
           wouldUpdate: 0,
           wouldSkip: skipped,
           atomic: true,
+          ...fetchFields,
         };
       }
       throw new CommandError(
@@ -3163,6 +3246,7 @@ export async function runImport(
         atomic: true,
         ...(opts.linkDeps ? { wouldLinkDependencyCandidates: countDependencyRefCandidates(repo, filtered) } : {}),
         ...gatePlanFields,
+        ...fetchFields,
       };
     }
 
@@ -3215,6 +3299,7 @@ export async function runImport(
       skipped,
       atomic: true,
       ...depLinkResultFields(atomicDepLink),
+      ...fetchFields,
       ...(gateReceipt ? { gate: gateReceipt } : {}),
     };
   }
@@ -3400,6 +3485,7 @@ export async function runImport(
       wouldSkip: skipped,
       ...(opts.linkDeps ? { wouldLinkDependencyCandidates: countDependencyRefCandidates(repo, filtered) } : {}),
       ...gatePlanFields,
+      ...fetchFields,
     };
   }
 
@@ -3426,7 +3512,7 @@ export async function runImport(
   // pushed; scan the proposed tracker change now and fail closed.
   if (opts.gate) verifyImportedProvenance((dependencies.readItems ?? readPmItems)(pmRoot), gatePlan!, repo);
   const gateReceipt = opts.gate ? gateImportWrites(pmRoot) : undefined;
-  return { imported, updated, skipped, ...depLinkResultFields(depLink), ...(gateReceipt ? { gate: gateReceipt } : {}) };
+  return { imported, updated, skipped, ...fetchFields, ...depLinkResultFields(depLink), ...(gateReceipt ? { gate: gateReceipt } : {}) };
 }
 
 /**
@@ -5219,6 +5305,8 @@ export function isMutatingGithubCommand(command: string, options: Record<string,
 // ---------------------------------------------------------------------------
 
 const IMPORT_FLAGS = [
+  { long: "--issue", value_name: "N[,N...]", description: "Fetch exactly these issue numbers, #N, or same-repo owner/repo#N references; conflicts with --state/--all/--labels/--since/--assignee/--milestone/--limit. Missing numbers fail before writes (reported by --dry-run); PRs require --include-prs" },
+  { long: "--limit", value_name: "n", description: "Positive list-mode issue cap, newest-updated first; reports limit and truncated when more exist (one extra matching issue is fetched to check). Invalid with --issue" },
   { long: "--all", description: "Include closed issues (shorthand for --state all)" },
   { long: "--state", value_name: "state", description: "Issue state: open | closed | all (default: open)" },
   { long: "--labels", value_name: "labels", description: "Comma-separated label filter" },
@@ -5367,6 +5455,8 @@ export default defineExtension({
         { name: "owner/repo", required: true, description: "GitHub repository to import" },
       ],
       examples: [
+        "pm github import owner/repo --issue 189",
+        "pm github import owner/repo --limit 10",
         "pm github import unbraind/pm-cli",
         "pm github import owner/repo --since 7d",
         "pm github import owner/repo --include-comments",
@@ -5533,6 +5623,8 @@ export default defineExtension({
       ],
       examples: [
         "pm gh-issues import unbraind/pm-cli",
+        "pm gh-issues import owner/repo --issue 189",
+        "pm gh-issues import owner/repo --limit 10",
         "pm gh-issues import unbraind/pm-cli --all",
         "pm gh-issues import unbraind/pm-cli --labels bug,enhancement",
         "pm gh-issues import unbraind/pm-cli --since 2026-01-01T00:00:00Z",
