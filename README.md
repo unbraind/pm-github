@@ -17,6 +17,52 @@ pm install npm:pm-github --global
 > `github.com/unbraind/pm-github` source cannot work either — pm copies a GitHub
 > source as-is without building it, and this repository does not commit `dist/`.
 
+## Revalidate GitHub blockers
+
+**Compatibility:** pm-github now requires PM CLI 2026.10.5 or newer for complete
+SDK reads and structured command exit statuses. Older hosts refuse installation
+or activation through the matching peer dependency and manifest floor.
+
+`pm github blockers` reads a certified complete tracker and checks every blocked
+item, plus non-terminal items with an external GitHub `blocked_by` dependency.
+It scans dependency targets, `blocked_reason`, description, and stored comments
+(including the latest) for `owner/repo#N`, issue/PR URLs, `#N`, and `GH-N`.
+Bare references use the item's `gh:owner/repo#N` provenance repo, then `--repo`.
+The extra short form `repo#N` resolves only against a matching repo hint.
+References are deduplicated across items and queried in GraphQL batches of 25,
+using the existing token resolution and rate-limit handling.
+
+```sh
+pm github blockers --repo unbraind/pm-cli
+pm github blockers --repo unbraind/pm-cli --json
+pm --pm-path fleet/pm-rl/.agents/pm github blockers --repo unbraind/pm-cli --json
+pm github blockers --ids pm-123,pm-456 --repo unbraind/pm-cli
+# Preview/write annotations only on a scratch tracker:
+pm --pm-path scratch/.agents/pm github blockers --repo unbraind/pm-cli --comment --dry-run
+pm --pm-path scratch/.agents/pm github blockers --repo unbraind/pm-cli --comment
+```
+
+Reports use the host renderer (TOON by default; global `--json`) and include item
+id/status, each reference's state, close reason and closed/merged timestamp.
+Verdicts are `cleared` (all references closed or merged), `partially_cleared`
+(some cleared), `still_blocked` (open blockers, none cleared), and `unresolvable`
+(no references or only unknown states). GitHub hides nonexistent and inaccessible
+private references alike: both can appear as `not_found`. Explicit permission
+errors remain `error` and cannot clear a blocker.
+
+Exit **0** means nothing cleared, **4** means at least one item has a cleared or
+partially cleared blocker, **1** means a query/comment failure (takes precedence
+over 4), **2** means invalid options or missing authentication, and **3** means
+an unknown `--ids` item. Structured reports remain available for query failures.
+No run auto-unblocks. `--comment` adds one comment per fully cleared item,
+listing newly cleared references as “Blocker X closed on D; revalidate.” Each
+reference/state/timestamp carries an idempotency marker; repeats add nothing,
+and a subsequent close with a different timestamp gets a fresh annotation.
+`--dry-run` previews the annotation counts without appending comments.
+The reusable scheduled sync runs this command report-only and emits an Actions
+warning for code 4; it stops on other non-zero codes. Callers must pin a release
+containing this command before adopting the updated workflow.
+
 ## Capabilities
 
 | SDK capability | What it provides |

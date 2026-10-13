@@ -33,6 +33,9 @@ import { spawnSync } from "node:child_process";
 import {
   comments as pmCommentsFn,
   commitItemMutations as sdkCommitItemMutations,
+  isExternalDependencyReference,
+  listAllComplete,
+  certifyCompleteListResult,
   listAllItemMetadata as sdkListAllItemMetadata,
   normalizeItemId as sdkNormalizeItemId,
   readSettings as sdkReadSettings,
@@ -759,6 +762,10 @@ export const EXIT_CODE = {
   GENERIC_FAILURE: 1,
   USAGE: 2,
   NOT_FOUND: 3,
+  // `pm github blockers`: at least one revalidated item is cleared (every
+  // blocker closed or merged) or partially cleared. Distinct from a failure so
+  // a scheduled sync can alert on a lifted blocker without reading the report.
+  BLOCKERS_CLEARED: 4,
 } as const;
 
 /**
@@ -3615,7 +3622,7 @@ export interface SyncPlanEntry {
  * @returns Matched items in corpus order.
  * @throws CommandError when any requested identity is absent.
  */
-function requireRequestedItems(items: PmItem[], requested: string[]): PmItem[] {
+function requireRequestedItems<TItem extends PmItem>(items: TItem[], requested: string[]): TItem[] {
   const scoped = scopeItemsByIds(items, requested.length > 0 ? requested : undefined);
   if (scoped.missing.length > 0) throw new CommandError(`--ids included unknown pm item id(s): ${scoped.missing.join(", ")}`, EXIT_CODE.NOT_FOUND);
   return scoped.selected;
@@ -4101,6 +4108,933 @@ async function runExport(ctx: CommandHandlerContext) {
 }
 
 // ---------------------------------------------------------------------------
+// Blocker revalidation — `pm github blockers`
+// ---------------------------------------------------------------------------
+//
+// A `blocked_reason` is a static string: nothing re-reads it, so an item whose
+// named GitHub blocker has since closed stays blocked indefinitely (the
+// motivating incident: two items sat blocked for 27 days after their blocker
+// issue closed). This section revalidates blocked items against the LIVE state
+// of the GitHub issues and pull requests their blocker text names. It is
+// REPORT-ONLY by construction: it never unblocks, reopens, or edits any item;
+// the optional `--comment` appends one idempotent comment per cleared item
+// so a human — not the tool — decides what the cleared blocker means.
+
+/** Terminal pm lifecycle statuses: an item in one of these can no longer be blocked. */
+export const BLOCKER_TERMINAL_STATUSES: ReadonlySet<string> = new Set(["closed", "canceled"]);
+
+/** How many blocker references are resolved per GraphQL request. */
+export const BLOCKER_STATES_BATCH_SIZE = 25;
+
+/** Shape an `owner/repo` (or `--repo`) hint must have before it resolves bare references. */
+const BLOCKER_REPO_SHAPE = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+$/;
+
+/** The syntactic form a parsed GitHub reference was recognized in. */
+export type BlockerReferenceForm =
+  | "repo_hash"      // `owner/repo#N`
+  | "url"            // https://github.com/owner/repo/issues/N or /pull/N
+  | "gh_dash"        // `GH-N`
+  | "short_repo_hash" // `name#N` (bare repo short name, resolved against a hint)
+  | "bare_hash";      // `#N` (resolved against a hint)
+
+/** One GitHub reference found in blocker text, before its repo hint is applied. */
+export interface ParsedBlockerReference {
+  /** `owner/repo` (lowercase) when the reference carries it; `undefined` for hint-resolved forms. */
+  repo?: string;
+  /** Issue or pull-request number. */
+  number: number;
+  /** The syntactic form the reference was recognized in. */
+  form: BlockerReferenceForm;
+  /** The literal matched text (for report provenance). */
+  raw: string;
+}
+
+/** A deduplicated, hint-resolved GitHub reference. `key` is its stable identity. */
+export interface BlockerReference {
+  /** Stable dedupe/lookup key: `owner/repo#N` when resolved, a normalized unresolved reference otherwise. */
+  key: string;
+  /** `owner/repo` (lowercase); `undefined` when no hint could resolve the reference. */
+  repo?: string;
+  /** Issue or pull-request number. */
+  number: number;
+  /** The syntactic form the reference was recognized in. */
+  form: BlockerReferenceForm;
+  /** The literal matched text (for report provenance). */
+  raw: string;
+}
+
+/** Live state of one blocker reference as queried from GitHub (or why it could not be). */
+export interface BlockerReferenceState {
+  /** `owner/repo` (lowercase); `undefined` when the reference never resolved to a repo. */
+  repo?: string;
+  /** Issue or pull-request number. */
+  number: number;
+  /** The syntactic form the reference was recognized in. */
+  form: BlockerReferenceForm;
+  /** The literal matched text (for report provenance). */
+  raw: string;
+  /** Live state, or the reason it is unknown. */
+  state: "open" | "closed" | "merged" | "not_found" | "error" | "unresolved";
+  /** GitHub close reason for issues (`COMPLETED`, `NOT_PLANNED`, `REOPENED`), when known. */
+  state_reason?: string;
+  /** ISO timestamp the issue closed, when known. */
+  closed_at?: string;
+  /** ISO timestamp the pull request merged, when known. */
+  merged_at?: string;
+  /** Canonical GitHub URL, when known. */
+  url?: string;
+  /** Failure detail, only for `state === "error"`. */
+  error?: string;
+}
+
+/** Per-item revalidation outcome. */
+export type BlockerVerdict = "cleared" | "partially_cleared" | "still_blocked" | "unresolvable";
+
+/** One revalidated candidate item, as reported. */
+export interface BlockerItemReport {
+  /** The pm item id. */
+  id: string;
+  /** Item status at read time (the status that made it a candidate). */
+  status: string;
+  /** Revalidation verdict over the item's references. */
+  verdict: BlockerVerdict;
+  /** Every parsed reference and its live state, sorted deterministically. */
+  references: BlockerReferenceState[];
+}
+
+/** The full `pm github blockers` report, returned to the host renderer. */
+export interface BlockersReport {
+  /** Fixed marker naming the producing command. */
+  command: "github blockers";
+  /** ISO timestamp of the run. */
+  generated_at: string;
+  /** Items read from the complete corpus (after any `--ids` scoping). */
+  items_read: number;
+  /** Items revalidated (blocked status, or external GitHub blocked_by dependency). */
+  candidates: number;
+  /** Per-item reports. */
+  items: BlockerItemReport[];
+  /** Items per verdict. */
+  counts: {
+    cleared: number;
+    partially_cleared: number;
+    still_blocked: number;
+    unresolvable: number;
+  };
+  /** Non-zero host exit status: 4 alerts, 1 query or annotation failures. */
+  exit_code?: number;
+  /** Receipt for `--comment`, present only when comments were requested. */
+  comment?: {
+    requested: true;
+    dry_run: boolean;
+    added: number;
+    skipped: number;
+    failed: number;
+  };
+}
+
+// GitHub reference forms, anchored so prose around a match cannot leak into it.
+// The prefix class excludes word characters, path separators, dots, and colons,
+// so `https://github.com/o/r/issues/N` (slash before owner) and
+// `github.com/o/r#N` never produce a second, shorter match inside a URL.
+const BLOCKER_URL_RE = /https?:\/\/(?:www\.)?github\.com\/([A-Za-z0-9][A-Za-z0-9_.-]*)\/([A-Za-z0-9_.-]+)\/(?:issues|pull)\/([1-9]\d{0,8})(?!\w)/gi;
+const BLOCKER_OWNER_REPO_RE = /(^|[^\w./:-])([A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+)#([1-9]\d{0,8})(?!\w)/g;
+const BLOCKER_GH_DASH_RE = /\bGH-([1-9]\d{0,8})\b/gi;
+const BLOCKER_SHORT_REPO_RE = /(^|[^\w./:-])([A-Za-z0-9_.-]+)#([1-9]\d{0,8})(?!\w)/g;
+const BLOCKER_BARE_HASH_RE = /(^|[^\w./:#-])#([1-9]\d{0,8})(?!\w)/g;
+
+/**
+ * Mask foreign tracker locators and the `github:` scheme prefix in blocker text.
+ *
+ * `gitlab:`/`jira:`/`linear:` locators name blockers pm-github cannot query, so
+ * the whole token is blanked to keep its `owner/repo#N` interior from parsing as
+ * a GitHub reference. The `github:` scheme — the tracker's canonical external
+ * dependency locator (`github:owner/repo#N`) — is replaced by a space so the
+ * locator's payload parses through the ordinary `owner/repo#N` form.
+ *
+ * @param text - One blocker text source (blocked_reason, description, comment, …).
+ * @returns The text with foreign locators blanked and the `github:` prefix removed.
+ */
+function maskNonGithubLocators(text: string): string {
+  return text.replace(/\b(?:gitlab|jira|linear):[^\s]+/gi, " ").replace(/\bgithub:/gi, " ");
+}
+
+/**
+ * Parse every GitHub reference in one text source.
+ *
+ * Recognized forms: full issue/PR URLs, `owner/repo#N`, `GH-N`, bare `#N`, and
+ * `name#N` (a repo short name). URL and `owner/repo#N` references carry their
+ * repo; `GH-N`, bare `#N`, and `name#N` do not and are resolved later against
+ * the item's provenance repo or `--repo` (see {@link resolveBlockerReferences}).
+ * Duplicate mentions within one text are not deduplicated here — the resolver
+ * owns the stable identity — but each form's scan is independent, so one text
+ * never yields the same (form, raw, number) twice.
+ *
+ * @param text - One blocker text source (blocked_reason, description, comment, …).
+ * @returns Every recognized reference, in form order (URL, owner/repo, GH-N, short, bare).
+ */
+export function parseBlockerReferences(text: string): ParsedBlockerReference[] {
+  const masked = maskNonGithubLocators(text);
+  const out: ParsedBlockerReference[] = [];
+  for (const m of masked.matchAll(BLOCKER_URL_RE)) {
+    out.push({ repo: `${m[1]!.toLowerCase()}/${m[2]!.toLowerCase()}`, number: Number(m[3]), form: "url", raw: m[0] });
+  }
+  for (const m of masked.matchAll(BLOCKER_OWNER_REPO_RE)) {
+    out.push({ repo: m[2]!.toLowerCase(), number: Number(m[3]), form: "repo_hash", raw: `${m[2]}#${m[3]}` });
+  }
+  for (const m of masked.matchAll(BLOCKER_GH_DASH_RE)) {
+    out.push({ number: Number(m[1]), form: "gh_dash", raw: m[0]!.toUpperCase() });
+  }
+  for (const m of masked.matchAll(BLOCKER_SHORT_REPO_RE)) {
+    out.push({ number: Number(m[3]), form: "short_repo_hash", raw: `${m[2]}#${m[3]}` });
+  }
+  for (const m of masked.matchAll(BLOCKER_BARE_HASH_RE)) {
+    out.push({ number: Number(m[2]), form: "bare_hash", raw: `#${m[2]}` });
+  }
+  return out;
+}
+
+/**
+ * Resolve hint-dependent references and deduplicate the result.
+ *
+ * `GH-N`, bare `#N`, and `name#N` references resolve against the first
+ * applicable hint — the item's own `gh:owner/repo#N` provenance repo, then
+ * `--repo`. A `name#N` short form resolves only when the name matches the
+ * hint's repo segment (so `pm-cli#854` resolves against `unbraind/pm-cli`, but
+ * `other#854` stays unresolved instead of guessing an owner). References that
+ * resolve to the same `owner/repo#N` collapse to the first-seen form.
+ *
+ * @param parsed - References from {@link parseBlockerReferences}.
+ * @param itemRepo - The item's provenance repo hint (`owner/repo`), when it has one.
+ * @param fallbackRepo - The `--repo` hint, when given.
+ * @returns Deduplicated references, sorted by repo then number for a deterministic report.
+ */
+export function resolveBlockerReferences(
+  parsed: readonly ParsedBlockerReference[],
+  itemRepo: string | undefined,
+  fallbackRepo: string | undefined,
+): BlockerReference[] {
+  const out: BlockerReference[] = [];
+  const seen = new Set<string>();
+  for (const ref of parsed) {
+    let repo = ref.repo;
+    if (repo === undefined) {
+      for (const hint of [itemRepo, fallbackRepo]) {
+        if (hint === undefined || !BLOCKER_REPO_SHAPE.test(hint)) continue;
+        if (ref.form === "short_repo_hash" && hint.split("/")[1]!.toLowerCase() !== ref.raw.split("#")[0]!.toLowerCase()) continue;
+        repo = hint.toLowerCase();
+        break;
+      }
+    }
+    const key = repo === undefined
+      ? (ref.form === "short_repo_hash" ? `unresolved:${ref.raw.toLowerCase()}` : `unresolved:#${ref.number}`)
+      : `${repo}#${ref.number}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ key, ...(repo === undefined ? {} : { repo }), number: ref.number, form: ref.form, raw: ref.raw });
+  }
+  return out.sort((a, b) => `${a.repo ?? ""}#${a.number}`.localeCompare(`${b.repo ?? ""}#${b.number}`));
+}
+
+/**
+ * Collect and resolve every GitHub reference named by one item's blocker text.
+ *
+ * Sources scanned, in order: external `blocked_by` dependency targets, the
+ * item-level `blocked_by` field, `blocked_reason`, `description`, and every
+ * stored comment. A `blocked_reason` is a static string that nothing re-reads —
+ * that is exactly the staleness this command exists to surface — so comments
+ * (including the latest ones) are scanned too. References matching any of the
+ * item's own GitHub provenance tags are excluded: an issue cannot block itself.
+ *
+ * @param item - One complete item from {@link decodeBlockerPmItems}.
+ * @param fallbackRepo - The `--repo` hint, when given.
+ * @returns Deduplicated resolved references for the item.
+ */
+export function collectBlockerReferences(item: BlockerPmItem, fallbackRepo: string | undefined): BlockerReference[] {
+  const texts: string[] = [];
+  for (const dep of item.dependencies) {
+    if (dep.kind === "blocked_by" && isGithubBlockerDependency(dep.id)) texts.push(dep.id);
+  }
+  if (item.blockedBy !== undefined) texts.push(item.blockedBy);
+  if (item.blockedReason !== undefined) texts.push(item.blockedReason);
+  texts.push(item.description);
+  for (const comment of item.comments) texts.push(comment.text);
+  const itemRepo = (() => {
+    for (const tag of item.tags ?? []) {
+      const provenance = parseProvenanceTag(tag);
+      if (provenance && BLOCKER_REPO_SHAPE.test(provenance.repo)) return provenance.repo;
+    }
+    return undefined;
+  })();
+  const parsed = texts.flatMap((text) => parseBlockerReferences(text));
+  const ownKeys = new Set((item.tags ?? []).flatMap((tag) => {
+    const provenance = parseProvenanceTag(tag);
+    return provenance ? [`${provenance.repo}#${provenance.number}`] : [];
+  }));
+  return resolveBlockerReferences(parsed, itemRepo, fallbackRepo).filter((ref) => !ownKeys.has(ref.key));
+}
+
+/** Classify external dependency targets that explicitly name GitHub issues or PRs. */
+function isGithubBlockerDependency(target: string): boolean {
+  return isExternalDependencyReference(target) && /^(?:github:|https?:\/\/(?:www\.)?github\.com\/)/i.test(target)
+    && parseBlockerReferences(target).length > 0;
+}
+
+/**
+ * Select the items `pm github blockers` revalidates.
+ *
+ * Every item whose status is `blocked`, plus every non-terminal item carrying a
+ * `blocked_by` dependency (or `blocked_by` field) whose target is an explicit
+ * external reference — the tracker's own cross-system locator classification
+ * plus an explicit GitHub locator or URL decides what counts as
+ * a GitHub target, so a foreign tracker or local `blocked_by` edge to another pm item never selects the
+ * item here. Terminal items are excluded: a closed item cannot be blocked.
+ *
+ * @param items - The complete runtime-validated item corpus.
+ * @returns The candidate items, in corpus order.
+ */
+export function selectBlockerCandidates(items: readonly BlockerPmItem[]): BlockerPmItem[] {
+  return items.filter((item) => {
+    if (item.status === "blocked") return true;
+    if (BLOCKER_TERMINAL_STATUSES.has(item.status)) return false;
+    return (
+      item.dependencies.some((dep) => dep.kind === "blocked_by" && isGithubBlockerDependency(dep.id))
+      || (item.blockedBy !== undefined && isGithubBlockerDependency(item.blockedBy))
+    );
+  });
+}
+
+/** One `pm list --all` dependency row, as consumed by blocker revalidation. */
+export interface BlockerPmDependency {
+  /** Dependency target: a local item id or an external locator string. */
+  id: string;
+  /** Dependency kind, e.g. `blocked_by`, `blocks`, `parent`. */
+  kind: string;
+}
+
+/** One `pm list --all` comment row, as consumed by blocker revalidation. */
+export interface BlockerPmComment {
+  /** The comment text. */
+  text: string;
+}
+
+/** A complete pm item plus the blocker fields the complete list output carries. */
+export interface BlockerPmItem extends PmItem {
+  /** Stable item id (required: the complete reader refuses id-less rows). */
+  id: string;
+  /** Item title at read time (validated by the complete reader). */
+  title: string;
+  /** Lifecycle status at read time (validated by the complete reader). */
+  status: string;
+  /** Short summary shown in listings (validated by the complete reader). */
+  description: string;
+  /** The static blocked-reason text, when the item carries one. */
+  blockedReason?: string;
+  /** The item-level `blocked_by` field (an item id, external locator, or reason text). */
+  blockedBy?: string;
+  /** Dependency rows (id + kind only; dates and authors are not consumed). */
+  dependencies: BlockerPmDependency[];
+  /** Stored comment texts, oldest first. */
+  comments: BlockerPmComment[];
+}
+
+/**
+ * Read an optional string field from one decoded `pm list --all` row.
+ *
+ * Fail closed on a present-but-wrong-type value: a number or object where a
+ * string belongs means the row cannot be trusted, and an unverifiable read is
+ * not a whole-workspace read.
+ *
+ * @param value - The raw row field.
+ * @param field - Field description for the refusal message.
+ * @returns The string, or `undefined` when the field is absent.
+ * @throws {@link CommandError} When the field is present but not a string.
+ */
+function optionalCompletePmString(value: unknown, field: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throw new CommandError(
+      `Refusing unverifiable pm list --all output: ${field} must be a string when present.`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Decode the complete `pm list --all` envelope into blocker-revalidation items.
+ *
+ * The envelope and every base field are validated by {@link decodeCompletePmItems}
+ * first (the same complete-read contract import uses), then the extra rows this
+ * command consumes — `blocked_reason`, `blocked_by`, dependency rows, and
+ * comment texts — are validated on top. A wrong-type extra fails closed with
+ * the same refusal wording, because blocker revalidation reading a partial or
+ * untrustworthy corpus would silently miss items.
+ *
+ * @param parsed - JSON decoded from the installed pm CLI.
+ * @returns Fresh runtime-validated blocker items.
+ * @throws {@link CommandError} When a receipt, count, identity, or consumed row
+ * field is absent, incomplete, or contradictory.
+ */
+export function decodeBlockerPmItems(parsed: unknown): BlockerPmItem[] {
+  const base = decodeCompletePmItems(parsed);
+  // No re-validation branch here: decodeCompletePmItems has already thrown unless
+  // `parsed` is a record whose `items` is an array exactly as long as `base`.
+  const rows = (parsed as { items: unknown[] }).items;
+  return base.map((item, index): BlockerPmItem => {
+    // Downcast, not a runtime claim: the complete reader has already proven
+    // id/title/status/description are strings on every row it emitted, so the
+    // required-field view of BlockerPmItem holds for this object.
+    const validated = item as PmItem & { id: string; title: string; status: string; description: string };
+    const row = rows[index] as Record<string, unknown>;
+    const blockedReason = optionalCompletePmString(row.blocked_reason, `item ${item.id} blocked_reason`);
+    const blockedBy = optionalCompletePmString(row.blocked_by, `item ${item.id} blocked_by`);
+    const dependencies: BlockerPmDependency[] = [];
+    if (row.dependencies !== undefined) {
+      if (!Array.isArray(row.dependencies)) {
+        throw new CommandError(
+          `Refusing unverifiable pm list --all output: item ${item.id} dependencies must be an array.`,
+        );
+      }
+      for (const dep of row.dependencies) {
+        if (!isJsonRecord(dep) || typeof dep.id !== "string" || typeof dep.kind !== "string") {
+          throw new CommandError(
+            `Refusing unverifiable pm list --all output: item ${item.id} dependency rows must carry string id and kind.`,
+          );
+        }
+        dependencies.push({ id: dep.id, kind: dep.kind });
+      }
+    }
+    const comments: BlockerPmComment[] = [];
+    if (row.comments !== undefined) {
+      if (!Array.isArray(row.comments)) {
+        throw new CommandError(
+          `Refusing unverifiable pm list --all output: item ${item.id} comments must be an array.`,
+        );
+      }
+      for (const comment of row.comments) {
+        if (!isJsonRecord(comment) || typeof comment.text !== "string") {
+          throw new CommandError(
+            `Refusing unverifiable pm list --all output: item ${item.id} comment rows must carry string text.`,
+          );
+        }
+        comments.push({ text: comment.text });
+      }
+    }
+    return {
+      ...validated,
+      dependencies,
+      comments,
+      ...(blockedReason === undefined ? {} : { blockedReason }),
+      ...(blockedBy === undefined ? {} : { blockedBy }),
+    };
+  });
+}
+
+/**
+ * Read every item through the complete SDK path and check its completeness certificate.
+ *
+ * The SDK disables extensions for the observational read. The shared item
+ * decoder also validates every blocker field consumed by this command.
+ *
+ * @param pmRoot - Workspace or tracker root accepted by the SDK.
+ * @returns The complete runtime-validated blocker item corpus.
+ * @throws On unreadable, incomplete, omitted, or invalid tracker data.
+ */
+export async function readBlockerPmItems(pmRoot: string): Promise<BlockerPmItem[]> {
+  const result = certifyCompleteListResult(await listAllComplete({ includeBody: true }, { pmRoot, cwd: pmRoot, noExtensions: true }));
+  return decodeBlockerPmItems(result);
+}
+
+// --- GraphQL state query ----------------------------------------------------
+
+/** Issue node fields selected by the blocker states query. */
+interface GraphqlBlockerIssue {
+  state?: string;
+  stateReason?: string | null;
+  closedAt?: string | null;
+  url?: string;
+}
+
+/** Pull-request node fields selected by the blocker states query. */
+interface GraphqlBlockerPullRequest {
+  state?: string;
+  mergedAt?: string | null;
+  closedAt?: string | null;
+  url?: string;
+}
+
+/** Response of one blocker states query: alias `rN` → aliased issue/PR nodes (or null for an inaccessible repo). */
+type GraphqlBlockerStatesData = Record<string, Record<string, GraphqlBlockerIssue | GraphqlBlockerPullRequest | null> | null>;
+
+/** One reference's aliases inside a blocker states query, for reading its response back. */
+export interface BlockerStatesQueryPlanEntry {
+  /** The reference the aliases answer. */
+  ref: ResolvedBlockerReference;
+  /** Alias of the reference's `repository(…)` block. */
+  repoAlias: string;
+  /** Alias of the reference's `issue(number:…)` field. */
+  issueAlias: string;
+  /** Alias of the reference's `pullRequest(number:…)` field. */
+  pullAlias: string;
+}
+
+/** The query plus the alias map needed to read its response back. */
+export interface BlockerStatesQueryPlan {
+  /** The literal GraphQL document to send. */
+  query: string;
+  /** Repos in alias order: `repos[i]` answers under alias `r${i}`. */
+  repos: string[];
+  /** Per-reference aliases, aligned with the document's fields. */
+  entries: BlockerStatesQueryPlanEntry[];
+}
+
+/** A reference whose repo hint resolved — the only kind GraphQL can query. */
+export interface ResolvedBlockerReference {
+  /** Stable dedupe/lookup key: `owner/repo#N`. */
+  key: string;
+  /** `owner/repo` (lowercase). */
+  repo: string;
+  /** Issue or pull-request number. */
+  number: number;
+  /** The syntactic form the reference was recognized in. */
+  form: BlockerReferenceForm;
+  /** The literal matched text (for report provenance). */
+  raw: string;
+}
+
+/**
+ * Build the batched GraphQL document resolving many references' live state.
+ *
+ * One query aliases each distinct repo (`r0: repository(owner:…, name:…)`), and
+ * within it each reference twice (`iN: issue(number:…)` plus `pN:
+ * pullRequest(number:…)`) — a number is either an issue or a PR and GraphQL
+ * resolves the wrong one to null, so one round-trip classifies every reference
+ * without guessing its kind. Repos are deduplicated and sorted, and each repo's
+ * references are sorted by number, so the document is a pure function of the
+ * reference SET, keeping recorded fixtures stable. The returned entries carry
+ * every reference's aliases so the response can be read back without
+ * re-deriving that ordering.
+ *
+ * @param refs - One batch's resolved references.
+ * @returns The query, its repo alias order, and the per-reference alias entries.
+ */
+export function buildBlockerStatesQueryPlan(refs: readonly ResolvedBlockerReference[]): BlockerStatesQueryPlan {
+  const byRepo = new Map<string, ResolvedBlockerReference[]>();
+  for (const ref of refs) {
+    const bucket = byRepo.get(ref.repo);
+    if (bucket) bucket.push(ref);
+    else byRepo.set(ref.repo, [ref]);
+  }
+  const repos = [...byRepo.keys()].sort();
+  const entries: BlockerStatesQueryPlanEntry[] = [];
+  const blocks = repos.map((repo, repoIndex) => {
+    const bucket = byRepo.get(repo)!.slice().sort((a, b) => a.number - b.number);
+    const fields = bucket.map((ref, refIndex) => {
+      entries.push({ ref, repoAlias: `r${repoIndex}`, issueAlias: `i${repoIndex}_${refIndex}`, pullAlias: `p${repoIndex}_${refIndex}` });
+      return `    i${repoIndex}_${refIndex}: issue(number: ${ref.number}) { state stateReason closedAt url }\n` +
+        `    p${repoIndex}_${refIndex}: pullRequest(number: ${ref.number}) { state mergedAt closedAt url }`;
+    });
+    const [owner, name] = repo.split("/");
+    return `  r${repoIndex}: repository(owner: "${owner}", name: "${name}") {\n${fields.join("\n")}\n  }`;
+  });
+  return { query: `query {\n${blocks.join("\n")}\n}`, repos, entries };
+}
+
+/**
+ * Split references into fixed-size batches.
+ *
+ * @param refs - References to batch.
+ * @param size - Maximum references per batch (at least 1).
+ * @returns Consecutive slices of the input, in order.
+ */
+export function chunkBlockerReferences(refs: readonly ResolvedBlockerReference[], size: number): ResolvedBlockerReference[][] {
+  if (!Number.isInteger(size) || size < 1) throw new CommandError("Blocker batch size must be a positive integer.");
+  const batches: ResolvedBlockerReference[][] = [];
+  for (let i = 0; i < refs.length; i += size) batches.push(refs.slice(i, i + size));
+  return batches;
+}
+
+/** Injectable GraphQL transport for the blocker states query (token closed over). */
+export type BlockerGraphQLTransport = (query: string) => Promise<GraphQLResponse<GraphqlBlockerStatesData>>;
+
+/**
+ * Map one reference's aliased issue/pull-request nodes to its live state.
+ *
+ * Null nodes for both the issue and the PR field mean GitHub would not resolve
+ * the reference — nonexistent, or present but invisible to the token; GitHub
+ * answers both identically, so both are reported `not_found`. An issue node
+ * wins over a PR node (only one of the two can exist for a number); an
+ * unrecognized state string is reported as an error rather than guessed.
+ *
+ * @param ref - The reference the nodes answer.
+ * @param issue - The aliased issue node, when GitHub resolved one.
+ * @param pullRequest - The aliased pull-request node, when GitHub resolved one.
+ * @returns The reference's live state.
+ */
+function mapBlockerReferenceNode(
+  ref: ResolvedBlockerReference,
+  issue: GraphqlBlockerIssue | null | undefined,
+  pullRequest: GraphqlBlockerPullRequest | null | undefined,
+): BlockerReferenceState {
+  const base = { repo: ref.repo, number: ref.number, form: ref.form, raw: ref.raw };
+  if (issue) {
+    if (issue.state === "OPEN") return { ...base, state: "open" };
+    if (issue.state === "CLOSED") {
+      return {
+        ...base,
+        state: "closed",
+        ...(issue.stateReason ? { state_reason: issue.stateReason } : {}),
+        ...(issue.closedAt ? { closed_at: issue.closedAt } : {}),
+        ...(issue.url ? { url: issue.url } : {}),
+      };
+    }
+    return { ...base, state: "error", error: "Unexpected GitHub issue state." };
+  }
+  if (pullRequest) {
+    if (pullRequest.state === "OPEN") return { ...base, state: "open" };
+    if (pullRequest.state === "MERGED") {
+      return {
+        ...base,
+        state: "merged",
+        ...(pullRequest.mergedAt ? { merged_at: pullRequest.mergedAt } : {}),
+        ...(pullRequest.closedAt ? { closed_at: pullRequest.closedAt } : {}),
+        ...(pullRequest.url ? { url: pullRequest.url } : {}),
+      };
+    }
+    if (pullRequest.state === "CLOSED") {
+      return {
+        ...base,
+        state: "closed",
+        ...(pullRequest.closedAt ? { closed_at: pullRequest.closedAt } : {}),
+        ...(pullRequest.url ? { url: pullRequest.url } : {}),
+      };
+    }
+    return { ...base, state: "error", error: "Unexpected GitHub pull request state." };
+  }
+  return { ...base, state: "not_found" };
+}
+
+/**
+ * Query the live state of every resolved reference, batched.
+ *
+ * References are batched ({@link BLOCKER_STATES_BATCH_SIZE} per request) through
+ * the shared client, auth, and rate-limit handling. A batch whose transport
+ * fails (no usable data — e.g. an invalid token or a total GraphQL error) marks
+ * every reference in it `error` and the run continues, so one inaccessible repo
+ * cannot blind the report on the others.
+ *
+ * @param refs - Every resolved reference across all items.
+ * @param transport - GraphQL transport (the production one closes over the token).
+ * @returns Live state by {@link BlockerReference.key}.
+ */
+export async function fetchBlockerReferenceStates(
+  refs: readonly ResolvedBlockerReference[],
+  transport: BlockerGraphQLTransport,
+): Promise<Map<string, BlockerReferenceState>> {
+  const states = new Map<string, BlockerReferenceState>();
+  for (const batch of chunkBlockerReferences(refs, BLOCKER_STATES_BATCH_SIZE)) {
+    const plan = buildBlockerStatesQueryPlan(batch);
+    let response: GraphQLResponse<GraphqlBlockerStatesData>;
+    try {
+      response = await transport(plan.query);
+    } catch {
+      for (const ref of batch) states.set(ref.key, { repo: ref.repo, number: ref.number, form: ref.form, raw: ref.raw, state: "error", error: "GitHub blocker state request failed." });
+      continue;
+    }
+    for (const entry of plan.entries) {
+      const failure = response.errors?.find((error) => error.type !== "NOT_FOUND" &&
+        (!error.path || (error.path[0] === entry.repoAlias &&
+          (error.path.length === 1 || error.path[1] === entry.issueAlias || error.path[1] === entry.pullAlias))));
+      if (failure) {
+        states.set(entry.ref.key, { ...entry.ref, state: "error", error: "GitHub rejected blocker state access." });
+        continue;
+      }
+      const repoBlock = response.data?.[entry.repoAlias];
+      if (repoBlock === undefined || (repoBlock !== null && (repoBlock[entry.issueAlias] === undefined || repoBlock[entry.pullAlias] === undefined))) {
+        states.set(entry.ref.key, { ...entry.ref, state: "error", error: "Incomplete GitHub blocker state response." });
+        continue;
+      }
+      states.set(entry.ref.key, mapBlockerReferenceNode(entry.ref, repoBlock?.[entry.issueAlias], repoBlock?.[entry.pullAlias]));
+    }
+  }
+  return states;
+}
+
+/**
+ * The revalidation verdict over one item's reference states.
+ *
+ * `cleared` requires every reference closed or merged; a partially cleared item
+ * (some blocker closed, some still open or unreadable) is reported as such
+ * rather than cleared, because an unreadable reference can always be open. An
+ * item with no references at all — a blocked_reason naming no GitHub reference —
+ * is `unresolvable`: its static text can never be revalidated automatically.
+ *
+ * @param states - The item's reference states.
+ * @returns The item's verdict.
+ */
+export function blockerItemVerdict(states: readonly BlockerReferenceState[]): BlockerVerdict {
+  if (states.length === 0) return "unresolvable";
+  let cleared = 0;
+  let open = 0;
+  for (const state of states) {
+    if (state.state === "closed" || state.state === "merged") cleared++;
+    else if (state.state === "open") open++;
+  }
+  if (cleared === states.length) return "cleared";
+  if (cleared > 0) return "partially_cleared";
+  if (open > 0) return "still_blocked";
+  return "unresolvable";
+}
+
+/** Marker a blockers comment carries so re-runs can skip it (`pm-github:blockers:…`). */
+export const BLOCKERS_COMMENT_MARKER_REGEX = /<!--\s*pm-github:blockers:([A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+)#(\d+):(closed|merged):([^\s<>]+)\s*-->/g;
+
+/**
+ * Build the idempotency marker for one cleared blocker reference.
+ *
+ * Identity is the reference PLUS its observed state (repo, number, closed or
+ * merged, and the exact timestamp): if the blocker later reopens and closes
+ * again, the changed timestamp makes the marker a new one and a fresh comment
+ * is appended, while an unchanged state never repeats.
+ *
+ * @param repo - The blocker's `owner/repo`.
+ * @param number - The blocker's number.
+ * @param disposition - `closed` or `merged`.
+ * @param at - The close/merge ISO timestamp.
+ * @returns The marker string embedded in the comment.
+ */
+export function blockerCommentMarker(repo: string, number: number, disposition: "closed" | "merged", at: string): string {
+  return `<!-- pm-github:blockers:${repo}#${number}:${disposition}:${at} -->`;
+}
+
+/**
+ * The disposition and timestamp one cleared reference is reported under.
+ *
+ * Shared by the comment builder and its idempotency marker so both always
+ * agree on whether a reference closed or merged, and on which date.
+ *
+ * @param state - The cleared reference's live state.
+ * @returns `closed`/`merged` plus the close or merge ISO timestamp (empty when GitHub sent none).
+ */
+function blockerDispositionAndDate(state: BlockerReferenceState): { disposition: "closed" | "merged"; at: string } {
+  const disposition = state.state === "merged" ? "merged" : "closed";
+  const at = (state.state === "merged" ? state.merged_at : state.closed_at) ?? "";
+  return { disposition, at };
+}
+
+/**
+ * Build the comment appended for one cleared blocker reference.
+ *
+ * Human text first (what the blocker was and when it closed, then the ask —
+ * revalidate), marker last, mirroring the GitHub comment sync's layout so stored
+ * comments stay scannable and machine-skippable.
+ *
+ * @param state - The cleared reference's live state.
+ * @returns The comment text.
+ */
+export function buildBlockerClearedComment(state: BlockerReferenceState): string {
+  const repo = state.repo ?? "";
+  const { disposition, at } = blockerDispositionAndDate(state);
+  const human = at === "" ? "an unknown date" : at.slice(0, 10);
+  const marker = blockerCommentMarker(repo, state.number, disposition, at === "" ? "unknown" : at);
+  return `Blocker ${repo}#${state.number} ${disposition} on ${human}; revalidate.\n\n${marker}`;
+}
+
+/**
+ * Collect the blocker markers already present in an item's comments.
+ *
+ * Mirrors {@link extractSyncedCommentIds}: each stored comment's text is scanned
+ * for the marker; hand-written comments simply contribute nothing.
+ *
+ * @param stored - The item's existing native comments.
+ * @returns The set of marker strings already present.
+ */
+export function extractBlockerCommentMarkers(stored: { text?: string }[]): Set<string> {
+  const markers = new Set<string>();
+  for (const entry of stored) {
+    if (!entry?.text) continue;
+    for (const m of entry.text.matchAll(BLOCKERS_COMMENT_MARKER_REGEX)) {
+      markers.add(blockerCommentMarker(m[1]!.toLowerCase(), Number(m[2]), m[3] as "closed" | "merged", m[4]!));
+    }
+  }
+  return markers;
+}
+
+/**
+ * Append one idempotent comment per cleared item reference on its item.
+ *
+ * Never unblocks, reopens, or edits anything — a cleared blocker does not
+ * always mean the work is unblocked, so the comment only names the closed
+ * blocker and asks a human to revalidate. Idempotent across re-runs and safe
+ * across concurrent runs: the per-item comment lock serializes the read-markers-then-append
+ * window, and a comment whose marker is already present is skipped, so the
+ * same reference state is never announced twice.
+ *
+ * @param pmRoot - Workspace root or pm data dir.
+ * @param cleared - Cleared reference states grouped by their item id.
+ * @param dryRun - Preview the comments without writing anything.
+ * @returns How many comments were added, skipped as already present, and not written.
+ * @internal Exported so the lock-contention and write-failure paths are directly
+ * testable without racing a real process; stripped from the published declaration.
+ */
+export async function appendBlockerComments(
+  pmRoot: string,
+  cleared: ReadonlyArray<{ itemId: string; states: readonly BlockerReferenceState[] }>,
+  dryRun: boolean,
+): Promise<{ added: number; skipped: number; failed: number }> {
+  let added = 0;
+  let skipped = 0;
+  let failed = 0;
+  for (const entry of cleared) {
+    const acquisition = await acquireImportLock(pmRoot, entry.itemId);
+    if (acquisition.status !== "acquired") {
+      console.error(
+        `${entry.itemId}: blocker comment skipped — comment-sync lock unavailable; re-run to record it`,
+      );
+      failed++;
+      continue;
+    }
+    const release = () => acquisition.lock.release();
+    try {
+      let existing: { text?: string }[];
+      try {
+        const list: CommentsResult = await pmCommentsFn(entry.itemId, {}, { pmRoot, cwd: pmRoot });
+        existing = list.comments;
+      } catch (err: unknown) {
+        console.error(`${entry.itemId}: could not read existing comments — ${errorMessage(err)}`);
+        failed++;
+        continue;
+      }
+      const markers = extractBlockerCommentMarkers(existing);
+      const pending = entry.states.filter((state) => {
+        const { disposition, at } = blockerDispositionAndDate(state);
+        return !markers.has(blockerCommentMarker(state.repo ?? "", state.number, disposition, at === "" ? "unknown" : at));
+      });
+      if (pending.length === 0) { skipped++; continue; }
+      const text = pending.map(buildBlockerClearedComment).join("\n\n");
+      if (dryRun) { added++; continue; }
+      try {
+        await pmCommentsFn(entry.itemId, { add: text, author: "pm-github" }, { pmRoot, cwd: pmRoot });
+        added++;
+      } catch (err: unknown) {
+        console.error(`${entry.itemId}: blocker comment failed — ${errorMessage(err)}`);
+        failed++;
+      }
+    } finally {
+      release();
+    }
+  }
+  return { added, skipped, failed };
+}
+
+/**
+ * Run `pm github blockers`: revalidate blocked items against the live state of their GitHub blockers.
+ *
+ * Reads the complete corpus through the SDK with a completeness certificate, selects blocked items plus non-terminal items with an external GitHub
+ * `blocked_by` dependency, parses their blocker text, queries each reference's
+ * live state in batched GraphQL, and reports a verdict per item. REPORT-ONLY:
+ * nothing is unblocked or edited; `--comment` only appends idempotent comments.
+ * Exit codes: 0 when nothing cleared, {@link EXIT_CODE.BLOCKERS_CLEARED} when
+ * something cleared or partially cleared, {@link EXIT_CODE.USAGE} for usage or a
+ * missing token, {@link EXIT_CODE.GENERIC_FAILURE} when any reference state query
+ * or any requested comment failed (takes precedence over 4).
+ *
+ * @param ctx - The host command-handler context.
+ * @returns The full report for the host renderer (JSON/TOON).
+ * @throws {@link CommandError} For usage or requested-item selection errors.
+ */
+async function runBlockers(ctx: CommandHandlerContext) {
+  const options = ctx.options;
+  const fallbackRepo = optionString(options, "repo");
+  if (fallbackRepo !== undefined && !BLOCKER_REPO_SHAPE.test(fallbackRepo)) {
+    throw new CommandError(
+      "Usage: pm github blockers [--repo owner/repo] [--ids pm-1,pm-2] [--comment] [--dry-run]  " +
+        "(--repo must be owner/repo)",
+      EXIT_CODE.USAGE,
+    );
+  }
+  const scopedIds = optionCsv(options, "ids");
+  if (optionProvided(options, "ids") && scopedIds.length === 0) {
+    throw new CommandError(
+      "--ids requires at least one pm item id (comma-separated), e.g. --ids pm-123,pm-456.",
+      EXIT_CODE.USAGE,
+    );
+  }
+  const withComments = optionEnabled(options, "comment");
+  const dryRun = optionEnabled(options, "dry-run", "dryRun");
+  const token = resolveGitHubToken();
+  if (!token) {
+    throw new CommandError(
+      "pm github blockers reads blocker state from GitHub and needs a token " +
+        "(set GITHUB_TOKEN/GH_TOKEN or run `gh auth login`).",
+      EXIT_CODE.USAGE,
+    );
+  }
+
+  const corpus = await readBlockerPmItems(ctx.pm_root);
+  const selected = requireRequestedItems(corpus, scopedIds);
+  const candidates = selectBlockerCandidates(selected);
+  const perItem = candidates.map((item) => ({ item, references: collectBlockerReferences(item, fallbackRepo) }));
+
+  const unique = new Map<string, ResolvedBlockerReference>();
+  for (const entry of perItem) {
+    for (const ref of entry.references) {
+      if (ref.repo !== undefined && !unique.has(ref.key)) {
+        unique.set(ref.key, { key: ref.key, repo: ref.repo, number: ref.number, form: ref.form, raw: ref.raw });
+      }
+    }
+  }
+  const stateByKey = await fetchBlockerReferenceStates([...unique.values()], (query) =>
+    githubGraphQLResponse<GraphqlBlockerStatesData>(token, query, {}));
+  const queried = [...stateByKey.values()];
+
+
+  const items: BlockerItemReport[] = perItem.map(({ item, references }) => {
+    const refStates: BlockerReferenceState[] = references.map((ref) =>
+      stateByKey.get(ref.key)
+      ?? { repo: ref.repo, number: ref.number, form: ref.form, raw: ref.raw, state: "unresolved" as const });
+    return {
+      id: item.id,
+      status: item.status,
+      verdict: blockerItemVerdict(refStates),
+      references: refStates,
+    };
+  });
+  const counts = {
+    cleared: items.filter((entry) => entry.verdict === "cleared").length,
+    partially_cleared: items.filter((entry) => entry.verdict === "partially_cleared").length,
+    still_blocked: items.filter((entry) => entry.verdict === "still_blocked").length,
+    unresolvable: items.filter((entry) => entry.verdict === "unresolvable").length,
+  };
+
+  let comment: BlockersReport["comment"];
+  if (withComments) {
+    const cleared = items
+      .filter((entry) => entry.verdict === "cleared")
+      .map((entry) => ({
+        itemId: entry.id,
+        states: entry.references,
+      }));
+    const receipt = await appendBlockerComments(ctx.pm_root, cleared, dryRun);
+    comment = { requested: true, dry_run: dryRun, ...receipt };
+  }
+
+  const report: BlockersReport = {
+    command: "github blockers",
+    generated_at: new Date().toISOString(),
+    items_read: selected.length,
+    candidates: candidates.length,
+    items,
+    counts,
+    ...(comment === undefined ? {} : { comment }),
+  };
+  const failed = queried.some((state) => state.state === "error") || (comment?.failed ?? 0) > 0;
+  if (failed) return { ...report, exit_code: EXIT_CODE.GENERIC_FAILURE };
+  if (counts.cleared > 0 || counts.partially_cleared > 0) return { ...report, exit_code: EXIT_CODE.BLOCKERS_CLEARED };
+  return report;
+}
+
+// ---------------------------------------------------------------------------
 // Search provider — reach GitHub from `pm search` for imported items
 // ---------------------------------------------------------------------------
 //
@@ -4328,7 +5262,7 @@ function graphqlUrl(): string {
 
 interface GraphQLResponse<T> {
   data?: T | null;
-  errors?: Array<{ message: string; type?: string }>;
+  errors?: Array<{ message: string; type?: string; path?: Array<string | number> }>;
 }
 
 // --- GraphQL response shapes (derived from the actual query strings below) ---
@@ -4465,11 +5399,16 @@ interface GraphqlProjectFieldsData {
 // `errors` array, so we surface those explicitly. The combined user+org queries
 // below intentionally return a partial error for the wrong owner type while the
 // right one still resolves; we only throw when there is NO usable data.
-async function githubGraphQL<T>(
+async function githubGraphQL<T>(token: string | undefined, query: string, variables: Record<string, unknown>): Promise<T> {
+  return (await githubGraphQLResponse<T>(token, query, variables)).data!;
+}
+
+/** Shared GraphQL client retaining partial errors for reference-level classification. */
+async function githubGraphQLResponse<T>(
   token: string | undefined,
   query: string,
   variables: Record<string, unknown>,
-): Promise<T> {
+): Promise<GraphQLResponse<T>> {
   if (!token) {
     throw new CommandError(
       "GitHub GraphQL requires a token (set GITHUB_TOKEN/GH_TOKEN or run `gh auth login`).",
@@ -4490,7 +5429,7 @@ async function githubGraphQL<T>(
       `GitHub GraphQL error${messages ? `: ${messages}` : ` (HTTP ${res.status})`}.`,
     );
   }
-  return parsed.data;
+  return parsed;
 }
 
 const STATUS_FIELD_GQL = `
@@ -5351,6 +6290,13 @@ const VALIDATE_FLAGS = [
   { long: "--repo", value_name: "owner/repo", description: "Also check this repo is accessible with the resolved token" },
 ];
 
+const BLOCKERS_FLAGS = [
+  { long: "--repo", value_name: "owner/repo", description: "Fallback repo for bare `#N`, `GH-N`, and `name#N` references that carry no owner (after the item's own gh: provenance repo)" },
+  { long: "--ids", value_name: "pm-1,pm-2", description: "Only revalidate these pm item IDs (comma-separated)" },
+  { long: "--comment", description: "Append one idempotent pm comment per cleared item (never unblocks or edits the item; re-runs skip an already-announced reference state)" },
+  { long: "--dry-run", description: "With --comment: preview the comments without writing anything (the report itself never mutates)" },
+];
+
 const PROJECT_LIST_FLAGS = [
   { long: "--owner", value_name: "login", description: "GitHub user or org login (or pass positionally)" },
 ];
@@ -5728,6 +6674,47 @@ export default defineExtension({
           );
         }
         return report;
+      },
+    });
+
+    // -----------------------------------------------------------------------
+    // command — `pm github blockers` (revalidate blocked items against the
+    // live state of their GitHub blockers). REPORT-ONLY: it never unblocks,
+    // reopens, or edits any item; --comment only appends idempotent comments.
+    // Exit codes: 0 nothing cleared; 4 something cleared or partially cleared
+    // (so CI and the scheduled sync can alert); 2 usage/missing token;
+    // 1 failure (any reference state query or requested comment failed, which
+    // takes precedence over 4).
+    // -----------------------------------------------------------------------
+    api.registerCommand({
+      name: "github blockers",
+      description:
+        "Revalidate blocked items against the live state of the GitHub issues and pull requests their " +
+        "blocked_reason, description, comments, and external blocked_by dependencies name " +
+        "(owner/repo#N, bare #N vs the item's repo or --repo, full issue/PR URLs, GH-N). " +
+        "Queries current state (open, closed with reason, merged, not found) in batched GraphQL and reports a " +
+        "verdict per item: cleared, partially_cleared, still_blocked, or unresolvable. NEVER auto-unblocks. " +
+        "Read-only; --comment appends one idempotent pm comment per cleared item. " +
+        "Exits 4 when something is cleared so CI and the scheduled sync can alert; use --json for machine output.",
+      intent: "revalidate blocked items against the live state of their GitHub blockers",
+      examples: [
+        "pm github blockers",
+        "pm github blockers --json",
+        "pm github blockers --repo unbraind/pm-cli",
+        "pm github blockers --ids pm-123,pm-456 --json",
+        "pm github blockers --comment",
+        "pm github blockers --comment --dry-run",
+      ],
+      flags: BLOCKERS_FLAGS,
+      failure_hints: [
+        "Set GITHUB_TOKEN/GH_TOKEN or run `gh auth login`; blockers reads live GitHub state.",
+        "Pass --repo owner/repo so bare `#N`, `GH-N`, and `name#N` references resolve; imported items resolve against their own provenance repo.",
+        "Exit code 4 means at least one blocked item has a cleared or partially cleared blocker; nothing was changed — revalidate the item by hand.",
+        "--comment never unblocks: it only appends one idempotent comment per cleared item.",
+        "Use --ids <pm-1,pm-2> to scope revalidation; unknown IDs fail fast.",
+      ],
+      async run(ctx: CommandHandlerContext) {
+        return runBlockers(ctx);
       },
     });
 

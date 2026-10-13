@@ -120,6 +120,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: ./node_modules/.bin/pm github validate --repo "${REPOSITORY}" --json | jq -e ' .ok == true and .repo_accessible == true '
 
+      # Report live blocker state without writing comments or changing status.
+      # Code 4 is an alert receipt; read/auth failures stop this run.
+      - name: Revalidate GitHub blockers (report only)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          blocker_status=0
+          ./node_modules/.bin/pm github blockers --repo "${REPOSITORY}" --json > "${RUNNER_TEMP}/pm-github-blockers.json" || blocker_status=$?
+          cat "${RUNNER_TEMP}/pm-github-blockers.json"
+          case "${blocker_status}" in
+            0) ;;
+            4) echo "::warning::GitHub blockers have cleared; revalidate the reported pm items." ;;
+            *) exit "${blocker_status}" ;;
+          esac
+
       - name: Preview GitHub to pm plan
         env:
           GH_TOKEN: ${{ github.token }}
