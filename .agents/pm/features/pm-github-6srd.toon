@@ -2,12 +2,17 @@ id: pm-github-6srd
 title: Select GitHub issue imports and cap list volume
 description: Fetch explicitly selected issue numbers through individual REST endpoints; validate conflicts and missing issues before writes; bound newest-updated list imports with truncation receipts.
 type: Feature
-status: in_progress
+status: closed
 priority: 1
 tags: []
 created_at: "2026-10-12T13:25:14.333Z"
-updated_at: "2026-10-12T13:57:05.635Z"
+updated_at: "2026-10-13T22:22:41.926Z"
+closed_at: "2026-10-13T22:22:41.904Z"
+completed_at: "2026-10-13T22:22:41.904Z"
 author: codex-sol
+resolution: Implemented and merged in #116 (2d52ed1).
+expected_result: The change described by this item is on main.
+actual_result: "Merged in #116 as 2d52ed1; checks successful at head 85acd18: CodeQL, codeql, semgrep-cloud-platform/scan, test (22), test (26)."
 comments[7]{created_at,author,text}:
   "2026-10-12T13:25:56.037Z",codex-sol,"Plan: use individual REST issue endpoints for explicit selection, validate all numbers before tracker mutation, preserve the shared comment/dependency/atomic/gate pipeline and provenance idempotency. List limits request newest-updated order and stop after one extra eligible issue establishes truncation. Add recorded public fleet REST fixtures and real scratch-tracker regressions. Keep PR #115 blocker code outside this diff."
   "2026-10-12T13:34:57.011Z",codex-sol,"Implemented selection prefetch and missing-number/PR refusal before writes, conflict validation, and bounded newest-updated list fetches with limit/truncated receipts. Recorded public REST fixtures cover pm-web #189/#96/PR #175 and pm-slack-standup #113. Initial focused run passed 23/26; fixture assertions needed existing body trimming and native-comment reads, and CLI acceptance now installs a packed archive because directory installs hit the SDK source-scan ceiling. Type checking, documentation, lint, zero-duplication and privacy gates pass."
@@ -29,4 +34,5 @@ tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,
 docs[2]{path,scope}:
   README.md,project
   test/fixtures/import-selection/README.md,project
+close_reason: "Delivered by #116 \"feat: select GitHub issue imports and cap list volume\" (merged as 2d52ed1). Checks successful at the PR head 85acd18: CodeQL, codeql, semgrep-cloud-platform/scan, test (22), test (26)."
 body: ""

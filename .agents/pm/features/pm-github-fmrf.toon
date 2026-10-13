@@ -2,12 +2,17 @@ id: pm-github-fmrf
 title: Revalidate blocked items against the live state of their GitHub blockers
 description: "Add `pm github blockers`: re-read every blocked item (plus non-terminal items whose blocked_by dependency targets an external GitHub reference), parse blocked_reason/description/comments for GitHub references (owner/repo#N, bare #N vs the item repo or --repo, full issue/PR URLs, GH-N), query their current state via batched GraphQL, and report a verdict (cleared / partially_cleared / still_blocked / unresolvable). Report-only: never auto-unblock; --comment appends one idempotent pm comment per cleared item. Exit 0 when nothing cleared, a documented non-zero code when something cleared so CI and the scheduled sync can alert."
 type: Feature
-status: in_progress
+status: closed
 priority: 2
 tags: []
 created_at: "2026-10-12T10:46:45.720Z"
-updated_at: "2026-10-13T21:08:24.225Z"
+updated_at: "2026-10-13T22:22:39.478Z"
+closed_at: "2026-10-13T22:22:39.469Z"
+completed_at: "2026-10-13T22:22:39.469Z"
 author: pi-gh-blockers
+resolution: Implemented and merged in #115 (1315818).
+expected_result: The change described by this item is on main.
+actual_result: "Merged in #115 as 1315818; checks successful at head 9f019c8: CodeQL, codeql, semgrep-cloud-platform/scan, test (22), test (26)."
 comments[37]{created_at,author,text}:
   "2026-10-12T10:46:49.828Z",pi-gh-blockers,"Claimed and started. Companion item: https://github.com/unbraind/pm-cli-website/blob/main/.agents/pm/features/pm-cli-website-5o9j.toon — this implements the blocker-revalidation capability the companion item calls for, in pm-github where the GitHub client, auth handling and provenance model already live. Design summary: complete pm list read (same receipts as import), candidate selection = status blocked OR non-terminal with an external GitHub blocked_by dependency, reference parsing across blocked_reason/description/comments, batched GraphQL state queries, report-only verdicts, idempotent --comment, wired into the reusable scheduled sync workflow as a report-only step."
   "2026-10-12T10:55:14.500Z",pi-gh-blockers,"Implementation drafted in the package worktree: complete-read refactor (runCompletePmList shared by readPmItems and the new readBlockerPmItems), BlockerPmItem decoder validating blocked_reason/blocked_by/dependencies/comments on top of the existing complete-corpus receipts, reference parser (URL, owner/repo#N, GH-N, name#N, bare #N; gitlab/jira/linear locators masked, github: locator scheme unwrapped), hint resolution against the item's gh: provenance repo then --repo, batched GraphQL state query (issue+pullRequest per number, repos deduped+sorted so recorded fixtures stay stable), verdict function, idempotent --comment with per-item lock, report + exit codes (0 nothing cleared, 4 cleared, 2 usage/token, 1 total state failure). Real GraphQL fixtures recorded from api.github.com: unbraind/pm-cli#854 closed 2026-08-01 (the motivating blocker), #1246 open, PR #34 merged, #999999 not found, plus a repository-not-found and a data-null error response."
@@ -101,4 +106,5 @@ docs[3]:
     note: README documents the corrected exit-code contract (1 takes precedence over 4); docstring and registration comment now match it
   - path: test/fixtures/blockers/README.md
     scope: project
+close_reason: "Delivered by #115 \"feat: revalidate live GitHub blockers without unblocking items\" (merged as 1315818). Checks successful at the PR head 9f019c8: CodeQL, codeql, semgrep-cloud-platform/scan, test (22), test (26)."
 body: ""
