@@ -43,7 +43,7 @@ const harnessPromise: Promise<ExtensionTestHarness> =
 const PM_BIN = process.platform === "win32" ? "pm.cmd" : "pm";
 // Real scratch trackers must not inherit unrelated globally installed extensions.
 const fixtureGlobalRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-gate-global-"));
-test.after(() => fs.rmSync(fixtureGlobalRoot, { recursive: true, force: true }));
+test.after(() => fs.rmSync(fixtureGlobalRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
 const PM_SPAWN_OPTS = { encoding: "utf-8" as const, shell: process.platform === "win32",
   env: { ...process.env, PM_GLOBAL_PATH: fixtureGlobalRoot } };
 const SYNC_BRANCH = "automation/pm-github-sync";
