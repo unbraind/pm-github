@@ -50,7 +50,7 @@
     "@babel/eslint-parser": "8.0.7",
     "@babel/plugin-syntax-typescript": "8.0.3",
     "@types/node": "26.6.5",
-    "@unbrained/pm-cli": "2026.10.9",
+    "@unbrained/pm-cli": "2026.10.13",
     "c8": "12.0.0",
     "eslint": "10.12.0",
     "jscpd": "5.4.1",
