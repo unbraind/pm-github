@@ -351,6 +351,8 @@ The `gate` receipt reports the verdict, scanned file count, findings, and allowl
 
 Fleet repos sync their issues into pm through ONE audited implementation: the reusable `workflow_call` workflow at [`.github/workflows/pm-github-sync.yml`](.github/workflows/pm-github-sync.yml). Its safety order is validate → dry-run plan → **gated import** → verify the repeat import is a no-op → caller post-import script → **full changed-path scope check and privacy gate** → strict health → repeat scope check and scan immediately before commit/push/review PR → caller CI dispatch. The default `post-import-script` is `changelog:full`, invoked with `npm run --if-present`: it runs the caller's own generator when present, so imported closed issues and their changelog entries land in the same commit. Actions are pinned by commit SHA. The job requests `contents: write`, `pull-requests: write`, `issues: read`, and `actions: write` for dispatch.
 
+When the tracker has no changes, regenerated `CHANGELOG.md` drift is discarded and the run emits a notice that the caller's own `changelog:check` owns that drift. The sync closes any owned open review PR and exits successfully without pushing or dispatching CI. Changelog changes are published only together with tracker changes.
+
 The explicit allowed scope for changed paths is:
 
 - Files beneath the SDK-resolved repository-local pm tracker, excluding its `extensions/`, `locks/`, and `checkpoints/` runtime directories. The extension setup files `settings.json` and `history/_workspace.jsonl` are permitted during setup, then restored before publication and excluded from both the scan and commit.

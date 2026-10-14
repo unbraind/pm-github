@@ -905,6 +905,9 @@ fs.writeFileSync("CHANGELOG.md", "# Changelog\\n- " + items[0] + "\\n");
       const publishedChangelog = spawnSync("git", ["--git-dir", bare, "show", `${SYNC_BRANCH}:CHANGELOG.md`], { encoding: "utf8" });
       assert.equal(publishedChangelog.status, 0);
       assert.match(publishedChangelog.stdout, /- .*\.toon/);
+      const publishedPaths = git(["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"]).stdout.trim().split("\n");
+      assert.ok(publishedPaths.includes("CHANGELOG.md"), "the sync commit includes regenerated changelog output");
+      assert.ok(publishedPaths.some(file => /^\.agents\/pm\/issues\/.*\.toon$/.test(file)), "the same sync commit includes tracker items");
       assert.deepEqual(fs.readFileSync(env.REVIEW_ACTIONS! + ".dispatch", "utf8").trim().split("\n"),
         ["ci.yml", "codeql.yaml"].map(file => `workflow run ${file} -R acme/widgets --ref ${SYNC_BRANCH}`));
       assert.match(result.stdout, /::notice::Skipping missing caller workflow: missing.yml/);
@@ -957,11 +960,13 @@ test("the workflow never edits a fork PR sharing the sync branch name", async ()
  * GitHub, so the run proposes no change ("no PR is needed").
  *
  * @param prListOverrides - Environment shaping which open PRs `gh pr list` lists.
+ * @param changelogState - Optional caller changelog drift to regenerate after a no-op import.
  * @returns The exit code, output, recorded review-PR actions and remote refs.
  */
-async function replayNoChangeSequence(prListOverrides: NodeJS.ProcessEnv): Promise<{
+async function replayNoChangeSequence(prListOverrides: NodeJS.ProcessEnv, changelogState?: "stale" | "absent"): Promise<{
   code: number | null; stdout: string; stderr: string;
   reviewActions: string[] | undefined; refs: string[];
+  status: string; changelog: string | undefined; published: boolean;
 }> {
   const { root, base, bare, git } = initSyncRepo();
   try {
@@ -972,6 +977,13 @@ async function replayNoChangeSequence(prListOverrides: NodeJS.ProcessEnv): Promi
     settings.extensions.enabled = ["pm-other"];
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
     assert.equal(git(["commit", "-qam", "restrict enabled extensions"]).status, 0);
+    if (changelogState) {
+      fs.writeFileSync(path.join(root, "generate-changelog.cjs"), 'require("node:fs").writeFileSync("CHANGELOG.md", "# Fresh changelog\\n");\n');
+      fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ scripts: { "changelog:full": "node generate-changelog.cjs" } }));
+      if (changelogState === "stale") fs.writeFileSync(path.join(root, "CHANGELOG.md"), "# Stale changelog\n");
+      assert.equal(git(["add", "--", "generate-changelog.cjs", "package.json", ...(changelogState === "stale" ? ["CHANGELOG.md"] : [])]).status, 0);
+      assert.equal(git(["commit", "-qm", "caller changelog regeneration fixture"]).status, 0);
+    }
     assert.equal(git(["push", "-q", bare, "main"]).status, 0);
     const env = await prepareWorkflowFixture(root, base);
     assert.notEqual(git(["diff", "--quiet", "--", ".agents/pm/settings.json"]).status, 0, "precondition: install edits settings.json");
@@ -987,7 +999,9 @@ async function replayNoChangeSequence(prListOverrides: NodeJS.ProcessEnv): Promi
     const actionsPath = env.REVIEW_ACTIONS!;
     return { code: result!.code, stdout: result!.stdout, stderr: result!.stderr,
       reviewActions: fs.existsSync(actionsPath) ? fs.readFileSync(actionsPath, "utf8").trim().split("\n") : undefined,
-      refs: remoteRefs(bare) };
+      refs: remoteRefs(bare), status: git(["status", "--porcelain"]).stdout.trim(),
+      changelog: fs.existsSync(path.join(root, "CHANGELOG.md")) ? fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8") : undefined,
+      published: fs.readFileSync(env.GITHUB_ENV!, "utf8").includes("SYNC_PUBLISHED=true") };
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 }
 
@@ -1013,6 +1027,30 @@ test("a no-change run with only a fork PR sharing the branch name closes nothing
   assert.match(run.stdout, /no PR is needed/);
   assert.equal(run.reviewActions, undefined, "a foreign fork PR is never touched");
   assert.deepEqual(run.refs, ["refs/heads/main"]);
+});
+
+test("a no-op import discards stale changelog drift and leaves a clean checkout without publication", async () => {
+  for (const ownPr of [undefined, "1"]) {
+    const run = await replayNoChangeSequence({ OWN_OPEN_PR: ownPr }, "stale");
+    assert.equal(run.code, 0, run.stderr + "\n" + run.stdout);
+    assert.match(run.stdout, /::notice::.*changelog differs from a fresh regeneration.*changelog:check owns that/);
+    assert.equal(run.changelog, "# Stale changelog\n", "restore the committed caller changelog");
+    assert.equal(run.status, "", "both index and working tree are clean");
+    assert.deepEqual(run.reviewActions, ownPr ? ["close"] : undefined);
+    assert.deepEqual(run.refs, ["refs/heads/main"], "the no-op run does not push");
+    assert.equal(run.published, false, "the no-op run does not dispatch caller CI");
+  }
+});
+
+test("a no-op import discards a newly generated changelog absent from HEAD", async () => {
+  const run = await replayNoChangeSequence({}, "absent");
+  assert.equal(run.code, 0, run.stderr + "\n" + run.stdout);
+  assert.match(run.stdout, /::notice::.*changelog:check owns that/);
+  assert.equal(run.changelog, undefined);
+  assert.equal(run.status, "");
+  assert.equal(run.reviewActions, undefined);
+  assert.deepEqual(run.refs, ["refs/heads/main"]);
+  assert.equal(run.published, false);
 });
 
 test("packed installed CLI repeats a completed gated import under native Bun within 45 seconds", { timeout: 180_000 }, async () => {

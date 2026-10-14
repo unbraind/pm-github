@@ -293,7 +293,18 @@ jobs:
               gh pr close "${number}" -R "${REPOSITORY}" --comment "The tracker already matches GitHub, so this sync no longer proposes a change; closing this review PR."
             fi
           }
-          if [[ ! -s "${RUNNER_TEMP}/pm-github-sync-commit-paths" ]]; then
+          if git diff --cached --quiet -- "${sync_scope[0]}" "${sync_scope[@]:2}"; then
+            # Changelog drift alone belongs to the caller's changelog check;
+            # publish regenerated output only alongside tracker changes.
+            if ! git diff --cached --quiet -- CHANGELOG.md; then
+              if git cat-file -e HEAD:CHANGELOG.md 2>/dev/null; then
+                git --literal-pathspecs restore --source=HEAD --staged --worktree -- CHANGELOG.md
+              else
+                git --literal-pathspecs rm -q --cached --ignore-unmatch -- CHANGELOG.md
+                rm -f -- CHANGELOG.md
+              fi
+              echo "::notice::The caller's changelog differs from a fresh regeneration; the repository's own changelog:check owns that drift. Discarding CHANGELOG.md because no tracker item changed."
+            fi
             restore_sync_setup
             echo "GitHub issues already match the pm tracker; no PR is needed."
             # A stale own review PR would still look actionable although this
