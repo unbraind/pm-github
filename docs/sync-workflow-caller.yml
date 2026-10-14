@@ -1,4 +1,7 @@
-# Replace release placeholders after the gated extension is published.
+# Repin both placeholders to the release containing changelog regeneration and CI dispatch.
+# Each configured CI workflow must enable workflow_dispatch and produce its required
+# check names on that event. Missing files are skipped with a notice.
+# Parked action_required PR runs are reported with URLs; dispatch runs separately.
 # Repository setup: Settings -> Actions -> General -> Workflow permissions must allow
 # read and write permissions and enable "Allow GitHub Actions to create and approve
 # pull requests" (off by default for new personal repositories; an organization can
@@ -12,8 +15,12 @@ permissions:
   contents: write
   pull-requests: write
   issues: read
+  actions: write # Required to dispatch the caller CI after opening/updating the PR.
 jobs:
   gated-sync:
     uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@RELEASE_COMMIT_SHA
     with:
       pm-github-version: "RELEASE_VERSION"
+      # Defaults shown explicitly; use "" to disable either optional action.
+      post-import-script: "changelog:full"
+      ci-workflows: "ci.yml" # Whitespace-separated filenames, e.g. "ci.yml codeql.yml".

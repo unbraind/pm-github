@@ -4,7 +4,8 @@
 // the adversarial cases prove a malicious issue body, comment, email, or host
 // path fails the gated import step so nothing is ever committed or pushed to
 // the remote. The positive case proves the whole sequence: plan → gated import
-// → strict health → commit/push → a second gated run that is a no-op for item
+// → caller changelog → final gate → strict health → commit/push → CI dispatch
+// → a second gated run that is a no-op for item
 // identity via the provenance tag.
 //
 // Malicious fixtures are syntactically valid but FAKE and assembled from parts
@@ -591,9 +592,11 @@ test("the reusable sync workflow is a workflow_call with explicit pinned inputs"
   assert.match(workflow, /^on:\n  workflow_call:/m);
   assert.match(workflow, /pm-github-version:\n\s+description:[^\n]+\n\s+type: string\n\s+required: true/);
   assert.match(workflow, /repository:\n\s+description:/);
+  assert.match(workflow, /post-import-script:[\s\S]*?default: "changelog:full"/);
+  assert.match(workflow, /ci-workflows:[\s\S]*?default: "ci.yml"/);
   assert.doesNotMatch(workflow, /^on:\n  schedule:/m, "the schedule stays with the caller");
-  // Job permissions cover issue reads, branch pushes and review PR writes.
-  const permissions = /^    permissions:\n      contents: write\n      pull-requests: write\n      issues: read\n/m;
+  // Job permissions cover issue reads, branch pushes, review PR writes and dispatch.
+  const permissions = /^    permissions:\n      contents: write\n      pull-requests: write\n      issues: read\n      actions: write\n/m;
   assert.match(workflow, permissions);
   assert.ok(
     (workflow.match(/^    permissions:/gm) ?? []).length === 1,
@@ -622,7 +625,11 @@ test("the gated import runs after validate/plan and before health, commit, and p
   const install = stepOffset("Install pinned pm-github extension");
   assert.ok(install < validate, "the pinned extension is installed before it is used");
   assert.ok(validate < plan && plan < gated, "validate and dry-run plan precede the gated import");
-  assert.ok(gated < health && health < commit, "the gate precedes health, commit, and push");
+  const postImport = stepOffset("Run caller post-import script");
+  const finalGate = stepOffset("Gate tracker and regenerated changelog");
+  const dispatch = stepOffset("Dispatch caller CI and report parked runs");
+  assert.ok(gated < postImport && postImport < finalGate && finalGate < health && health < commit && commit < dispatch,
+    "post-import output is gated before health/publication and CI follows the PR");
   assert.match(workflow, /import "\$\{REPOSITORY\}" --state all --atomic --gate/);
   assert.match(workflow, /pm health --strict-exit/);
   // No staged catch-all that could commit unscanned content.
@@ -651,6 +658,7 @@ test("the caller example pins the reusable workflow and the extension version", 
   );
   assert.match(callerExample, /pm-github-version: "RELEASE_VERSION"/);
   assert.match(callerExample, /^permissions:\n  contents: write\n  pull-requests: write\n/m);
+  assert.match(callerExample, /^  actions: write/m);
   const lines = callerExample.split("\n").filter((line) => line.trim() !== "" && !line.startsWith("#"));
   assert.ok(lines.length <= 40, "the caller stays a small, reviewable file");
 });
@@ -696,6 +704,7 @@ function packWorkflowCandidate(packageRoot: string, destination: string, env: No
 
 /** Install the candidate and create a local gh PR receipt boundary, never a network writer. */
 async function prepareWorkflowFixture(root: string, base: string): Promise<NodeJS.ProcessEnv> {
+  if (!fs.existsSync(path.join(root, "package.json"))) fs.writeFileSync(path.join(root, "package.json"), "{}\n");
   const bin = path.join(root, "node_modules", ".bin");
   fs.mkdirSync(bin, { recursive: true });
   fs.symlinkSync(path.resolve(import.meta.dirname, "../node_modules/.bin/pm"), path.join(bin, "pm"));
@@ -732,12 +741,23 @@ case "$1 $2" in
       shift
     done
     ;;
+  "workflow run")
+    [[ -s "\${REVIEW_RECEIPT}" ]] || exit 2
+    git ls-remote --exit-code origin "refs/heads/\${SYNC_BRANCH}" >/dev/null || exit 2
+    printf '%s\\n' "$*" >> "\${REVIEW_ACTIONS}.dispatch"
+    exit "\${DISPATCH_STATUS:-0}"
+    ;;
+  "run list")
+    printf '%s\\n' "$*" >> "\${REVIEW_ACTIONS}.runs"
+    printf '%s\\n' "\${PARKED_RUN_URL:-}"
+    ;;
   *) exit 1 ;;
 esac
 `, { mode: 0o755 });
   const env = { ...process.env, PATH: tools + path.delimiter + bin + path.delimiter + process.env.PATH,
     GH_TOKEN: "synthetic-test-token", GITHUB_TOKEN: "synthetic-test-token", PM_AUTHOR: "codex-sol",
     PM_GLOBAL_PATH: fixtureGlobalRoot, PM_PATH: path.join(root, ".agents", "pm"), REPOSITORY: "acme/widgets", CALLING_REPOSITORY: "acme/widgets",
+    POST_IMPORT_SCRIPT: "changelog:full", CI_WORKFLOWS: "ci.yml",
     PM_GITHUB_VERSION: "2026.10.4", SYNC_BRANCH, SYNC_LEASE: "", RUNNER_TEMP: base,
     GITHUB_ENV: path.join(base, "job-env"), REVIEW_RECEIPT: path.join(base, "review.md"), REVIEW_ACTIONS: path.join(base, "review-actions") };
   const packageRoot = path.resolve(import.meta.dirname, "..");
@@ -753,7 +773,8 @@ esac
 }
 
 const WORKFLOW_IMPORT_SEQUENCE = ["Validate GitHub access", "Revalidate GitHub blockers (report only)", "Preview GitHub to pm plan", "Gated GitHub to pm import",
-  "Verify repeat import is a no-op", "Verify strict pm health", "Commit gated sync changes and open review PR"] as const;
+  "Verify repeat import is a no-op", "Run caller post-import script", "Gate tracker and regenerated changelog",
+  "Verify strict pm health", "Commit gated sync changes and open review PR", "Dispatch caller CI and report parked runs"] as const;
 
 test("workflow packing isolates prepare from the caller tracker in clones and linked worktrees", async () => {
   const { root, base } = initSyncRepo();
@@ -841,9 +862,23 @@ test("the executable reusable workflow never publishes each adversarial fixture"
 test("the executable reusable workflow pushes only a clean import and creates or updates linked reviews", async () => {
   const { root, base, bare, git } = initSyncRepo();
   try {
+    fs.mkdirSync(path.join(root, ".github/workflows"), { recursive: true });
+    for (const file of ["ci.yml", "codeql.yaml"]) fs.writeFileSync(path.join(root, ".github/workflows", file), "on: workflow_dispatch\n");
+    fs.writeFileSync(path.join(root, "generate-changelog.cjs"), `const fs = require("node:fs");
+const items = fs.readdirSync(".agents/pm/issues").filter(file => file.endsWith(".toon"));
+if (items.length !== 1) process.exit(1);
+fs.writeFileSync("CHANGELOG.md", "# Changelog\\n- " + items[0] + "\\n");
+`);
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ scripts: { "changelog:full": "node generate-changelog.cjs" } }));
+    fs.writeFileSync(path.join(root, "CHANGELOG.md"), "# Changelog\n");
+    assert.equal(git(["add", "--", ".github/workflows", "generate-changelog.cjs", "package.json", "CHANGELOG.md"]).status, 0);
+    assert.equal(git(["commit", "-qm", "caller changelog and dispatchable CI"]).status, 0);
+    assert.equal(git(["push", "-q", "origin", "main"]).status, 0);
     const env = await prepareWorkflowFixture(root, base);
+    env.CI_WORKFLOWS = "ci.yml missing.yml\ncodeql.yaml";
+    env.PARKED_RUN_URL = "https://example.invalid/actions/runs/123";
     assert.equal(git(["switch", "-c", SYNC_BRANCH]).status, 0);
-    const handle = githubHandler([issue(1, "Synthetic issue", "Reviewed public body.")]);
+    const handle = githubHandler([{ ...issue(1, "Synthetic issue", "Reviewed public body."), state: "closed" }]);
     await withMockGithub((req, res, url, server) => {
       if (req.url === "/repos/acme/widgets") jsonResponse(res, 200, { private: false });
       else handle(req, res, url, server);
@@ -857,11 +892,21 @@ test("the executable reusable workflow pushes only a clean import and creates or
       // While the PR is open the main link may not resolve yet, so each item
       // also links its proposed version on the sync branch.
       assert.ok(review.includes(`([proposed](https://github.com/acme/widgets/blob/${SYNC_BRANCH}/.agents/pm/issues/`), review);
+      assert.match(fs.readFileSync(env.GITHUB_ENV!, "utf8"), /^SYNC_PUBLISHED=true$/m, "subsequent Actions steps see publication success");
       const lease = git(["rev-parse", "HEAD"]).stdout.trim();
+      const publishedChangelog = spawnSync("git", ["--git-dir", bare, "show", `${SYNC_BRANCH}:CHANGELOG.md`], { encoding: "utf8" });
+      assert.equal(publishedChangelog.status, 0);
+      assert.match(publishedChangelog.stdout, /- .*\.toon/);
+      assert.deepEqual(fs.readFileSync(env.REVIEW_ACTIONS! + ".dispatch", "utf8").trim().split("\n"),
+        ["ci.yml", "codeql.yaml"].map(file => `workflow run ${file} -R acme/widgets --ref ${SYNC_BRANCH}`));
+      assert.match(result.stdout, /::notice::Skipping missing caller workflow: missing.yml/);
+      assert.ok(result.stdout.includes(`::notice::A pull-request workflow requires maintainer approval: ${env.PARKED_RUN_URL}`));
+      assert.ok(fs.readFileSync(env.REVIEW_ACTIONS! + ".runs", "utf8").includes(`--commit ${lease} --status action_required`));
       // Each Actions job starts from a fresh checkout, without old local journals.
       const nextRoot = path.join(base, "next-work");
       assert.equal(spawnSync("git", ["clone", "--branch", "main", bare, nextRoot], { encoding: "utf8" }).status, 0);
       const nextEnv = await prepareWorkflowFixture(nextRoot, base);
+      nextEnv.CI_WORKFLOWS = "ci.yml codeql.yaml";
       assert.equal(spawnSync("git", ["-C", nextRoot, "switch", "-c", SYNC_BRANCH]).status, 0);
       assert.equal(spawnSync("git", ["-C", nextRoot, "config", "user.name", "Fixture"]).status, 0);
       assert.equal(spawnSync("git", ["-C", nextRoot, "config", "user.email", "fixture@users.noreply.github.com"]).status, 0);
@@ -869,6 +914,8 @@ test("the executable reusable workflow pushes only a clean import and creates or
         PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE, SYNC_LEASE: lease, OWN_OPEN_PR: "1" });
       assert.equal(update.code, 0, update.stderr + "\n" + update.stdout);
       assert.deepEqual(fs.readFileSync(env.REVIEW_ACTIONS!, "utf8").trim().split("\n"), ["create", "edit"]);
+      assert.equal(fs.readFileSync(env.REVIEW_ACTIONS! + ".dispatch", "utf8").trim().split("\n").length, 4,
+        "both PR creation and update dispatch caller CI");
     });
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
@@ -1033,6 +1080,8 @@ test("workflow input shell diagnoses a foreign repository and branch outside aut
   for (const [input, value, diagnostic] of [
     ["REPOSITORY", "acme/other", "::error::repository must equal the calling repository (acme/widgets)."],
     ["SYNC_BRANCH", "feature/sync", "::error::sync-branch must start with automation/."],
+    ["POST_IMPORT_SCRIPT", "npm run changelog:full", "::error::post-import-script must be an npm script name, not a shell command."],
+    ["POST_IMPORT_SCRIPT", "--version", "::error::post-import-script must be an npm script name, not a shell command."],
   ] as const) {
     const result = await executeWorkflow(workflowShell(["Validate sync inputs"]), repoRoot, {
       ...process.env, REPOSITORY: "acme/widgets", CALLING_REPOSITORY: "acme/widgets", SYNC_BRANCH, PM_GITHUB_VERSION: "2026.10.6",
@@ -1046,7 +1095,7 @@ test("workflow input shell diagnoses a foreign repository and branch outside aut
 test("workflow credentials stay out of install steps and checkout persistence", () => {
   const steps = workflow.split(/\n      - name: /).slice(1);
   const tokenSteps = steps.filter(step => step.includes("GH_TOKEN:")).map(step => step.split("\n")[0]);
-  assert.deepEqual(tokenSteps, ["Validate GitHub access", "Revalidate GitHub blockers (report only)", "Preview GitHub to pm plan", "Gated GitHub to pm import", "Verify repeat import is a no-op", "Commit gated sync changes and open review PR"]);
+  assert.deepEqual(tokenSteps, ["Validate GitHub access", "Revalidate GitHub blockers (report only)", "Preview GitHub to pm plan", "Gated GitHub to pm import", "Verify repeat import is a no-op", "Commit gated sync changes and open review PR", "Dispatch caller CI and report parked runs"]);
   assert.doesNotMatch(workflow.slice(0, stepOffset("Validate sync inputs")), /GH_TOKEN:/);
   assert.match(steps.find(step => step.startsWith("Checkout main"))!, /persist-credentials: false/);
   assert.match(workflowShell(["Install dependencies"]), /npm ci --ignore-scripts/);
@@ -1073,6 +1122,77 @@ test("scheduled blocker report warns on clearance, preserves items, and fails on
         else assert.doesNotMatch(result.stdout, /::warning::/);
         assert.equal(fs.readFileSync(itemPath, "utf8"), before);
       });
+    }
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
+
+test("post-import changelog findings and script failures block publication", async () => {
+  for (const script of ["generate-secret", "fail-script"]) {
+    const { root, base, bare, git } = initSyncRepo();
+    try {
+      fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ scripts: {
+        "generate-secret": "node generate-secret.cjs", "fail-script": "node -e 'process.exit(19)'",
+      } }));
+      fs.writeFileSync(path.join(root, "generate-secret.cjs"),
+        'require("node:fs").writeFileSync("CHANGELOG.md", process.env.SYNTHETIC_SECRET + "\\n");\n');
+      const env = await prepareWorkflowFixture(root, base);
+      assert.equal(git(["switch", "-c", SYNC_BRANCH]).status, 0);
+      const handle = githubHandler([issue(1, "Public issue", "Reviewed public body.")]);
+      await withMockGithub((req, res, url, server) => {
+        if (req.url === "/repos/acme/widgets") jsonResponse(res, 200, { private: false });
+        else handle(req, res, url, server);
+      }, async () => {
+        const result = await executeWorkflow(workflowShell(WORKFLOW_IMPORT_SEQUENCE), root, { ...env,
+          PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE, POST_IMPORT_SCRIPT: script, SYNTHETIC_SECRET: GH_TOKEN });
+        assert.notEqual(result.code, 0);
+        if (script === "generate-secret") {
+          assert.match(result.stderr, /github-token-classic/);
+          assert.ok(fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8").includes(GH_TOKEN));
+          assert.ok(!result.stdout.includes(GH_TOKEN) && !result.stderr.includes(GH_TOKEN));
+        } else assert.equal(result.code, 19);
+        assert.deepEqual(remoteRefs(bare), ["refs/heads/main"]);
+        assert.ok(!fs.existsSync(env.REVIEW_RECEIPT!));
+        assert.ok(!fs.existsSync(env.REVIEW_ACTIONS! + ".dispatch"));
+      });
+    } finally { fs.rmSync(base, { recursive: true, force: true }); }
+  }
+});
+
+test("post-import script can be overridden or disabled and defaults tolerate an absent script", async () => {
+  const { root, base } = initSyncRepo();
+  try {
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ scripts: { custom: "node custom.cjs" } }));
+    fs.writeFileSync(path.join(root, "custom.cjs"), 'require("node:fs").writeFileSync("CHANGELOG.md", "custom");\n');
+    const shell = workflowShell(["Run caller post-import script"]);
+    for (const script of ["changelog:full", "", "custom"]) {
+      const result = await executeWorkflow(shell, root, { ...process.env, POST_IMPORT_SCRIPT: script });
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(fs.existsSync(path.join(root, "CHANGELOG.md")), script === "custom");
+    }
+    assert.equal(fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8"), "custom");
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
+test("dispatch handles disabled, invalid, failed, and unpublished caller workflows", async () => {
+  const { root, base, git } = initSyncRepo();
+  try {
+    const env = await prepareWorkflowFixture(root, base);
+    fs.mkdirSync(path.join(root, ".github/workflows"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".github/workflows/ci.yml"), "on: workflow_dispatch\n");
+    assert.equal(git(["switch", "-c", SYNC_BRANCH]).status, 0);
+    assert.equal(git(["push", "-q", "origin", SYNC_BRANCH]).status, 0);
+    fs.writeFileSync(env.REVIEW_RECEIPT!, "Existing review");
+    const shell = workflowShell(["Dispatch caller CI and report parked runs"]);
+    for (const [overrides, expected] of [
+      [{ SYNC_PUBLISHED: "false", CI_WORKFLOWS: "ci.yml" }, 0],
+      [{ SYNC_PUBLISHED: "true", CI_WORKFLOWS: "" }, 0],
+      [{ SYNC_PUBLISHED: "true", CI_WORKFLOWS: "../ci.yml" }, 1],
+      [{ SYNC_PUBLISHED: "true", CI_WORKFLOWS: "ci.yml", DISPATCH_STATUS: "23" }, 23],
+    ] as const) {
+      const result = await executeWorkflow(shell, root, { ...env, ...overrides });
+      assert.equal(result.code, expected, result.stderr);
+      if (expected !== 23) assert.ok(!fs.existsSync(env.REVIEW_ACTIONS! + ".dispatch"));
     }
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
