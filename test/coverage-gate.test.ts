@@ -139,7 +139,12 @@ test("coverage inventory accepts dot-dot names inside the repository and rejects
 test("the c8 merge process gets the enlarged heap before the c8 entry point", () => {
   const seen: string[][] = [];
   const spy: CoverageRunner = (_command, args) => { seen.push([...args]); return { status: 1 }; };
-  assert.equal(runCoverageGate(process.cwd(), spy), 1);
+  const root = coverageFixture();
+  try {
+    assert.equal(runCoverageGate(root, spy), 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
   assert.equal(seen.length, 1);
   assert.equal(seen[0]![0], COVERAGE_HEAP_FLAG, "the heap flag must precede c8 so the merge process receives it");
   assert.match(seen[0]![1]!, /c8\.js$/);
