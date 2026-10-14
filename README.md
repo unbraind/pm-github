@@ -349,7 +349,23 @@ The `gate` receipt reports the verdict, scanned file count, findings, and allowl
 
 ## Automated sync workflow
 
-Fleet repos sync their issues into pm through ONE audited implementation: the reusable `workflow_call` workflow at [`.github/workflows/pm-github-sync.yml`](.github/workflows/pm-github-sync.yml) in this repository. It runs the gated pipeline in fail-closed order — checkout → install the **pinned** extension → `pm github validate` → dry-run plan → **gated import** → verify the repeat import is a no-op → `pm health --strict-exit` → and only then commit, push the sync branch, and open/update a review PR whose body links every changed item as `https://github.com/<repo>/blob/main/.agents/pm/<folder>/<id>.toon`. Because `--gate` exits non-zero on any finding, the job can never reach the push step with a leak in the change. Actions are pinned by commit SHA; permissions are least-privilege (`contents: write`, `pull-requests: write`, `issues: read`).
+Fleet repos sync their issues into pm through ONE audited implementation: the reusable `workflow_call` workflow at [`.github/workflows/pm-github-sync.yml`](.github/workflows/pm-github-sync.yml). Its safety order is validate → dry-run plan → **gated import** → verify the repeat import is a no-op → caller post-import script → **full changed-path scope check and privacy gate** → strict health → repeat scope check and scan immediately before commit/push/review PR → caller CI dispatch. The default `post-import-script` is `changelog:full`, invoked with `npm run --if-present`: it runs the caller's own generator when present, so imported closed issues and their changelog entries land in the same commit. Actions are pinned by commit SHA. The job requests `contents: write`, `pull-requests: write`, `issues: read`, and `actions: write` for dispatch.
+
+When the tracker has no changes, regenerated `CHANGELOG.md` drift is discarded and the run emits a notice that the caller's own `changelog:check` owns that drift. The sync closes any owned open review PR and exits successfully without pushing or dispatching CI. Changelog changes are published only together with tracker changes.
+
+The explicit allowed scope for changed paths is:
+
+- Files beneath the SDK-resolved repository-local pm tracker, excluding its `extensions/`, `locks/`, and `checkpoints/` runtime directories. The extension setup files `settings.json` and `history/_workspace.jsonl` are permitted during setup, then restored before publication and excluded from both the scan and commit.
+- The repository-root `CHANGELOG.md`.
+
+After the caller script and again immediately before committing, `git status --porcelain=v1 -z --untracked-files=all` enumerates staged, unstaged, and untracked changes, including both sides of renames. Every path outside this list produces an error and prevents publication. Allowed changes are staged and the privacy gate scans the exact NUL-delimited path list passed to `git commit --only --pathspec-from-file` with literal pathspecs. The final scan is regenerated from current content; any finding, unreadable input, or script failure prevents publication. The restricted commit also excludes unrelated staged content if a scope check is bypassed.
+
+Optional inputs:
+
+| Input | Default | Behavior |
+| --- | --- | --- |
+| `post-import-script` | `changelog:full` | Caller npm script name invoked with `npm run --if-present` after import and before the final scan. Override for a different package script, or set `""` to disable. Missing scripts are skipped. Raw shell commands are not accepted. Generated `CHANGELOG.md` is staged with the tracker. Changing any file outside the documented scope fails the run, whether staged, unstaged, or untracked. |
+| `ci-workflows` | `ci.yml` | Whitespace-separated filenames in the caller's `.github/workflows`, for example `ci.yml codeql.yml`. Missing files emit a notice and are skipped; set `""` to disable dispatch. Existing workflows must enable `workflow_dispatch`; dispatch errors fail the sync job. |
 
 A fleet repo owns the schedule and calls it with the pinned versions (see [`docs/sync-workflow-caller.yml`](docs/sync-workflow-caller.yml)):
 
@@ -364,6 +380,7 @@ permissions:
   contents: write
   pull-requests: write
   issues: read
+  actions: write
 
 jobs:
   gated-sync:
@@ -372,7 +389,9 @@ jobs:
       pm-github-version: "RELEASE_VERSION"     # required: exact published version
 ```
 
-Replace the two release placeholders after the gated extension is published; the current published version does not contain this feature. The calling repo needs `@unbrained/pm-cli` as a devDependency (the workflow's `npm ci` provides the CLI) and its pm tracker at `.agents/pm` committed on `main`. Under **Settings → Actions → General → Workflow permissions** it must also allow read and write token permissions and enable **Allow GitHub Actions to create and approve pull requests** (an organization can disable this), or the run pushes the sync branch and then fails to open the review PR. A PR that `GITHUB_TOKEN` opens or edits does not trigger `pull_request` workflows, so the sync PR gets no CI checks until a maintainer re-runs them (for example by closing and reopening the PR); the reusable workflow always uses the job's `GITHUB_TOKEN`.
+Replace the two release placeholders with the release commit and package version containing this change; existing callers must repin both. The calling repo needs `@unbrained/pm-cli` as a devDependency (the workflow's `npm ci` provides the CLI) and its pm tracker at `.agents/pm` committed on `main`. Under **Settings → Actions → General → Workflow permissions** it must allow read and write token permissions and enable **Allow GitHub Actions to create and approve pull requests** (an organization can disable this), or the run pushes the sync branch and then fails to open the review PR. The caller must grant `actions: write`; a reusable workflow cannot elevate its caller's permissions.
+
+Bot-created review PRs may have missing required checks or `pull_request` runs parked in `action_required`. After a successful push and PR creation/update, the reusable workflow uses the job's `GITHUB_TOKEN` to run `gh workflow run <file> --ref "$SYNC_BRANCH"` for each configured caller CI workflow. Explicit `workflow_dispatch` creates runs on the sync head, so callers must enable that trigger and ensure those runs produce their required check names (and do not restrict the required jobs to the `pull_request` event). It also lists `action_required` runs for the exact pushed SHA and prints their URLs as notices without failing because approval is needed. Missing workflows, disabled dispatch, or approval notices do not establish that required CI passed; inspect the dispatched checks. A no-change sync closes its stale own review PR and dispatches nothing. See GitHub's [GITHUB_TOKEN event rules](https://docs.github.com/en/actions/concepts/security/github_token) and [dispatch trigger and permission requirements](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event).
 
 ### Installed CLI timeout acceptance
 

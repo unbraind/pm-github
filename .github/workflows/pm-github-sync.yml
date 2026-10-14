@@ -7,7 +7,8 @@
 # Pipeline order is the safety property: validate → dry-run plan → gated import
 # (plan completeness + provenance idempotency verified BEFORE the write, then
 # the fail-closed privacy gate scans the proposed tracker change AFTER it) →
-# strict pm health → and only then commit + push + PR. `--gate` exits non-zero
+# caller post-import script → full status scope check + exact commit diff gate → strict pm health
+# → commit + push + PR → caller CI dispatch. `--gate` exits non-zero
 # on any credential, personal-data, or host-path finding — or on any unreadable
 # scan input — so this job can never reach the push step with a leak in the
 # change. Actions are pinned by SHA.
@@ -31,6 +32,16 @@ on:
         type: string
         required: false
         default: "automation/pm-github-sync"
+      post-import-script:
+        description: "Caller npm script after import, before the final gate; missing skips, empty disables it"
+        type: string
+        required: false
+        default: "changelog:full"
+      ci-workflows:
+        description: "Whitespace-separated caller workflow filenames with workflow_dispatch; empty disables dispatch"
+        type: string
+        required: false
+        default: "ci.yml"
       node-version:
         description: "Node.js version for the pm CLI"
         type: string
@@ -51,11 +62,14 @@ jobs:
       contents: write
       pull-requests: write
       issues: read
+      actions: write
     runs-on: ubuntu-latest
     env:
       REPOSITORY: ${{ inputs.repository }}
       SYNC_BRANCH: ${{ inputs.sync-branch }}
       PM_GITHUB_VERSION: ${{ inputs.pm-github-version }}
+      POST_IMPORT_SCRIPT: ${{ inputs.post-import-script }}
+      CI_WORKFLOWS: ${{ inputs.ci-workflows }}
       CALLING_REPOSITORY: ${{ github.repository }}
     steps:
       - name: Validate sync inputs
@@ -66,6 +80,7 @@ jobs:
           [[ "${PM_GITHUB_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]] || { echo "::error::pm-github-version must be an exact numeric version: N.N.N or N.N.N-N."; exit 1; }
           [[ "${SYNC_BRANCH}" == automation/* ]] || { echo "::error::sync-branch must start with automation/."; exit 1; }
           git check-ref-format "refs/heads/${SYNC_BRANCH}"
+          [[ -z "${POST_IMPORT_SCRIPT:-}" || "${POST_IMPORT_SCRIPT:-}" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.:-]*$ ]] || { echo "::error::post-import-script must be an npm script name, not a shell command."; exit 1; }
 
       - name: Checkout main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -102,12 +117,80 @@ jobs:
           npm ci --ignore-scripts
           printf '%s/node_modules/.bin\n' "${GITHUB_WORKSPACE}" >> "${GITHUB_PATH}"
 
+      # The explicit publication allowlist is the SDK-resolved tracker (except
+      # extensions, locks, checkpoints and extension setup files) and CHANGELOG.md. Nothing else may
+      # change, even if unstaged or untracked. Keep all boundaries on this list.
+      - name: Resolve sync commit scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          PM_SYNC_TRACKER="$(node --input-type=module -e 'import { resolvePmRoot } from "@unbrained/pm-cli/sdk"; import { relative } from "node:path"; const p = relative(process.cwd(), resolvePmRoot(process.cwd())); if (!p || p === ".." || p.startsWith("../") || /[\r\n]/.test(p)) throw new Error("Sync tracker must be inside the repository"); process.stdout.write(p);')"
+          export PM_SYNC_TRACKER
+          printf 'PM_SYNC_TRACKER=%s\n' "${PM_SYNC_TRACKER}" >> "${GITHUB_ENV}"
+          cat > "${RUNNER_TEMP}/pm-github-sync-scope.sh" <<'SCOPE'
+          sync_scope=(":(top,literal)${PM_SYNC_TRACKER}" ':(top,literal)CHANGELOG.md'
+            ":(top,exclude,literal)${PM_SYNC_TRACKER}/extensions"
+            ":(top,exclude,literal)${PM_SYNC_TRACKER}/locks"
+            ":(top,exclude,literal)${PM_SYNC_TRACKER}/checkpoints"
+            ":(top,exclude,literal)${PM_SYNC_TRACKER}/settings.json"
+            ":(top,exclude,literal)${PM_SYNC_TRACKER}/history/_workspace.jsonl")
+          restore_sync_setup() {
+            for setup_path in "${PM_SYNC_TRACKER}/settings.json" "${PM_SYNC_TRACKER}/history/_workspace.jsonl"; do
+              if git cat-file -e "HEAD:${setup_path}" 2>/dev/null; then
+                git --literal-pathspecs restore --source=HEAD --staged --worktree -- "${setup_path}"
+              else
+                git --literal-pathspecs rm -q --cached --ignore-unmatch -- "${setup_path}"
+                rm -f -- "${setup_path}"
+              fi
+            done
+          }
+          check_sync_scope() {
+            local entry path failed=0
+            git status --porcelain=v1 -z --untracked-files=all > "${RUNNER_TEMP}/pm-github-sync-status"
+            while IFS= read -r -d '' entry; do
+              path="${entry:3}"
+              check_sync_path "${path}" || failed=1
+              # Porcelain -z renames/copies contain a second, original path.
+              if [[ "${entry:0:2}" == *R* || "${entry:0:2}" == *C* ]]; then
+                IFS= read -r -d '' path || { echo '::error::Incomplete Git status record.'; return 1; }
+                check_sync_path "${path}" || failed=1
+              fi
+            done < "${RUNNER_TEMP}/pm-github-sync-status"
+            return "${failed}"
+          }
+          check_sync_path() {
+            case "$1" in
+              "${PM_SYNC_TRACKER}"/extensions|"${PM_SYNC_TRACKER}"/extensions/*|"${PM_SYNC_TRACKER}"/locks|"${PM_SYNC_TRACKER}"/locks/*|"${PM_SYNC_TRACKER}"/checkpoints|"${PM_SYNC_TRACKER}"/checkpoints/*) ;;
+              "${PM_SYNC_TRACKER}"/*|CHANGELOG.md) return 0 ;;
+            esac
+            printf '::error::Changed path outside sync commit scope: %q\n' "$1"
+            return 1
+          }
+          gate_sync_change() {
+            check_sync_scope
+            git ls-files -z --modified --deleted --others --exclude-standard -- "${sync_scope[0]}" "${sync_scope[@]:2}" > "${RUNNER_TEMP}/pm-github-sync-stage-paths"
+            if [[ -s "${RUNNER_TEMP}/pm-github-sync-stage-paths" ]]; then
+              git --literal-pathspecs add --pathspec-from-file="${RUNNER_TEMP}/pm-github-sync-stage-paths" --pathspec-file-nul
+            fi
+            if [[ -e CHANGELOG.md ]] || git ls-files --error-unmatch -- CHANGELOG.md >/dev/null 2>&1; then
+              git --literal-pathspecs add -- CHANGELOG.md
+            fi
+            git diff --cached --name-only -z --no-renames -- "${sync_scope[@]}" > "${RUNNER_TEMP}/pm-github-sync-commit-paths"
+            mapfile -d '' -t sync_paths < "${RUNNER_TEMP}/pm-github-sync-commit-paths"
+            : > "${RUNNER_TEMP}/pm-github-sync.patch"
+            if [[ ${#sync_paths[@]} -gt 0 ]]; then
+              git --literal-pathspecs diff --cached --no-color --no-ext-diff --no-textconv --no-renames --binary --unified=2147483647 -- "${sync_paths[@]}" > "${RUNNER_TEMP}/pm-github-sync.patch"
+            fi
+            ./node_modules/.bin/pm github gate --diff "${RUNNER_TEMP}/pm-github-sync.patch" --json
+          }
+          SCOPE
+
       - name: Install pinned pm-github extension
         shell: bash
         run: |
           set -euo pipefail
           ./node_modules/.bin/pm package install "npm:pm-github@${PM_GITHUB_VERSION}" --project
-          node -e 'if (require("./.agents/pm/extensions/pm-github/package.json").version !== process.argv[1]) process.exit(1)' "${PM_GITHUB_VERSION}"
+          node -e 'if (require("./" + process.argv[2] + "/extensions/pm-github/package.json").version !== process.argv[1]) process.exit(1)' "${PM_GITHUB_VERSION}" "${PM_SYNC_TRACKER}"
 
       - name: Configure PM merge drivers
         run: ./node_modules/.bin/pm merge install
@@ -156,15 +239,32 @@ jobs:
         run: |
           set -euo pipefail
           paths_file="${RUNNER_TEMP}/pm-github-tracker-paths"
-          git ls-files -z --modified --deleted --others --exclude-standard -- .agents/pm > "${paths_file}"
-          node -e 'const fs = require("node:fs"); const file = process.argv[1]; const paths = fs.readFileSync(file, "utf8").split("\0").filter(p => p && !["extensions", "locks", "checkpoints"].includes(p.slice(".agents/pm/".length).split("/")[0])); fs.writeFileSync(file, paths.map(p => p + "\0").join(""));' "${paths_file}"
+          source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
+          git ls-files -z --modified --deleted --others --exclude-standard -- "${sync_scope[0]}" "${sync_scope[@]:2}" > "${paths_file}"
           if [[ -s "${paths_file}" ]]; then
             git --literal-pathspecs add --pathspec-from-file="${paths_file}" --pathspec-file-nul
           fi
           ./node_modules/.bin/pm github import "${REPOSITORY}" --state all --atomic --gate --with-comments
-          git diff --exit-code -- .agents/pm ':(exclude,glob).agents/pm/extensions/**' ':(exclude,glob).agents/pm/locks/**' ':(exclude,glob).agents/pm/checkpoints/**'
-          [[ -z "$(git ls-files --others --exclude-standard -- .agents/pm ':(exclude,glob).agents/pm/extensions/**' ':(exclude,glob).agents/pm/locks/**' ':(exclude,glob).agents/pm/checkpoints/**')" ]]
+          git diff --exit-code -- "${sync_scope[0]}" "${sync_scope[@]:2}"
+          [[ -z "$(git ls-files --others --exclude-standard -- "${sync_scope[0]}" "${sync_scope[@]:2}")" ]]
           ./node_modules/.bin/pm github gate --json
+
+      - name: Run caller post-import script
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${POST_IMPORT_SCRIPT}" ]]; then
+            npm run --if-present "${POST_IMPORT_SCRIPT}"
+          fi
+
+      # Check every changed path immediately after the caller script. Extension
+      # setup files stay outside the patch and are restored before publication.
+      - name: Gate tracker and regenerated changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
+          gate_sync_change
 
       - name: Verify strict pm health
         run: ./node_modules/.bin/pm health --strict-exit
@@ -175,7 +275,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ./node_modules/.bin/pm github gate --json
+          source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
+          gate_sync_change
           # gh pr list --head matches branch names, and a fork can open a PR
           # from a branch with the same name, so filter the results to PRs whose
           # head repository is this repository (never trust .[0] alone).
@@ -192,19 +293,19 @@ jobs:
               gh pr close "${number}" -R "${REPOSITORY}" --comment "The tracker already matches GitHub, so this sync no longer proposes a change; closing this review PR."
             fi
           }
-          # Installing the pinned extension can add it to an explicit
-          # extensions.enabled list, and pm records that settings change in the
-          # workspace history. Both are setup state, not synced data, so neither
-          # reaches the commit (the extension is not needed after the gate).
-          for setup_path in .agents/pm/settings.json .agents/pm/history/_workspace.jsonl; do
-            if git cat-file -e "HEAD:${setup_path}" 2>/dev/null; then
-              git restore --source=HEAD --staged --worktree -- "${setup_path}"
-            else
-              git rm -q --cached --ignore-unmatch -- "${setup_path}"
-              rm -f -- "${setup_path}"
+          if git diff --cached --quiet -- "${sync_scope[0]}" "${sync_scope[@]:2}"; then
+            # Changelog drift alone belongs to the caller's changelog check;
+            # publish regenerated output only alongside tracker changes.
+            if ! git diff --cached --quiet -- CHANGELOG.md; then
+              if git cat-file -e HEAD:CHANGELOG.md 2>/dev/null; then
+                git --literal-pathspecs restore --source=HEAD --staged --worktree -- CHANGELOG.md
+              else
+                git --literal-pathspecs rm -q --cached --ignore-unmatch -- CHANGELOG.md
+                rm -f -- CHANGELOG.md
+              fi
+              echo "::notice::The caller's changelog differs from a fresh regeneration; the repository's own changelog:check owns that drift. Discarding CHANGELOG.md because no tracker item changed."
             fi
-          done
-          if git diff --cached --quiet; then
+            restore_sync_setup
             echo "GitHub issues already match the pm tracker; no PR is needed."
             # A stale own review PR would still look actionable although this
             # run has no change to propose, so close it before returning.
@@ -216,7 +317,7 @@ jobs:
           : > "${links_file}"
           while IFS= read -r changed; do
             case "${changed}" in
-              .agents/pm/*/*.toon)
+              "${PM_SYNC_TRACKER}"/*/*.toon)
                 item_id="${changed##*/}"
                 item_id="${item_id%.toon}"
                 # The main link is the permanent one after merge; the branch link
@@ -224,12 +325,18 @@ jobs:
                 printf -- '- [%s](https://github.com/%s/blob/main/%s) ([proposed](https://github.com/%s/blob/%s/%s))\n' "${item_id}" "${REPOSITORY}" "${changed}" "${REPOSITORY}" "${SYNC_BRANCH}" "${changed}" >> "${links_file}"
                 ;;
             esac
-          done < <(git diff --cached --name-only -- .agents/pm)
+          done < <(git diff --cached --name-only -- "${sync_scope[0]}" "${sync_scope[@]:2}")
           if [[ ! -s "${links_file}" ]]; then
             echo "::error::The sync changed tracker state but no item link could be generated."
             exit 1
           fi
-          git commit -m "chore(pm): sync GitHub issues (gated)"
+          # Re-enumerate all status paths, re-stage and re-scan immediately before
+          # committing. --only prevents any unrelated staged path from leaking
+          # even if the scope check is bypassed. NUL paths preserve odd filenames.
+          gate_sync_change
+          restore_sync_setup
+          check_sync_scope
+          git --literal-pathspecs commit --only --pathspec-from-file="${RUNNER_TEMP}/pm-github-sync-commit-paths" --pathspec-file-nul -m "chore(pm): sync GitHub issues (gated)"
           gh auth setup-git
           git push --force-with-lease="refs/heads/${SYNC_BRANCH}:${SYNC_LEASE}" origin "HEAD:refs/heads/${SYNC_BRANCH}"
           body_file="${RUNNER_TEMP}/pm-github-sync-pr.md"
@@ -245,3 +352,29 @@ jobs:
           else
             gh pr edit "${pr_number}" -R "${REPOSITORY}" --body-file "${body_file}"
           fi
+          export SYNC_PUBLISHED=true
+          printf 'SYNC_PUBLISHED=true\n' >> "${GITHUB_ENV}"
+
+      - name: Dispatch caller CI and report parked runs
+        if: env.SYNC_PUBLISHED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${SYNC_PUBLISHED:-false}" == true ]] || exit 0
+          while IFS= read -r workflow_file; do
+            [[ -n "${workflow_file}" ]] || continue
+            [[ "${workflow_file}" =~ ^[a-zA-Z0-9_.-]+\.ya?ml$ ]] || { echo "::error::ci-workflows must contain workflow filenames."; exit 1; }
+            if [[ ! -f ".github/workflows/${workflow_file}" ]]; then
+              echo "::notice::Skipping missing caller workflow: ${workflow_file}"
+              continue
+            fi
+            gh workflow run "${workflow_file}" -R "${REPOSITORY}" --ref "${SYNC_BRANCH}"
+          done < <(printf '%s\n' "${CI_WORKFLOWS}" | tr ' \t\r' '\n')
+          head_sha="$(git rev-parse HEAD)"
+          parked_runs="$(gh run list -R "${REPOSITORY}" --commit "${head_sha}" --status action_required --limit 100 --json url --jq '.[].url')"
+          while IFS= read -r run_url; do
+            [[ -n "${run_url}" ]] || continue
+            echo "::notice::A pull-request workflow requires maintainer approval: ${run_url}. Review this parked run if needed; caller CI dispatch runs are separate."
+          done <<< "${parked_runs}"

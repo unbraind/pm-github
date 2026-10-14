@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Regenerate caller changelogs and dispatch required CI for gated sync PRs ([pm-github-wrmt](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-wrmt.toon))
+
 ## 2026.10.14 - 2026-10-14
 
 ### Added

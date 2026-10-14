@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { collectCoverageSources, runCoverageGate, runCoverageGateIfMain, type CoverageRunner } from "../scripts/coverage-gate.ts";
+import { collectCoverageSources, COVERAGE_HEAP_FLAG, runCoverageGate, runCoverageGateIfMain, type CoverageRunner } from "../scripts/coverage-gate.ts";
 import { nodeToolingExecutable } from "../scripts/main-invocation.ts";
 
 /** Create an independently runnable project with one branching source and its test. */
@@ -134,4 +134,18 @@ test("coverage inventory accepts dot-dot names inside the repository and rejects
     assert.deepEqual(collectCoverageSources(root, "..cache"), ["..cache/module.ts"]);
     assert.throws(() => collectCoverageSources(root, ".."), /escapes the repository/);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("the c8 merge process gets the enlarged heap before the c8 entry point", () => {
+  const seen: string[][] = [];
+  const spy: CoverageRunner = (_command, args) => { seen.push([...args]); return { status: 1 }; };
+  const root = coverageFixture();
+  try {
+    assert.equal(runCoverageGate(root, spy), 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0]![0], COVERAGE_HEAP_FLAG, "the heap flag must precede c8 so the merge process receives it");
+  assert.match(seen[0]![1]!, /c8\.js$/);
 });
