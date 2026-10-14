@@ -49,7 +49,7 @@
   "devDependencies": {
     "@babel/eslint-parser": "8.0.7",
     "@babel/plugin-syntax-typescript": "8.0.3",
-    "@toon-format/toon": "4.1.1",
+    "@toon-format/toon": "4.4.0",
     "@types/node": "26.6.5",
     "@unbrained/pm-cli": "2026.10.13",
     "c8": "12.0.0",
