@@ -643,7 +643,7 @@ test("the PR body links every changed item as a permanent main-tree pm link", ()
     /https:\/\/github\.com\/%s\/blob\/main\/%s/,
     "the link template targets the main-tree item path",
   );
-  assert.match(workflow, /\.agents\/pm\/\*\/\*\.toon/);
+  assert.match(workflow, /"\$\{PM_SYNC_TRACKER\}"\/\*\/\*\.toon/);
   assert.match(workflow, /gh pr create/);
   assert.match(workflow, /gh pr edit/);
   // The push is explicit and force-resets the automation branch from main.
@@ -705,9 +705,17 @@ function packWorkflowCandidate(packageRoot: string, destination: string, env: No
 /** Install the candidate and create a local gh PR receipt boundary, never a network writer. */
 async function prepareWorkflowFixture(root: string, base: string): Promise<NodeJS.ProcessEnv> {
   if (!fs.existsSync(path.join(root, "package.json"))) fs.writeFileSync(path.join(root, "package.json"), "{}\n");
+  // Match caller dependency/runtime ignores before installing the extension;
+  // fixture setup itself must not masquerade as a post-import change.
+  fs.appendFileSync(path.join(root, ".gitignore"), "\nnode_modules/\n.agents/pm/extensions/\n.agents/pm/locks/\n.agents/pm/checkpoints/\n");
+  assert.equal(spawnSync("git", ["add", "--", "package.json", ".gitignore"], { cwd: root }).status, 0);
+  assert.equal(spawnSync("git", ["-c", "user.name=Sync Fixture", "-c", "user.email=fixture@users.noreply.github.com",
+    "commit", "-qm", "caller dependency configuration"], { cwd: root }).status, 0);
   const bin = path.join(root, "node_modules", ".bin");
   fs.mkdirSync(bin, { recursive: true });
   fs.symlinkSync(path.resolve(import.meta.dirname, "../node_modules/.bin/pm"), path.join(bin, "pm"));
+  fs.mkdirSync(path.join(root, "node_modules/@unbrained"), { recursive: true });
+  fs.symlinkSync(path.join(repoRoot, "node_modules/@unbrained/pm-cli"), path.join(root, "node_modules/@unbrained/pm-cli"));
   const tools = path.join(base, "tools");
   fs.mkdirSync(tools, { recursive: true });
   fs.writeFileSync(path.join(tools, "gh"), `#!/usr/bin/env bash
@@ -772,7 +780,7 @@ esac
   return env;
 }
 
-const WORKFLOW_IMPORT_SEQUENCE = ["Validate GitHub access", "Revalidate GitHub blockers (report only)", "Preview GitHub to pm plan", "Gated GitHub to pm import",
+const WORKFLOW_IMPORT_SEQUENCE = ["Resolve sync commit scope", "Validate GitHub access", "Revalidate GitHub blockers (report only)", "Preview GitHub to pm plan", "Gated GitHub to pm import",
   "Verify repeat import is a no-op", "Run caller post-import script", "Gate tracker and regenerated changelog",
   "Verify strict pm health", "Commit gated sync changes and open review PR", "Dispatch caller CI and report parked runs"] as const;
 
@@ -1136,6 +1144,8 @@ test("post-import changelog findings and script failures block publication", asy
       } }));
       fs.writeFileSync(path.join(root, "generate-secret.cjs"),
         'require("node:fs").writeFileSync("CHANGELOG.md", process.env.SYNTHETIC_SECRET + "\\n");\n');
+      assert.equal(git(["add", "--", "package.json", "generate-secret.cjs"]).status, 0);
+      assert.equal(git(["commit", "-qm", "caller scripts"]).status, 0);
       const env = await prepareWorkflowFixture(root, base);
       assert.equal(git(["switch", "-c", SYNC_BRANCH]).status, 0);
       const handle = githubHandler([issue(1, "Public issue", "Reviewed public body.")]);
@@ -1157,6 +1167,105 @@ test("post-import changelog findings and script failures block publication", asy
       });
     } finally { fs.rmSync(base, { recursive: true, force: true }); }
   }
+});
+
+test("caller post-import changes outside the commit scope fail closed for every Git status class", async () => {
+  for (const mode of ["staged", "unstaged", "untracked", "credential", "rename", "multiple"] as const) {
+    const { root, base, bare, git } = initSyncRepo();
+    try {
+      const offending = mode === "multiple" ? ["extra.txt", "second.txt"] : ["extra.txt"];
+      fs.writeFileSync(path.join(root, "extra.txt"), "baseline\n");
+      fs.writeFileSync(path.join(root, "post-import.ts"), `import { writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+const mode = process.env.SCOPE_TEST_MODE;
+if (mode !== "rename") writeFileSync("extra.txt", mode === "credential" ? process.env.SYNTHETIC_SECRET! : "changed\\n");
+if (mode === "staged" || mode === "credential") execFileSync("git", ["add", "--", "extra.txt"]);
+if (mode === "rename") execFileSync("git", ["mv", "extra.txt", ".agents/pm/extra.txt"]);
+if (mode === "multiple") writeFileSync("second.txt", "changed\\n");
+`);
+      fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ scripts: { "post-import-run": "node post-import.ts" } }));
+      const baselinePaths = ["package.json", "post-import.ts", ...(mode === "untracked" ? [] : ["extra.txt"])];
+      assert.equal(git(["add", "--", ...baselinePaths]).status, 0);
+      assert.equal(git(["commit", "-qm", "caller fixture"]).status, 0);
+      assert.equal(git(["push", "-q", "origin", "main"]).status, 0);
+      if (mode === "untracked") fs.unlinkSync(path.join(root, "extra.txt"));
+      const before = spawnSync("git", ["--git-dir", bare, "rev-parse", "main"], { encoding: "utf8" }).stdout;
+      const env = await prepareWorkflowFixture(root, base);
+      assert.equal(git(["switch", "-c", SYNC_BRANCH]).status, 0);
+      const handle = githubHandler([issue(1, "Public issue", "Reviewed public body.")]);
+      await withMockGithub((req, res, url, server) => {
+        if (req.url === "/repos/acme/widgets") jsonResponse(res, 200, { private: false });
+        else handle(req, res, url, server);
+      }, async () => {
+        const result = await executeWorkflow(workflowShell(WORKFLOW_IMPORT_SEQUENCE), root, { ...env,
+          PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE, POST_IMPORT_SCRIPT: "post-import-run",
+          SCOPE_TEST_MODE: mode, SYNTHETIC_SECRET: GH_TOKEN });
+        assert.notEqual(result.code, 0, `must reject ${mode}: ${result.stdout}\n${result.stderr}`);
+        assert.match(result.stdout, /Changed path outside sync commit scope/);
+        for (const file of offending) assert.ok(result.stdout.includes(file), result.stdout);
+        assert.ok(!result.stdout.includes(GH_TOKEN) && !result.stderr.includes(GH_TOKEN));
+        assert.deepEqual(remoteRefs(bare), ["refs/heads/main"]);
+        assert.equal(spawnSync("git", ["--git-dir", bare, "rev-parse", "main"], { encoding: "utf8" }).stdout, before);
+        assert.ok(!fs.existsSync(env.REVIEW_RECEIPT!));
+        assert.ok(!fs.existsSync(env.REVIEW_ACTIONS! + ".dispatch"));
+      });
+    } finally { fs.rmSync(base, { recursive: true, force: true }); }
+  }
+});
+
+test("publication rechecks late changes and rescans the exact working content it commits", async () => {
+  for (const mode of ["staged", "unstaged", "untracked", "credential", "tracker-secret"] as const) {
+    const { root, base, bare, git } = initSyncRepo();
+    try {
+      const env = await prepareWorkflowFixture(root, base);
+      assert.equal(git(["switch", "-c", SYNC_BRANCH]).status, 0);
+      const handle = githubHandler([issue(1, "Public issue", "Reviewed public body.")]);
+      await withMockGithub((req, res, url, server) => {
+        if (req.url === "/repos/acme/widgets") jsonResponse(res, 200, { private: false });
+        else handle(req, res, url, server);
+      }, async () => {
+        const filename = mode === "tracker-secret" ? "CHANGELOG.md" : mode === "unstaged" ? "package.json" : "late.txt";
+        const mutate = `node -e 'require("node:fs").writeFileSync(process.env.LATE_PATH, process.env.LATE_CONTENT)'\n`
+          + (mode === "staged" || mode === "credential" ? 'git add -- "$LATE_PATH"\n' : "");
+        // Insert immediately BEFORE the final status check and scan, after link
+        // generation, so both the early gate and the commit-step entry pass.
+        const lateShell = workflowShell(WORKFLOW_IMPORT_SEQUENCE).replace(
+          'gate_sync_change\nrestore_sync_setup\ncheck_sync_scope\ngit --literal-pathspecs commit --only',
+          mutate + 'gate_sync_change\nrestore_sync_setup\ncheck_sync_scope\ngit --literal-pathspecs commit --only');
+        assert.ok(lateShell.includes(mutate), "late injection must execute before the commit gate");
+        const result = await executeWorkflow(lateShell, root, { ...env,
+          PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE, LATE_PATH: filename,
+          LATE_CONTENT: mode === "credential" || mode === "tracker-secret" ? GH_TOKEN : "changed\n" });
+        assert.notEqual(result.code, 0, `${mode}: ${result.stdout}\n${result.stderr}`);
+        if (mode === "tracker-secret") assert.match(result.stderr, /github-token-classic/);
+        else assert.ok(result.stdout.includes(filename), result.stdout);
+        assert.deepEqual(remoteRefs(bare), ["refs/heads/main"]);
+      });
+    } finally { fs.rmSync(base, { recursive: true, force: true }); }
+  }
+});
+
+test("restricted commit excludes unrelated staged content even when scope checks are bypassed", async () => {
+  const { root, base, bare, git } = initSyncRepo();
+  try {
+    const env = await prepareWorkflowFixture(root, base);
+    assert.equal(git(["switch", "-c", SYNC_BRANCH]).status, 0);
+    const handle = githubHandler([issue(1, "Public issue", "Reviewed public body.")]);
+    await withMockGithub((req, res, url, server) => {
+      if (req.url === "/repos/acme/widgets") jsonResponse(res, 200, { private: false });
+      else handle(req, res, url, server);
+    }, async () => {
+      const shell = workflowShell(WORKFLOW_IMPORT_SEQUENCE).replace(/^\s*check_sync_scope$/gm, "")
+        .replace('source "${RUNNER_TEMP}/pm-github-sync-scope.sh"\ngate_sync_change',
+          'node -e \'require("node:fs").writeFileSync("extra.txt", "unscanned")\'\ngit add -- extra.txt\nsource "${RUNNER_TEMP}/pm-github-sync-scope.sh"\ngate_sync_change');
+      const result = await executeWorkflow(shell, root, { ...env, PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE });
+      assert.equal(result.code, 0, result.stderr + "\n" + result.stdout);
+      assert.ok(remoteRefs(bare).includes("refs/heads/" + SYNC_BRANCH), "scope-only revert allows publication");
+      assert.equal(spawnSync("git", ["--git-dir", bare, "cat-file", "-e", `${SYNC_BRANCH}:extra.txt`]).status, 128,
+        "explicit commit pathspec still prevents publication of the unrelated file");
+      assert.equal(git(["diff", "--cached", "--name-only", "--", "extra.txt"]).stdout.trim(), "extra.txt");
+    });
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 
 test("post-import script can be overridden or disabled and defaults tolerate an absent script", async () => {

@@ -1,0 +1,16 @@
+id: pm-github-vhi6
+title: Bound coverage aggregation memory and compare default-heap CI behavior
+description: "During the PR #122 privacy-scope regression work, an identity-isolated npm release:check completed 587/587 tests with zero failures, skips or cancellations, then c8 report aggregation exhausted Node's default 4 GiB heap. Native coverage receipts occupied approximately 2.9 GiB. The security fix is being validated with NODE_OPTIONS=--max-old-space-size=12288 and unchanged source inventory and four 100-percent thresholds. Compare default-heap CI behavior, investigate bounded report aggregation or documented resource requirements, and retain complete authored-source and real CLI coverage. Earlier local heap-exhaustion observations also appear in pm-github-fmrf; this task tracks current default-heap acceptance separately from the scope fix in pm-github-wrmt."
+type: Task
+status: open
+priority: 2
+tags[3]: coverage,follow-up,gates
+created_at: "2026-10-14T14:32:34.672Z"
+updated_at: "2026-10-14T15:04:27.090Z"
+author: codex-agent
+comments[1]{created_at,author,text}:
+  "2026-10-14T15:04:27.090Z",codex-agent,"Confirmed resource workaround: complete identity-isolated npm and Bun release:check each passed 587/587 tests and all 11 checks with NODE_OPTIONS=--max-old-space-size=12288. Coverage remains exact 100/100/100/100 across 12 authored modules, without source exemptions or threshold changes. The earlier default-heap npm run passed all 587 tests before c8 aggregation exhausted the heap. Default-heap CI comparison and bounded aggregation remain follow-up work; the security change does not alter coverage implementation or CI memory settings."
+files[2]{path,scope}:
+  scripts/coverage-gate.ts,project
+  test/import-gate.test.ts,project
+body: ""

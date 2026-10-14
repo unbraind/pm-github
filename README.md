@@ -349,13 +349,20 @@ The `gate` receipt reports the verdict, scanned file count, findings, and allowl
 
 ## Automated sync workflow
 
-Fleet repos sync their issues into pm through ONE audited implementation: the reusable `workflow_call` workflow at [`.github/workflows/pm-github-sync.yml`](.github/workflows/pm-github-sync.yml). Its safety order is validate → dry-run plan → **gated import** → verify the repeat import is a no-op → caller post-import script → **final privacy gate over tracker files and `CHANGELOG.md`** → strict health → commit/push/review PR → caller CI dispatch. The default `post-import-script` is `changelog:full`, invoked with `npm run --if-present`: it runs the caller's own generator when present, so imported closed issues and their changelog entries land in the same commit. The final gate scans an explicit staged diff including the regenerated changelog; any finding or script failure prevents publication. Actions are pinned by commit SHA. The job requests `contents: write`, `pull-requests: write`, `issues: read`, and `actions: write` for dispatch.
+Fleet repos sync their issues into pm through ONE audited implementation: the reusable `workflow_call` workflow at [`.github/workflows/pm-github-sync.yml`](.github/workflows/pm-github-sync.yml). Its safety order is validate → dry-run plan → **gated import** → verify the repeat import is a no-op → caller post-import script → **full changed-path scope check and privacy gate** → strict health → repeat scope check and scan immediately before commit/push/review PR → caller CI dispatch. The default `post-import-script` is `changelog:full`, invoked with `npm run --if-present`: it runs the caller's own generator when present, so imported closed issues and their changelog entries land in the same commit. Actions are pinned by commit SHA. The job requests `contents: write`, `pull-requests: write`, `issues: read`, and `actions: write` for dispatch.
+
+The explicit allowed scope for changed paths is:
+
+- Files beneath the SDK-resolved repository-local pm tracker, excluding its `extensions/`, `locks/`, and `checkpoints/` runtime directories. The extension setup files `settings.json` and `history/_workspace.jsonl` are permitted during setup, then restored before publication and excluded from both the scan and commit.
+- The repository-root `CHANGELOG.md`.
+
+After the caller script and again immediately before committing, `git status --porcelain=v1 -z --untracked-files=all` enumerates staged, unstaged, and untracked changes, including both sides of renames. Every path outside this list produces an error and prevents publication. Allowed changes are staged and the privacy gate scans the exact NUL-delimited path list passed to `git commit --only --pathspec-from-file` with literal pathspecs. The final scan is regenerated from current content; any finding, unreadable input, or script failure prevents publication. The restricted commit also excludes unrelated staged content if a scope check is bypassed.
 
 Optional inputs:
 
 | Input | Default | Behavior |
 | --- | --- | --- |
-| `post-import-script` | `changelog:full` | Caller npm script name invoked with `npm run --if-present` after import and before the final scan. Override for a different package script, or set `""` to disable. Missing scripts are skipped. Raw shell commands are not accepted. Generated `CHANGELOG.md` is staged with the tracker. Other generated files are outside the commit scope. |
+| `post-import-script` | `changelog:full` | Caller npm script name invoked with `npm run --if-present` after import and before the final scan. Override for a different package script, or set `""` to disable. Missing scripts are skipped. Raw shell commands are not accepted. Generated `CHANGELOG.md` is staged with the tracker. Changing any file outside the documented scope fails the run, whether staged, unstaged, or untracked. |
 | `ci-workflows` | `ci.yml` | Whitespace-separated filenames in the caller's `.github/workflows`, for example `ci.yml codeql.yml`. Missing files emit a notice and are skipped; set `""` to disable dispatch. Existing workflows must enable `workflow_dispatch`; dispatch errors fail the sync job. |
 
 A fleet repo owns the schedule and calls it with the pinned versions (see [`docs/sync-workflow-caller.yml`](docs/sync-workflow-caller.yml)):
