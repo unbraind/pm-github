@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Select GitHub issue imports and cap list volume ([pm-github-6srd](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-6srd.toon))
+- Revalidate blocked items against the live state of their GitHub blockers ([pm-github-fmrf](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-fmrf.toon))
+
 ## 2026.10.8 - 2026-10-08
 
 ### Added
