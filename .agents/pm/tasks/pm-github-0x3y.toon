@@ -1,0 +1,12 @@
+id: pm-github-0x3y
+title: Add a reusable gated closeout PR workflow
+description: Follow up on pm-github closeout with a workflow_call automation surface after command acceptance. Reuse the gated sync safety model without changing its existing workflow or inputs.
+type: Task
+status: open
+priority: 2
+tags: []
+created_at: "2026-10-14T21:46:44.372Z"
+updated_at: "2026-10-14T21:46:44.372Z"
+author: codex-agent
+acceptance_criteria: "Run verified closeout on a bot branch and open or update a PR; never push main; validate tracker privacy, regenerate changelog, and dispatch required CI before publication.; Test clean, malicious, no-op, permission-limited and repeat invocations with explicit evidence; document least-privilege callers."
+body: ""

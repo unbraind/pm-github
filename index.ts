@@ -23,6 +23,7 @@ import type {
   PreflightOverrideContext,
   SearchProviderQueryContext,
 } from "@unbrained/pm-cli/sdk/authoring";
+import { CloseoutUsageError, runCloseout } from "./closeout.ts";
 import http from "node:http";
 import https from "node:https";
 import crypto from "node:crypto";
@@ -6674,6 +6675,33 @@ export default defineExtension({
           );
         }
         return report;
+      },
+    });
+
+    // Closeout uses the existing repository resolution and REST transport.
+    api.registerCommand({
+      name: "github closeout",
+      description: "Close items linked by merged PRs after verifying head checks. Dry-run by default; --apply writes through the SDK. Returns a compact TOON plan or --json.",
+      intent: "close delivered pm items with verifiable GitHub evidence",
+      examples: ["pm github closeout --repo owner/repo --pr 42 --pr 43", "pm github closeout --since 2026-10-01 --skip pm-123 --apply --json"],
+      flags: [
+        { long: "--repo", value_name: "owner/repo", description: "Repository (or PM_GITHUB_REPO)" },
+        { long: "--pr", value_name: "n", repeatable: true, description: "Select a PR number (repeatable; conflicts with --since)" },
+        { long: "--since", value_name: "ISO date", description: "Select PRs merged at or after this ISO date/time" },
+        { long: "--skip", value_name: "id", repeatable: true, description: "Never close this item (repeatable)" },
+        { long: "--apply", description: "Close eligible items (default: dry-run)" },
+        { long: "--dry-run", description: "Preview only; overrides --apply" },
+      ],
+      async run(ctx: CommandHandlerContext) {
+        try {
+          const token = resolveGitHubToken();
+          return await runCloseout(ctx.pm_root, resolveSearchRepo(ctx.options), ctx.options, {
+            base: githubApiBase(), get: url => fetchJSON(url, token), next: parseNextLink,
+          });
+        } catch (error) {
+          // A plain Error would make the host re-run the handler (repeating GitHub reads and remaining closes).
+          throw new CommandError((error as Error).message, error instanceof CloseoutUsageError ? EXIT_CODE.USAGE : EXIT_CODE.GENERIC_FAILURE);
+        }
       },
     });
 
