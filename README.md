@@ -75,17 +75,34 @@ Missing, malformed or incomplete head evidence, malformed metadata and other
 metadata errors fail closed. The plan reports which rule was used.
 
 TOON is the compact default; global `--json` returns the stable shape
-`{command, repo, dry_run, plan, checks, closed}`. Each plan row is exactly
+`{command, repo, dry_run, plan, checks, closed, failed}`. Each plan row is exactly
 `{item, pr, action: "close" | "skip", reason}`. `checks` reports each PR's rule,
 verdict, explanation and successful check names. Dry-run rows describe intended
 closes; `closed` counts writes only with `--apply`. `--dry-run` overrides
-`--apply`. All API planning finishes before the first SDK close; a tracker
-write failure stops apply, so inspect the tracker and safely rerun the selection.
+`--apply`. All API planning finishes before the first SDK close. Individual SDK
+refusals become skip rows containing a diagnostic code (or a generic failure
+class), without raw error prose, paths or lock-owner identities. Remaining
+closes continue; `failed` counts refused writes and `closed` counts successful
+writes. After processing everything, any failed close produces a `CommandError`
+with exit code 1 and the complete JSON report in its message. Eligibility skips
+alone do not fail the command. Inspect the report before retrying.
 
 The SDK close reason is a JSON string containing **only** verified facts:
 `{pr, url, merge_commit_sha, head_sha, merged_at, checks}`. `checks` contains the
 sorted unique names that actually succeeded at that head; neutral/skipped runs
 are not described as passed. PR body, title and comments are never persisted.
+For both default and strict close validation, the SDK always receives the three
+structured close fields it supports, without overriding tracker policy:
+
+- `resolution`: `Delivered by <PR URL> (merge <sha12>, head <sha12>)`.
+- `expected_result`: the item's own acceptance criteria verbatim when present;
+  otherwise `Delivered by the linked pull request, merged with its required checks passing.`
+- `actual_result`: `Merged at <time> with required checks passing: <names>`, using
+  only verified merge time and sorted successful check names. This makes no
+  platform, coverage or test-execution claims.
+
+Item titles never supply any of these fields. Existing tracker acceptance
+criteria remain the only prose source; PR body and comments supply no field text.
 Completion time is the GitHub merge time. Repeating a completed selection skips
 terminal items and performs zero additional tracker writes. The command edits
 only the tracker; commit it with its history and regenerate the caller's
