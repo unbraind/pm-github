@@ -9,6 +9,17 @@ No scratch changes were committed or pushed.
 
 Tarball SHA-256: `f4167d8acad52195ba9c4c05da3cb596c5b3bd95f8b97a1a3f14b6fa1b7b888c`.
 
+Build identification: the tarball, every readback below and the gate counts in
+"Package validation" are evidence from the pm-github build at commit `bbf6516`
+(the first commit of pull request 126). Two review rounds followed it: `64311e9`
+and `241ed1d` changed only the fallback check wording, so the readbacks below
+still show the earlier text `required checks passing`, while the reviewed head
+writes `required checks satisfied; successful head checks`, and the tracker's
+later gate record reports 663 tests because two check-wording tests were added.
+The proof was not re-run against the reviewed head; the behaviour it proves
+(strict close fields filled from GitHub facts, idempotent repeat, no scratch
+writes) is unchanged by those rounds.
+
 ## Plan and apply
 
 `pm github closeout --repo unbraind/pm-rust --pr 81 --json` produced this plan
@@ -82,7 +93,7 @@ every item and history file were identical before and after the repeat.
 
 ## Package validation
 
-The packed runtime matched the final build byte for byte across all 16 `dist` files.
+The packed runtime matched the `bbf6516` build byte for byte across all 16 `dist` files.
 The linked `pm test pm-github-2o9k --run --progress` run passed **71/71** tests
 with zero failures, skips, cancellations or todos. Its declared timeout was
 raised from the default 120 seconds to 600 seconds for the full closeout suite.
