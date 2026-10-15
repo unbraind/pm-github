@@ -2,11 +2,13 @@ id: pm-github-wrmt
 title: Regenerate caller changelogs and dispatch required CI for gated sync PRs
 description: "Make gated sync reviews independently mergeable with an overridable caller npm script, a final privacy scan including CHANGELOG.md, and explicit caller CI workflow dispatch after PR creation or update. Fleet adoption remains tracked by pm-github-aiok."
 type: Feature
-status: in_progress
+status: closed
 priority: 2
 tags[1]: changelog-unreleased
 created_at: "2026-10-14T11:43:07.998Z"
-updated_at: "2026-10-14T18:53:48.691Z"
+updated_at: "2026-10-15T09:25:33.804Z"
+closed_at: "2026-10-15T09:25:33.684Z"
+completed_at: "2026-10-14T19:27:27.000Z"
 author: codex-agent
 comments[20]{created_at,author,text}:
   "2026-10-14T11:43:26.402Z",codex-agent,"Measured fleet use: pm-gantt-chart#142 was blocked because bot PR workflows ended action_required and imported closed issues changed the generated changelog. Plan: run caller post-import command, stage CHANGELOG.md with tracker data, scan an explicit combined diff before health and publication, then dispatch configured caller workflows on the pushed branch. Test with real local git repositories and HTTP fixtures; record behavioural revert proofs. No duplicate feature found; fleet rollout is separate in pm-github-aiok."
@@ -40,4 +42,5 @@ docs[3]{path,scope}:
   CHANGELOG.md,project
   docs/sync-workflow-caller.yml,project
   README.md,project
+close_reason: "{\"pr\":122,\"url\":\"https://github.com/unbraind/pm-github/pull/122\",\"merge_commit_sha\":\"596edc60b7cc05228c4b19dbc4810384e7d14836\",\"head_sha\":\"140988083e04cf3f207a79c8af2e71d81ce17f5a\",\"merged_at\":\"2026-10-14T19:27:27Z\",\"checks\":[\"CodeQL\",\"CodeRabbit\",\"codeql\",\"semgrep-cloud-platform/scan\",\"test (22)\",\"test (26)\"]}"
 body: ""

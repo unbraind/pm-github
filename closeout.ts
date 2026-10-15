@@ -1,5 +1,5 @@
 /** Close delivered tracker items using merged pull requests and head-check evidence. */
-import { close, listAllComplete, certifyCompleteListResult } from "@unbrained/pm-cli/sdk";
+import { close, listAllComplete, certifyCompleteListResult, PmCliError } from "@unbrained/pm-cli/sdk";
 
 /** Existing GitHub REST transport, supplied by the extension entry point. */
 export interface CloseoutApi {
@@ -295,12 +295,36 @@ function closeReason(pr: PullRequest, passed: string[]): string {
     head_sha: pr.head.sha, merged_at: pr.merged_at, checks: passed });
 }
 
+/** Report SDK refusal codes without exposing paths, identities or arbitrary error prose. */
+export function closeoutFailureReason(error: unknown): string {
+  if (error instanceof PmCliError) {
+    const code = error.code;
+    if (typeof code === "string" && /^[a-z][a-z0-9_]{0,79}$/.test(code)) return `SDK close refused: ${code}.`;
+    return `SDK close refused (exit ${error.exitCode}).`;
+  }
+  return "SDK close failed (unclassified error).";
+}
+
 /** Invalid selectors or repository input: the caller must change the command, so the host maps it to a usage exit. */
 export class CloseoutUsageError extends Error {}
 
 /** Re-throw a selector parser's failure as a usage error. */
 function usage<T>(parse: () => T): T {
   try { return parse(); } catch (error) { throw new CloseoutUsageError((error as Error).message); }
+}
+
+/**
+ * Describe the verified check evidence for a passed gate without overstating it.
+ *
+ * The required rule states that the required checks were satisfied and lists every successful head check (optional
+ * ones included). The fallback rule (no readable required contexts)
+ * may pass on neutral or skipped runs alone, so it states that policy and lists successful checks only when any exist.
+ */
+export function checkEvidence(gate: CheckGate): string {
+  // gate.passed holds every successful head check, optional ones included, so it is never labelled as the required set.
+  if (gate.rule === "required") return `required checks satisfied; successful head checks: ${gate.passed.join(", ")}`;
+  const successes = gate.passed.length > 0 ? `successful checks: ${gate.passed.join(", ")}` : "no check reported success";
+  return `no readable required checks, so every completed head check run had to succeed, be neutral or be skipped; ${successes}`;
 }
 
 /** Plan all selected PRs before closing eligible items through the real SDK. */
@@ -328,7 +352,7 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
     }
   }
   const corpus = certifyCompleteListResult(await listAllComplete({}, { pmRoot, noExtensions: true }));
-  const items = new Map(corpus.items.map(item => [item.id, { status: item.status, type: item.type }]));
+  const items = new Map(corpus.items.map(item => [item.id, item]));
   // Containers close when their children are done, never because a pull request mentions them.
   const activeChildren = new Map<string, number>();
   for (const item of corpus.items) {
@@ -338,7 +362,7 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
   const selected = new Set<string>();
   const plan: CloseoutRow[] = [];
   const checks: CheckGate[] = [];
-  const closures: { item: string; reason: string; at: string }[] = [];
+  const closures: { row: CloseoutRow; reason: string; at: string; resolution: string; expectedResult: string; actualResult: string }[] = [];
   for (const number of [...new Set(numbers)].sort((a, b) => a - b)) {
     const pr = pullRequest(await payload(api, `/repos/${repo}/pulls/${number}`), repo, number);
     let gate: CheckGate = { pr: number, rule: "unavailable", ok: false, passed: [], reason: "Pull request is not merged or merge evidence is incomplete." };
@@ -360,15 +384,35 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
       else {
         reason = gate.reason;
         selected.add(ref.item);
-        closures.push({ item: ref.item, reason: closeReason(pr, gate.passed), at: pr.merged_at! });
-        plan.push({ item: ref.item, pr: number, action: "close", reason });
+        const row: CloseoutRow = { item: ref.item, pr: number, action: "close", reason };
+        const criteria = items.get(ref.item)!.acceptance_criteria;
+        closures.push({ row, reason: closeReason(pr, gate.passed), at: pr.merged_at!,
+          resolution: `Delivered by ${pr.html_url} (merge ${pr.merge_commit_sha!.slice(0, 12)}, head ${pr.head.sha.slice(0, 12)})`,
+          expectedResult: typeof criteria === "string" && criteria.trim().length > 0 ? criteria
+            : "Delivered by the linked pull request, merged after its head check gate passed.",
+          actualResult: `Merged at ${pr.merged_at!}; ${checkEvidence(gate)}`,
+        });
+        plan.push(row);
         continue;
       }
       plan.push({ item: ref.item, pr: number, action: "skip", reason });
     }
   }
+  let closed = 0;
+  let failed = 0;
   if (apply) {
-    for (const entry of closures) await close(entry.item, entry.reason, { author: "pm-github", completedAt: entry.at }, { pmRoot, noExtensions: true });
+    for (const entry of closures) {
+      try {
+        await close(entry.row.item, entry.reason, { author: "pm-github", completedAt: entry.at,
+          resolution: entry.resolution, expectedResult: entry.expectedResult, actualResult: entry.actualResult,
+        }, { pmRoot, noExtensions: true });
+        closed++;
+      } catch (error: unknown) {
+        failed++;
+        entry.row.action = "skip";
+        entry.row.reason = closeoutFailureReason(error);
+      }
+    }
   }
-  return { command: "github closeout", repo, dry_run: !apply, plan, checks, closed: apply ? closures.length : 0 };
+  return { command: "github closeout", repo, dry_run: !apply, plan, checks, closed, failed };
 }

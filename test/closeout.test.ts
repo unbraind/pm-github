@@ -5,9 +5,9 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { create, close, update, get } from "@unbrained/pm-cli/sdk";
+import { create, close, update, get, config, acquireLock, PmCliError } from "@unbrained/pm-cli/sdk";
 import extension, { fetchJSON, githubApiBase, parseNextLink } from "../index.ts";
-import { CloseoutUsageError, declaresDelivery, extractCloseoutItems, runCloseout, type CloseoutApi } from "../closeout.ts";
+import { CloseoutUsageError, closeoutFailureReason, declaresDelivery, extractCloseoutItems, runCloseout, type CloseoutApi } from "../closeout.ts";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import { decode } from "@toon-format/toon";
 import { boundedCli } from "./helpers/bounded-cli.ts";
@@ -139,6 +139,9 @@ test("apply persists only exact GitHub reason facts; repeated selection writes z
     assert.equal(item.close_reason, JSON.stringify({ pr: 42, url: `https://github.com/${repo}/pull/42`, merge_commit_sha: merge,
       head_sha: head, merged_at: mergedAt, checks: ["CI"] }));
     assert.equal(item.completed_at, "2026-10-13T12:30:00.000Z");
+    assert.equal(item.resolution, `Delivered by https://github.com/${repo}/pull/42 (merge ${merge.slice(0, 12)}, head ${head.slice(0, 12)})`);
+    assert.equal(item.expected_result, "Verified delivery");
+    assert.equal(item.actual_result, `Merged at ${mergedAt}; required checks satisfied; successful head checks: CI`);
     const before = snapshot(root);
     assert.ok(!before.includes(email) && !before.includes(token) && !before.includes("Private prose"));
     const repeat = await closeout(root, { pr: "42", apply: true });
@@ -146,6 +149,92 @@ test("apply persists only exact GitHub reason facts; repeated selection writes z
     assert.match(repeat.plan[0]!.reason, /already closed or canceled/);
     assert.equal(snapshot(root), before);
   });
+}));
+
+for (const mode of ["default", "strict"]) {
+  test(`${mode} close validation writes factual fields with and without acceptance criteria`, async () => tracker(async (root, ids) => {
+    const sdk = { pmRoot: root, noExtensions: true };
+    if (mode === "strict") await config("project", "set", "governance-close-validation-default", undefined, { policy: "strict" }, sdk);
+    const criteria = "Reject a legacy cursor without after_index.\nPreserve the query fingerprint.";
+    await update(ids[0]!, { title: "Legacy cursors publish the query fingerprint", acceptanceCriteria: criteria }, sdk);
+    const without = (await create({ title: "Tests pass on every platform despite Linux-only gating", type: "Task", author: "fixture" }, sdk)).item.id;
+    await update(without, { status: "in_progress" }, sdk);
+    // The strict fixture must actually reject an evidence-free close before exercising closeout.
+    if (mode === "strict") await assert.rejects(() => close(without, "Fixture delivery", {}, sdk),
+      (error: unknown) => error instanceof PmCliError && error.code === "close_validation_missing_fields");
+    const body = `${link(ids[0]!)}\n${link(without)}\nPrivate PR prose and comments claim Linux, macOS and Windows coverage.`;
+    await withMockGithub(fixture(body), async () => {
+      const before = snapshot(root);
+      assert.equal((await closeout(root)).failed, 0);
+      assert.equal(snapshot(root), before);
+      const result = await closeout(root, { pr: "42", apply: true });
+      assert.equal(result.closed, 2);
+      assert.equal(result.failed, 0);
+      for (const [id, expected] of [[ids[0]!, criteria], [without, "Delivered by the linked pull request, merged after its head check gate passed."]]) {
+        const item = (await get(id!, {}, sdk)).item;
+        assert.equal(item.status, "closed");
+        assert.equal(item.expected_result, expected);
+        assert.equal(item.resolution, `Delivered by https://github.com/${repo}/pull/42 (merge ${merge.slice(0, 12)}, head ${head.slice(0, 12)})`);
+        assert.equal(item.actual_result, `Merged at ${mergedAt}; required checks satisfied; successful head checks: CI`);
+        const fields = JSON.stringify([item.resolution, item.expected_result, item.actual_result]);
+        assert.ok(!fields.includes(String(item.title)) && !fields.includes("Private PR") && !fields.includes("Windows"));
+      }
+    });
+  }));
+}
+
+test("apply continues after lock and policy refusals and counts only successful writes", async () => tracker(async (root, ids) => {
+  const sdk = { pmRoot: root, noExtensions: true };
+  await update(ids[2]!, { tags: "requires-review" }, sdk);
+  const policy = { id: "review-required", description: "Private policy prose", effect: "refuse",
+    subject: { tags: ["requires-review"], operations: ["close"] }, rule: { kind: "require_fields", fields: ["reviewer"] } };
+  for (const args of [["policy-put", policy.id, "--definition", JSON.stringify(policy)], ["policy-mode", "refuse"]]) {
+    const result = spawnSync(cli, ["--pm-path", root, "schema", ...args], { cwd: root, encoding: "utf8", env: { ...process.env, PM_AUTHOR: "fixture" } });
+    assert.equal(result.status, 0, result.stderr);
+  }
+  const unlock = await acquireLock(root, ids[0]!, 300, "private-lock-owner");
+  try {
+    await withEnv({ PM_LOCK_WAIT_MS: "0" }, () => withMockGithub(fixture(ids.map(id => link(id)).join("\n")), async () => {
+      const result = await closeout(root, { pr: "42", apply: true });
+      assert.equal(result.closed, 2);
+      assert.equal(result.failed, 2);
+      assert.deepEqual(result.plan.map(row => row.action), ["skip", "close", "skip", "close"]);
+      assert.equal(result.plan[0]!.reason, "SDK close refused: lock_conflict.");
+      assert.match(result.plan[2]!.reason, /workflow_policy/);
+      assert.ok(!JSON.stringify(result).includes("private-lock-owner") && !JSON.stringify(result).includes("Private policy") && !JSON.stringify(result).includes(root));
+      for (const [index, id] of ids.entries()) assert.equal((await get(id, {}, sdk)).item.status, index % 2 === 0 ? "in_progress" : "closed");
+    }));
+  } finally { await unlock(); }
+}));
+
+test("failure reasons discard arbitrary prose and malformed diagnostic codes", () => {
+  for (const code of [undefined, "Private prose", "a".repeat(81)]) {
+    assert.equal(closeoutFailureReason(new PmCliError("Private filesystem details", 1, { code })), "SDK close refused (exit 1).");
+  }
+  for (const error of [new Error("Private filesystem details"), "Private response", null]) {
+    assert.equal(closeoutFailureReason(error), "SDK close failed (unclassified error).");
+  }
+});
+
+test("public apply reports partial results as CommandError exit 1 after remaining closes", async () => tracker(async (root, ids) => {
+  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "importers", "schema", "hooks", "preflight", "search"] });
+  const unlock = await acquireLock(root, ids[0]!, 300, "private-lock-owner");
+  try {
+    await withEnv({ PM_GITHUB_REPO: repo, GITHUB_TOKEN: "fixture", PM_LOCK_WAIT_MS: "0" }, () => withMockGithub(fixture(ids.slice(0, 2).map(id => link(id)).join("\n")), async server => {
+      await assert.rejects(harness.runCommand({ command: "github closeout", pmRoot: root, options: { pr: ["42"], apply: true } }), (error: unknown) => {
+        assert.equal((error as Error).name, "CommandError");
+        assert.equal((error as { exitCode: number }).exitCode, 1);
+        const report = JSON.parse((error as Error).message) as { closed: number; failed: number; plan: { action: string; reason: string }[] };
+        assert.equal(report.closed, 1);
+        assert.equal(report.failed, 1);
+        assert.deepEqual(report.plan.map(row => row.action), ["skip", "close"]);
+        assert.equal(report.plan[0]!.reason, "SDK close refused: lock_conflict.");
+        return true;
+      });
+      assert.equal((await get(ids[1]!, {}, { pmRoot: root, noExtensions: true })).item.status, "closed");
+      assert.equal(server.requests.filter(request => request.url.includes("/pulls/")).length, 1);
+    }));
+  } finally { await unlock(); }
 }));
 
 test("one item referenced by multiple selected PRs is closed once", async () => tracker(async (root, ids) => {
@@ -580,5 +669,32 @@ test("a mention is not delivery: open follow-ups, epics and parents with active 
     // With its only child closed, the parent's own in-progress delivery now closes on a rerun.
     const rerun = await closeout(root, { pr: "42", apply: true });
     assert.deepEqual(rerun.plan.filter(row => row.action === "close").map(row => row.item), [ids[0]]);
+  });
+}));
+
+test("fallback closes describe the applied check policy and never claim required checks", async () => tracker(async (root, ids) => {
+  for (const [conclusion, evidence] of [["success", "successful checks: CI"], ["skipped", "no check reported success"]] as const) {
+    const id = (await create({ title: `Fallback ${conclusion}`, type: "Task", author: "fixture" }, { pmRoot: root, noExtensions: true })).item.id;
+    await update(id, { status: "in_progress" }, { pmRoot: root, noExtensions: true });
+    await withMockGithub(fixture(link(id), (request, response) => {
+      if (request.url!.includes("/protection/")) jsonResponse(response, 404, {});
+      if (request.url!.includes("/check-runs")) jsonResponse(response, 200, { total_count: 1, check_runs: [run({ conclusion })] });
+    }), async () => {
+      assert.equal((await closeout(root, { pr: "42", apply: true })).closed, 1);
+      const item = (await get(id, { full: true }, { pmRoot: root, noExtensions: true })).item as Record<string, unknown>;
+      assert.equal(item.actual_result, `Merged at ${mergedAt}; no readable required checks, so every completed head check run had to succeed, be neutral or be skipped; ${evidence}`);
+      assert.doesNotMatch(String(item.actual_result), /required checks (passing|satisfied)/);
+    });
+  }
+}));
+
+test("successful optional checks are never labelled as required", async () => tracker(async (root, ids) => {
+  await withMockGithub(fixture(link(ids[0]!), (request, response) => {
+    if (request.url!.includes("/check-runs")) jsonResponse(response, 200, { total_count: 2, check_runs: [run(), run({ name: "lint" })] });
+  }), async () => {
+    assert.equal((await closeout(root, { pr: "42", apply: true })).closed, 1);
+    const item = (await get(ids[0]!, { full: true }, { pmRoot: root, noExtensions: true })).item as Record<string, unknown>;
+    assert.equal(item.actual_result, `Merged at ${mergedAt}; required checks satisfied; successful head checks: CI, lint`);
+    assert.doesNotMatch(String(item.actual_result), /required checks passing/);
   });
 }));

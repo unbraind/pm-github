@@ -6695,9 +6695,11 @@ export default defineExtension({
       async run(ctx: CommandHandlerContext) {
         try {
           const token = resolveGitHubToken();
-          return await runCloseout(ctx.pm_root, resolveSearchRepo(ctx.options), ctx.options, {
+          const report = await runCloseout(ctx.pm_root, resolveSearchRepo(ctx.options), ctx.options, {
             base: githubApiBase(), get: url => fetchJSON(url, token), next: parseNextLink,
           });
+          if (report.failed > 0) throw new CommandError(JSON.stringify({ ...report, error: "pm github closeout: some closes failed" }), EXIT_CODE.GENERIC_FAILURE);
+          return report;
         } catch (error) {
           // A plain Error would make the host re-run the handler (repeating GitHub reads and remaining closes).
           throw new CommandError((error as Error).message, error instanceof CloseoutUsageError ? EXIT_CODE.USAGE : EXIT_CODE.GENERIC_FAILURE);
