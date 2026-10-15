@@ -313,6 +313,18 @@ function usage<T>(parse: () => T): T {
   try { return parse(); } catch (error) { throw new CloseoutUsageError((error as Error).message); }
 }
 
+/**
+ * Describe the verified check evidence for a passed gate without overstating it.
+ *
+ * The required rule names the required checks that succeeded. The fallback rule (no readable required contexts)
+ * may pass on neutral or skipped runs alone, so it states that policy and lists successful checks only when any exist.
+ */
+export function checkEvidence(gate: CheckGate): string {
+  if (gate.rule === "required") return `required checks passing: ${gate.passed.join(", ")}`;
+  const successes = gate.passed.length > 0 ? `successful checks: ${gate.passed.join(", ")}` : "no check reported success";
+  return `no readable required checks, so every completed head check run had to succeed, be neutral or be skipped; ${successes}`;
+}
+
 /** Plan all selected PRs before closing eligible items through the real SDK. */
 export async function runCloseout(pmRoot: string, repo: string | undefined, options: Record<string, unknown>, api: CloseoutApi) {
   if (!repo || !/^(?!\.{1,2}\/)[A-Za-z0-9_.-]+\/(?!\.{1,2}$)[A-Za-z0-9_.-]+$/.test(repo)) throw new CloseoutUsageError("closeout requires --repo owner/repo or PM_GITHUB_REPO.");
@@ -375,8 +387,8 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
         closures.push({ row, reason: closeReason(pr, gate.passed), at: pr.merged_at!,
           resolution: `Delivered by ${pr.html_url} (merge ${pr.merge_commit_sha!.slice(0, 12)}, head ${pr.head.sha.slice(0, 12)})`,
           expectedResult: typeof criteria === "string" && criteria.trim().length > 0 ? criteria
-            : "Delivered by the linked pull request, merged with its required checks passing.",
-          actualResult: `Merged at ${pr.merged_at!} with required checks passing: ${gate.passed.join(", ")}`,
+            : "Delivered by the linked pull request, merged after its head check gate passed.",
+          actualResult: `Merged at ${pr.merged_at!}; ${checkEvidence(gate)}`,
         });
         plan.push(row);
         continue;

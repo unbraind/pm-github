@@ -1,0 +1,12 @@
+id: pm-github-l1ot
+title: "The daily release regenerates the changelog with a different status filter than release:check, so an open item delivered since the last tag fails the release"
+description: "On 2026-10-15 the scheduled pm-github release (run 38705391245) failed in Run release checks with 'Changelog is out of date'. The release step 'Generate changelog and release notes' runs npx pm-changelog in replace mode with its default closed-only status filter, then npm run release:check runs changelog:check through scripts/generate-changelog.ts, which passes closed plus every status present in the tracker. pm-github-wrmt (delivered by PR 122) was still in_progress, so it appeared only in the check's output and the release aborted after bumping in the runner (nothing was published). The release workflow and the package scripts must generate the changelog through one code path (the repo's changelog:full script), so a release cannot fail on a disagreement between two generators of the same file."
+type: Issue
+status: open
+priority: 1
+tags[2]: changelog,release
+created_at: "2026-10-15T09:25:36.259Z"
+updated_at: "2026-10-15T09:25:36.259Z"
+author: claude-hub
+acceptance_criteria: "release.yml generates CHANGELOG.md and the release notes through the package's own changelog scripts with the same status filter as changelog:check; a test fails if the two disagree; a release run with an in_progress item delivered since the last tag either succeeds or fails before any bump with a clear reason"
+body: ""

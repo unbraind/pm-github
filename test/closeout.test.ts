@@ -141,7 +141,7 @@ test("apply persists only exact GitHub reason facts; repeated selection writes z
     assert.equal(item.completed_at, "2026-10-13T12:30:00.000Z");
     assert.equal(item.resolution, `Delivered by https://github.com/${repo}/pull/42 (merge ${merge.slice(0, 12)}, head ${head.slice(0, 12)})`);
     assert.equal(item.expected_result, "Verified delivery");
-    assert.equal(item.actual_result, `Merged at ${mergedAt} with required checks passing: CI`);
+    assert.equal(item.actual_result, `Merged at ${mergedAt}; required checks passing: CI`);
     const before = snapshot(root);
     assert.ok(!before.includes(email) && !before.includes(token) && !before.includes("Private prose"));
     const repeat = await closeout(root, { pr: "42", apply: true });
@@ -170,12 +170,12 @@ for (const mode of ["default", "strict"]) {
       const result = await closeout(root, { pr: "42", apply: true });
       assert.equal(result.closed, 2);
       assert.equal(result.failed, 0);
-      for (const [id, expected] of [[ids[0]!, criteria], [without, "Delivered by the linked pull request, merged with its required checks passing."]]) {
+      for (const [id, expected] of [[ids[0]!, criteria], [without, "Delivered by the linked pull request, merged after its head check gate passed."]]) {
         const item = (await get(id!, {}, sdk)).item;
         assert.equal(item.status, "closed");
         assert.equal(item.expected_result, expected);
         assert.equal(item.resolution, `Delivered by https://github.com/${repo}/pull/42 (merge ${merge.slice(0, 12)}, head ${head.slice(0, 12)})`);
-        assert.equal(item.actual_result, `Merged at ${mergedAt} with required checks passing: CI`);
+        assert.equal(item.actual_result, `Merged at ${mergedAt}; required checks passing: CI`);
         const fields = JSON.stringify([item.resolution, item.expected_result, item.actual_result]);
         assert.ok(!fields.includes(String(item.title)) && !fields.includes("Private PR") && !fields.includes("Windows"));
       }
@@ -670,4 +670,20 @@ test("a mention is not delivery: open follow-ups, epics and parents with active 
     const rerun = await closeout(root, { pr: "42", apply: true });
     assert.deepEqual(rerun.plan.filter(row => row.action === "close").map(row => row.item), [ids[0]]);
   });
+}));
+
+test("fallback closes describe the applied check policy and never claim required checks", async () => tracker(async (root, ids) => {
+  for (const [conclusion, evidence] of [["success", "successful checks: CI"], ["skipped", "no check reported success"]] as const) {
+    const id = (await create({ title: `Fallback ${conclusion}`, type: "Task", author: "fixture" }, { pmRoot: root, noExtensions: true })).item.id;
+    await update(id, { status: "in_progress" }, { pmRoot: root, noExtensions: true });
+    await withMockGithub(fixture(link(id), (request, response) => {
+      if (request.url!.includes("/protection/")) jsonResponse(response, 404, {});
+      if (request.url!.includes("/check-runs")) jsonResponse(response, 200, { total_count: 1, check_runs: [run({ conclusion })] });
+    }), async () => {
+      assert.equal((await closeout(root, { pr: "42", apply: true })).closed, 1);
+      const item = (await get(id, { full: true }, { pmRoot: root, noExtensions: true })).item as Record<string, unknown>;
+      assert.equal(item.actual_result, `Merged at ${mergedAt}; no readable required checks, so every completed head check run had to succeed, be neutral or be skipped; ${evidence}`);
+      assert.doesNotMatch(String(item.actual_result), /required checks passing/);
+    });
+  }
 }));

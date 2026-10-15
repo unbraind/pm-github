@@ -96,10 +96,14 @@ structured close fields it supports, without overriding tracker policy:
 
 - `resolution`: `Delivered by <PR URL> (merge <sha12>, head <sha12>)`.
 - `expected_result`: the item's own acceptance criteria verbatim when present;
-  otherwise `Delivered by the linked pull request, merged with its required checks passing.`
-- `actual_result`: `Merged at <time> with required checks passing: <names>`, using
-  only verified merge time and sorted successful check names. This makes no
-  platform, coverage or test-execution claims.
+  otherwise `Delivered by the linked pull request, merged after its head check gate passed.`
+- `actual_result`: `Merged at <time>; required checks passing: <names>` when branch
+  protection or rulesets name required checks. Under the fallback rule (no readable
+  required contexts) it reads `Merged at <time>; no readable required checks, so every
+  completed head check run had to succeed, be neutral or be skipped; successful checks:
+  <names>`, or `…; no check reported success` when only neutral or skipped runs exist.
+  Only the verified merge time, the applied check policy and sorted successful check
+  names are used; no platform, coverage or test-execution claims are made.
 
 Item titles never supply any of these fields. Existing tracker acceptance
 criteria remain the only prose source; PR body and comments supply no field text.
