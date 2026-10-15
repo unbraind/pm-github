@@ -97,8 +97,9 @@ structured close fields it supports, without overriding tracker policy:
 - `resolution`: `Delivered by <PR URL> (merge <sha12>, head <sha12>)`.
 - `expected_result`: the item's own acceptance criteria verbatim when present;
   otherwise `Delivered by the linked pull request, merged after its head check gate passed.`
-- `actual_result`: `Merged at <time>; required checks passing: <names>` when branch
-  protection or rulesets name required checks. Under the fallback rule (no readable
+- `actual_result`: `Merged at <time>; required checks satisfied; successful head checks:
+  <names>` when branch protection or rulesets name required checks (the list holds every
+  successful head check, optional ones included). Under the fallback rule (no readable
   required contexts) it reads `Merged at <time>; no readable required checks, so every
   completed head check run had to succeed, be neutral or be skipped; successful checks:
   <names>`, or `…; no check reported success` when only neutral or skipped runs exist.

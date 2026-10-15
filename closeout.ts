@@ -316,11 +316,13 @@ function usage<T>(parse: () => T): T {
 /**
  * Describe the verified check evidence for a passed gate without overstating it.
  *
- * The required rule names the required checks that succeeded. The fallback rule (no readable required contexts)
+ * The required rule states that the required checks were satisfied and lists every successful head check (optional
+ * ones included). The fallback rule (no readable required contexts)
  * may pass on neutral or skipped runs alone, so it states that policy and lists successful checks only when any exist.
  */
 export function checkEvidence(gate: CheckGate): string {
-  if (gate.rule === "required") return `required checks passing: ${gate.passed.join(", ")}`;
+  // gate.passed holds every successful head check, optional ones included, so it is never labelled as the required set.
+  if (gate.rule === "required") return `required checks satisfied; successful head checks: ${gate.passed.join(", ")}`;
   const successes = gate.passed.length > 0 ? `successful checks: ${gate.passed.join(", ")}` : "no check reported success";
   return `no readable required checks, so every completed head check run had to succeed, be neutral or be skipped; ${successes}`;
 }

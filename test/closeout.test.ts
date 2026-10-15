@@ -141,7 +141,7 @@ test("apply persists only exact GitHub reason facts; repeated selection writes z
     assert.equal(item.completed_at, "2026-10-13T12:30:00.000Z");
     assert.equal(item.resolution, `Delivered by https://github.com/${repo}/pull/42 (merge ${merge.slice(0, 12)}, head ${head.slice(0, 12)})`);
     assert.equal(item.expected_result, "Verified delivery");
-    assert.equal(item.actual_result, `Merged at ${mergedAt}; required checks passing: CI`);
+    assert.equal(item.actual_result, `Merged at ${mergedAt}; required checks satisfied; successful head checks: CI`);
     const before = snapshot(root);
     assert.ok(!before.includes(email) && !before.includes(token) && !before.includes("Private prose"));
     const repeat = await closeout(root, { pr: "42", apply: true });
@@ -175,7 +175,7 @@ for (const mode of ["default", "strict"]) {
         assert.equal(item.status, "closed");
         assert.equal(item.expected_result, expected);
         assert.equal(item.resolution, `Delivered by https://github.com/${repo}/pull/42 (merge ${merge.slice(0, 12)}, head ${head.slice(0, 12)})`);
-        assert.equal(item.actual_result, `Merged at ${mergedAt}; required checks passing: CI`);
+        assert.equal(item.actual_result, `Merged at ${mergedAt}; required checks satisfied; successful head checks: CI`);
         const fields = JSON.stringify([item.resolution, item.expected_result, item.actual_result]);
         assert.ok(!fields.includes(String(item.title)) && !fields.includes("Private PR") && !fields.includes("Windows"));
       }
@@ -683,7 +683,18 @@ test("fallback closes describe the applied check policy and never claim required
       assert.equal((await closeout(root, { pr: "42", apply: true })).closed, 1);
       const item = (await get(id, { full: true }, { pmRoot: root, noExtensions: true })).item as Record<string, unknown>;
       assert.equal(item.actual_result, `Merged at ${mergedAt}; no readable required checks, so every completed head check run had to succeed, be neutral or be skipped; ${evidence}`);
-      assert.doesNotMatch(String(item.actual_result), /required checks passing/);
+      assert.doesNotMatch(String(item.actual_result), /required checks (passing|satisfied)/);
     });
   }
+}));
+
+test("successful optional checks are never labelled as required", async () => tracker(async (root, ids) => {
+  await withMockGithub(fixture(link(ids[0]!), (request, response) => {
+    if (request.url!.includes("/check-runs")) jsonResponse(response, 200, { total_count: 2, check_runs: [run(), run({ name: "lint" })] });
+  }), async () => {
+    assert.equal((await closeout(root, { pr: "42", apply: true })).closed, 1);
+    const item = (await get(ids[0]!, { full: true }, { pmRoot: root, noExtensions: true })).item as Record<string, unknown>;
+    assert.equal(item.actual_result, `Merged at ${mergedAt}; required checks satisfied; successful head checks: CI, lint`);
+    assert.doesNotMatch(String(item.actual_result), /required checks passing/);
+  });
 }));
