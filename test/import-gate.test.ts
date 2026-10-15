@@ -657,6 +657,8 @@ test("the caller example pins the reusable workflow and the extension version", 
     /uses: unbraind\/pm-github\/\.github\/workflows\/pm-github-sync\.yml@RELEASE_COMMIT_SHA/,
   );
   assert.match(callerExample, /pm-github-version: "RELEASE_VERSION"/);
+  assert.match(callerExample, /npm-project-dir: "\."/);
+  assert.match(callerExample, /npm-project-dir: tests\/oracle/);
   assert.match(callerExample, /^permissions:\n  contents: write\n  pull-requests: write\n/m);
   assert.match(callerExample, /^  actions: write/m);
   const lines = callerExample.split("\n").filter((line) => line.trim() !== "" && !line.startsWith("#"));
@@ -765,6 +767,7 @@ esac
   const env = { ...process.env, PATH: tools + path.delimiter + bin + path.delimiter + process.env.PATH,
     GH_TOKEN: "synthetic-test-token", GITHUB_TOKEN: "synthetic-test-token", PM_AUTHOR: "codex-sol",
     PM_GLOBAL_PATH: fixtureGlobalRoot, PM_PATH: path.join(root, ".agents", "pm"), REPOSITORY: "acme/widgets", CALLING_REPOSITORY: "acme/widgets",
+    NPM_PROJECT_PATH: root, GITHUB_WORKSPACE: root,
     POST_IMPORT_SCRIPT: "changelog:full", CI_WORKFLOWS: "ci.yml",
     PM_GITHUB_VERSION: "2026.10.4", SYNC_BRANCH, SYNC_LEASE: "", RUNNER_TEMP: base,
     GITHUB_ENV: path.join(base, "job-env"), REVIEW_RECEIPT: path.join(base, "review.md"), REVIEW_ACTIONS: path.join(base, "review-actions") };
@@ -1112,6 +1115,127 @@ test("gated pre-write input errors carry the command exit code", async () => {
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+/** Run the real directory validator and consume its environment file as Actions does. */
+async function resolveNpmProject(root: string, base: string, input: string): Promise<{ result: Awaited<ReturnType<typeof executeWorkflow>>; env: NodeJS.ProcessEnv }> {
+  const env: NodeJS.ProcessEnv = { ...process.env, GITHUB_WORKSPACE: root, GITHUB_ENV: path.join(base, "npm-env"),
+    GITHUB_PATH: path.join(base, "npm-path"), NPM_PROJECT_DIR: input, POST_IMPORT_SCRIPT: "changelog:full",
+    NPM_RECEIPT: path.join(base, "npm-script-receipt") };
+  for (const key of Object.keys(env)) if (key.toLowerCase() === "npm_config_allow_scripts") delete env[key];
+  const result = await executeWorkflow(workflowShell(["Validate npm project directory"]), root, env);
+  if (result.code === 0) {
+    const exported = fs.readFileSync(env.GITHUB_ENV!, "utf8");
+    assert.match(exported, /^NPM_PROJECT_PATH=[^\r\n]+\n$/);
+    env.NPM_PROJECT_PATH = exported.slice("NPM_PROJECT_PATH=".length).trimEnd();
+  }
+  return { result, env };
+}
+
+for (const directory of [".", "tests/oracle"]) {
+  test(`npm-project-dir ${directory === "." ? "default" : "subdirectory"} installs, prepends PATH and runs the caller script in the selected project`, async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-npm-project-"));
+    const root = path.join(base, "work");
+    const project = path.join(root, directory);
+    fs.mkdirSync(project, { recursive: true });
+    const manifest = JSON.stringify({ name: "sync-project", version: "1.0.0", scripts: {
+      preinstall: "node -e 'process.exit(88)'",
+      "changelog:full": `node -e 'require("node:fs").writeFileSync(process.env.NPM_RECEIPT, process.cwd())'`,
+    } });
+    const lock = JSON.stringify({ name: "sync-project", version: "1.0.0", lockfileVersion: 3, requires: true,
+      packages: { "": { name: "sync-project", version: "1.0.0", hasInstallScript: true } } });
+    fs.writeFileSync(path.join(project, "package.json"), manifest);
+    fs.writeFileSync(path.join(project, "package-lock.json"), lock);
+    try {
+      const defaultInput = /npm-project-dir:\n\s+description:[^\n]+\n\s+type: string\n\s+required: false\n\s+default: "([^"\n]+)"/.exec(workflow);
+      assert.ok(defaultInput, "the optional input declares its default");
+      assert.match(workflow, /NPM_PROJECT_DIR: \$\{\{ inputs.npm-project-dir \}\}/);
+      const { result, env } = await resolveNpmProject(root, base, directory === "." ? defaultInput[1]! : directory);
+      assert.equal(result.code, 0, result.stdout + result.stderr);
+      assert.equal(env.NPM_PROJECT_PATH, project);
+      assert.ok(stepOffset("Checkout main") < stepOffset("Validate npm project directory"));
+      assert.ok(stepOffset("Validate npm project directory") < stepOffset("Setup Node.js"));
+      assert.match(workflow, /cache-dependency-path: \|\n\s+\$\{\{ env.NPM_PROJECT_PATH \}\}\/package-lock.json\n\s+\$\{\{ env.NPM_PROJECT_PATH \}\}\/npm-shrinkwrap.json/);
+      const install = await executeWorkflow(workflowShell(["Install dependencies"]), root, env);
+      assert.equal(install.code, 0, install.stdout + install.stderr);
+      assert.equal(fs.readFileSync(env.GITHUB_PATH!, "utf8"), `${project}/node_modules/.bin\n`);
+      // npm must ignore the failing lifecycle script and preserve both manifests.
+      assert.equal(fs.readFileSync(path.join(project, "package.json"), "utf8"), manifest);
+      assert.equal(fs.readFileSync(path.join(project, "package-lock.json"), "utf8"), lock);
+      const post = await executeWorkflow(workflowShell(["Run caller post-import script"]), root, env);
+      assert.equal(post.code, 0, post.stdout + post.stderr);
+      assert.equal(fs.readFileSync(env.NPM_RECEIPT!, "utf8"), project);
+      if (directory === ".") {
+        // Compare the legacy default's observable files byte for byte.
+        const legacyEnv = { ...env, GITHUB_PATH: path.join(base, "legacy-path"), NPM_RECEIPT: path.join(base, "legacy-receipt") };
+        const legacy = await executeWorkflow('npm ci --ignore-scripts\nprintf \'%s/node_modules/.bin\\n\' "$GITHUB_WORKSPACE" >> "$GITHUB_PATH"\nnpm run --if-present "$POST_IMPORT_SCRIPT"', root, legacyEnv);
+        assert.equal(legacy.code, 0, legacy.stdout + legacy.stderr);
+        for (const key of ["GITHUB_PATH", "NPM_RECEIPT"] as const) {
+          assert.deepEqual(fs.readFileSync(env[key]!), fs.readFileSync(legacyEnv[key]!));
+        }
+      } else assert.equal(fs.existsSync(path.join(root, "package.json")), false);
+    } finally { fs.rmSync(base, { recursive: true, force: true }); }
+  });
+}
+
+for (const scenario of ["parent", "embedded-parent", "absolute", "missing-package", "missing-directory", "symlink-escape", "symlink-newline-target", "newline", "colon", "empty"] as const) {
+  test(`npm-project-dir refuses ${scenario} before install or environment publication`, async () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-npm-invalid-"));
+    const root = path.join(base, "work");
+    fs.mkdirSync(root);
+    fs.mkdirSync(path.join(root, "empty"));
+    fs.writeFileSync(path.join(base, "package.json"), "{}");
+    fs.writeFileSync(path.join(root, "package.json"), "{}");
+    fs.symlinkSync(base, path.join(root, "escape"), "dir");
+    fs.mkdirSync(path.join(root, "canonical\n"));
+    fs.mkdirSync(path.join(root, "canonical"));
+    fs.writeFileSync(path.join(root, "canonical", "package.json"), "{}");
+    fs.symlinkSync("canonical\n", path.join(root, "newline-link"), "dir");
+    const inputs = { parent: "..", "embedded-parent": "empty/../", absolute: root,
+      "missing-package": "empty", "missing-directory": "absent", "symlink-escape": "escape", "symlink-newline-target": "newline-link",
+      newline: ".\nINJECTED=value", colon: "empty:other", empty: "" };
+    try {
+      const { result, env } = await resolveNpmProject(root, base, inputs[scenario]);
+      assert.equal(result.code, 1, result.stdout + result.stderr);
+      assert.equal(result.stdout, "::error::npm-project-dir must be a relative path without .. segments, resolve inside the workspace, and contain package.json.\n");
+      assert.equal(result.stderr, "");
+      assert.equal(fs.existsSync(env.GITHUB_ENV!), false);
+      assert.equal(fs.existsSync(env.GITHUB_PATH!), false);
+    } finally { fs.rmSync(base, { recursive: true, force: true }); }
+  });
+}
+
+test("npm-project-dir subdirectory CLI and SDK keep the tracker and publication at the repository root", async () => {
+  const { root, base, bare, git } = initSyncRepo();
+  try {
+    const env = await prepareWorkflowFixture(root, base);
+    const project = path.join(root, "tests", "oracle");
+    fs.mkdirSync(project, { recursive: true });
+    fs.renameSync(path.join(root, "package.json"), path.join(project, "package.json"));
+    fs.renameSync(path.join(root, "node_modules"), path.join(project, "node_modules"));
+    // The fixture uses the real pinned CLI/SDK and packed candidate extension.
+    env.NPM_PROJECT_PATH = project;
+    env.PATH = path.join(project, "node_modules", ".bin") + path.delimiter + env.PATH;
+    assert.equal(git(["add", "--", "package.json", "tests/oracle/package.json"]).status, 0);
+    assert.equal(git(["commit", "-qm", "nested caller npm project"]).status, 0);
+    assert.equal(git(["switch", "-c", SYNC_BRANCH]).status, 0);
+    const handle = githubHandler([issue(1, "Public nested caller issue", "Reviewed public body.")]);
+    await withMockGithub((req, res, url, server) => {
+      if (req.url === "/repos/acme/widgets") jsonResponse(res, 200, { private: false });
+      else handle(req, res, url, server);
+    }, async () => {
+      const result = await executeWorkflow(workflowShell(WORKFLOW_IMPORT_SEQUENCE), root,
+        { ...env, PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE });
+      assert.equal(result.code, 0, result.stdout + result.stderr + git(["diff", "--", ".gitattributes"]).stdout);
+      assert.equal(fs.existsSync(path.join(root, "package.json")), false);
+      assert.match(fs.readFileSync(env.GITHUB_ENV!, "utf8"), /^PM_SYNC_TRACKER=\.agents\/pm$/m);
+      assert.ok(remoteRefs(bare).includes("refs/heads/" + SYNC_BRANCH));
+      const changed = git(["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"]).stdout.trim().split("\n");
+      assert.ok(changed.some(file => file.endsWith(".toon")), "a nonempty import was published");
+      assert.ok(changed.every(file => file.startsWith(".agents/pm/") || file === "CHANGELOG.md"));
+      assert.equal(fs.existsSync(path.join(project, ".agents")), false);
+    });
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
 test("workflow input shell accepts numeric same-day pins and refuses floating versions", async () => {
   for (const [version, valid] of [["2026.10.6", true], ["2026.10.6-1", true], ["2026.10.6-12", true], ["latest", false], ["^2026.10.6", false], ["2026.10.6-beta", false], ["2026.10.6-1; true", false]] as const) {
     const result = await executeWorkflow(workflowShell(["Validate sync inputs"]), repoRoot, {
@@ -1313,7 +1437,7 @@ test("post-import script can be overridden or disabled and defaults tolerate an 
     fs.writeFileSync(path.join(root, "custom.cjs"), 'require("node:fs").writeFileSync("CHANGELOG.md", "custom");\n');
     const shell = workflowShell(["Run caller post-import script"]);
     for (const script of ["changelog:full", "", "custom"]) {
-      const result = await executeWorkflow(shell, root, { ...process.env, POST_IMPORT_SCRIPT: script });
+      const result = await executeWorkflow(shell, root, { ...process.env, NPM_PROJECT_PATH: root, POST_IMPORT_SCRIPT: script });
       assert.equal(result.code, 0, result.stderr);
       assert.equal(fs.existsSync(path.join(root, "CHANGELOG.md")), script === "custom");
     }

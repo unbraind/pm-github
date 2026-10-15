@@ -461,6 +461,7 @@ Optional inputs:
 
 | Input | Default | Behavior |
 | --- | --- | --- |
+| `npm-project-dir` | `.` | Relative npm project directory for `npm ci --ignore-scripts`, the CLI `node_modules/.bin` PATH entry, and `post-import-script`. Must have `package.json`, contain no `..` segments, and resolve inside the workspace (including symlinks); invalid paths fail before caching/install. The tracker and publication scope stay at the repository root. |
 | `post-import-script` | `changelog:full` | Caller npm script name invoked with `npm run --if-present` after import and before the final scan. Override for a different package script, or set `""` to disable. Missing scripts are skipped. Raw shell commands are not accepted. Generated `CHANGELOG.md` is staged with the tracker. Changing any file outside the documented scope fails the run, whether staged, unstaged, or untracked. |
 | `ci-workflows` | `ci.yml` | Whitespace-separated filenames in the caller's `.github/workflows`, for example `ci.yml codeql.yml`. Missing files emit a notice and are skipped; set `""` to disable dispatch. Existing workflows must enable `workflow_dispatch`; dispatch errors fail the sync job. |
 
@@ -486,7 +487,13 @@ jobs:
       pm-github-version: "RELEASE_VERSION"     # required: exact published version
 ```
 
-Replace the two release placeholders with the release commit and package version containing this change; existing callers must repin both. The calling repo needs `@unbrained/pm-cli` as a devDependency (the workflow's `npm ci` provides the CLI) and its pm tracker at `.agents/pm` committed on `main`. Under **Settings → Actions → General → Workflow permissions** it must allow read and write token permissions and enable **Allow GitHub Actions to create and approve pull requests** (an organization can disable this), or the run pushes the sync branch and then fails to open the review PR. The caller must grant `actions: write`; a reusable workflow cannot elevate its caller's permissions.
+Replace the two release placeholders with the release commit and package version containing this change; existing callers must repin both. The selected npm project needs a committed npm lockfile (`package-lock.json` or `npm-shrinkwrap.json`) and `@unbrained/pm-cli` as a devDependency (the workflow's `npm ci` provides the CLI) and its pm tracker at `.agents/pm` committed on `main`. Under **Settings → Actions → General → Workflow permissions** it must allow read and write token permissions and enable **Allow GitHub Actions to create and approve pull requests** (an organization can disable this), or the run pushes the sync branch and then fails to open the review PR. The caller must grant `actions: write`; a reusable workflow cannot elevate its caller's permissions.
+
+For a caller such as `unbraind/pm-rust` with no root `package.json`, add
+`npm-project-dir: tests/oracle` under `with:`. Its `tests/oracle/package.json`
+provides the CLI and post-import npm script; Git and pm tracker operations still
+run from the repository root. A script that regenerates the changelog must write
+the repository-root `CHANGELOG.md` to stay within the publication allowlist.
 
 Bot-created review PRs may have missing required checks or `pull_request` runs parked in `action_required`. After a successful push and PR creation/update, the reusable workflow uses the job's `GITHUB_TOKEN` to run `gh workflow run <file> --ref "$SYNC_BRANCH"` for each configured caller CI workflow. Explicit `workflow_dispatch` creates runs on the sync head, so callers must enable that trigger and ensure those runs produce their required check names (and do not restrict the required jobs to the `pull_request` event). It also lists `action_required` runs for the exact pushed SHA and prints their URLs as notices without failing because approval is needed. Missing workflows, disabled dispatch, or approval notices do not establish that required CI passed; inspect the dispatched checks. A no-change sync closes its stale own review PR and dispatches nothing. See GitHub's [GITHUB_TOKEN event rules](https://docs.github.com/en/actions/concepts/security/github_token) and [dispatch trigger and permission requirements](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event).
 
