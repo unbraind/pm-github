@@ -1,0 +1,25 @@
+id: pm-github-q4uz
+title: Refuse reusable sync runs outside the caller default branch
+description: "Track https://github.com/unbraind/pm-github/issues/128. Add a first-step fail-closed ref guard with injection-safe environment inputs, document caller behavior, and execute real workflow shell contract tests without changing the remaining pipeline."
+type: Issue
+status: in_progress
+priority: 1
+tags[1]: "gh:unbraind/pm-github#128"
+created_at: "2026-10-15T20:46:41.947Z"
+updated_at: "2026-10-15T22:01:14.428Z"
+author: codex-agent
+acceptance_criteria: First-step guard refuses non-default refs and accepts schedule and workflow_dispatch on the default branch; behavioural revert fails; npm and Bun release gates pass at unchanged thresholds.
+comments[4]{created_at,author,text}:
+  "2026-10-15T20:46:55.457Z",codex-agent,Starting #128 from main including #130. Add a first-step Bash string comparison using env-bound caller ref/default branch; preserve all later workflow content. Execute the first step for default and non-default refs and prove refusal disappears when only the guard is removed. Document that callers need no guard; run both unchanged release gates under isolated Git identity.
+  "2026-10-15T20:48:13.818Z",codex-agent,"Behavioural revert proof: removed only Require caller default branch from the real workflow and ran node --test --test-name-pattern=\"first workflow step refuses\" test/import-gate.test.ts. Result: 0 passed, 1 failed; refs/heads/feature/sync returned exit 0 instead of required 1. Restored the guard; node --test --test-name-pattern=\"caller default branch|first workflow step\" test/import-gate.test.ts passed 3/3, zero failures/skips/cancellations/todos. After removing the guard, the entire workflow is byte-for-byte identical to baseline 3f64d8b (main including #130). The guard uses env inputs and string comparison without a Bash regex."
+  "2026-10-15T21:25:15.228Z",codex-agent,"npm run release:check passed under isolated HOME and Git configuration: 679/679 tests, 0 failures/skips/cancellations/todos; 13 authored modules at exact 100/100/100/100 coverage (10040/10040 lines, 10040/10040 statements, 255/255 functions, 2832/2832 branches). Typecheck, build, 158 documented declarations, lint, zero-duplication threshold, privacy, production audit (0 vulnerabilities), pack dry-run, changelog check, and release attestation all passed at unchanged thresholds. Starting bun run release:check next."
+  "2026-10-15T22:01:13.539Z",codex-agent,"bun run release:check passed under isolated HOME and Git configuration: 679/679 tests, 0 failures/skips/cancellations/todos. Exact coverage matches npm: 13 authored modules, 10040/10040 lines and statements, 255/255 functions, 2832/2832 branches (100/100/100/100). All static, privacy, audit, packing, changelog and attestation gates passed at unchanged thresholds. Linked focused tests also passed through pm test --run --progress (3/3). Ready for review; callers must repin the reusable workflow to receive this guard. No PM CLI/SDK defect or UX gap encountered. Item remains in_progress and will not be closed."
+files[2]{path,scope}:
+  .github/workflows/pm-github-sync.yml,project
+  test/import-gate.test.ts,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  "node --test --test-name-pattern=\"caller default branch|first workflow step\" test/import-gate.test.ts",project,codex-agent,"2026-10-15T20:48:04.283Z",local_mutation,fix/sync-default-branch-guard
+docs[2]{path,scope}:
+  docs/sync-workflow-caller.yml,project
+  README.md,project
+body: ""

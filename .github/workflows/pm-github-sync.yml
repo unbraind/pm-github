@@ -78,6 +78,19 @@ jobs:
       CI_WORKFLOWS: ${{ inputs.ci-workflows }}
       CALLING_REPOSITORY: ${{ github.repository }}
     steps:
+      - name: Require caller default branch
+        env:
+          RUN_REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_ref="refs/heads/${DEFAULT_BRANCH}"
+          if [[ -z "${DEFAULT_BRANCH}" || "${RUN_REF}" != "${expected_ref}" ]]; then
+            printf '::error::Sync ref "%s" must match caller default branch ref "%s".\n' "${RUN_REF}" "${expected_ref}"
+            exit 1
+          fi
+
       - name: Validate sync inputs
         shell: bash
         run: |

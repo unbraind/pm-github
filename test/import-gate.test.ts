@@ -604,6 +604,54 @@ test("the reusable sync workflow is a workflow_call with explicit pinned inputs"
   );
 });
 
+test("the caller default branch guard is first and preserves the remaining step order", () => {
+  const steps = workflow.split(/\n      - name: /).slice(1);
+  assert.deepEqual(steps.map(step => step.split("\n")[0]), [
+    "Require caller default branch", "Validate sync inputs", "Checkout main",
+    "Validate npm project directory", "Setup Node.js", "Prepare sync branch from main",
+    "Install dependencies", "Resolve sync commit scope", "Install pinned pm-github extension",
+    "Configure PM merge drivers", "Verify gate is available", "Validate GitHub access",
+    "Revalidate GitHub blockers (report only)", "Preview GitHub to pm plan",
+    "Gated GitHub to pm import", "Verify repeat import is a no-op", "Run caller post-import script",
+    "Gate tracker and regenerated changelog", "Verify strict pm health",
+    "Commit gated sync changes and open review PR", "Dispatch caller CI and report parked runs",
+  ]);
+  assert.match(steps[0]!, /RUN_REF: \$\{\{ github.ref \}\}/);
+  assert.match(steps[0]!, /DEFAULT_BRANCH: \$\{\{ github.event.repository.default_branch \}\}/);
+  assert.match(steps[0]!, /shell: bash/);
+  assert.doesNotMatch(steps[0]!, /\n        (?:if|continue-on-error):/);
+  assert.doesNotMatch(workflowShell(["Require caller default branch"]), /\$\{\{|=~/);
+  assert.match(callerExample, /Callers need no guard of their own/);
+});
+
+test("the first workflow step refuses non-default refs with one diagnostic naming both refs", async () => {
+  // Execute the first step even after a guard removal, so the revert fails on
+  // its actual exit status rather than merely failing to find a named step.
+  const firstStep = /^      - name: (.+)$/m.exec(workflow)![1]!;
+  for (const ref of ["refs/heads/feature/sync", "refs/tags/main", "refs/heads/main-extra", "refs/heads/$(printf injected)", ""]) {
+    const result = await executeWorkflow(workflowShell([firstStep]), repoRoot, {
+      ...process.env, RUN_REF: ref, DEFAULT_BRANCH: "main", GITHUB_EVENT_NAME: "workflow_dispatch",
+      REPOSITORY: "acme/widgets", CALLING_REPOSITORY: "acme/widgets", SYNC_BRANCH, PM_GITHUB_VERSION: "2026.10.15",
+    });
+    assert.equal(result.code, 1, `must refuse ${ref}`);
+    assert.equal(result.stdout, `::error::Sync ref "${ref}" must match caller default branch ref "refs/heads/main".\n`);
+    assert.equal(result.stderr, "");
+  }
+});
+
+test("the first workflow step accepts scheduled and dispatched calls on the caller default branch", async () => {
+  const firstStep = /^      - name: (.+)$/m.exec(workflow)![1]!;
+  for (const event of ["schedule", "workflow_dispatch"]) {
+    for (const branch of ["main", "trunk", "release/stable"]) {
+      const result = await executeWorkflow(workflowShell([firstStep]), repoRoot, {
+        ...process.env, RUN_REF: `refs/heads/${branch}`, DEFAULT_BRANCH: branch, GITHUB_EVENT_NAME: event,
+      });
+      assert.equal(result.code, 0, `${event} on ${branch}: ${result.stderr}`);
+      assert.equal(result.stdout + result.stderr, "");
+    }
+  }
+});
+
 test("every action the workflow uses is pinned by commit SHA", () => {
   const uses = [...workflow.matchAll(/^\s*uses: ([^\s#]+)/gm)].map((match) => match[1]!);
   assert.ok(uses.length >= 2, "the workflow uses actions");
