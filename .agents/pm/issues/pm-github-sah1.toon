@@ -1,0 +1,15 @@
+id: pm-github-sah1
+title: Stabilize the watchdog startup probe under concurrent coverage
+description: The existing acceptance-watchdog test can reach its 500 ms synthetic-child deadline before the child prints ready under concurrent coverage. A full package run failed the ready assertion while the isolated watchdog suite passed 2/2. This is separate from the delivered bounded-consumer watchdog work in pm-github-hptv and from closeout behavior.
+type: Issue
+status: open
+priority: 2
+tags: []
+created_at: "2026-10-15T00:13:15.730Z"
+updated_at: "2026-10-15T00:13:15.730Z"
+author: codex-agent
+acceptance_criteria: "Reproduce the readiness race with real child processes under coverage and make the probe deterministic without weakening the 500 ms deadline, 100 ms cleanup, 3 second assertion, or 45 second consumer acceptance budget.; Keep all source inventories, four coverage thresholds and SDK pins unchanged; pass isolated and full npm/Bun checks; demonstrate that the probe still detects a missing forced kill."
+files[2]{path,scope}:
+  test/bounded-cli.test.ts,project
+  test/helpers/bounded-cli.ts,project
+body: ""

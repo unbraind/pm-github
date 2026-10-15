@@ -17,6 +17,69 @@ pm install npm:pm-github --global
 > `github.com/unbraind/pm-github` source cannot work either — pm copies a GitHub
 > source as-is without building it, and this repository does not commit `dist/`.
 
+## Close items delivered by merged pull requests
+
+Agents can use `pm github closeout` to replace manual post-merge tracker cleanup.
+It resolves `--repo` or `PM_GITHUB_REPO` through the existing
+repository resolver, and uses the normal `GITHUB_TOKEN` / `GH_TOKEN` / `gh auth`
+token resolution. Use repeatable `--pr` numbers **or** `--since` with an ISO date
+or timestamp including a timezone. `--since` selects merge times inclusively,
+drains the closed-PR listing, and verifies each selected PR individually.
+
+```sh
+# Agent: inspect the plan first. No tracker writes happen by default.
+pm github closeout --repo owner/repo --pr 42 --pr 43 --skip pm-deferred --json
+# Apply the reviewed selection; repeatable --skip always excludes those ids.
+pm github closeout --repo owner/repo --pr 42 --pr 43 --skip pm-deferred --apply
+# Incremental sweep, including merges exactly at the cutoff.
+PM_GITHUB_REPO=owner/repo pm github closeout --since 2026-10-01T00:00:00Z --json
+```
+
+Only `https://github.com/owner/repo/blob/main/.agents/pm/<folder>/<id>.toon`
+links in PR bodies are recognized. Percent-encoded names and nested SDK tracker
+folders are supported; malformed encodings and traversal segments are ignored. Repository comparisons ignore case. Links to
+other repositories, unknown ids, closed/canceled items and `--skip` ids produce
+explicit skip rows. Bare ids and `pm:` trailers are not supported. If several
+selected PRs reference one item, the lowest PR number supplies its evidence and
+later references are skipped. Link delivered items in PR bodies; use `--skip`
+for any linked follow-up work that remains open. Items are read through a certified complete SDK
+corpus, including terminal items.
+
+A PR must be merged and have complete merge facts. Required head checks from
+classic branch protection and active branch rulesets must conclude **success**;
+missing, pending, neutral, skipped, failed or app-mismatched required checks
+prevent closure. Required legacy commit-status contexts must succeed too, using their
+latest status. Check-run, status and ruleset pages are fully read. Rulesets are
+read through GitHub's [effective branch rules API](https://docs.github.com/en/rest/repos/rules#get-rules-for-a-branch).
+The check policy reflects the rules readable at invocation time.
+
+When a protection source is unreadable (HTTP 403/404), or no required contexts
+are configured, the report labels the **fallback** rule. Every readable required
+context still must conclude success, including its app binding. The fallback
+additionally requires at least one head check run, every run completed with
+`success`, `neutral` or `skipped`, and successful latest legacy head statuses.
+It never discards a known requirement because another source is unreadable.
+Missing, malformed or incomplete head evidence, malformed metadata and other
+metadata errors fail closed. The plan reports which rule was used.
+
+TOON is the compact default; global `--json` returns the stable shape
+`{command, repo, dry_run, plan, checks, closed}`. Each plan row is exactly
+`{item, pr, action: "close" | "skip", reason}`. `checks` reports each PR's rule,
+verdict, explanation and successful check names. Dry-run rows describe intended
+closes; `closed` counts writes only with `--apply`. `--dry-run` overrides
+`--apply`. All API planning finishes before the first SDK close; a tracker
+write failure stops apply, so inspect the tracker and safely rerun the selection.
+
+The SDK close reason is a JSON string containing **only** verified facts:
+`{pr, url, merge_commit_sha, head_sha, merged_at, checks}`. `checks` contains the
+sorted unique names that actually succeeded at that head; neutral/skipped runs
+are not described as passed. PR body, title and comments are never persisted.
+Completion time is the GitHub merge time. Repeating a completed selection skips
+terminal items and performs zero additional tracker writes. The command edits
+only the tracker; commit it with its history and regenerate the caller's
+changelog in a closeout PR. Reusable bot-branch automation is tracked separately
+in [pm-github-0x3y](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-0x3y.toon).
+
 ## Revalidate GitHub blockers
 
 **Compatibility:** pm-github now requires PM CLI 2026.10.5 or newer for complete
@@ -69,7 +132,7 @@ containing this command before adopting the updated workflow.
 |---|---|
 | `importers` | `pm github import <owner/repo>` — idempotent native import pipeline |
 | `importers` (exporter) | `pm github export` — pm items → GitHub issues (dry-run by default; upsert) |
-| `commands` | `pm gh-issues import` (legacy import alias), `pm github sync` (push status), `pm github gate` (fail-closed pre-push privacy gate), `pm github validate` (diagnostics), `pm github project list\|fields\|import\|sync` (Projects v2) |
+| `commands` | `pm gh-issues import` (legacy import alias), `pm github sync` (push status), `pm github gate` (fail-closed pre-push privacy gate), `pm github validate` (diagnostics), `pm github closeout` (verified merged-PR delivery), `pm github project list\|fields\|import\|sync` (Projects v2) |
 | `schema` | declares `github_url`, `github_number`, `github_state`, `github_author`, `github_created_at`, `github_updated_at` item fields |
 | `hooks` | `afterCommand` — opt-in sync reminder (`PM_GITHUB_SYNC`) for linked items |
 | `preflight` | early warning when a mutating github command lacks a token |
