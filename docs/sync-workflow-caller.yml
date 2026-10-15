@@ -21,6 +21,7 @@ jobs:
     uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@RELEASE_COMMIT_SHA
     with:
       pm-github-version: "RELEASE_VERSION"
+      npm-project-dir: "." # For pm-rust, use: npm-project-dir: tests/oracle
       # Defaults shown explicitly; use "" to disable either optional action.
       post-import-script: "changelog:full"
       ci-workflows: "ci.yml" # Whitespace-separated filenames, e.g. "ci.yml codeql.yml".

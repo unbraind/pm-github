@@ -32,6 +32,11 @@ on:
         type: string
         required: false
         default: "automation/pm-github-sync"
+      npm-project-dir:
+        description: "Caller npm project directory for dependencies and post-import-script (relative, inside the workspace)"
+        type: string
+        required: false
+        default: "."
       post-import-script:
         description: "Caller npm script after import, before the final gate; missing skips, empty disables it"
         type: string
@@ -68,6 +73,7 @@ jobs:
       REPOSITORY: ${{ inputs.repository }}
       SYNC_BRANCH: ${{ inputs.sync-branch }}
       PM_GITHUB_VERSION: ${{ inputs.pm-github-version }}
+      NPM_PROJECT_DIR: ${{ inputs.npm-project-dir }}
       POST_IMPORT_SCRIPT: ${{ inputs.post-import-script }}
       CI_WORKFLOWS: ${{ inputs.ci-workflows }}
       CALLING_REPOSITORY: ${{ github.repository }}
@@ -90,11 +96,30 @@ jobs:
           ref: main
           persist-credentials: false
 
+      - name: Validate npm project directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          invalid_npm_project() {
+            echo "::error::npm-project-dir must be a relative path without .. segments, resolve inside the workspace, and contain package.json."
+            exit 1
+          }
+          [[ -n "${NPM_PROJECT_DIR}" && "${NPM_PROJECT_DIR}" != /* && "${NPM_PROJECT_DIR}" != *[$'\r\n:']* ]] || invalid_npm_project
+          case "/${NPM_PROJECT_DIR}/" in */../*) invalid_npm_project ;; esac
+          workspace="$(realpath -e -- "${GITHUB_WORKSPACE}" 2>/dev/null)" || invalid_npm_project
+          IFS= read -r -d '' npm_project_path < <(realpath -ez -- "${GITHUB_WORKSPACE}/${NPM_PROJECT_DIR}" 2>/dev/null) || invalid_npm_project
+          [[ "${npm_project_path}" == "${workspace}" || "${npm_project_path}" == "${workspace}/"* ]] || invalid_npm_project
+          [[ "${npm_project_path}" != *[$'\r\n:']* && -f "${npm_project_path}/package.json" ]] || invalid_npm_project
+          printf 'NPM_PROJECT_PATH=%s\n' "${npm_project_path}" >> "${GITHUB_ENV}"
+
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ inputs.node-version }}
           cache: npm
+          cache-dependency-path: |
+            ${{ env.NPM_PROJECT_PATH }}/package-lock.json
+            ${{ env.NPM_PROJECT_PATH }}/npm-shrinkwrap.json
 
       # Always rebuild the sync branch from current main: the branch only ever
       # holds automated sync commits, so a reset keeps the PR a clean review of
@@ -114,8 +139,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm ci --ignore-scripts
-          printf '%s/node_modules/.bin\n' "${GITHUB_WORKSPACE}" >> "${GITHUB_PATH}"
+          (cd "${NPM_PROJECT_PATH}" && npm ci --ignore-scripts)
+          printf '%s/node_modules/.bin\n' "${NPM_PROJECT_PATH}" >> "${GITHUB_PATH}"
 
       # The explicit publication allowlist is the SDK-resolved tracker (except
       # extensions, locks, checkpoints and extension setup files) and CHANGELOG.md. Nothing else may
@@ -124,7 +149,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          PM_SYNC_TRACKER="$(node --input-type=module -e 'import { resolvePmRoot } from "@unbrained/pm-cli/sdk"; import { relative } from "node:path"; const p = relative(process.cwd(), resolvePmRoot(process.cwd())); if (!p || p === ".." || p.startsWith("../") || /[\r\n]/.test(p)) throw new Error("Sync tracker must be inside the repository"); process.stdout.write(p);')"
+          PM_SYNC_TRACKER="$(cd "${NPM_PROJECT_PATH}" && node --input-type=module -e 'import { resolvePmRoot } from "@unbrained/pm-cli/sdk"; import { relative } from "node:path"; const p = relative(process.env.GITHUB_WORKSPACE, resolvePmRoot(process.env.GITHUB_WORKSPACE)); if (!p || p === ".." || p.startsWith("../") || /[\r\n]/.test(p)) throw new Error("Sync tracker must be inside the repository"); process.stdout.write(p);')"
           export PM_SYNC_TRACKER
           printf 'PM_SYNC_TRACKER=%s\n' "${PM_SYNC_TRACKER}" >> "${GITHUB_ENV}"
           cat > "${RUNNER_TEMP}/pm-github-sync-scope.sh" <<'SCOPE'
@@ -181,7 +206,7 @@ jobs:
             if [[ ${#sync_paths[@]} -gt 0 ]]; then
               git --literal-pathspecs diff --cached --no-color --no-ext-diff --no-textconv --no-renames --binary --unified=2147483647 -- "${sync_paths[@]}" > "${RUNNER_TEMP}/pm-github-sync.patch"
             fi
-            ./node_modules/.bin/pm github gate --diff "${RUNNER_TEMP}/pm-github-sync.patch" --json
+            pm github gate --diff "${RUNNER_TEMP}/pm-github-sync.patch" --json
           }
           SCOPE
 
@@ -189,19 +214,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ./node_modules/.bin/pm package install "npm:pm-github@${PM_GITHUB_VERSION}" --project
+          pm package install "npm:pm-github@${PM_GITHUB_VERSION}" --project
           node -e 'if (require("./" + process.argv[2] + "/extensions/pm-github/package.json").version !== process.argv[1]) process.exit(1)' "${PM_GITHUB_VERSION}" "${PM_SYNC_TRACKER}"
 
       - name: Configure PM merge drivers
-        run: ./node_modules/.bin/pm merge install
+        run: pm merge install
 
       - name: Verify gate is available
-        run: ./node_modules/.bin/pm github gate --json
+        run: pm github gate --json
 
       - name: Validate GitHub access
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./node_modules/.bin/pm github validate --repo "${REPOSITORY}" --json | jq -e ' .ok == true and .repo_accessible == true '
+        run: pm github validate --repo "${REPOSITORY}" --json | jq -e ' .ok == true and .repo_accessible == true '
 
       # Report live blocker state without writing comments or changing status.
       # Code 4 is an alert receipt; read/auth failures stop this run.
@@ -212,7 +237,7 @@ jobs:
         run: |
           set -euo pipefail
           blocker_status=0
-          ./node_modules/.bin/pm github blockers --repo "${REPOSITORY}" --json > "${RUNNER_TEMP}/pm-github-blockers.json" || blocker_status=$?
+          pm github blockers --repo "${REPOSITORY}" --json > "${RUNNER_TEMP}/pm-github-blockers.json" || blocker_status=$?
           cat "${RUNNER_TEMP}/pm-github-blockers.json"
           case "${blocker_status}" in
             0) ;;
@@ -223,14 +248,14 @@ jobs:
       - name: Preview GitHub to pm plan
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./node_modules/.bin/pm github import "${REPOSITORY}" --state all --atomic --gate --dry-run --with-comments
+        run: pm github import "${REPOSITORY}" --state all --atomic --gate --dry-run --with-comments
 
       # The gate step. A finding (or unreadable scan input) fails this step, so
       # the job never reaches the commit/push below with a leak in the change.
       - name: Gated GitHub to pm import
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./node_modules/.bin/pm github import "${REPOSITORY}" --state all --atomic --gate --with-comments
+        run: pm github import "${REPOSITORY}" --state all --atomic --gate --with-comments
 
       - name: Verify repeat import is a no-op
         env:
@@ -244,17 +269,17 @@ jobs:
           if [[ -s "${paths_file}" ]]; then
             git --literal-pathspecs add --pathspec-from-file="${paths_file}" --pathspec-file-nul
           fi
-          ./node_modules/.bin/pm github import "${REPOSITORY}" --state all --atomic --gate --with-comments
+          pm github import "${REPOSITORY}" --state all --atomic --gate --with-comments
           git diff --exit-code -- "${sync_scope[0]}" "${sync_scope[@]:2}"
           [[ -z "$(git ls-files --others --exclude-standard -- "${sync_scope[0]}" "${sync_scope[@]:2}")" ]]
-          ./node_modules/.bin/pm github gate --json
+          pm github gate --json
 
       - name: Run caller post-import script
         shell: bash
         run: |
           set -euo pipefail
           if [[ -n "${POST_IMPORT_SCRIPT}" ]]; then
-            npm run --if-present "${POST_IMPORT_SCRIPT}"
+            (cd "${NPM_PROJECT_PATH}" && npm run --if-present "${POST_IMPORT_SCRIPT}")
           fi
 
       # Check every changed path immediately after the caller script. Extension
@@ -267,7 +292,7 @@ jobs:
           gate_sync_change
 
       - name: Verify strict pm health
-        run: ./node_modules/.bin/pm health --strict-exit
+        run: pm health --strict-exit
 
       - name: Commit gated sync changes and open review PR
         env:
