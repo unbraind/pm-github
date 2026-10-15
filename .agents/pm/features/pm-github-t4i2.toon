@@ -2,11 +2,13 @@ id: pm-github-t4i2
 title: Close pm items delivered by merged pull requests with verifiable GitHub evidence
 description: "Add a safe, idempotent pm github closeout command so agents can close delivered tracker items using facts verified against merged pull requests and head checks."
 type: Feature
-status: in_progress
+status: closed
 priority: 1
 tags[1]: changelog-unreleased
 created_at: "2026-10-14T21:42:54.457Z"
-updated_at: "2026-10-15T02:17:59.088Z"
+updated_at: "2026-10-15T03:52:15.943Z"
+closed_at: "2026-10-15T03:52:15.924Z"
+completed_at: "2026-10-15T03:48:51.000Z"
 author: codex-agent
 acceptance_criteria: "Resolve the existing repository and select repeatable --pr numbers or merged PRs at or after --since ISO time; dry-run by default, --apply writes, compact TOON and stable --json plan rows item/pr/action/reason.; Extract only same-repository .agents/pm/<folder>/<id>.toon links; report foreign-repository links and unknown ids as explicit skips; never import PR body or comment text.; Skip closed/canceled items and repeatable --skip ids; require merged PR and successful required head checks; missing/failed check evidence fails closed; unreadable protection falls back to all head runs completed with success/neutral/skipped and reports the applied rule.; Use the SDK close path with only PR number/URL, merge commit SHA, head SHA, merge time and passed head check names in the close reason; repeated selection performs zero additional tracker writes.; Test with existing GitHub HTTP fixtures and real temporary trackers: repository matching, unknown/terminal/skipped ids, failed required checks, missing evidence, fallback, dry-run byte equality, exact apply reason, repeated no-op and synthetic email/token privacy; demonstrate behavioral revert failures for check gating and idempotency.; Document agent examples and pm-changelog entry; optionally add a separate bot-branch closeout workflow only after complete tests, otherwise create a follow-up item; keep gated sync workflow and inputs unchanged.; Pass npm and Bun release:check with isolated Git identity and unchanged thresholds; regenerate and check changelog; commit tracker/history with code, push branch and open the requested public-safe PR without closing this item."
 comments[15]{created_at,author,text}:
@@ -34,4 +36,5 @@ tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,
 docs[2]{path,scope}:
   CHANGELOG.md,project
   README.md,project
+close_reason: "{\"pr\":124,\"url\":\"https://github.com/unbraind/pm-github/pull/124\",\"merge_commit_sha\":\"2d663d87db9b782aa57399155b04e0e890869985\",\"head_sha\":\"573c1a658c62031a3110d086839e5cb00b34d7aa\",\"merged_at\":\"2026-10-15T03:48:51Z\",\"checks\":[\"CodeQL\",\"CodeRabbit\",\"codeql\",\"semgrep-cloud-platform/scan\",\"test (22)\",\"test (26)\"]}"
 body: ""
