@@ -82,7 +82,7 @@ async function payload(api: CloseoutApi, endpoint: string): Promise<unknown> {
 }
 
 /** Drain same-endpoint pagination; reject cycles, foreign links and truncated totals. */
-async function pages(api: CloseoutApi, endpoint: string, checks = false): Promise<unknown[]> {
+async function pages(api: CloseoutApi, endpoint: string, checks = false, done?: (row: unknown) => boolean): Promise<unknown[]> {
   let next: string | undefined = `${api.base}${endpoint}`;
   const initial = new URL(next);
   const seen = new Set<string>();
@@ -104,7 +104,8 @@ async function pages(api: CloseoutApi, endpoint: string, checks = false): Promis
     }
     if (!Array.isArray(page)) throw new Error("Incomplete GitHub evidence page.");
     rows.push(...page);
-    next = api.next(response.linkHeader);
+    // A caller-proven ordered listing can stop once a page reaches rows that can no longer match.
+    next = done !== undefined && page.some(done) ? undefined : api.next(response.linkHeader);
   }
   if (total !== undefined && rows.length !== total) throw new Error("Incomplete check-run evidence.");
   return rows;
@@ -227,8 +228,40 @@ export async function checkCloseoutHead(api: CloseoutApi, repo: string, pr: Pull
 /** Statuses that already ended an item's lifecycle. */
 const TERMINAL_STATUSES: readonly string[] = ["closed", "canceled"];
 
-/** GitHub-style closing keywords; a link counts as an explicit delivery claim only when one precedes it on its line. */
-const CLOSING_KEYWORD = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|deliver(?:s|ed)?)\b/i;
+/** GitHub-style closing keywords that declare delivery of the link they directly precede. */
+const CLOSING_KEYWORDS = new Set(["close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves", "resolved", "deliver", "delivers", "delivered"]);
+
+/**
+ * Whether a closing keyword directly precedes a link, given the line text before the link.
+ *
+ * Only earlier links (markdown or bare), commas and "and" may sit between the keyword and the link, so
+ * `Delivers [a](…) and [b](…)` declares both while `Not fixed here; see <link>` declares nothing.
+ * Scans backwards with plain string operations; no backtracking pattern touches PR text.
+ */
+export function declaresDelivery(prefix: string): boolean {
+  let rest = prefix;
+  // The link may be the target of a markdown label: `Closes [pm-x](`.
+  if (rest.endsWith("](")) rest = rest.slice(0, Math.max(0, rest.lastIndexOf("[")));
+  for (;;) {
+    rest = rest.trimEnd();
+    if (rest.endsWith(",")) { rest = rest.slice(0, -1); continue; }
+    if (rest.endsWith(")")) {
+      // Skip one earlier markdown link `[label](url)`; any other parenthetical ends the scan.
+      const target = rest.lastIndexOf("](");
+      const label = target < 0 ? -1 : rest.lastIndexOf("[", target);
+      if (label < 0 || /\s/.test(rest.slice(target + 2, -1))) return false;
+      rest = rest.slice(0, label);
+      continue;
+    }
+    const cut = Math.max(rest.lastIndexOf(" "), rest.lastIndexOf("\t")) + 1;
+    const word = rest.slice(cut);
+    if (word.toLowerCase() === "and" || word.startsWith("https://")) { rest = rest.slice(0, cut); continue; }
+    let bare = word;
+    while (bare.endsWith(":") || bare.endsWith("*") || bare.endsWith("_")) bare = bare.slice(0, -1);
+    while (bare.startsWith("*") || bare.startsWith("_")) bare = bare.slice(1);
+    return CLOSING_KEYWORDS.has(bare.toLowerCase());
+  }
+}
 
 /** Extract only canonical tracker links, retaining foreign references solely for skip rows. */
 export function extractCloseoutItems(body: string): { item: string; repo: string; declared: boolean }[] {
@@ -243,7 +276,7 @@ export function extractCloseoutItems(body: string): { item: string; repo: string
     if (components.some(component => /^\.{1,2}$|[/\\\0]/.test(component))) return [];
     const item = components.at(-1)!;
     const key = `${match[1]!.toLowerCase()}/${item}`;
-    const declared = CLOSING_KEYWORD.test(body.slice(body.lastIndexOf("\n", match.index) + 1, match.index));
+    const declared = declaresDelivery(body.slice(body.lastIndexOf("\n", match.index) + 1, match.index));
     if (seen.has(key)) {
       // A later "Closes <link>" line still declares an item an earlier line only mentioned.
       if (declared) for (const entry of refs) if (entry.key === key) entry.declared = true;
@@ -262,19 +295,31 @@ function closeReason(pr: PullRequest, passed: string[]): string {
     head_sha: pr.head.sha, merged_at: pr.merged_at, checks: passed });
 }
 
+/** Invalid selectors or repository input: the caller must change the command, so the host maps it to a usage exit. */
+export class CloseoutUsageError extends Error {}
+
+/** Re-throw a selector parser's failure as a usage error. */
+function usage<T>(parse: () => T): T {
+  try { return parse(); } catch (error) { throw new CloseoutUsageError((error as Error).message); }
+}
+
 /** Plan all selected PRs before closing eligible items through the real SDK. */
 export async function runCloseout(pmRoot: string, repo: string | undefined, options: Record<string, unknown>, api: CloseoutApi) {
-  if (!repo || !/^(?!\.{1,2}\/)[A-Za-z0-9_.-]+\/(?!\.{1,2}$)[A-Za-z0-9_.-]+$/.test(repo)) throw new Error("closeout requires --repo owner/repo or PM_GITHUB_REPO.");
-  const numbers = repeated(options, "pr").map(value => {
-    if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) throw new Error("--pr requires positive pull-request numbers.");
+  if (!repo || !/^(?!\.{1,2}\/)[A-Za-z0-9_.-]+\/(?!\.{1,2}$)[A-Za-z0-9_.-]+$/.test(repo)) throw new CloseoutUsageError("closeout requires --repo owner/repo or PM_GITHUB_REPO.");
+  const numbers = usage(() => repeated(options, "pr")).map(value => {
+    if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) throw new CloseoutUsageError("--pr requires positive pull-request numbers.");
     return Number(value);
   });
-  const since = options.since === undefined ? undefined : isoDate(text(options.since));
-  if ((numbers.length === 0) === (since === undefined)) throw new Error("Select either repeatable --pr <n> or --since <ISO date>.");
-  const skip = new Set(repeated(options, "skip"));
+  const since = options.since === undefined ? undefined : usage(() => isoDate(text(options.since)));
+  if ((numbers.length === 0) === (since === undefined)) throw new CloseoutUsageError("Select either repeatable --pr <n> or --since <ISO date>.");
+  const skip = new Set(usage(() => repeated(options, "skip")));
   const apply = options.apply === true && options["dry-run"] !== true && options.dryRun !== true;
   if (since !== undefined) {
-    for (const value of await pages(api, `/repos/${repo}/pulls?state=closed&sort=updated&direction=desc&per_page=100`)) {
+    // Rows arrive newest-updated first and a merge never postdates its PR's update, so a row updated
+    // before the cutoff proves no later row can have merged at or after it.
+    const cutoff = Date.parse(since);
+    const older = (row: unknown) => typeof row === "object" && row !== null && Date.parse(String((row as { updated_at?: unknown }).updated_at)) < cutoff;
+    for (const value of await pages(api, `/repos/${repo}/pulls?state=closed&sort=updated&direction=desc&per_page=100`, false, older)) {
       const pr = record(value);
       if (pr.merged_at !== null && Date.parse(isoDate(text(pr.merged_at))) >= Date.parse(since)) {
         if (!Number.isSafeInteger(pr.number) || Number(pr.number) < 1) throw new Error("Invalid selected pull-request number.");

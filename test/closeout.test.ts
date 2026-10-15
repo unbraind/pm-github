@@ -7,7 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { create, close, update, get } from "@unbrained/pm-cli/sdk";
 import extension, { fetchJSON, githubApiBase, parseNextLink } from "../index.ts";
-import { extractCloseoutItems, runCloseout, type CloseoutApi } from "../closeout.ts";
+import { CloseoutUsageError, declaresDelivery, extractCloseoutItems, runCloseout, type CloseoutApi } from "../closeout.ts";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import { decode } from "@toon-format/toon";
 import { boundedCli } from "./helpers/bounded-cli.ts";
@@ -91,6 +91,13 @@ test("extraction accepts only canonical tracker links and deduplicates reference
   assert.deepEqual(extractCloseoutItems([`- Closes ${link("pm-5")}`, `- [pm-6](${link("pm-6")}): closed later`, `See ${link("pm-7")}`, `Fixes [pm-7](${link("pm-7")})`,
     `Prefix ${link("pm-8")}`].join("\n")).map(ref => [ref.item, ref.declared]),
   [["pm-5", true], ["pm-6", false], ["pm-7", true], ["pm-8", false]]);
+  // The keyword must directly precede its link: prose in between, as in these review-reported lines, declares nothing.
+  for (const line of ["Unrelated to the fix in ", "Not fixed here; see ", "Previously closed work: ", "Closes (see notes) ", "Closes [a](not a url) and ", "text]("]) {
+    assert.equal(declaresDelivery(line), false, line);
+  }
+  for (const line of ["Closes ", "- Closes: ", "**Fixes** [pm-x](", "Delivers [a](https://x/a.toon) and [b](", `Resolves ${link("pm-1")}, `, "_Delivered_ "]) {
+    assert.equal(declaresDelivery(line), true, line);
+  }
   for (const folder of [".", "..", "%2e%2e", "%2Fescape", "%5Cescape", "%00", "bad%ZZ"]) {
     assert.deepEqual(extractCloseoutItems(`https://github.com/${repo}/blob/main/.agents/pm/${folder}/pm-1.toon`), []);
   }
@@ -274,9 +281,9 @@ test("invalid selectors fail before HTTP or writes", async () => tracker(async (
     for (const options of [{}, { pr: [] }, { pr: false }, { pr: "" }, { pr: ["42", 43] }, { pr: "0" }, { pr: "1.2" }, { pr: "9007199254740992" },
       { pr: "42", since: "2026-10-01" }, { since: "yesterday" }, { since: "2026-02-30" }, { since: "2026-10-01T12:00:00" },
       { since: "2026-10-01T99:00:00Z" }, { since: false }, { since: "" }, { pr: "42", skip: [] }, { pr: "42", skip: true }]) {
-      await assert.rejects(() => closeout(root, options));
+      await assert.rejects(() => closeout(root, options), CloseoutUsageError);
     }
-    for (const repository of [undefined, "invalid", "bad/repo/name", "./repo", "../repo", "fixture/.", "fixture/.."]) await assert.rejects(() => runCloseout(root, repository, { pr: "42" }, api()));
+    for (const repository of [undefined, "invalid", "bad/repo/name", "./repo", "../repo", "fixture/.", "fixture/.."]) await assert.rejects(() => runCloseout(root, repository, { pr: "42" }, api()), CloseoutUsageError);
     assert.equal(server.requests.length, 0);
   });
 }));
@@ -359,6 +366,29 @@ test("public command registration reuses repo resolution and shared transport", 
     const result = await harness.runCommand({ command: "github closeout", pmRoot: root, options: { pr: ["42"] } });
     assert.equal((result.result as { plan: { action: string }[] }).plan[0]!.action, "close");
   }));
+  // Failures surface as handled command errors (usage 2, evidence 1), so the host never re-runs the handler.
+  await withEnv({ PM_GITHUB_REPO: repo, GITHUB_TOKEN: "fixture" }, () => withMockGithub(fixture(link(ids[0]!), (request, response) => {
+    if (request.url!.includes("/pulls/")) jsonResponse(response, 200, { number: 42 });
+  }), async server => {
+    await assert.rejects(harness.runCommand({ command: "github closeout", pmRoot: root, options: { pr: ["0"] } }),
+      (error: unknown) => (error as { exitCode?: number }).exitCode === 2 && /positive pull-request numbers/.test((error as Error).message));
+    await assert.rejects(harness.runCommand({ command: "github closeout", pmRoot: root, options: { pr: ["42"] } }),
+      (error: unknown) => (error as { exitCode?: number }).exitCode === 1 && /Invalid GitHub evidence object/.test((error as Error).message));
+    assert.equal(server.requests.filter(request => request.url.includes("/pulls/")).length, 1);
+  }));
+}));
+
+test("since stops paging once a row was last updated before the cutoff", async () => tracker(async (root, ids) => {
+  await withMockGithub(fixture(link(ids[0]!), (request, response, _body, base) => {
+    if (request.url!.includes("/pulls?")) {
+      jsonResponse(response, 200, [{ number: 42, merged_at: mergedAt, updated_at: mergedAt }, { number: 41, merged_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:00:00Z" }],
+        { Link: nextLinkHeader(base, "/repos/fixture/project/pulls?state=closed&page=2") });
+    }
+  }), async server => {
+    const report = await closeout(root, { since: mergedAt });
+    assert.deepEqual(report.plan.map(row => row.pr), [42]);
+    assert.equal(server.requests.filter(request => request.url.includes("/pulls?")).length, 1);
+  });
 }));
 
 test("packed CLI preserves repeatable selectors, TOON/JSON shape and no-op apply", async () => tracker(async (root, ids) => {

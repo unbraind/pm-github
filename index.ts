@@ -23,7 +23,7 @@ import type {
   PreflightOverrideContext,
   SearchProviderQueryContext,
 } from "@unbrained/pm-cli/sdk/authoring";
-import { runCloseout } from "./closeout.ts";
+import { CloseoutUsageError, runCloseout } from "./closeout.ts";
 import http from "node:http";
 import https from "node:https";
 import crypto from "node:crypto";
@@ -6693,10 +6693,15 @@ export default defineExtension({
         { long: "--dry-run", description: "Preview only; overrides --apply" },
       ],
       async run(ctx: CommandHandlerContext) {
-        const token = resolveGitHubToken();
-        return runCloseout(ctx.pm_root, resolveSearchRepo(ctx.options), ctx.options, {
-          base: githubApiBase(), get: url => fetchJSON(url, token), next: parseNextLink,
-        });
+        try {
+          const token = resolveGitHubToken();
+          return await runCloseout(ctx.pm_root, resolveSearchRepo(ctx.options), ctx.options, {
+            base: githubApiBase(), get: url => fetchJSON(url, token), next: parseNextLink,
+          });
+        } catch (error) {
+          // A plain Error would make the host re-run the handler (repeating GitHub reads and remaining closes).
+          throw new CommandError((error as Error).message, error instanceof CloseoutUsageError ? EXIT_CODE.USAGE : EXIT_CODE.GENERIC_FAILURE);
+        }
       },
     });
 
