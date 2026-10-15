@@ -224,10 +224,17 @@ export async function checkCloseoutHead(api: CloseoutApi, repo: string, pr: Pull
   return result;
 }
 
+/** Statuses that already ended an item's lifecycle. */
+const TERMINAL_STATUSES: readonly string[] = ["closed", "canceled"];
+
+/** GitHub-style closing keywords; a link counts as an explicit delivery claim only when one precedes it on its line. */
+const CLOSING_KEYWORD = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?|deliver(?:s|ed)?)\b/i;
+
 /** Extract only canonical tracker links, retaining foreign references solely for skip rows. */
-export function extractCloseoutItems(body: string): { item: string; repo: string }[] {
+export function extractCloseoutItems(body: string): { item: string; repo: string; declared: boolean }[] {
   const links = body.matchAll(/https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/blob\/main\/\.agents\/pm\/((?:[^/\s?#<>)\]"']+\/)+)([^/\s?#<>)\]"']+)\.toon(?=$|[\s?#<>)\]"'])/g);
   const seen = new Set<string>();
+  const refs: { key: string; repo: string; item: string; declared: boolean }[] = [];
   return [...links].flatMap(match => {
     let components: string[];
     try {
@@ -236,10 +243,17 @@ export function extractCloseoutItems(body: string): { item: string; repo: string
     if (components.some(component => /^\.{1,2}$|[/\\\0]/.test(component))) return [];
     const item = components.at(-1)!;
     const key = `${match[1]!.toLowerCase()}/${item}`;
-    if (seen.has(key)) return [];
+    const declared = CLOSING_KEYWORD.test(body.slice(body.lastIndexOf("\n", match.index) + 1, match.index));
+    if (seen.has(key)) {
+      // A later "Closes <link>" line still declares an item an earlier line only mentioned.
+      if (declared) for (const entry of refs) if (entry.key === key) entry.declared = true;
+      return [];
+    }
     seen.add(key);
-    return [{ repo: match[1]!, item }];
-  });
+    const entry = { key, repo: match[1]!, item, declared };
+    refs.push(entry);
+    return [entry];
+  }).map(({ repo, item, declared }) => ({ repo, item, declared }));
 }
 
 /** Render only the allowed GitHub facts; never include body, title or comment text. */
@@ -269,7 +283,13 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
     }
   }
   const corpus = certifyCompleteListResult(await listAllComplete({}, { pmRoot, noExtensions: true }));
-  const items = new Map(corpus.items.map(item => [item.id, item.status]));
+  const items = new Map(corpus.items.map(item => [item.id, { status: item.status, type: item.type }]));
+  // Containers close when their children are done, never because a pull request mentions them.
+  const activeChildren = new Map<string, number>();
+  for (const item of corpus.items) {
+    const parent = (item as { parent?: unknown }).parent;
+    if (typeof parent === "string" && !TERMINAL_STATUSES.includes(item.status)) activeChildren.set(parent, (activeChildren.get(parent) ?? 0) + 1);
+  }
   const selected = new Set<string>();
   const plan: CloseoutRow[] = [];
   const checks: CheckGate[] = [];
@@ -284,8 +304,13 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
       if (ref.repo.toLowerCase() !== repo.toLowerCase()) reason = "Link points to another repository.";
       else if (!items.has(ref.item)) reason = "Item does not exist in the tracker.";
       else if (skip.has(ref.item)) reason = "Explicitly excluded by --skip.";
-      else if (["closed", "canceled"].includes(items.get(ref.item)!)) reason = "Item is already closed or canceled.";
+      else if (TERMINAL_STATUSES.includes(items.get(ref.item)!.status)) reason = "Item is already closed or canceled.";
       else if (!gate.ok) reason = gate.reason;
+      else if (items.get(ref.item)!.type === "Epic") reason = "Epics close when their children are done, not by a pull request.";
+      else if (activeChildren.has(ref.item)) reason = `Item has ${activeChildren.get(ref.item)} non-terminal child item(s).`;
+      else if (items.get(ref.item)!.status !== "in_progress" && !ref.declared) {
+        reason = `Item is ${items.get(ref.item)!.status}, not in progress; a mention is not delivery. Prefix its link with Closes, Fixes, Resolves or Delivers to close it.`;
+      }
       else if (selected.has(ref.item)) reason = "Item already selected by another pull request.";
       else {
         reason = gate.reason;

@@ -41,8 +41,20 @@ folders are supported; malformed encodings and traversal segments are ignored. R
 other repositories, unknown ids, closed/canceled items and `--skip` ids produce
 explicit skip rows. Bare ids and `pm:` trailers are not supported. If several
 selected PRs reference one item, the lowest PR number supplies its evidence and
-later references are skipped. Link delivered items in PR bodies; use `--skip`
-for any linked follow-up work that remains open. Items are read through a certified complete SDK
+later references are skipped.
+
+**A mention is not delivery.** PR bodies routinely link follow-ups, epics and
+related work for context, so a link alone never closes an item. An item is
+closed only when:
+
+- it is `in_progress` (claimed work), **or** its link is preceded on the same
+  line by a GitHub-style closing keyword: `Closes`, `Fixes`, `Resolves` or
+  `Delivers` (and their tense forms), for example `- Closes [pm-x](…/pm-x.toon)`;
+- it is not an `Epic`; epics close when their children are done;
+- it has no non-terminal child items.
+
+Each refused item gets a skip row naming the rule, so the plan shows why
+deferred follow-ups stay open. `--skip` still excludes any id unconditionally. Items are read through a certified complete SDK
 corpus, including terminal items.
 
 A PR must be merged and have complete merge facts. Required head checks from

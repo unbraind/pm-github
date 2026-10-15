@@ -63,6 +63,8 @@ async function tracker(fn: (pmRoot: string, ids: string[]) => Promise<void>) {
     const ids: string[] = [];
     for (let n = 0; n < 4; n++) {
       const created = await create({ title: `Delivery ${n}`, type: "Task", author: "fixture", acceptanceCriteria: "Verified delivery" }, { pmRoot: root, noExtensions: true });
+      // Delivered work is claimed work; open follow-ups are exercised separately.
+      await update(created.item.id, { status: "in_progress" }, { pmRoot: root, noExtensions: true });
       ids.push(created.item.id);
     }
     await fn(root, ids);
@@ -84,7 +86,11 @@ function closeout(root: string, options: Record<string, unknown> = { pr: "42" })
 test("extraction accepts only canonical tracker links and deduplicates references", () => {
   assert.deepEqual(extractCloseoutItems([link("pm-1"), link("pm%2D1"), link("pm-1", "FIXTURE/PROJECT"), link("pm-1", "other/repo"),
     "pm: pm-2", link("pm-3").replace("blob/main", "blob/feature"), link("pm-4") + ".bak", "https://github.com/fixture/project/issues/1"].join("\n")),
-  [{ repo, item: "pm-1" }, { repo: "other/repo", item: "pm-1" }]);
+  [{ repo, item: "pm-1", declared: false }, { repo: "other/repo", item: "pm-1", declared: false }]);
+  // Only a closing keyword before the link on the same line declares delivery; a later declaring line upgrades a mention.
+  assert.deepEqual(extractCloseoutItems([`- Closes ${link("pm-5")}`, `- [pm-6](${link("pm-6")}): closed later`, `See ${link("pm-7")}`, `Fixes [pm-7](${link("pm-7")})`,
+    `Prefix ${link("pm-8")}`].join("\n")).map(ref => [ref.item, ref.declared]),
+  [["pm-5", true], ["pm-6", false], ["pm-7", true], ["pm-8", false]]);
   for (const folder of [".", "..", "%2e%2e", "%2Fescape", "%5Cescape", "%00", "bad%ZZ"]) {
     assert.deepEqual(extractCloseoutItems(`https://github.com/${repo}/blob/main/.agents/pm/${folder}/pm-1.toon`), []);
   }
@@ -456,6 +462,7 @@ test("custom SDK folders with dots, encoded spaces and nested paths close throug
     });
     assert.equal(configured.status, 0, configured.stderr);
     const created = await create({ type: type!, title: `Custom delivery ${type}`, author: "fixture", acceptanceCriteria: "Verified delivery" }, { pmRoot: root, noExtensions: true });
+    await update(created.item.id, { status: "in_progress" }, { pmRoot: root, noExtensions: true });
     const url = `https://github.com/${repo}/blob/main/.agents/pm/${folder!.split("/").map(encodeURIComponent).join("/")}/${encodeURIComponent(created.item.id).replaceAll("-", "%2D")}.toon`;
     await withMockGithub(fixture(url), async () => {
       assert.equal((await closeout(root, { pr: "42", apply: true })).closed, 1);
@@ -514,4 +521,34 @@ test("unreadable protection sources retain fallback without hiding invalid autho
       assert.equal(report.plan[0]!.action, status === 401 ? "skip" : "close");
     });
   }
+}));
+
+test("a mention is not delivery: open follow-ups, epics and parents with active children are never closed", async () => tracker(async (root, ids) => {
+  const sdk = { pmRoot: root, noExtensions: true };
+  const followUp = (await create({ title: "Deferred follow-up", type: "Task", author: "fixture" }, sdk)).item.id;
+  const declared = (await create({ title: "Declared delivery", type: "Task", author: "fixture" }, sdk)).item.id;
+  const epic = (await create({ title: "Umbrella", type: "Epic", author: "fixture" }, sdk)).item.id;
+  await update(epic, { status: "in_progress" }, sdk);
+  await update(ids[1]!, { parent: ids[0]! }, sdk);
+  const body = [`Delivers [parent](${link(ids[0]!)}) and [child](${link(ids[1]!)})`, `Follow-up: ${link(followUp)} (not closed by this PR)`,
+    `Closes ${link(declared)}`, `Part of ${link(epic)}`].join("\n");
+  await withMockGithub(fixture(body), async () => {
+    const report = await closeout(root, { pr: "42" });
+    const rows = new Map(report.plan.map(row => [row.item, row]));
+    assert.equal(rows.get(ids[0]!)!.action, "skip");
+    assert.match(rows.get(ids[0]!)!.reason, /1 non-terminal child/);
+    assert.equal(rows.get(ids[1]!)!.action, "close");
+    assert.equal(rows.get(followUp)!.action, "skip");
+    assert.match(rows.get(followUp)!.reason, /open, not in progress; a mention is not delivery/);
+    assert.equal(rows.get(declared)!.action, "close");
+    assert.equal(rows.get(epic)!.action, "skip");
+    assert.match(rows.get(epic)!.reason, /Epics close when their children are done/);
+    const applied = await closeout(root, { pr: "42", apply: true });
+    assert.equal(applied.closed, 2);
+    assert.equal((await get(followUp, {}, sdk)).item.status, "open");
+    assert.equal((await get(epic, {}, sdk)).item.status, "in_progress");
+    // With its only child closed, the parent's own in-progress delivery now closes on a rerun.
+    const rerun = await closeout(root, { pr: "42", apply: true });
+    assert.deepEqual(rerun.plan.filter(row => row.action === "close").map(row => row.item), [ids[0]]);
+  });
 }));
