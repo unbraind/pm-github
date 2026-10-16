@@ -66,7 +66,9 @@ async function fixture(fn: (f: { root: string; base: string; pmRoot: string; id:
   const root = join(base, "caller");
   const remote = join(base, "remote.git");
   mkdirSync(root);
-  const env: NodeJS.ProcessEnv = { ...process.env, PM_AUTHOR: "fixture", PM_GLOBAL_PATH: join(base, "global"),
+  // PM_TELEMETRY_INLINE_FLUSH keeps the pm CLI's telemetry flush inside each command, so no detached
+  // worker can still be writing under the disposable global root when teardown removes it.
+  const env: NodeJS.ProcessEnv = { ...process.env, PM_AUTHOR: "fixture", PM_GLOBAL_PATH: join(base, "global"), PM_TELEMETRY_INLINE_FLUSH: "1",
     GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@users.noreply.github.com",
     GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@users.noreply.github.com" };
   const git = (...args: string[]) => command(root, "git", args, env);
