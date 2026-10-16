@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Add a reusable gated closeout PR workflow ([pm-github-0x3y](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-0x3y.toon))
+- Let reusable sync choose its npm project directory ([pm-github-z5z1](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-z5z1.toon))
+
+### Fixed
+
+- Refuse reusable sync runs outside the caller default branch ([pm-github-q4uz](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-q4uz.toon))
+
 ## 2026.10.15 - 2026-10-15
 
 ### Added

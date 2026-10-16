@@ -2,11 +2,13 @@ id: pm-github-z5z1
 title: Let reusable sync choose its npm project directory
 description: "GitHub issue: https://github.com/unbraind/pm-github/issues/129. Add optional npm-project-dir (default .), validate a repository-contained npm project before installation, and use it for dependencies, CLI PATH, and the caller post-import script without expanding the publication allowlist."
 type: Feature
-status: in_progress
+status: closed
 priority: 1
 tags: []
 created_at: "2026-10-15T17:57:16.378Z"
-updated_at: "2026-10-15T20:00:59.345Z"
+updated_at: "2026-10-16T06:24:40.941Z"
+closed_at: "2026-10-16T06:24:40.911Z"
+completed_at: "2026-10-15T20:27:49.000Z"
 author: codex-agent
 comments[11]{created_at,author,text}:
   "2026-10-15T17:57:29.182Z",codex-agent,"Design: validate npm-project-dir after checkout and before setup-node caching or npm install; reject absolute/traversal paths, resolved symlink escapes, missing package.json, and environment/PATH separators with one named-input diagnostic. Export the canonical project path for install, PATH and the post-import script; resolve the SDK there while keeping tracker and Git operations at the repository root. Preserve the publication allowlist. Contract tests execute shell extracted from the real workflow with real temporary projects; perform and record a behavioral revert per regression scenario."
@@ -32,4 +34,5 @@ tests[4]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,
 docs[2]{path,scope}:
   docs/sync-workflow-caller.yml,project
   README.md,project
+close_reason: "{\"pr\":130,\"url\":\"https://github.com/unbraind/pm-github/pull/130\",\"merge_commit_sha\":\"3f64d8b510df98462774276ca34fbf65a0d64481\",\"head_sha\":\"a8404e843baf0c7cbc811c849258b58838b5bf41\",\"merged_at\":\"2026-10-15T20:27:49Z\",\"checks\":[\"CodeQL\",\"CodeRabbit\",\"codeql\",\"semgrep-cloud-platform/scan\",\"test (22)\",\"test (26)\"]}"
 body: ""
