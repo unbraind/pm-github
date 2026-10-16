@@ -90,7 +90,9 @@ plan row and selected PR check. Global `--json` always returns the full shape
 `{item, pr, action: "close" | "skip", code, reason}`. Codes distinguish
 `head_evidence_unavailable`, `incomplete_merge`, `head_checks_failed`, and
 `head_checks_passed` without parsing explanations. `checks` reports each PR's rule,
-verdict, explanation and successful check names. Dry-run rows describe intended
+verdict, explanation and successful check names. `head_checks_passed` remains the success
+code for all passing policies; `rule: "declared"` proves the caller-declared contexts,
+while repository required-check metadata was unavailable. Dry-run rows describe intended
 closes; `closed` counts writes only with `--apply`. `--dry-run` overrides
 `--apply`. All API planning finishes before the first SDK close. Individual SDK
 refusals become skip rows containing a diagnostic code (or a generic failure
@@ -113,8 +115,9 @@ structured close fields it supports, without overriding tracker policy:
 - `actual_result`: `Merged at <time>; required checks satisfied; successful head checks:
   <names>` when branch protection or rulesets name required checks (the list holds every
   successful head check, optional ones included). Under the declared policy it reads
-  `Merged at <time>; caller-declared and readable required checks satisfied; successful
-  head checks: <names>`. Under the fallback rule (fully readable, empty policy) it reads
+  `Merged at <time>; caller-declared checks concluded success; repository required-check
+  metadata was unavailable; successful head checks: <names>`. Under the fallback rule
+  (fully readable, empty policy) it reads
   `Merged at <time>; no readable required checks, so every
   completed head check run had to succeed, be neutral or be skipped; successful checks:
   <names>`, or `…; no check reported success` when only neutral or skipped runs exist.

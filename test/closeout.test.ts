@@ -747,6 +747,8 @@ test("declared contexts verify exact names and latest statuses without requiring
     const report = await closeout(root, { pr: "42", apply: true, "required-checks": "  CI\tlegacy\nCI  " });
     assert.equal(report.closed, 1);
     assert.equal(report.checks[0]!.rule, "declared");
+    assert.equal(report.checks[0]!.code, "head_checks_passed");
+    assert.equal(report.checks[0]!.reason, "Caller-declared checks concluded success; repository required-check metadata was unavailable.");
     assert.deepEqual(report.checks[0]!.passed, ["CI", "legacy"]);
   });
 }));

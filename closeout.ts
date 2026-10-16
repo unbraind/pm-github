@@ -223,7 +223,7 @@ export async function checkCloseoutHead(api: CloseoutApi, repo: string, pr: Pull
       }
     }
     if (!policy.fallback) {
-      result.reason = policy.unavailable ? "Caller-declared and readable required head checks concluded success."
+      result.reason = policy.unavailable ? "Caller-declared checks concluded success; repository required-check metadata was unavailable."
         : "Required head checks concluded success (branch-protection and ruleset rule).";
     } else {
       if (runs.length === 0) { result.reason = "Fallback rule: no check runs at head; evidence missing."; return result; }
@@ -336,13 +336,14 @@ function usage<T>(parse: () => T): T {
 /**
  * Describe the verified check evidence for a passed gate without overstating it.
  *
- * The required and declared rules state that their required checks were satisfied and list every successful head check (optional
- * ones included). The fallback rule (fully readable metadata with no required contexts)
+ * The required rule reports required-check success; the declared rule reports caller-declared success
+ * and unavailable repository metadata. Both list every successful head check (optional ones included).
+ * The fallback rule (fully readable metadata with no required contexts)
  * may pass on neutral or skipped runs alone, so it states that policy and lists successful checks only when any exist.
  */
 export function checkEvidence(gate: CheckGate): string {
   // gate.passed holds every successful head check, optional ones included, so it is never labelled as the required set.
-  if (gate.rule === "declared") return `caller-declared and readable required checks satisfied; successful head checks: ${gate.passed.join(", ")}`;
+  if (gate.rule === "declared") return `caller-declared checks concluded success; repository required-check metadata was unavailable; successful head checks: ${gate.passed.join(", ")}`;
   if (gate.rule === "required") return `required checks satisfied; successful head checks: ${gate.passed.join(", ")}`;
   const successes = gate.passed.length > 0 ? `successful checks: ${gate.passed.join(", ")}` : "no check reported success";
   return `no readable required checks, so every completed head check run had to succeed, be neutral or be skipped; ${successes}`;

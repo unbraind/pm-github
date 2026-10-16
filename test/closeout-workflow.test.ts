@@ -421,7 +421,7 @@ for (const mode of ["undeclared", "missing", "neutral", "skipped", "pending", "s
       assert.equal(existsSync(f.env.PR_STATE!), true);
       assert.notEqual(f.git("ls-remote", "origin", `refs/heads/${branch}`), "");
       const item = (await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item;
-      assert.match(String(item.actual_result), mode === "metadata" ? /required checks satisfied/ : /caller-declared and readable required checks satisfied/);
+      assert.match(String(item.actual_result), mode === "metadata" ? /required checks satisfied/ : /caller-declared checks concluded success; repository required-check metadata was unavailable; successful head checks: CI/);
     } else {
       assert.equal(report.plan[0]!.code, mode === "undeclared" ? "required_checks_unverified" : "head_checks_failed");
       if (mode === "undeclared") assert.equal(result.code, 1, result.out);
