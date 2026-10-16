@@ -1,0 +1,18 @@
+id: pm-github-ygye
+title: Configure the release app for automatic workflow stamping
+description: "Operational dependency of pm-github-znig. Install a dedicated GitHub App on this repository with Contents, Workflows, Pull requests and Actions write plus Checks read. Set RELEASE_APP_CLIENT_ID repository variable and RELEASE_APP_PRIVATE_KEY repository secret. The release workflow mints and revokes installation tokens automatically; GITHUB_TOKEN lacks workflow-write authorization. Verify the next scheduled release can push, merge, publish with OIDC and tag the stamped workflow commit. No release dispatch is authorized by this task."
+type: Task
+status: open
+priority: 2
+tags: []
+created_at: "2026-10-16T12:52:32.568Z"
+updated_at: "2026-10-16T14:29:37.342Z"
+author: codex-agent
+acceptance_criteria: App installed with documented permissions and repository configuration; a normal scheduled release records a successful stamped-workflow metadata transaction.
+comments[1]{created_at,author,text}:
+  "2026-10-16T14:29:37.342Z",codex-agent,"Round 1 design supersedes workflow stamping: release.yml is restored to its previous behavior and reusable workflows resolve release tags at runtime using documented job.workflow_sha and public git ls-remote. The release GitHub App, RELEASE_APP_CLIENT_ID, and RELEASE_APP_PRIVATE_KEY are no longer needed for this change. Leaving this item open for orchestrator cancellation."
+files[1]{path,scope,note}:
+  .github/workflows/release.yml,project,Automatic app token and release credential precondition
+docs[1]{path,scope,note}:
+  README.md,project,Release app permissions and repository configuration
+body: ""
