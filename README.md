@@ -450,16 +450,97 @@ Rendered values are also scanned in memory before mutation, so a known finding c
 
 The `gate` receipt reports the verdict, scanned file count, findings, and allowlisted count. With `--json`, successful reports go to stdout; failures use the host CLI's JSON error envelope on stderr, with the redacted gate report serialized in `detail` (`jq ' .detail | fromjson ' gate-error.json`). Unreadable inputs produce a nonzero JSON refusal.
 
+## Self-versioned workflows and Dependabot
+
+Both reusable workflows install their own embedded **exact** pm-github version
+and verify the installed package version. During release preparation, `release.yml`
+stamps the optional input default and the literal install version in both workflow
+files from `package.json`, before the release checks and metadata commit. Those
+files are included in the release commit that is merged, published and tagged.
+The caller checkout is never used to discover the reusable workflow's version.
+
+Release maintainer setup (pm-github only): install a dedicated GitHub App on this
+repository with **Contents: write**, **Workflows: write**, **Pull requests: write**,
+**Actions: write**, and **Checks: read**. Set repository variable
+`RELEASE_APP_CLIENT_ID` and repository secret `RELEASE_APP_PRIVATE_KEY` to that
+app's client ID and private key. The SHA-pinned `actions/create-github-app-token`
+step mints a short-lived token automatically for each run, scoped to this
+repository and those permissions, and revokes it at job completion. Checkout uses
+it for the release-branch push; the release PR step uses it for PR creation, CI
+dispatch, approval and merge. No-release runs can use `GITHUB_TOKEN`; release runs
+refuse missing app configuration before version preparation. Incorrect permissions
+or invalid credentials fail at authentication. npm publishing continues to use
+OIDC. GitHub's [contents API requirements](https://docs.github.com/en/rest/repos/contents#create-or-update-file-contents)
+require workflow-write authorization for workflow changes; granting `actions:
+write` to `GITHUB_TOKEN` does not supply it. See
+[additional token permissions](https://docs.github.com/en/actions/tutorials/authenticate-with-github_token#granting-additional-permissions).
+
+Pin **release commit SHAs**, with their matching tag in a same-line comment
+(for example `uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@<40-character-release-sha> # v2026.10.16`).
+On non-release commits such as main between releases, the embedded version is the
+last released version; pinning an arbitrary main commit does not select a new
+package release. New callers omit `pm-github-version`. Existing callers can keep
+that deprecated optional input: if it differs from the embedded version, the job
+emits `::warning::` and uses the embedded version without failing. Even a floating
+or malformed legacy input cannot change what gets installed. Embedded versions
+still require an exact numeric version; no `latest`, range or floating tag is used.
+
+GitHub documents [reusable-workflow updates](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/auto-update-actions)
+and [SHA pins and same-line version comments](https://docs.github.com/en/code-security/reference/supply-chain-security/supported-ecosystems-and-repositories#github-actions).
+Dependabot updates SHA-pinned remote `uses:` references and their version comments
+when the pinned commit has a matching release tag. GitHub warns that untagged
+commits can instead advance to the latest commit, which may differ from the latest
+release. A SHA update therefore selects the new embedded install version without
+editing any caller input.
+
+Merge this entry into the caller's `.github/dependabot.yml` (retain other ecosystems
+and disjoint groups such as `codeql-action`):
+
+```yaml
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 5
+    groups:
+      pm-toolchain:
+        patterns:
+          - "unbraind/pm-github"
+        # No update-types filter: calendar-version year changes must also update.
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "github_actions"
+```
+
+The group pattern is the repository name, covering both reusable workflow paths.
+Use exactly `pm-toolchain`: the fleet's existing
+[dependabot-auto-merge.yml](.github/workflows/dependabot-auto-merge.yml) enables
+`gh pr merge --auto --squash` for Dependabot PRs in that group, including calendar
+version major changes. The workflow checks the Dependabot author and repository
+owner, then the metadata group or minor/patch update type. Commit prefix and
+labels do not control merge eligibility; the explicit values above keep PRs
+consistent. Ensure the two labels exist (GitHub ignores unknown custom labels).
+Repository auto-merge must be enabled and required branch-protection checks must
+pass; this configuration does not bypass them. It uses the existing workflow's
+`contents: write` and `pull-requests: write` token permissions. See GitHub's
+[Dependabot option definitions](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference)
+for schedules, groups, commit messages and labels.
+
 ## Automated closeout workflow
 
 [`.github/workflows/pm-github-closeout.yml`](.github/workflows/pm-github-closeout.yml)
 is a reusable `workflow_call` that opens or updates **one** PR titled
 `chore(pm): close items delivered by merged pull requests` from `pm-github/closeout`.
 Copy [the caller template](docs/closeout-workflow-caller.yml) into the caller's
-workflows directory and replace `RELEASE_COMMIT_SHA` and `RELEASE_VERSION` with a
-reviewed workflow commit and an exact published pm-github version containing
+workflows directory and replace `RELEASE_COMMIT_SHA` with a reviewed release
+commit and `vRELEASE_VERSION` with its matching release tag containing
 `github closeout`. The template schedules a daily run and allows manual dispatch.
-Adopting callers is a separate change; the existing sync workflow is unchanged.
+Adopting callers is a separate change.
 
 The workflow resolves the caller's default branch through the repository API,
 with event metadata as fallback, and refuses other run refs before checkout.
@@ -467,7 +548,7 @@ This works for scheduled payloads without a `repository` object and for branches
 such as `trunk` or `release/stable`. The caller's pinned PM CLI comes from
 `npm ci --ignore-scripts` in `npm-project-dir` (default `.`), which must resolve
 inside the workspace and contain `package.json`. The SDK resolves the tracker
-from the repository root. The exact `pm-github-version` is installed and verified.
+from the repository root. The exact embedded release version is installed and verified.
 
 Each run rebuilds the bot branch from the current default branch and invokes
 `pm github closeout --since 1970-01-01 --apply --json`. Scanning all merge history
@@ -539,7 +620,7 @@ Optional inputs:
 | `post-import-script` | `changelog:full` | Caller npm script name invoked with `npm run --if-present` after import and before the final scan. Override for a different package script, or set `""` to disable. Missing scripts are skipped. Raw shell commands are not accepted. Generated `CHANGELOG.md` is staged with the tracker. Changing any file outside the documented scope fails the run, whether staged, unstaged, or untracked. |
 | `ci-workflows` | `ci.yml` | Whitespace-separated filenames in the caller's `.github/workflows`, for example `ci.yml codeql.yml`. Missing files emit a notice and are skipped; set `""` to disable dispatch. Existing workflows must enable `workflow_dispatch`; dispatch errors fail the sync job. |
 
-A fleet repo owns the schedule and calls it with the pinned versions (see [`docs/sync-workflow-caller.yml`](docs/sync-workflow-caller.yml)):
+A fleet repo owns the schedule and calls it with a pinned release SHA (see [`docs/sync-workflow-caller.yml`](docs/sync-workflow-caller.yml)):
 
 ```yaml
 name: Sync GitHub issues into pm
@@ -556,12 +637,10 @@ permissions:
 
 jobs:
   gated-sync:
-    uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@RELEASE_COMMIT_SHA
-    with:
-      pm-github-version: "RELEASE_VERSION"     # required: exact published version
+    uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@RELEASE_COMMIT_SHA # vRELEASE_VERSION
 ```
 
-Replace the two release placeholders with the release commit and package version containing this change; existing callers must repin both. The selected npm project needs a committed npm lockfile (`package-lock.json` or `npm-shrinkwrap.json`) and `@unbrained/pm-cli` as a devDependency (the workflow's `npm ci` provides the CLI) and its pm tracker at `.agents/pm` committed on the caller's default branch. Under **Settings → Actions → General → Workflow permissions** it must allow read and write token permissions and enable **Allow GitHub Actions to create and approve pull requests** (an organization can disable this), or the run pushes the sync branch and then fails to open the review PR. The caller must grant `actions: write`; a reusable workflow cannot elevate its caller's permissions.
+Replace `RELEASE_COMMIT_SHA` with a reviewed release commit containing this change and `vRELEASE_VERSION` with its matching tag. Configure [Dependabot](#self-versioned-workflows-and-dependabot) to maintain future pins automatically. The selected npm project needs a committed npm lockfile (`package-lock.json` or `npm-shrinkwrap.json`) and `@unbrained/pm-cli` as a devDependency (the workflow's `npm ci` provides the CLI) and its pm tracker at `.agents/pm` committed on the caller's default branch. Under **Settings → Actions → General → Workflow permissions** it must allow read and write token permissions and enable **Allow GitHub Actions to create and approve pull requests** (an organization can disable this), or the run pushes the sync branch and then fails to open the review PR. The caller must grant `actions: write`; a reusable workflow cannot elevate its caller's permissions.
 
 For a caller such as `unbraind/pm-rust` with no root `package.json`, add
 `npm-project-dir: tests/oracle` under `with:`. Its `tests/oracle/package.json`

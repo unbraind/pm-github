@@ -588,9 +588,9 @@ function stepOffset(name: string): number {
   return match.index;
 }
 
-test("the reusable sync workflow is a workflow_call with explicit pinned inputs", () => {
+test("the reusable sync workflow is a workflow_call with an optional legacy version input", () => {
   assert.match(workflow, /^on:\n  workflow_call:/m);
-  assert.match(workflow, /pm-github-version:\n\s+description:[^\n]+\n\s+type: string\n\s+required: true/);
+  assert.match(workflow, /pm-github-version:\n\s+description:[^\n]+\n\s+type: string\n\s+required: false/);
   assert.match(workflow, /repository:\n\s+description:/);
   assert.match(workflow, /post-import-script:[\s\S]*?default: "changelog:full"/);
   assert.match(workflow, /ci-workflows:[\s\S]*?default: "ci.yml"/);
@@ -751,13 +751,13 @@ test("the caller default branch drives checkout, reset, PR bases and permanent i
   assert.match(workflow, /git push --force-with-lease=/);
 });
 
-test("the caller example pins the reusable workflow and the extension version", () => {
+test("the caller example pins the reusable workflow release", () => {
   assert.match(callerExample, /^on:\n  schedule:\n    - cron:/m, "the caller owns the schedule");
   assert.match(
     callerExample,
     /uses: unbraind\/pm-github\/\.github\/workflows\/pm-github-sync\.yml@RELEASE_COMMIT_SHA/,
   );
-  assert.match(callerExample, /pm-github-version: "RELEASE_VERSION"/);
+  assert.doesNotMatch(callerExample, /pm-github-version/);
   assert.match(callerExample, /npm-project-dir: "\."/);
   assert.match(callerExample, /npm-project-dir: tests\/oracle/);
   assert.match(callerExample, /^permissions:\n  contents: write\n  pull-requests: write\n/m);

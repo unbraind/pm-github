@@ -1,0 +1,31 @@
+id: pm-github-znig
+title: Let reusable workflows carry their own release version
+description: "Companion pm-cli-website-4h4m: https://github.com/unbraind/pm-cli-website/search?q=pm-cli-website-4h4m&type=code . Stamp reusable sync and closeout workflows in the tagged release commit; install the embedded exact version and warn on deprecated caller overrides. Document daily Dependabot SHA updates and existing fleet auto-merge compatibility. No caller repins or release dispatch."
+type: Feature
+status: in_progress
+priority: 2
+tags: []
+created_at: "2026-10-16T12:47:09.319Z"
+updated_at: "2026-10-16T14:21:44.001Z"
+author: codex-agent
+acceptance_criteria: "Real workflow contract tests prove release stamping, omitted and mismatched legacy inputs, exact installs, and caller templates without the deprecated input; npm and Bun release checks pass at unchanged thresholds."
+comments[6]{created_at,author,text}:
+  "2026-10-16T12:47:21.478Z",codex-agent,"Design: release preparation stamps both reusable workflow input defaults and literal PM_GITHUB_VERSION job values from the prepared package version, before release checks and the metadata commit. The job always installs and verifies that literal exact version; REQUESTED_PM_GITHUB_VERSION carries the deprecated input only for a non-fatal mismatch warning. Both workflow paths join release commit and merged-state diff scopes. Contract tests execute real release/validation/install shell blocks with isolated files and command receipts. Caller docs use daily github-actions updates grouped as pm-toolchain, the existing auto-merge exemption for calendar-version major changes; commit prefix and labels do not authorize merging."
+  "2026-10-16T12:52:56.211Z",codex-agent,"Found an operational requirement: stamping .github/workflows files requires Workflows write authorization, which GITHUB_TOKEN cannot grant. Added a SHA-pinned GitHub App token step with explicit repository permissions, checkout/release-PR authentication, and a missing-configuration refusal before version preparation. Tokens are minted and revoked automatically. Follow-up pm-github-ygye tracks the one-time app installation and configuration; no credential or release dispatch was changed. Sources: https://docs.github.com/en/rest/repos/contents#create-or-update-file-contents and https://docs.github.com/en/actions/tutorials/authenticate-with-github_token#granting-additional-permissions ."
+  "2026-10-16T12:54:28.432Z",codex-agent,"Behavioural revert proofs using node --test --test-reporter=tap test/self-versioned-workflows.test.ts, keeping all tests unchanged and restoring each implementation mutation immediately: remove only release stamping block => 15 pass / 4 fail; restore only caller-controlled install binding => 9 pass / 10 fail; remove only mismatch warning => 13 pass / 6 fail; restore only deprecated caller-template input => 17 pass / 2 fail; remove only workflow paths from release commit staging => 17 pass / 2 fail. Each run has 19 tests and zero skip/cancel/todo. Restored implementation passes 19/19, also verified through pm test --run --progress. Dedicated app setup remains tracked by pm-github-ygye; no release or fleet-repin actions performed."
+  "2026-10-16T13:27:48.638Z",codex-agent,"First isolated-identity npm release gate reached 721 tests: 720 passed, one attestation contract failed, with zero skip/cancel/todo. The pinned attestation scanner treated TypeScript template literals in the new release heredoc as shell command substitutions and reported false publish paths. Replaced those template literals with equivalent string concatenation; release behavior and thresholds are unchanged. Running the direct verifier and release contracts before repeating the full gates."
+  "2026-10-16T13:29:07.696Z",codex-agent,"Corrected source: direct attestation verifier passes and node --test test/self-versioned-workflows.test.ts test/release-workflow.test.ts test/verify-release-publish-attestation.test.ts passes 36/36 with zero fail/skip/cancel/todo. Explicit empty legacy input now also warns. Repeated all five implementation-only revert proofs with unchanged current tests: remove stamping => 15 pass / 4 fail; revert install binding => 9 pass / 10 fail; remove warning => 11 pass / 8 fail; restore template input => 17 pass / 2 fail; omit workflows from release staging => 17 pass / 2 fail. Each has 19 tests and zero skip/cancel/todo. All mutations restored; the full npm and Bun gates will run again at unchanged thresholds."
+  "2026-10-16T14:21:44.001Z",codex-agent,"Final gates passed on the restored implementation at unchanged thresholds: npm run release:check under isolated HOME with global/system Git configuration disabled, and bun run release:check. Each reports 721/721 tests, zero failures, skips, cancellations or TODOs; both require exact 100/100/100/100 coverage across 13 authored modules. Typecheck, docstrings, lint, zero-duplication, privacy, production audit (zero vulnerabilities), dry-run packing, changelog and publish-attestation checks passed. Focused release contracts passed 36/36; linked pm test passed 19/19. The heredoc scanner false positive is avoided with string concatenation. No release dispatched or other fleet repository edited. Release-app configuration and scheduled acceptance remain open in pm-github-ygye; this feature remains unclosed with its claim released."
+files[5]{path,scope}:
+  .github/workflows/pm-github-closeout.yml,project
+  .github/workflows/pm-github-sync.yml,project
+  .github/workflows/release.yml,project
+  test/import-gate.test.ts,project
+  test/self-versioned-workflows.test.ts,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test test/self-versioned-workflows.test.ts,project,codex-agent,"2026-10-16T12:53:13.161Z",local_mutation,feat/self-versioned-reusable-workflows
+docs[3]{path,scope}:
+  docs/closeout-workflow-caller.yml,project
+  docs/sync-workflow-caller.yml,project
+  README.md,project
+body: ""

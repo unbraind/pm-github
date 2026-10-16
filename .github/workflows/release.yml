@@ -31,11 +31,26 @@ jobs:
     env:
       RELEASE_TIMEZONE: Europe/Vienna
     steps:
+      - name: Create release workflow token
+        id: release_token
+        if: vars.RELEASE_APP_CLIENT_ID != ''
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-workflows: write
+          permission-pull-requests: write
+          permission-actions: write
+          permission-checks: read
+
       - name: Checkout
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
           fetch-tags: true
+          # Workflow stamping requires Workflows: write, unavailable to GITHUB_TOKEN.
+          token: ${{ steps.release_token.outputs.token || github.token }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
@@ -154,6 +169,18 @@ jobs:
       # published nothing, and still reported the bump as progress. Asking the
       # registry for a credential BEFORE anything is mutated turns that silent
       # drift into an immediate, actionable failure.
+      - name: Require workflow release credential
+        if: steps.decide.outputs.should_release == 'true'
+        env:
+          RELEASE_WORKFLOW_TOKEN: ${{ steps.release_token.outputs.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${RELEASE_WORKFLOW_TOKEN}" ]]; then
+            echo "::error::Configure RELEASE_APP_CLIENT_ID and RELEASE_APP_PRIVATE_KEY for an installed release app with Contents and Workflows write permissions. GITHUB_TOKEN cannot push workflow changes."
+            exit 1
+          fi
+
       - name: Verify npm will accept this workflow's OIDC identity
         if: steps.decide.outputs.should_release == 'true'
         shell: bash
@@ -255,6 +282,26 @@ jobs:
           set -euo pipefail
           npm version "${NPM_VERSION}" --no-git-tag-version --allow-same-version
           node -e "const fs=require('node:fs');const version=JSON.parse(fs.readFileSync('package.json','utf8')).version;for(const file of ['manifest.json']){if(!fs.existsSync(file))continue;const json=JSON.parse(fs.readFileSync(file,'utf8'));json.version=version;fs.writeFileSync(file,JSON.stringify(json,null,2)+'\n');}if(fs.existsSync('index.ts')){const source=fs.readFileSync('index.ts','utf8');const next=source.replace(/version:\s*[\"'][^\"']+[\"']/,'version: \"'+version+'\"');if(next!==source)fs.writeFileSync('index.ts',next);}"
+          # Stamp the workflow implementation itself, never the caller checkout.
+          node --input-type=module-typescript <<'TS'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const { version } = JSON.parse(readFileSync('package.json', 'utf8')) as { version: string };
+          if (!/^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$/.test(version)) throw new Error('Expected exact release version');
+          for (const name of ['sync', 'closeout']) {
+            const file = '.github/workflows/pm-github-' + name + '.yml';
+            const source = readFileSync(file, 'utf8');
+            const patterns = [
+              /^        default: "[^"\n]+" # release-stamped default$/gm,
+              /^      PM_GITHUB_VERSION: "[^"\n]+" # release-stamped install version$/gm,
+            ];
+            let next = source;
+            for (const pattern of patterns) {
+              if ([...source.matchAll(pattern)].length !== 1) throw new Error('Missing or duplicate version stamp in ' + file);
+              next = next.replace(pattern, line => line.replace(/"[^"\n]+"/, '"' + version + '"'));
+            }
+            writeFileSync(file, next);
+          }
+          TS
           npm run build
 
       - name: Generate changelog and release notes
@@ -280,7 +327,7 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          paths=(package.json package-lock.json manifest.json CHANGELOG.md)
+          paths=(package.json package-lock.json manifest.json CHANGELOG.md .github/workflows/pm-github-sync.yml .github/workflows/pm-github-closeout.yml)
           [[ -f index.ts ]] && paths+=(index.ts)
           [[ -d src ]] && paths+=(src)
           git add "${paths[@]}"
@@ -295,7 +342,7 @@ jobs:
         id: release_pr
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.release_token.outputs.token }}
           RELEASE_BASE_SHA: ${{ steps.decide.outputs.base_sha }}
           RELEASE_TAG: ${{ steps.decide.outputs.tag }}
           NPM_VERSION: ${{ steps.decide.outputs.npm_version }}
@@ -534,7 +581,7 @@ jobs:
 
           npm ci
           npm run release:check
-          diff_paths=(package.json package-lock.json manifest.json CHANGELOG.md)
+          diff_paths=(package.json package-lock.json manifest.json CHANGELOG.md .github/workflows/pm-github-sync.yml .github/workflows/pm-github-closeout.yml)
           [[ -f index.ts ]] && diff_paths+=(index.ts)
           [[ -d src ]] && diff_paths+=(src)
           git diff --exit-code -- "${diff_paths[@]}"

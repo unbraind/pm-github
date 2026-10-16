@@ -1,4 +1,5 @@
-# Repin both placeholders to the release containing changelog regeneration and CI dispatch.
+# Pin a reviewed release SHA and its matching tag comment; Dependabot maintains both.
+# See README.md for the daily github-actions pm-toolchain group configuration.
 # Each configured CI workflow must enable workflow_dispatch and produce its required
 # check names on that event. Missing files are skipped with a notice.
 # Parked action_required PR runs are reported with URLs; dispatch runs separately.
@@ -25,9 +26,8 @@ permissions:
   actions: write # Required to dispatch the caller CI after opening/updating the PR.
 jobs:
   gated-sync:
-    uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@RELEASE_COMMIT_SHA
+    uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@RELEASE_COMMIT_SHA # vRELEASE_VERSION
     with:
-      pm-github-version: "RELEASE_VERSION"
       npm-project-dir: "." # For pm-rust, use: npm-project-dir: tests/oracle
       # Defaults shown explicitly; use "" to disable either optional action.
       post-import-script: "changelog:full"

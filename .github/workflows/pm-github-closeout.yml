@@ -1,6 +1,5 @@
 # Reusable closeout: verified merged delivery → gated tracker diff → review PR.
 # Scope helpers intentionally match gated sync; executable parity tests prevent drift.
-# The existing sync workflow and its inputs are unchanged.
 
 name: Gated merged-PR → pm closeout
 
@@ -13,9 +12,10 @@ on:
         required: false
         default: ${{ github.repository }}
       pm-github-version:
-        description: "Exact published pm-github version to install (pin; never a floating tag or latest)"
+        description: "Deprecated: ignored if different from the embedded release version; pin a release SHA instead"
         type: string
-        required: true
+        required: false
+        default: "2026.10.16" # release-stamped default
       npm-project-dir:
         description: "Caller npm project directory for dependencies and post-closeout-script (relative, inside the workspace)"
         type: string
@@ -56,7 +56,8 @@ jobs:
     env:
       REPOSITORY: ${{ inputs.repository }}
       SYNC_BRANCH: pm-github/closeout
-      PM_GITHUB_VERSION: ${{ inputs.pm-github-version }}
+      PM_GITHUB_VERSION: "2026.10.16" # release-stamped install version
+      REQUESTED_PM_GITHUB_VERSION: ${{ inputs.pm-github-version }}
       NPM_PROJECT_DIR: ${{ inputs.npm-project-dir }}
       POST_CLOSEOUT_SCRIPT: ${{ inputs.post-closeout-script }}
       CI_WORKFLOWS: ${{ inputs.ci-workflows }}
@@ -90,6 +91,9 @@ jobs:
         run: |
           set -euo pipefail
           [[ "${REPOSITORY}" == "${CALLING_REPOSITORY}" ]] || { echo "::error::repository must equal the calling repository (${CALLING_REPOSITORY})."; exit 1; }
+          if [[ "${REQUESTED_PM_GITHUB_VERSION-${PM_GITHUB_VERSION}}" != "${PM_GITHUB_VERSION}" ]]; then
+            echo "::warning::pm-github-version is deprecated and differs from the embedded release version; using pm-github@${PM_GITHUB_VERSION}."
+          fi
           [[ "${PM_GITHUB_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]] || { echo "::error::pm-github-version must be an exact numeric version: N.N.N or N.N.N-N."; exit 1; }
           [[ "${SYNC_BRANCH}" == pm-github/closeout ]] || { echo "::error::Closeout branch must be pm-github/closeout."; exit 1; }
           git check-ref-format "refs/heads/${SYNC_BRANCH}"
