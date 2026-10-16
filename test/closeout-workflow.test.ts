@@ -66,7 +66,9 @@ async function fixture(fn: (f: { root: string; base: string; pmRoot: string; id:
   const root = join(base, "caller");
   const remote = join(base, "remote.git");
   mkdirSync(root);
-  const env: NodeJS.ProcessEnv = { ...process.env, PM_AUTHOR: "fixture", PM_GLOBAL_PATH: join(base, "global"),
+  // PM_TELEMETRY_INLINE_FLUSH keeps the pm CLI's telemetry flush inside each command, so no detached
+  // worker can still be writing under the disposable global root when teardown removes it.
+  const env: NodeJS.ProcessEnv = { ...process.env, PM_AUTHOR: "fixture", PM_GLOBAL_PATH: join(base, "global"), PM_TELEMETRY_INLINE_FLUSH: "1",
     GIT_AUTHOR_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@users.noreply.github.com",
     GIT_COMMITTER_NAME: "Fixture", GIT_COMMITTER_EMAIL: "fixture@users.noreply.github.com" };
   const git = (...args: string[]) => command(root, "git", args, env);
@@ -164,7 +166,12 @@ set +a
 ${shell(name, source)}
 )`).join("\n"), root, env);
   try { await fn({ root, base, pmRoot, id, env, run, git }); }
-  finally { await server.close(); rmSync(base, { recursive: true, force: true }); }
+  finally {
+    await server.close();
+    // The pm CLI's detached telemetry flush can still be writing under PM_GLOBAL_PATH/runtime/telemetry
+    // when the caller exits; retry the removal as import-gate.test.ts does (upstream pm-cli#1423, #1484).
+    rmSync(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
 }
 
 const setup = ["Require caller default branch", "Validate closeout inputs", "Validate npm project directory", "Prepare sync branch from default branch",
