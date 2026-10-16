@@ -143,11 +143,12 @@ esac
     PR_STATE: join(base, "pr-state"), PR_BODY: join(base, "pr-body"), RECEIPTS: join(base, "receipts") });
   const server = await startMockGithub((req, res) => {
     const url = req.url!;
+    if (url.includes("/check-runs")) env.HEAD_LOOKUPS = String(Number(env.HEAD_LOOKUPS ?? 0) + 1);
     if (env.READ_DENIED === "true" || (env.CHECKS_DENIED === "true" && url.includes("/check-runs"))) { jsonResponse(res, 403, { message: "Resource not accessible by integration" }); return; }
     const sha = "a".repeat(40);
     if (url.includes("/pulls?")) jsonResponse(res, 200, env.NO_DELIVERY === "true" ? [] : [{ number: 42, merged_at: "2026-10-15T00:00:00Z", updated_at: "2026-10-15T00:00:00Z" }]);
-    else if (url.endsWith("/pulls/42")) jsonResponse(res, 200, { number: 42, body: `https://github.com/acme/widgets/blob/main/.agents/pm/tasks/${id}.toon`,
-      merged: true, merged_at: "2026-10-15T00:00:00Z", merge_commit_sha: "b".repeat(40), html_url: "https://github.com/acme/widgets/pull/42",
+    else if (url.endsWith("/pulls/42")) jsonResponse(res, 200, { number: 42, body: env.NO_LINKS === "true" ? "Routine maintenance" : `https://github.com/${env.FOREIGN_LINK === "true" ? "other/project" : "acme/widgets"}/blob/main/.agents/pm/tasks/${id}.toon${env.SUMMARY_ROWS === "true" ? `\nhttps://github.com/other/project/blob/main/.agents/pm/tasks/${id}.toon` : ""}${env.SUMMARY_ITEM ? `\nhttps://github.com/acme/widgets/blob/main/.agents/pm/tasks/${env.SUMMARY_ITEM}.toon` : ""}`,
+      merged: true, merged_at: "2026-10-15T00:00:00Z", merge_commit_sha: env.INCOMPLETE_MERGE === "true" ? null : "b".repeat(40), html_url: "https://github.com/acme/widgets/pull/42",
       head: { sha }, base: { ref: "trunk", repo: { full_name: "acme/widgets" } } });
     else if (url.includes("/protection/")) jsonResponse(res, 200, { contexts: ["CI"], checks: [] });
     else if (url.includes("/rules/branches/")) jsonResponse(res, 200, []);
@@ -204,6 +205,7 @@ test("closeout contract keeps sync safety helpers, exact pins, env bindings and 
 });
 
 test("schedule without repository payload resolves trunk; clean closeout opens one PR and repeat edits it", async () => fixture(async f => {
+  f.env.SUMMARY_ROWS = "true";
   const baseHead = f.git("rev-parse", "HEAD");
   const first = await f.run([...setup, ...finish]);
   assert.equal(first.code, 0, first.out);
@@ -211,7 +213,12 @@ test("schedule without repository payload resolves trunk; clean closeout opens o
   const published = f.git("ls-remote", "origin", `refs/heads/${branch}`).split(/\s/)[0];
   assert.ok(published);
   assert.equal(f.git("ls-remote", "origin", "refs/heads/trunk").split(/\s/)[0], baseHead);
-  assert.match(readFileSync(f.env.PR_BODY!, "utf8"), /blob\/trunk\/\.agents\/pm/);
+  const body = readFileSync(f.env.PR_BODY!, "utf8");
+  assert.match(body, /blob\/trunk\/\.agents\/pm/);
+  assert.match(body, /"action": "close"/);
+  assert.match(body, /"other_repository": 1/);
+  assert.doesNotMatch(body, /"code": "other_repository"/);
+  assert.doesNotMatch(body, /"checks"|"reason"/);
   assert.match(f.git("show", `${published}:CHANGELOG.md`), /Verified delivery/);
   const second = await f.run([...setup, ...finish]);
   assert.equal(second.code, 0, second.out);
@@ -354,5 +361,33 @@ test("an explicit lease refuses a competing bot-branch writer", async () => fixt
   assert.notEqual(result.code, 0);
   assert.match(result.out, /stale info|rejected/);
   assert.equal(f.git("ls-remote", "origin", `refs/heads/${branch}`).split(/\s/)[0], competingHead);
+  assert.equal(existsSync(f.env.PR_STATE!), false);
+}));
+
+for (const mode of ["unlinked", "foreign", "terminal", "local", "incomplete", "unlinked-incomplete"]) {
+  test(`unavailable evidence is scoped to local tracker refusals: ${mode}`, async () => fixture(async f => {
+    f.env.CHECKS_DENIED = "true";
+    if (mode.startsWith("unlinked")) f.env.NO_LINKS = "true";
+    if (mode === "foreign") f.env.FOREIGN_LINK = "true";
+    if (mode.includes("incomplete")) f.env.INCOMPLETE_MERGE = "true";
+    if (mode === "terminal") await update(f.id, { status: "canceled" }, { pmRoot: f.pmRoot, noExtensions: true });
+    const result = await f.run([...setup, ...finish]);
+    assert.equal(result.code, mode === "local" || mode === "incomplete" ? 1 : 0, result.out);
+    if (mode === "local") assert.match(result.out, /token read access to head checks for linked local tracker items/);
+    if (mode === "incomplete") {
+      assert.match(result.out, /incomplete merged-PR metadata blocks a linked local tracker item/);
+      assert.equal(f.env.HEAD_LOOKUPS, undefined);
+    }
+    unpublished(f.git);
+    assert.equal(existsSync(f.env.PR_STATE!), false);
+  }));
+}
+
+test("compact PR summary is privacy gated before the bot branch is published", async () => fixture(async f => {
+  f.env.SUMMARY_ITEM = "ghp_" + "A".repeat(36);
+  const result = await f.run([...setup, ...finish]);
+  assert.notEqual(result.code, 0, result.out);
+  assert.match(result.out, /github-token-classic/);
+  unpublished(f.git);
   assert.equal(existsSync(f.env.PR_STATE!), false);
 }));

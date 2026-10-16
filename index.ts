@@ -23,7 +23,7 @@ import type {
   PreflightOverrideContext,
   SearchProviderQueryContext,
 } from "@unbrained/pm-cli/sdk/authoring";
-import { CloseoutUsageError, runCloseout } from "./closeout.ts";
+import { CloseoutUsageError, compactCloseoutReport, runCloseout } from "./closeout.ts";
 import http from "node:http";
 import https from "node:https";
 import crypto from "node:crypto";
@@ -6691,6 +6691,7 @@ export default defineExtension({
         { long: "--skip", value_name: "id", repeatable: true, description: "Never close this item (repeatable)" },
         { long: "--apply", description: "Close eligible items (default: dry-run)" },
         { long: "--dry-run", description: "Preview only; overrides --apply" },
+        { long: "--full", description: "Include every plan row and PR check (also available with --json)" },
       ],
       async run(ctx: CommandHandlerContext) {
         try {
@@ -6699,7 +6700,7 @@ export default defineExtension({
             base: githubApiBase(), get: url => fetchJSON(url, token), next: parseNextLink,
           });
           if (report.failed > 0) throw new CommandError(JSON.stringify({ ...report, error: "pm github closeout: some closes failed" }), EXIT_CODE.GENERIC_FAILURE);
-          return report;
+          return ctx.global.json === true || ctx.options.full === true ? report : compactCloseoutReport(report);
         } catch (error) {
           // A plain Error would make the host re-run the handler (repeating GitHub reads and remaining closes).
           throw new CommandError((error as Error).message, error instanceof CloseoutUsageError ? EXIT_CODE.USAGE : EXIT_CODE.GENERIC_FAILURE);
