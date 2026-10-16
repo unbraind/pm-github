@@ -78,6 +78,29 @@ jobs:
       CI_WORKFLOWS: ${{ inputs.ci-workflows }}
       CALLING_REPOSITORY: ${{ github.repository }}
     steps:
+      - name: Require caller default branch
+        id: caller_branch
+        env:
+          RUN_REF: ${{ github.ref }}
+          EVENT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEFAULT_BRANCH="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch // empty' 2>/dev/null)" || DEFAULT_BRANCH=""
+          DEFAULT_BRANCH="${DEFAULT_BRANCH:-${EVENT_DEFAULT_BRANCH:-}}"
+          if [[ -z "${DEFAULT_BRANCH}" ]] || ! git check-ref-format "refs/heads/${DEFAULT_BRANCH}" >/dev/null 2>&1; then
+            echo "::error::Cannot resolve a valid caller default branch from the repository API or event payload."
+            exit 1
+          fi
+          expected_ref="refs/heads/${DEFAULT_BRANCH}"
+          if [[ "${RUN_REF}" != "${expected_ref}" ]]; then
+            printf '::error::Sync ref "%s" must match caller default branch ref "%s".\n' "${RUN_REF}" "${expected_ref}"
+            exit 1
+          fi
+          printf 'branch=%s\n' "${DEFAULT_BRANCH}" >> "${GITHUB_OUTPUT}"
+          printf 'DEFAULT_BRANCH=%s\n' "${DEFAULT_BRANCH}" >> "${GITHUB_ENV}"
+
       - name: Validate sync inputs
         shell: bash
         run: |
@@ -88,12 +111,12 @@ jobs:
           git check-ref-format "refs/heads/${SYNC_BRANCH}"
           [[ -z "${POST_IMPORT_SCRIPT:-}" || "${POST_IMPORT_SCRIPT:-}" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.:-]*$ ]] || { echo "::error::post-import-script must be an npm script name, not a shell command."; exit 1; }
 
-      - name: Checkout main
+      - name: Checkout caller default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           fetch-tags: true
-          ref: main
+          ref: ${{ steps.caller_branch.outputs.branch }}
           persist-credentials: false
 
       - name: Validate npm project directory
@@ -121,10 +144,10 @@ jobs:
             ${{ env.NPM_PROJECT_PATH }}/package-lock.json
             ${{ env.NPM_PROJECT_PATH }}/npm-shrinkwrap.json
 
-      # Always rebuild the sync branch from current main: the branch only ever
+      # Always rebuild the sync branch from the current default branch: the branch only ever
       # holds automated sync commits, so a reset keeps the PR a clean review of
       # exactly this run's proposed change instead of an ever-growing merge.
-      - name: Prepare sync branch from main
+      - name: Prepare sync branch from default branch
         shell: bash
         run: |
           set -euo pipefail
@@ -132,7 +155,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           sync_lease="$(git rev-parse --verify "refs/remotes/origin/${SYNC_BRANCH}" 2>/dev/null || true)"
           printf 'SYNC_LEASE=%s\n' "${sync_lease}" >> "${GITHUB_ENV}"
-          git switch --force-create "${SYNC_BRANCH}" origin/main
+          git switch --force-create "${SYNC_BRANCH}" "origin/${DEFAULT_BRANCH}"
 
       # The calling repo's own devDependency provides the pm CLI (npm ci).
       - name: Install dependencies
@@ -306,7 +329,7 @@ jobs:
           # from a branch with the same name, so filter the results to PRs whose
           # head repository is this repository (never trust .[0] alone).
           own_open_pr() {
-            gh pr list -R "${REPOSITORY}" --head "${SYNC_BRANCH}" --base main --state open \
+            gh pr list -R "${REPOSITORY}" --head "${SYNC_BRANCH}" --base "${DEFAULT_BRANCH}" --state open \
               --json number,headRepository,headRepositoryOwner,isCrossRepository \
               | jq -r --arg repository "${REPOSITORY}" \
                 '[ .[] | select(.isCrossRepository == false and (.headRepositoryOwner.login + "/" + .headRepository.name) == $repository) | .number ][0] // empty'
@@ -345,9 +368,9 @@ jobs:
               "${PM_SYNC_TRACKER}"/*/*.toon)
                 item_id="${changed##*/}"
                 item_id="${item_id%.toon}"
-                # The main link is the permanent one after merge; the branch link
+                # The default-branch link is the permanent one after merge; the branch link
                 # shows the proposed item while the review PR is open.
-                printf -- '- [%s](https://github.com/%s/blob/main/%s) ([proposed](https://github.com/%s/blob/%s/%s))\n' "${item_id}" "${REPOSITORY}" "${changed}" "${REPOSITORY}" "${SYNC_BRANCH}" "${changed}" >> "${links_file}"
+                printf -- '- [%s](https://github.com/%s/blob/%s/%s) ([proposed](https://github.com/%s/blob/%s/%s))\n' "${item_id}" "${REPOSITORY}" "${DEFAULT_BRANCH}" "${changed}" "${REPOSITORY}" "${SYNC_BRANCH}" "${changed}" >> "${links_file}"
                 ;;
             esac
           done < <(git diff --cached --name-only -- "${sync_scope[0]}" "${sync_scope[@]:2}")
@@ -367,13 +390,13 @@ jobs:
           body_file="${RUNNER_TEMP}/pm-github-sync-pr.md"
           {
             printf '%s\n\n' "Automated pm-github issue synchronization for ${REPOSITORY}."
-            printf '%s\n\n' "The import ran with \`--gate\`: the plan was verified for completeness and provenance idempotency before the write, and the proposed tracker change passed the fail-closed privacy gate before anything was committed. \`main\` is never pushed directly."
+            printf '%s\n\n' "The import ran with \`--gate\`: the plan was verified for completeness and provenance idempotency before the write, and the proposed tracker change passed the fail-closed privacy gate before anything was committed. \`${DEFAULT_BRANCH}\` is never pushed directly."
             printf '%s\n\n' "Tracker items changed:"
             cat "${links_file}"
           } > "${body_file}"
           pr_number="$(own_open_pr)"
           if [[ -z "${pr_number}" ]]; then
-            gh pr create -R "${REPOSITORY}" --base main --head "${SYNC_BRANCH}" --title "chore(pm): sync GitHub issues (gated)" --body-file "${body_file}"
+            gh pr create -R "${REPOSITORY}" --base "${DEFAULT_BRANCH}" --head "${SYNC_BRANCH}" --title "chore(pm): sync GitHub issues (gated)" --body-file "${body_file}"
           else
             gh pr edit "${pr_number}" -R "${REPOSITORY}" --body-file "${body_file}"
           fi

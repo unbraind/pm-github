@@ -604,6 +604,103 @@ test("the reusable sync workflow is a workflow_call with explicit pinned inputs"
   );
 });
 
+test("the caller default branch guard is first and preserves the remaining step order", () => {
+  const steps = workflow.split(/\n      - name: /).slice(1);
+  assert.deepEqual(steps.map(step => step.split("\n")[0]), [
+    "Require caller default branch", "Validate sync inputs", "Checkout caller default branch",
+    "Validate npm project directory", "Setup Node.js", "Prepare sync branch from default branch",
+    "Install dependencies", "Resolve sync commit scope", "Install pinned pm-github extension",
+    "Configure PM merge drivers", "Verify gate is available", "Validate GitHub access",
+    "Revalidate GitHub blockers (report only)", "Preview GitHub to pm plan",
+    "Gated GitHub to pm import", "Verify repeat import is a no-op", "Run caller post-import script",
+    "Gate tracker and regenerated changelog", "Verify strict pm health",
+    "Commit gated sync changes and open review PR", "Dispatch caller CI and report parked runs",
+  ]);
+  assert.match(steps[0]!, /RUN_REF: \$\{\{ github.ref \}\}/);
+  assert.match(steps[0]!, /EVENT_DEFAULT_BRANCH: \$\{\{ github.event.repository.default_branch \}\}/);
+  assert.match(steps[0]!, /shell: bash/);
+  assert.doesNotMatch(steps[0]!, /\n        (?:if|continue-on-error):/);
+  assert.doesNotMatch(workflowShell(["Require caller default branch"]), /\$\{\{|=~/);
+  assert.match(callerExample, /Callers need no guard of their own/);
+});
+
+/** Bind realistic caller event metadata and inject only the external gh command. */
+function guardEnvironment(base: string, payload: { repository?: { default_branch: string }; [key: string]: unknown },
+  ref: string, apiBranch: string, apiStatus = 0): NodeJS.ProcessEnv {
+  const eventPath = path.join(base, "event.json");
+  fs.writeFileSync(eventPath, JSON.stringify(payload));
+  const event = JSON.parse(fs.readFileSync(eventPath, "utf8")) as typeof payload;
+  // These assertions tie the simulated runner bindings to the actual step env.
+  const guard = workflow.slice(stepOffset("Require caller default branch"), stepOffset("Validate sync inputs"));
+  assert.match(guard, /RUN_REF: \$\{\{ github.ref \}\}/);
+  assert.match(guard, /EVENT_DEFAULT_BRANCH: \$\{\{ github.event.repository.default_branch \}\}/);
+  assert.match(guard, /GH_TOKEN: \$\{\{ github.token \}\}/);
+  const command = path.join(base, "gh");
+  fs.writeFileSync(command, `#!/usr/bin/env bash
+set -euo pipefail
+[[ "$*" == 'api repos/acme/widgets --jq .default_branch // empty' ]] || exit 98
+[[ "$GH_TOKEN" == synthetic-test-token ]] || exit 99
+printf '%s' "$API_BRANCH"
+exit "$API_STATUS"
+`, { mode: 0o755 });
+  return { ...process.env, RUN_REF: ref, EVENT_DEFAULT_BRANCH: event.repository?.default_branch ?? "",
+    DEFAULT_BRANCH: "", GITHUB_EVENT_PATH: eventPath, GITHUB_EVENT_NAME: "schedule" in event ? "schedule" : "workflow_dispatch",
+    GITHUB_REPOSITORY: "acme/widgets", GH_TOKEN: "synthetic-test-token", PATH: base + path.delimiter + process.env.PATH,
+    API_BRANCH: apiBranch, API_STATUS: String(apiStatus),
+    GITHUB_OUTPUT: path.join(base, "guard-output"), GITHUB_ENV: path.join(base, "guard-env") };
+}
+
+test("the first workflow step refuses non-default refs with one diagnostic naming both refs", async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-ref-"));
+  try {
+    for (const ref of ["refs/heads/feature/sync", "refs/tags/main", "refs/heads/main-extra", "refs/heads/$(printf injected)", ""]) {
+      const env = guardEnvironment(base, { inputs: {}, ref, repository: { default_branch: "main" } }, ref, "main");
+      const result = await executeWorkflow(workflowShell(["Require caller default branch"]), repoRoot, env);
+      assert.equal(result.code, 1, `must refuse ${ref}`);
+      assert.equal(result.stdout, `::error::Sync ref "${ref}" must match caller default branch ref "refs/heads/main".\n`);
+      assert.equal(result.stderr, "");
+      assert.ok(!fs.existsSync(env.GITHUB_OUTPUT!), "a refused ref cannot provide a checkout branch");
+    }
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
+test("the first workflow step accepts realistic schedule payloads without repository and dispatched payloads", async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-events-"));
+  try {
+    for (const branch of ["main", "trunk", "release/stable"]) {
+      for (const payload of [{ schedule: "17 2 * * *" }, { inputs: {}, ref: branch, repository: { default_branch: branch } }]) {
+        const env = guardEnvironment(base, payload, `refs/heads/${branch}`, branch);
+        for (const file of [env.GITHUB_OUTPUT!, env.GITHUB_ENV!]) fs.rmSync(file, { force: true });
+        const result = await executeWorkflow(workflowShell(["Require caller default branch"]), repoRoot, env);
+        assert.equal(result.code, 0, `${env.GITHUB_EVENT_NAME} on ${branch}: ${result.stdout + result.stderr}`);
+        assert.equal(result.stdout + result.stderr, "");
+        assert.equal(fs.readFileSync(env.GITHUB_OUTPUT!, "utf8"), `branch=${branch}\n`);
+        assert.equal(fs.readFileSync(env.GITHUB_ENV!, "utf8"), `DEFAULT_BRANCH=${branch}\n`);
+      }
+    }
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
+test("the first workflow step prefers the API, falls back to present payload metadata and fails closed", async () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-resolution-"));
+  try {
+    const payload = { inputs: {}, repository: { default_branch: "trunk" } };
+    for (const [apiBranch, status, accepted] of [["trunk", 0, true], ["", 1, true], ["", 0, true], ["main", 0, false]] as const) {
+      const env = guardEnvironment(base, payload, "refs/heads/trunk", apiBranch, status);
+      const result = await executeWorkflow(workflowShell(["Require caller default branch"]), repoRoot, env);
+      assert.equal(result.code, accepted ? 0 : 1, result.stdout + result.stderr);
+    }
+    for (const [apiBranch, status] of [["", 1], ["", 0], ["trunk\nINJECTED=value", 0], ["null", 1]] as const) {
+      const env = guardEnvironment(base, { schedule: "17 2 * * *" }, "refs/heads/trunk", apiBranch, status);
+      fs.rmSync(env.GITHUB_OUTPUT!, { force: true });
+      const result = await executeWorkflow(workflowShell(["Require caller default branch"]), repoRoot, env);
+      assert.equal(result.code, 1, result.stdout + result.stderr);
+      assert.equal(result.stdout, "::error::Cannot resolve a valid caller default branch from the repository API or event payload.\n");
+      assert.ok(!fs.existsSync(env.GITHUB_OUTPUT!));
+    }
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
 test("every action the workflow uses is pinned by commit SHA", () => {
   const uses = [...workflow.matchAll(/^\s*uses: ([^\s#]+)/gm)].map((match) => match[1]!);
   assert.ok(uses.length >= 2, "the workflow uses actions");
@@ -637,16 +734,20 @@ test("the gated import runs after validate/plan and before health, commit, and p
   assert.match(workflow, /git --literal-pathspecs add --pathspec-from-file=/);
 });
 
-test("the PR body links every changed item as a permanent main-tree pm link", () => {
+test("the caller default branch drives checkout, reset, PR bases and permanent item links", () => {
   assert.match(
     workflow,
-    /https:\/\/github\.com\/%s\/blob\/main\/%s/,
-    "the link template targets the main-tree item path",
+    /https:\/\/github\.com\/%s\/blob\/%s\/%s/,
+    "the link template accepts the resolved default branch",
   );
   assert.match(workflow, /"\$\{PM_SYNC_TRACKER\}"\/\*\/\*\.toon/);
   assert.match(workflow, /gh pr create/);
   assert.match(workflow, /gh pr edit/);
-  // The push is explicit and force-resets the automation branch from main.
+  assert.doesNotMatch(workflow, /\bmain\b/, "no operation or documentation in the reusable workflow hard-codes main");
+  assert.match(workflow, /ref: \$\{\{ steps.caller_branch.outputs.branch \}\}/);
+  assert.match(workflowShell(["Prepare sync branch from default branch"]), /git switch --force-create "\$\{SYNC_BRANCH\}" "origin\/\$\{DEFAULT_BRANCH\}"/);
+  assert.equal((workflow.match(/--base "\$\{DEFAULT_BRANCH\}"/g) ?? []).length, 2);
+  // The push is explicit and force-resets only the automation branch.
   assert.match(workflow, /git push --force-with-lease=/);
 });
 
@@ -726,6 +827,7 @@ if [[ "$1" == "auth" && "$2" == "setup-git" ]]; then exit 0; fi
 if [[ "$1" == "--version" ]]; then printf 'gh fixture\\n'; exit 0; fi
 case "$1 $2" in
   "pr list")
+    printf '%s\\n' "$*" >> "\${REVIEW_ACTIONS}.pr-args"
     entries=""
     if [[ -n "\${OWN_OPEN_PR:-}" ]]; then
       entries+="{\\"number\\":\${OWN_OPEN_PR},\\"headRepository\\":{\\"name\\":\\"\${REPOSITORY#*/}\\"},\\"headRepositoryOwner\\":{\\"login\\":\\"\${REPOSITORY%%/*}\\"},\\"isCrossRepository\\":false},"
@@ -737,6 +839,7 @@ case "$1 $2" in
     printf '[%s]' "\${entries%,}"
     ;;
   "pr create"|"pr edit")
+    printf '%s\\n' "$*" >> "\${REVIEW_ACTIONS}.pr-args"
     printf '%s\\n' "$2" >> "\${REVIEW_ACTIONS}"
     while [[ $# -gt 0 ]]; do
       if [[ "$1" == "--body-file" ]]; then cp "$2" "\${REVIEW_RECEIPT}"; break; fi
@@ -769,7 +872,7 @@ esac
     PM_GLOBAL_PATH: fixtureGlobalRoot, PM_PATH: path.join(root, ".agents", "pm"), REPOSITORY: "acme/widgets", CALLING_REPOSITORY: "acme/widgets",
     NPM_PROJECT_PATH: root, GITHUB_WORKSPACE: root,
     POST_IMPORT_SCRIPT: "changelog:full", CI_WORKFLOWS: "ci.yml",
-    PM_GITHUB_VERSION: "2026.10.4", SYNC_BRANCH, SYNC_LEASE: "", RUNNER_TEMP: base,
+    PM_GITHUB_VERSION: "2026.10.4", DEFAULT_BRANCH: "main", SYNC_BRANCH, SYNC_LEASE: "", RUNNER_TEMP: base,
     GITHUB_ENV: path.join(base, "job-env"), REVIEW_RECEIPT: path.join(base, "review.md"), REVIEW_ACTIONS: path.join(base, "review-actions") };
   const packageRoot = path.resolve(import.meta.dirname, "..");
   const packed = await packWorkflowCandidate(packageRoot, base, env);
@@ -930,6 +1033,50 @@ fs.writeFileSync("CHANGELOG.md", "# Changelog\\n- " + items[0] + "\\n");
       assert.deepEqual(fs.readFileSync(env.REVIEW_ACTIONS!, "utf8").trim().split("\n"), ["create", "edit"]);
       assert.equal(fs.readFileSync(env.REVIEW_ACTIONS! + ".dispatch", "utf8").trim().split("\n").length, 4,
         "both PR creation and update dispatch caller CI");
+    });
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
+test("the caller default branch trunk flows from schedule guard through real Git preparation and review", async () => {
+  const { root, base, bare, git } = initSyncRepo();
+  try {
+    assert.equal(git(["branch", "-m", "trunk"]).status, 0);
+    assert.equal(git(["push", "-u", "origin", "trunk"]).status, 0);
+    assert.equal(spawnSync("git", ["--git-dir", bare, "symbolic-ref", "HEAD", "refs/heads/trunk"]).status, 0);
+    assert.equal(git(["push", "origin", "--delete", "main"]).status, 0);
+    const fixtureEnv = await prepareWorkflowFixture(root, base);
+    assert.equal(git(["push", "origin", "trunk"]).status, 0, "publish the caller dependency setup on its default branch");
+    const guardEnv = guardEnvironment(base, { schedule: "17 2 * * *" }, "refs/heads/trunk", "trunk");
+    const guarded = await executeWorkflow(workflowShell(["Require caller default branch"]), root, guardEnv);
+    assert.equal(guarded.code, 0, guarded.stdout + guarded.stderr);
+    const output = fs.readFileSync(guardEnv.GITHUB_OUTPUT!, "utf8").trim().split("=")[1]!;
+    assert.equal(output, "trunk", "checkout action receives the guard output");
+    assert.match(workflow, /ref: \$\{\{ steps.caller_branch.outputs.branch \}\}/);
+    assert.equal(git(["switch", "--detach", output]).status, 0, "checkout the resolved default branch");
+    const exported = fs.readFileSync(guardEnv.GITHUB_ENV!, "utf8").trim().split("=")[1]!;
+    const env: NodeJS.ProcessEnv = { ...fixtureEnv, DEFAULT_BRANCH: exported };
+    const prepared = await executeWorkflow(workflowShell(["Prepare sync branch from default branch"]), root, env);
+    assert.equal(prepared.code, 0, prepared.stdout + prepared.stderr);
+    assert.equal(git(["branch", "--show-current"]).stdout.trim(), SYNC_BRANCH);
+    assert.equal(git(["rev-parse", "HEAD"]).stdout, git(["rev-parse", "origin/trunk"]).stdout);
+    const handle = githubHandler([issue(1, "Synthetic trunk issue", "Reviewed public body.")]);
+    await withMockGithub((req, res, url, server) => {
+      if (req.url === "/repos/acme/widgets") jsonResponse(res, 200, { private: false });
+      else handle(req, res, url, server);
+    }, async () => {
+      const result = await executeWorkflow(workflowShell(WORKFLOW_IMPORT_SEQUENCE), root, { ...env,
+        PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE });
+      assert.equal(result.code, 0, result.stdout + result.stderr);
+      assert.deepEqual(remoteRefs(bare), ["refs/heads/" + SYNC_BRANCH, "refs/heads/trunk"].sort());
+      const prArgs = fs.readFileSync(env.REVIEW_ACTIONS! + ".pr-args", "utf8").trim().split("\n");
+      assert.equal(prArgs.length, 2);
+      for (const args of prArgs) assert.match(args, /--base trunk(?: |$)/);
+      assert.match(prArgs[0]!, /^pr list /);
+      assert.match(prArgs[1]!, /^pr create /);
+      const body = fs.readFileSync(env.REVIEW_RECEIPT!, "utf8");
+      assert.match(body, /https:\/\/github\.com\/acme\/widgets\/blob\/trunk\/\.agents\/pm\/issues\/[^)]+\.toon/);
+      assert.ok(body.includes("`trunk` is never pushed directly."));
+      assert.doesNotMatch(body, /\bmain\b/);
     });
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
@@ -1151,7 +1298,7 @@ for (const directory of [".", "tests/oracle"]) {
       const { result, env } = await resolveNpmProject(root, base, directory === "." ? defaultInput[1]! : directory);
       assert.equal(result.code, 0, result.stdout + result.stderr);
       assert.equal(env.NPM_PROJECT_PATH, project);
-      assert.ok(stepOffset("Checkout main") < stepOffset("Validate npm project directory"));
+      assert.ok(stepOffset("Checkout caller default branch") < stepOffset("Validate npm project directory"));
       assert.ok(stepOffset("Validate npm project directory") < stepOffset("Setup Node.js"));
       assert.match(workflow, /cache-dependency-path: \|\n\s+\$\{\{ env.NPM_PROJECT_PATH \}\}\/package-lock.json\n\s+\$\{\{ env.NPM_PROJECT_PATH \}\}\/npm-shrinkwrap.json/);
       const install = await executeWorkflow(workflowShell(["Install dependencies"]), root, env);
@@ -1265,11 +1412,11 @@ test("workflow input shell diagnoses a foreign repository and branch outside aut
 test("workflow credentials stay out of install steps and checkout persistence", () => {
   const steps = workflow.split(/\n      - name: /).slice(1);
   const tokenSteps = steps.filter(step => step.includes("GH_TOKEN:")).map(step => step.split("\n")[0]);
-  assert.deepEqual(tokenSteps, ["Validate GitHub access", "Revalidate GitHub blockers (report only)", "Preview GitHub to pm plan", "Gated GitHub to pm import", "Verify repeat import is a no-op", "Commit gated sync changes and open review PR", "Dispatch caller CI and report parked runs"]);
-  assert.doesNotMatch(workflow.slice(0, stepOffset("Validate sync inputs")), /GH_TOKEN:/);
-  assert.match(steps.find(step => step.startsWith("Checkout main"))!, /persist-credentials: false/);
+  assert.deepEqual(tokenSteps, ["Require caller default branch", "Validate GitHub access", "Revalidate GitHub blockers (report only)", "Preview GitHub to pm plan", "Gated GitHub to pm import", "Verify repeat import is a no-op", "Commit gated sync changes and open review PR", "Dispatch caller CI and report parked runs"]);
+  assert.doesNotMatch(workflow.slice(0, stepOffset("Require caller default branch")), /GH_TOKEN:/);
+  assert.match(steps.find(step => step.startsWith("Checkout caller default branch"))!, /persist-credentials: false/);
   assert.match(workflowShell(["Install dependencies"]), /npm ci --ignore-scripts/);
-  assert.doesNotMatch(workflowShell(["Prepare sync branch from main"]), /git fetch|git ls-remote/);
+  assert.doesNotMatch(workflowShell(["Prepare sync branch from default branch"]), /git fetch|git ls-remote/);
   assert.match(workflowShell(["Commit gated sync changes and open review PR"]), /gh auth setup-git\n\s*git push/);
 });
 

@@ -2,6 +2,13 @@
 # Each configured CI workflow must enable workflow_dispatch and produce its required
 # check names on that event. Missing files are skipped with a notice.
 # Parked action_required PR runs are reported with URLs; dispatch runs separately.
+# Callers need no guard of their own: the reusable workflow's first step requires
+# the caller's default branch for both schedule and workflow_dispatch. Selecting
+# another branch for manual dispatch fails with an error naming both refs.
+# It resolves the default branch through the repository API with the job token,
+# falling back to payload metadata when present; schedule needs no repository object.
+# Unresolved branches fail closed before checkout. Checkout, sync preparation,
+# PR bases and tracker links use that branch, including trunk or release/stable.
 # Repository setup: Settings -> Actions -> General -> Workflow permissions must allow
 # read and write permissions and enable "Allow GitHub Actions to create and approve
 # pull requests" (off by default for new personal repositories; an organization can
