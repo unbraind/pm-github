@@ -111,8 +111,8 @@ criteria remain the only prose source; PR body and comments supply no field text
 Completion time is the GitHub merge time. Repeating a completed selection skips
 terminal items and performs zero additional tracker writes. The command edits
 only the tracker; commit it with its history and regenerate the caller's
-changelog in a closeout PR. Reusable bot-branch automation is tracked separately
-in [pm-github-0x3y](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-0x3y.toon).
+changelog in a closeout PR. The [automated closeout workflow](#automated-closeout-workflow)
+performs that daily review-PR preparation for fleet repositories.
 
 ## Revalidate GitHub blockers
 
@@ -443,6 +443,67 @@ Unreadable input, malformed or truncated diffs, binary input, invalid UTF-8, Git
 Rendered values are also scanned in memory before mutation, so a known finding cannot be written to disk. After mutation, the importer verifies that every planned provenance tag exists exactly once, then scans the tracker diff. A completed SDK journal cannot substitute for missing item files.
 
 The `gate` receipt reports the verdict, scanned file count, findings, and allowlisted count. With `--json`, successful reports go to stdout; failures use the host CLI's JSON error envelope on stderr, with the redacted gate report serialized in `detail` (`jq ' .detail | fromjson ' gate-error.json`). Unreadable inputs produce a nonzero JSON refusal.
+
+## Automated closeout workflow
+
+[`.github/workflows/pm-github-closeout.yml`](.github/workflows/pm-github-closeout.yml)
+is a reusable `workflow_call` that opens or updates **one** PR titled
+`chore(pm): close items delivered by merged pull requests` from `pm-github/closeout`.
+Copy [the caller template](docs/closeout-workflow-caller.yml) into the caller's
+workflows directory and replace `RELEASE_COMMIT_SHA` and `RELEASE_VERSION` with a
+reviewed workflow commit and an exact published pm-github version containing
+`github closeout`. The template schedules a daily run and allows manual dispatch.
+Adopting callers is a separate change; the existing sync workflow is unchanged.
+
+The workflow resolves the caller's default branch through the repository API,
+with event metadata as fallback, and refuses other run refs before checkout.
+This works for scheduled payloads without a `repository` object and for branches
+such as `trunk` or `release/stable`. The caller's pinned PM CLI comes from
+`npm ci --ignore-scripts` in `npm-project-dir` (default `.`), which must resolve
+inside the workspace and contain `package.json`. The SDK resolves the tracker
+from the repository root. The exact `pm-github-version` is installed and verified.
+
+Each run rebuilds the bot branch from the current default branch and invokes
+`pm github closeout --since 1970-01-01 --apply --json`. Scanning all merge history
+avoids losing deliveries during schedule outages; it costs more API reads for
+large repositories. Terminal items are skipped and the command retains its
+normal eligibility, child/epic, required-check and strict-close rules. Raw
+closeout reports stay in runner scratch storage rather than being copied into
+the PR or logs. The caller's `post-closeout-script` defaults to `changelog:full`,
+run through `npm run --if-present` in the npm project; empty disables it.
+The script must emit the root `CHANGELOG.md` and remain inside the publication scope.
+
+| Safety boundary | Closeout and sync parity |
+| --- | --- |
+| Entry and install | Caller default-branch guard, contained npm project, exact package version, SHA-pinned Actions, no persisted checkout credentials |
+| Proposed publication | SDK-resolved tracker plus root changelog; setup, extension, lock and checkpoint files excluded; every changed path checked |
+| Privacy | Same fail-closed full-context staged-diff scan after the caller script and immediately before commit; unreadable input refuses publication |
+| Validation | Strict PM health; explicit item/history scope committed together |
+| Branch and PR | Explicit force-with-lease against the observed bot ref; push only bot branch; owned PR lookup excludes forks |
+| No-op | Zero closes or no tracker diff creates no remote branch or PR; caller-only drift unpublished; stale owned PR closed |
+| CI | Caller workflow dispatch after PR create/update; parked approval-required runs reported; no merge |
+
+`ci-workflows` defaults to `ci.yml`; use whitespace-separated filenames for every
+required caller CI workflow. Each must support `workflow_dispatch` and produce
+its required checks on that event. Missing files are skipped with a notice,
+matching sync; empty disables dispatch. CI dispatch starts checks; it does not
+certify that they passed. Review and required-check enforcement remain with the
+caller's protected branch. A repository concurrency group serializes closeout
+runs, and the explicit lease rejects competing writers.
+
+The caller grants only `contents: write`, `pull-requests: write`, `checks: read`
+and `actions: write`. Closeout uses `checks: read` instead of sync's `issues: read`
+to retrieve head-check evidence ([GitHub Checks API permissions](https://docs.github.com/en/rest/checks/runs#list-check-runs-for-a-git-reference)).
+The reusable workflow cannot elevate the caller's token
+permissions ([GitHub reusable workflow permissions](https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations)).
+Repository Actions settings must allow Actions to create PRs. Read denial stops
+closeout before push with a diagnostic, including unavailable head-check evidence
+reported by the command as a skip; push/PR denial fails publication and
+CI dispatch denial fails the job explicitly. A PR creation denial may leave the
+gated bot branch pushed, and a dispatch denial leaves the review PR open; neither
+case changes the default branch or merges anything. Explicit dispatch is used
+for reliable caller CI invocation with `GITHUB_TOKEN`
+([GitHub token event behavior](https://docs.github.com/en/actions/concepts/security/github_token)).
 
 ## Automated sync workflow
 
