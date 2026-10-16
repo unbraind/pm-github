@@ -164,7 +164,12 @@ set +a
 ${shell(name, source)}
 )`).join("\n"), root, env);
   try { await fn({ root, base, pmRoot, id, env, run, git }); }
-  finally { await server.close(); rmSync(base, { recursive: true, force: true }); }
+  finally {
+    await server.close();
+    // The pm CLI's detached telemetry flush can still be writing under PM_GLOBAL_PATH/runtime/telemetry
+    // when the caller exits; retry the removal as import-gate.test.ts does (upstream pm-cli#1423, #1484).
+    rmSync(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
 }
 
 const setup = ["Require caller default branch", "Validate closeout inputs", "Validate npm project directory", "Prepare sync branch from default branch",
