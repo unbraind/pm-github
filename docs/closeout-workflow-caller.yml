@@ -23,5 +23,8 @@ jobs:
     with:
       npm-project-dir: "." # Use tools/oracle or another contained npm project when needed.
       post-closeout-script: "changelog:full" # Missing script skips; "" disables it.
-      required-checks: "" # Whitespace-separated context names (e.g. "CI CodeQL"); required when protection metadata cannot be read.
+      # One context per line; match your repository's required checks when metadata cannot be read.
+      required-checks: |
+        test (22)
+        test (26)
       ci-workflows: "ci.yml" # Whitespace-separated workflow filenames; "" disables dispatch.

@@ -32,7 +32,7 @@ on:
         required: false
         default: "ci.yml"
       required-checks:
-        description: "Whitespace-separated required contexts to verify when protection metadata is unavailable"
+        description: "One required context name per line; spaces are preserved and blank lines ignored; used when protection metadata is unavailable"
         type: string
         required: false
         default: ""
@@ -290,6 +290,7 @@ jobs:
           # Full history catches up after missed schedules; the command skips terminal items.
           # Keep the report private until the proposed change has passed the privacy gate.
           required_args=()
+          # Forward the newline-joined list as one literal argument; TypeScript parses lines.
           if [[ -n "${REQUIRED_CHECKS:-}" ]]; then
             required_args+=(--required-checks "${REQUIRED_CHECKS}")
           fi

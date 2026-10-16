@@ -6688,7 +6688,7 @@ export default defineExtension({
         { long: "--repo", value_name: "owner/repo", description: "Repository (or PM_GITHUB_REPO)" },
         { long: "--pr", value_name: "n", repeatable: true, description: "Select a PR number (repeatable; conflicts with --since)" },
         { long: "--since", value_name: "ISO date", description: "Select PRs merged at or after this ISO date/time" },
-        { long: "--required-checks", value_name: "contexts", description: "Whitespace-separated required contexts when protection metadata is unavailable" },
+        { long: "--required-checks", value_name: "contexts", description: "One required context per line when protection metadata is unavailable (spaces preserved; blank lines ignored)" },
         { long: "--skip", value_name: "id", repeatable: true, description: "Never close this item (repeatable)" },
         { long: "--apply", description: "Close eligible items (default: dry-run)" },
         { long: "--dry-run", description: "Preview only; overrides --apply" },

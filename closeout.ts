@@ -83,6 +83,14 @@ function repeated(options: Record<string, unknown>, key: string): string[] {
   return [...new Set((values as string[]).map(value => value.trim()))];
 }
 
+/** Parse one literal context per line, preserving spaces and ignoring blank lines. */
+function requiredContexts(value: unknown): string[] {
+  if (value === undefined) return [];
+  const values = Array.isArray(value) ? value : [value];
+  if (values.some(entry => typeof entry !== "string")) throw new Error("--required-checks requires newline-separated context names.");
+  return (values as string[]).flatMap(entry => entry.split("\n")).map(line => line.trim()).filter(Boolean);
+}
+
 /** Read one payload with the shared authenticated retry/redirect transport. */
 async function payload(api: CloseoutApi, endpoint: string): Promise<unknown> {
   return JSON.parse((await api.get(`${api.base}${endpoint}`)).body) as unknown;
@@ -358,8 +366,7 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
   });
   const since = options.since === undefined ? undefined : usage(() => isoDate(text(options.since)));
   if ((numbers.length === 0) === (since === undefined)) throw new CloseoutUsageError("Select either repeatable --pr <n> or --since <ISO date>.");
-  const declaredOptions = { "required-checks": options["required-checks"] ?? options.requiredChecks };
-  const declared = usage(() => repeated(declaredOptions, "required-checks")).flatMap(value => value.split(/\s+/));
+  const declared = usage(() => requiredContexts(options["required-checks"] ?? options.requiredChecks));
   const skip = new Set(usage(() => repeated(options, "skip")));
   const apply = options.apply === true && options["dry-run"] !== true && options.dryRun !== true;
   if (since !== undefined) {

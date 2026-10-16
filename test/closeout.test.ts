@@ -369,7 +369,7 @@ test("invalid selectors fail before HTTP or writes", async () => tracker(async (
   await withMockGithub(fixture(null), async server => {
     for (const options of [{}, { pr: [] }, { pr: false }, { pr: "" }, { pr: ["42", 43] }, { pr: "0" }, { pr: "1.2" }, { pr: "9007199254740992" },
       { pr: "42", since: "2026-10-01" }, { since: "yesterday" }, { since: "2026-02-30" }, { since: "2026-10-01T12:00:00" },
-      { since: "2026-10-01T99:00:00Z" }, { since: false }, { since: "" }, { pr: "42", skip: [] }, { pr: "42", skip: true }, { pr: "42", "required-checks": "  " }, { pr: "42", "required-checks": false }]) {
+      { since: "2026-10-01T99:00:00Z" }, { since: false }, { since: "" }, { pr: "42", skip: [] }, { pr: "42", skip: true }, { pr: "42", "required-checks": ["CI", 42] }, { pr: "42", "required-checks": false }]) {
       await assert.rejects(() => closeout(root, options), CloseoutUsageError);
     }
     for (const repository of [undefined, "invalid", "bad/repo/name", "./repo", "../repo", "fixture/.", "fixture/.."]) await assert.rejects(() => runCloseout(root, repository, { pr: "42" }, api()), CloseoutUsageError);
@@ -738,13 +738,13 @@ test("declared contexts verify exact names and latest statuses without requiring
   }), async () => {
     const before = snapshot(root);
     assert.equal((await checkCloseoutHead(api(), repo, pull(link(ids[0]!)))).code, "required_checks_unverified");
-    for (const names of ["CI Legacy", "CI missing"]) {
+    for (const names of ["CI\nLegacy", "CI\nmissing"]) {
       const report = await closeout(root, { pr: "42", apply: true, "required-checks": names });
       assert.equal(report.closed, 0);
       assert.equal(report.plan[0]!.code, "head_checks_failed");
       assert.equal(snapshot(root), before);
     }
-    const report = await closeout(root, { pr: "42", apply: true, "required-checks": "  CI\tlegacy\nCI  " });
+    const report = await closeout(root, { pr: "42", apply: true, "required-checks": "  CI\nlegacy\nCI  " });
     assert.equal(report.closed, 1);
     assert.equal(report.checks[0]!.rule, "declared");
     assert.equal(report.checks[0]!.code, "head_checks_passed");
@@ -763,5 +763,25 @@ test("declared names cannot bypass a readable app binding", async () => tracker(
     assert.equal(report.closed, 0);
     assert.equal(report.plan[0]!.code, "head_checks_failed");
     assert.equal(snapshot(root), before);
+  });
+}));
+
+test("newline context arrays preserve literal names and empty declarations fail closed", async () => tracker(async (root, ids) => {
+  await withMockGithub(fixture(link(ids[0]!), (request, response) => {
+    if (request.url!.includes("/protection/") || request.url!.includes("/rules/branches/")) jsonResponse(response, 403, {});
+    if (request.url!.includes("/check-runs")) jsonResponse(response, 200, { total_count: 2, check_runs: [run({ name: "test (22)" }), run({ name: "test (26)" })] });
+  }), async () => {
+    const before = snapshot(root);
+    for (const names of [[], "", " \n\t\r\n ", ["", "\n"]]) {
+      const report = await closeout(root, { pr: "42", apply: true, "required-checks": names });
+      assert.equal(report.plan[0]!.code, "required_checks_unverified");
+      assert.equal(snapshot(root), before);
+    }
+    // A former space-separated list is one literal name, so observed runs cannot satisfy it.
+    const missing = await closeout(root, { pr: "42", apply: true, "required-checks": "test (22) test (26)" });
+    assert.equal(missing.plan[0]!.code, "head_checks_failed");
+    assert.equal(snapshot(root), before);
+    const report = await closeout(root, { pr: "42", apply: true, requiredChecks: ["  test (22)\n\n", "test (26)\r\n"] });
+    assert.equal(report.closed, 1);
   });
 }));

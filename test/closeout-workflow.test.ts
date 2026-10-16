@@ -155,7 +155,10 @@ esac
       head: { sha }, base: { ref: "trunk", repo: { full_name: "acme/widgets" } } });
     else if (url.includes("/protection/")) jsonResponse(res, 200, { contexts: ["CI"], checks: [] });
     else if (url.includes("/rules/branches/")) jsonResponse(res, 200, []);
-    else if (url.includes("/check-runs")) jsonResponse(res, 200, { total_count: 1, check_runs: [{ name: "CI", head_sha: sha, status: env.HEAD_STATUS ?? "completed", conclusion: env.HEAD_CONCLUSION ?? "success", app: { id: 7 } }] });
+    else if (url.includes("/check-runs")) {
+      const names = env.HEAD_NAMES ? JSON.parse(env.HEAD_NAMES) as string[] : ["CI"];
+      jsonResponse(res, 200, { total_count: names.length, check_runs: names.map(name => ({ name, head_sha: sha, status: env.HEAD_STATUS ?? "completed", conclusion: env.HEAD_CONCLUSION ?? "success", app: { id: 7 } })) });
+    }
     else if (url.includes("/statuses")) jsonResponse(res, 200, []);
     else jsonResponse(res, 404, {});
   });
@@ -210,7 +213,7 @@ test("closeout contract keeps sync safety helpers, exact pins, env bindings and 
   assert.match(caller, /@RELEASE_COMMIT_SHA/);
   assert.match(caller, /^permissions: \{\}$/m);
   assert.match(caller, /gated-closeout:\n    permissions:\n      contents: write\n      pull-requests: write\n      checks: read\n      actions: write/);
-  assert.match(caller, /required-checks: ""/);
+  assert.match(caller, /required-checks: \|\n        test \(22\)\n        test \(26\)/);
   assert.match(workflow, /REQUIRED_CHECKS: \$\{\{ inputs.required-checks \}\}/);
   assert.doesNotMatch(caller, /issues: read/);
 });
@@ -403,11 +406,11 @@ test("compact PR summary is privacy gated before the bot branch is published", a
   assert.equal(existsSync(f.env.PR_STATE!), false);
 }));
 
-for (const mode of ["undeclared", "missing", "neutral", "skipped", "pending", "success", "metadata"]) {
+for (const mode of ["undeclared", "blank", "missing", "neutral", "skipped", "pending", "success", "metadata"]) {
   test(`required-check metadata boundary ${mode} uses the real workflow and command`, async () => fixture(async f => {
     f.env.PROTECTION_DENIED = mode === "metadata" ? "false" : "true";
     // A declared policy never replaces a complete readable policy.
-    f.env.REQUIRED_CHECKS = mode === "undeclared" ? "" : mode === "missing" || mode === "metadata" ? "CI missing" : "CI";
+    f.env.REQUIRED_CHECKS = mode === "undeclared" ? "" : mode === "blank" ? " \n\t\r\n " : mode === "missing" || mode === "metadata" ? "CI\nmissing" : "CI";
     if (["neutral", "skipped"].includes(mode)) f.env.HEAD_CONCLUSION = mode;
     if (mode === "pending") f.env.HEAD_STATUS = "queued";
     const before = readFileSync(join(f.pmRoot, "tasks", `${f.id}.toon`), "utf8");
@@ -423,12 +426,34 @@ for (const mode of ["undeclared", "missing", "neutral", "skipped", "pending", "s
       const item = (await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item;
       assert.match(String(item.actual_result), mode === "metadata" ? /required checks satisfied/ : /caller-declared checks concluded success; repository required-check metadata was unavailable; successful head checks: CI/);
     } else {
-      assert.equal(report.plan[0]!.code, mode === "undeclared" ? "required_checks_unverified" : "head_checks_failed");
-      if (mode === "undeclared") assert.equal(result.code, 1, result.out);
+      assert.equal(report.plan[0]!.code, mode === "undeclared" || mode === "blank" ? "required_checks_unverified" : "head_checks_failed");
+      if (mode === "undeclared" || mode === "blank") assert.equal(result.code, 1, result.out);
       assert.equal(readFileSync(join(f.pmRoot, "tasks", `${f.id}.toon`), "utf8"), before);
       assert.equal(existsSync(f.env.PR_STATE!), false);
       unpublished(f.git);
       assert.doesNotMatch(readFileSync(f.env.RECEIPTS!, "utf8"), /pr (create|edit)|workflow run/);
     }
+  }));
+}
+
+for (const [scenario, names, input] of [
+  ["single name", ["CI / build"], "CI / build"],
+  ["spaces parentheses and slashes", ["CI / build (linux)", "CI / lint"], "CI / build (linux)\nCI / lint"],
+  ["fleet example", ["test (22)", "test (26)"], "test (22)\ntest (26)\n"],
+  ["empty lines and trimming", ["test (22)", "test (26)"], "\n  test (22) \r\n \t\n\t test (26)\t\n\n"],
+  ["literal shell names", ["$(id)", "CI / 'single' and \"double\" quotes", "$(touch injected)", "CI \\ * ? [ab]"], "$(id)\nCI / 'single' and \"double\" quotes\n$(touch injected)\nCI \\ * ? [ab]"],
+] as const) {
+  test(`newline required contexts ${scenario} survive the real workflow and command`, async () => fixture(async f => {
+    f.env.PROTECTION_DENIED = "true";
+    f.env.HEAD_NAMES = JSON.stringify(names);
+    f.env.REQUIRED_CHECKS = input;
+    const result = await f.run([...setup, "Close delivered tracker items"]);
+    assert.equal(result.code, 0, result.out);
+    const report = JSON.parse(readFileSync(join(f.base, "pm-github-closeout.json"), "utf8")) as { closed: number; checks: { rule: string; passed: string[] }[] };
+    assert.equal(report.closed, 1);
+    assert.equal(report.checks[0]!.rule, "declared");
+    assert.deepEqual([...report.checks[0]!.passed].sort(), [...names].sort());
+    assert.equal((await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item.status, "closed");
+    assert.equal(existsSync(join(f.root, "injected")), false);
   }));
 }

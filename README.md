@@ -67,8 +67,8 @@ The check policy reflects the rules readable at invocation time.
 
 When either protection source is unreadable (HTTP 403/404), the row is ineligible
 with `required_checks_unverified`. Observed green runs cannot prove that every
-required context ran. Supply `--required-checks "CI CodeQL"` to declare a
-whitespace-separated set of required context names when metadata is unavailable.
+required context ran. Supply `--required-checks $'test (22)\ntest (26)'` (Bash) to declare a
+newline-separated set of required context names when metadata is unavailable.
 Every declared context must conclude **success** on the exact head (or have a
 successful latest legacy status); missing, pending, neutral or skipped contexts
 refuse closure. Readable requirements remain enforced, including app bindings.
@@ -556,9 +556,20 @@ inside the workspace and contain `package.json`. The SDK resolves the tracker
 from the repository root. The exact release version resolved from the workflow commit is installed and verified.
 
 `required-checks` is an optional workflow input with an empty default. Set it to
-all required context names (for example `"CI CodeQL"`) when the token cannot read
-branch-protection or ruleset metadata, as is common with `GITHUB_TOKEN`. The workflow
-passes this value as one quoted command argument. Without a declaration, unavailable
+all required context names, **one context name per line**, when the token cannot read
+branch-protection or ruleset metadata, as is common with `GITHUB_TOKEN`:
+
+```yaml
+with:
+  required-checks: |
+    test (22)
+    test (26)
+```
+
+Each line is trimmed and empty lines are ignored. Spaces within names such as
+`CI / build` are preserved; names are never split on spaces. The workflow passes
+the newline-joined list as one quoted command argument for TypeScript to parse.
+Without a declaration, unavailable
 metadata refuses closeout and prevents publishing a branch or PR. Keep this list
 aligned with the caller's required checks; it is a caller-owned policy declaration.
 
