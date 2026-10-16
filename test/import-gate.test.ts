@@ -46,7 +46,7 @@ const PM_BIN = process.platform === "win32" ? "pm.cmd" : "pm";
 const fixtureGlobalRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-gate-global-"));
 test.after(() => fs.rmSync(fixtureGlobalRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
 const PM_SPAWN_OPTS = { encoding: "utf-8" as const, shell: process.platform === "win32",
-  env: { ...process.env, PM_GLOBAL_PATH: fixtureGlobalRoot } };
+  env: { ...process.env, PM_GLOBAL_PATH: fixtureGlobalRoot, PM_TELEMETRY_INLINE_FLUSH: "1" } };
 const SYNC_BRANCH = "automation/pm-github-sync";
 
 // --- Fake-but-well-formed malicious fixtures, assembled from parts.
@@ -869,7 +869,7 @@ esac
 `, { mode: 0o755 });
   const env = { ...process.env, PATH: tools + path.delimiter + bin + path.delimiter + process.env.PATH,
     GH_TOKEN: "synthetic-test-token", GITHUB_TOKEN: "synthetic-test-token", PM_AUTHOR: "codex-sol",
-    PM_GLOBAL_PATH: fixtureGlobalRoot, PM_PATH: path.join(root, ".agents", "pm"), REPOSITORY: "acme/widgets", CALLING_REPOSITORY: "acme/widgets",
+    PM_GLOBAL_PATH: fixtureGlobalRoot, PM_TELEMETRY_INLINE_FLUSH: "1", PM_PATH: path.join(root, ".agents", "pm"), REPOSITORY: "acme/widgets", CALLING_REPOSITORY: "acme/widgets",
     NPM_PROJECT_PATH: root, GITHUB_WORKSPACE: root,
     POST_IMPORT_SCRIPT: "changelog:full", CI_WORKFLOWS: "ci.yml",
     PM_GITHUB_VERSION: "2026.10.4", DEFAULT_BRANCH: "main", SYNC_BRANCH, SYNC_LEASE: "", RUNNER_TEMP: base,
