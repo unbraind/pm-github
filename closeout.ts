@@ -14,11 +14,18 @@ export interface CloseoutRow {
   pr: number;
   action: "close" | "skip";
   reason: string;
+  code: CloseoutCode;
 }
+
+/** Stable decisions used by automation and compact skip counts. */
+export type CloseoutCode = "already_terminal" | "other_repository" | "duplicate_selection" | "explicit_skip"
+  | "unknown_item" | "epic" | "active_children" | "not_delivery" | "close_failed"
+  | "head_checks_passed" | "head_checks_failed" | "head_evidence_unavailable" | "incomplete_merge";
 
 /** Which head-check policy was evaluated for one selected pull request. */
 interface CheckGate {
   pr: number;
+  code: CloseoutCode;
   rule: "required" | "fallback" | "unavailable";
   reason: string;
   passed: string[];
@@ -179,7 +186,7 @@ async function requirements(api: CloseoutApi, repo: string, branch: string): Pro
 
 /** Verify required checks or the explicitly reported conservative fallback at the PR head. */
 export async function checkCloseoutHead(api: CloseoutApi, repo: string, pr: PullRequest): Promise<CheckGate> {
-  const result: CheckGate = { pr: pr.number, rule: "unavailable", reason: "Head check evidence unavailable or incomplete.", passed: [], ok: false };
+  const result: CheckGate = { pr: pr.number, code: "head_evidence_unavailable", rule: "unavailable", reason: "Head check evidence unavailable or incomplete.", passed: [], ok: false };
   try {
     const policy = await requirements(api, repo, pr.base.ref);
     result.rule = policy.fallback ? "fallback" : "required";
@@ -196,6 +203,7 @@ export async function checkCloseoutHead(api: CloseoutApi, repo: string, pr: Pull
       const context = text(status.context);
       if (!statuses.has(context)) statuses.set(context, { context, state: text(status.state) });
     }
+    result.code = "head_checks_failed";
     for (const check of policy.checks) {
       const matching = runs.filter(run => run.name === check.name && (check.app === null || run.app.id === check.app));
       const legacy = statuses.get(check.name);
@@ -218,8 +226,10 @@ export async function checkCloseoutHead(api: CloseoutApi, repo: string, pr: Pull
     }
     result.passed = [...new Set([...runs.filter(run => run.status === "completed" && run.conclusion === "success").map(run => run.name),
       ...[...statuses.values()].filter(status => status.state === "success").map(status => status.context)])].sort();
+    result.code = "head_checks_passed";
     result.ok = true;
   } catch {
+    result.code = "head_evidence_unavailable";
     // Never echo an API body, exception payload, PR body or comment into the report.
   }
   return result;
@@ -365,26 +375,28 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
   const closures: { row: CloseoutRow; reason: string; at: string; resolution: string; expectedResult: string; actualResult: string }[] = [];
   for (const number of [...new Set(numbers)].sort((a, b) => a - b)) {
     const pr = pullRequest(await payload(api, `/repos/${repo}/pulls/${number}`), repo, number);
-    let gate: CheckGate = { pr: number, rule: "unavailable", ok: false, passed: [], reason: "Pull request is not merged or merge evidence is incomplete." };
+    let gate: CheckGate = { pr: number, code: "incomplete_merge", rule: "unavailable", ok: false, passed: [], reason: "Pull request is not merged or merge evidence is incomplete." };
     if (mergeEvidence(pr)) gate = await checkCloseoutHead(api, repo, pr);
     checks.push(gate);
     for (const ref of extractCloseoutItems(pr.body ?? "")) {
       let reason: string;
-      if (ref.repo.toLowerCase() !== repo.toLowerCase()) reason = "Link points to another repository.";
-      else if (!items.has(ref.item)) reason = "Item does not exist in the tracker.";
-      else if (skip.has(ref.item)) reason = "Explicitly excluded by --skip.";
-      else if (TERMINAL_STATUSES.includes(items.get(ref.item)!.status)) reason = "Item is already closed or canceled.";
-      else if (!gate.ok) reason = gate.reason;
-      else if (items.get(ref.item)!.type === "Epic") reason = "Epics close when their children are done, not by a pull request.";
-      else if (activeChildren.has(ref.item)) reason = `Item has ${activeChildren.get(ref.item)} non-terminal child item(s).`;
+      let code: CloseoutCode;
+      if (ref.repo.toLowerCase() !== repo.toLowerCase()) { code = "other_repository"; reason = "Link points to another repository."; }
+      else if (!items.has(ref.item)) { code = "unknown_item"; reason = "Item does not exist in the tracker."; }
+      else if (skip.has(ref.item)) { code = "explicit_skip"; reason = "Explicitly excluded by --skip."; }
+      else if (TERMINAL_STATUSES.includes(items.get(ref.item)!.status)) { code = "already_terminal"; reason = "Item is already closed or canceled."; }
+      else if (!gate.ok) { code = gate.code; reason = gate.reason; }
+      else if (items.get(ref.item)!.type === "Epic") { code = "epic"; reason = "Epics close when their children are done, not by a pull request."; }
+      else if (activeChildren.has(ref.item)) { code = "active_children"; reason = `Item has ${activeChildren.get(ref.item)} non-terminal child item(s).`; }
       else if (items.get(ref.item)!.status !== "in_progress" && !ref.declared) {
+        code = "not_delivery";
         reason = `Item is ${items.get(ref.item)!.status}, not in progress; a mention is not delivery. Prefix its link with Closes, Fixes, Resolves or Delivers to close it.`;
       }
-      else if (selected.has(ref.item)) reason = "Item already selected by another pull request.";
+      else if (selected.has(ref.item)) { code = "duplicate_selection"; reason = "Item already selected by another pull request."; }
       else {
         reason = gate.reason;
         selected.add(ref.item);
-        const row: CloseoutRow = { item: ref.item, pr: number, action: "close", reason };
+        const row: CloseoutRow = { item: ref.item, pr: number, action: "close", code: gate.code, reason };
         const criteria = items.get(ref.item)!.acceptance_criteria;
         closures.push({ row, reason: closeReason(pr, gate.passed), at: pr.merged_at!,
           resolution: `Delivered by ${pr.html_url} (merge ${pr.merge_commit_sha!.slice(0, 12)}, head ${pr.head.sha.slice(0, 12)})`,
@@ -395,7 +407,7 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
         plan.push(row);
         continue;
       }
-      plan.push({ item: ref.item, pr: number, action: "skip", reason });
+      plan.push({ item: ref.item, pr: number, action: "skip", code, reason });
     }
   }
   let closed = 0;
@@ -410,9 +422,24 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
       } catch (error: unknown) {
         failed++;
         entry.row.action = "skip";
+        entry.row.code = "close_failed";
         entry.row.reason = closeoutFailureReason(error);
       }
     }
   }
   return { command: "github closeout", repo, dry_run: !apply, plan, checks, closed, failed };
+}
+
+/** Keep actionable decisions and their checks while counting routine skips by stable code. */
+export function compactCloseoutReport(report: Awaited<ReturnType<typeof runCloseout>>) {
+  const skipped: Partial<Record<CloseoutCode, number>> = {};
+  const plan = report.plan.flatMap(row => {
+    if (["already_terminal", "other_repository", "duplicate_selection", "explicit_skip"].includes(row.code)) {
+      skipped[row.code] = (skipped[row.code] ?? 0) + 1;
+      return [];
+    }
+    return [{ ...row, action: row.action === "close" ? "close" : "refuse" }];
+  });
+  const prs = new Set(plan.map(row => row.pr));
+  return { ...report, plan, skipped, checks: report.checks.filter(gate => prs.has(gate.pr)) };
 }

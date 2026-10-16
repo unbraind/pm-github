@@ -7,7 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { create, close, update, get, config, acquireLock, PmCliError } from "@unbrained/pm-cli/sdk";
 import extension, { fetchJSON, githubApiBase, parseNextLink } from "../index.ts";
-import { CloseoutUsageError, closeoutFailureReason, declaresDelivery, extractCloseoutItems, runCloseout, type CloseoutApi } from "../closeout.ts";
+import { CloseoutUsageError, closeoutFailureReason, compactCloseoutReport, declaresDelivery, extractCloseoutItems, runCloseout, type CloseoutApi } from "../closeout.ts";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import { decode } from "@toon-format/toon";
 import { boundedCli } from "./helpers/bounded-cli.ts";
@@ -119,7 +119,7 @@ test("dry-run plans same-repo, foreign, unknown, terminal and excluded items wit
     assert.match(report.plan[3]!.reason, /already closed or canceled/);
     assert.match(report.plan[4]!.reason, /already closed or canceled/);
     assert.match(report.plan[5]!.reason, /--skip/);
-    assert.deepEqual(Object.keys(report.plan[0]!), ["item", "pr", "action", "reason"]);
+    assert.deepEqual(Object.keys(report.plan[0]!), ["item", "pr", "action", "code", "reason"]);
     assert.equal(snapshot(root), before);
     await closeout(root, { pr: "42", apply: true, "dry-run": true });
     await closeout(root, { pr: "42", apply: true, dryRun: true });
@@ -454,6 +454,14 @@ test("public command registration reuses repo resolution and shared transport", 
   await withEnv({ PM_GITHUB_REPO: repo, GITHUB_TOKEN: "fixture" }, () => withMockGithub(fixture(link(ids[0]!)), async () => {
     const result = await harness.runCommand({ command: "github closeout", pmRoot: root, options: { pr: ["42"] } });
     assert.equal((result.result as { plan: { action: string }[] }).plan[0]!.action, "close");
+    const compact = await harness.runCommand({ command: "github closeout", pmRoot: root,
+      global: { json: false }, options: { pr: ["42", "43", "44"] } });
+    assert.equal((compact.result as { plan: object[] }).plan.length, 1);
+    assert.deepEqual((compact.result as { skipped: object }).skipped, { duplicate_selection: 2 });
+    const full = await harness.runCommand({ command: "github closeout", pmRoot: root,
+      global: { json: false }, options: { pr: ["42", "43", "44"], full: true } });
+    assert.equal((full.result as { plan: object[] }).plan.length, 3);
+    assert.equal("skipped" in (full.result as object), false);
   }));
   // Failures surface as handled command errors (usage 2, evidence 1), so the host never re-runs the handler.
   await withEnv({ PM_GITHUB_REPO: repo, GITHUB_TOKEN: "fixture" }, () => withMockGithub(fixture(link(ids[0]!), (request, response) => {
@@ -502,7 +510,14 @@ test("packed CLI preserves repeatable selectors, TOON/JSON shape and no-op apply
     assert.equal(preview.code, 0, preview.stderr);
     const report = decode(preview.stdout) as { dry_run: boolean; plan: { action: string }[] };
     assert.equal(report.dry_run, true);
-    assert.equal(report.plan.length, 8);
+    assert.equal(report.plan.length, 2);
+    assert.deepEqual((report as unknown as { skipped: object }).skipped, { explicit_skip: 4, duplicate_selection: 2 });
+    const full = await call([...flags, "--full"]);
+    assert.equal(full.code, 0, full.stderr);
+    assert.equal((decode(full.stdout) as { plan: object[] }).plan.length, 8);
+    const json = await call([...flags, "--json"]);
+    assert.equal(json.code, 0, json.stderr);
+    assert.equal((JSON.parse(json.stdout) as { plan: object[] }).plan.length, 8);
     assert.equal(report.plan.filter(row => row.action === "close").length, 2);
     assert.equal(snapshot(root), before);
     const applied = await call([...flags, "--apply", "--json"]);
@@ -696,5 +711,21 @@ test("successful optional checks are never labelled as required", async () => tr
     const item = (await get(ids[0]!, { full: true }, { pmRoot: root, noExtensions: true })).item as Record<string, unknown>;
     assert.equal(item.actual_result, `Merged at ${mergedAt}; required checks satisfied; successful head checks: CI, lint`);
     assert.doesNotMatch(String(item.actual_result), /required checks passing/);
+  });
+}));
+
+test("compact report counts routine skips and retains individual refusals with their head evidence", async () => tracker(async (root, ids) => {
+  await update(ids[1]!, { status: "canceled" }, { pmRoot: root, noExtensions: true });
+  await withMockGithub(fixture([link(ids[0]!), link(ids[1]!), link(ids[0]!, "other/project")].join("\n"), (request, response) => {
+    if (request.url!.includes("/check-runs")) jsonResponse(response, 200, { total_count: 1, check_runs: [run({ conclusion: "failure" })] });
+  }), async () => {
+    const full = await closeout(root);
+    const report = compactCloseoutReport(full);
+    assert.deepEqual(report.skipped, { already_terminal: 1, other_repository: 1 });
+    assert.equal(report.plan.length, 1);
+    assert.equal(report.plan[0]!.action, "refuse");
+    assert.equal(report.plan[0]!.code, "head_checks_failed");
+    assert.equal(report.checks.length, 1);
+    assert.equal(full.plan.length, 3);
   });
 }));

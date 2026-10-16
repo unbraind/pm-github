@@ -1,0 +1,405 @@
+# Reusable closeout: verified merged delivery → gated tracker diff → review PR.
+# Scope helpers intentionally match gated sync; executable parity tests prevent drift.
+# The existing sync workflow and its inputs are unchanged.
+
+name: Gated merged-PR → pm closeout
+
+on:
+  workflow_call:
+    inputs:
+      repository:
+        description: "owner/repo whose merged PRs deliver items (defaults to the calling repository)"
+        type: string
+        required: false
+        default: ${{ github.repository }}
+      pm-github-version:
+        description: "Exact published pm-github version to install (pin; never a floating tag or latest)"
+        type: string
+        required: true
+      npm-project-dir:
+        description: "Caller npm project directory for dependencies and post-closeout-script (relative, inside the workspace)"
+        type: string
+        required: false
+        default: "."
+      post-closeout-script:
+        description: "Caller npm script after closeout, before the final gate; missing skips, empty disables it"
+        type: string
+        required: false
+        default: "changelog:full"
+      ci-workflows:
+        description: "Whitespace-separated caller workflow filenames with workflow_dispatch; empty disables dispatch"
+        type: string
+        required: false
+        default: "ci.yml"
+      node-version:
+        description: "Node.js version for the pm CLI"
+        type: string
+        required: false
+        default: "22.18.0"
+
+concurrency:
+  group: pm-github-closeout-${{ github.repository }}
+  cancel-in-progress: false
+
+# No workflow-wide grant: the job below requests exactly what it needs.
+permissions: {}
+
+jobs:
+  gated-closeout:
+    # Read delivery evidence, push only the closeout branch, and maintain one PR.
+    permissions:
+      contents: write
+      pull-requests: write
+      checks: read
+      actions: write
+    runs-on: ubuntu-latest
+    env:
+      REPOSITORY: ${{ inputs.repository }}
+      SYNC_BRANCH: pm-github/closeout
+      PM_GITHUB_VERSION: ${{ inputs.pm-github-version }}
+      NPM_PROJECT_DIR: ${{ inputs.npm-project-dir }}
+      POST_CLOSEOUT_SCRIPT: ${{ inputs.post-closeout-script }}
+      CI_WORKFLOWS: ${{ inputs.ci-workflows }}
+      CALLING_REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Require caller default branch
+        id: caller_branch
+        env:
+          RUN_REF: ${{ github.ref }}
+          EVENT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEFAULT_BRANCH="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch // empty' 2>/dev/null)" || DEFAULT_BRANCH=""
+          DEFAULT_BRANCH="${DEFAULT_BRANCH:-${EVENT_DEFAULT_BRANCH:-}}"
+          if [[ -z "${DEFAULT_BRANCH}" ]] || ! git check-ref-format "refs/heads/${DEFAULT_BRANCH}" >/dev/null 2>&1; then
+            echo "::error::Cannot resolve a valid caller default branch from the repository API or event payload."
+            exit 1
+          fi
+          expected_ref="refs/heads/${DEFAULT_BRANCH}"
+          if [[ "${RUN_REF}" != "${expected_ref}" ]]; then
+            printf '::error::Closeout ref "%s" must match caller default branch ref "%s".\n' "${RUN_REF}" "${expected_ref}"
+            exit 1
+          fi
+          printf 'branch=%s\n' "${DEFAULT_BRANCH}" >> "${GITHUB_OUTPUT}"
+          printf 'DEFAULT_BRANCH=%s\n' "${DEFAULT_BRANCH}" >> "${GITHUB_ENV}"
+
+      - name: Validate closeout inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${REPOSITORY}" == "${CALLING_REPOSITORY}" ]] || { echo "::error::repository must equal the calling repository (${CALLING_REPOSITORY})."; exit 1; }
+          [[ "${PM_GITHUB_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]] || { echo "::error::pm-github-version must be an exact numeric version: N.N.N or N.N.N-N."; exit 1; }
+          [[ "${SYNC_BRANCH}" == pm-github/closeout ]] || { echo "::error::Closeout branch must be pm-github/closeout."; exit 1; }
+          git check-ref-format "refs/heads/${SYNC_BRANCH}"
+          [[ "${SYNC_BRANCH}" != "${DEFAULT_BRANCH}" ]] || { echo "::error::The closeout bot branch cannot be the caller default branch."; exit 1; }
+          [[ -z "${POST_CLOSEOUT_SCRIPT:-}" || "${POST_CLOSEOUT_SCRIPT:-}" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.:-]*$ ]] || { echo "::error::post-closeout-script must be an npm script name, not a shell command."; exit 1; }
+
+      - name: Checkout caller default branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          ref: ${{ steps.caller_branch.outputs.branch }}
+          persist-credentials: false
+
+      - name: Validate npm project directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          invalid_npm_project() {
+            echo "::error::npm-project-dir must be a relative path without .. segments, resolve inside the workspace, and contain package.json."
+            exit 1
+          }
+          [[ -n "${NPM_PROJECT_DIR}" && "${NPM_PROJECT_DIR}" != /* && "${NPM_PROJECT_DIR}" != *[$'\r\n:']* ]] || invalid_npm_project
+          case "/${NPM_PROJECT_DIR}/" in */../*) invalid_npm_project ;; esac
+          workspace="$(realpath -e -- "${GITHUB_WORKSPACE}" 2>/dev/null)" || invalid_npm_project
+          IFS= read -r -d '' npm_project_path < <(realpath -ez -- "${GITHUB_WORKSPACE}/${NPM_PROJECT_DIR}" 2>/dev/null) || invalid_npm_project
+          [[ "${npm_project_path}" == "${workspace}" || "${npm_project_path}" == "${workspace}/"* ]] || invalid_npm_project
+          [[ "${npm_project_path}" != *[$'\r\n:']* && -f "${npm_project_path}/package.json" ]] || invalid_npm_project
+          printf 'NPM_PROJECT_PATH=%s\n' "${npm_project_path}" >> "${GITHUB_ENV}"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+          cache-dependency-path: |
+            ${{ env.NPM_PROJECT_PATH }}/package-lock.json
+            ${{ env.NPM_PROJECT_PATH }}/npm-shrinkwrap.json
+
+      # Rebuild the closeout branch from the current default branch: it only
+      # holds automated closeout commits, keeping the PR a clean review of
+      # exactly this run's proposed change instead of an ever-growing merge.
+      - name: Prepare sync branch from default branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          sync_lease="$(git rev-parse --verify "refs/remotes/origin/${SYNC_BRANCH}" 2>/dev/null || true)"
+          printf 'SYNC_LEASE=%s\n' "${sync_lease}" >> "${GITHUB_ENV}"
+          git switch --force-create "${SYNC_BRANCH}" "origin/${DEFAULT_BRANCH}"
+
+      # The calling repo's own devDependency provides the pm CLI (npm ci).
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd "${NPM_PROJECT_PATH}" && npm ci --ignore-scripts)
+          printf '%s/node_modules/.bin\n' "${NPM_PROJECT_PATH}" >> "${GITHUB_PATH}"
+
+      # The explicit publication allowlist is the SDK-resolved tracker (except
+      # extensions, locks, checkpoints and extension setup files) and CHANGELOG.md. Nothing else may
+      # change, even if unstaged or untracked. Keep all boundaries on this list.
+      - name: Resolve sync commit scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          PM_SYNC_TRACKER="$(cd "${NPM_PROJECT_PATH}" && node --input-type=module -e 'import { resolvePmRoot } from "@unbrained/pm-cli/sdk"; import { relative } from "node:path"; const p = relative(process.env.GITHUB_WORKSPACE, resolvePmRoot(process.env.GITHUB_WORKSPACE)); if (!p || p === ".." || p.startsWith("../") || /[\r\n]/.test(p)) throw new Error("Sync tracker must be inside the repository"); process.stdout.write(p);')"
+          export PM_SYNC_TRACKER
+          printf 'PM_SYNC_TRACKER=%s\n' "${PM_SYNC_TRACKER}" >> "${GITHUB_ENV}"
+          cat > "${RUNNER_TEMP}/pm-github-sync-scope.sh" <<'SCOPE'
+          sync_scope=(":(top,literal)${PM_SYNC_TRACKER}" ':(top,literal)CHANGELOG.md'
+            ":(top,exclude,literal)${PM_SYNC_TRACKER}/extensions"
+            ":(top,exclude,literal)${PM_SYNC_TRACKER}/locks"
+            ":(top,exclude,literal)${PM_SYNC_TRACKER}/checkpoints"
+            ":(top,exclude,literal)${PM_SYNC_TRACKER}/settings.json"
+            ":(top,exclude,literal)${PM_SYNC_TRACKER}/history/_workspace.jsonl")
+          restore_sync_setup() {
+            for setup_path in "${PM_SYNC_TRACKER}/settings.json" "${PM_SYNC_TRACKER}/history/_workspace.jsonl"; do
+              if git cat-file -e "HEAD:${setup_path}" 2>/dev/null; then
+                git --literal-pathspecs restore --source=HEAD --staged --worktree -- "${setup_path}"
+              else
+                git --literal-pathspecs rm -q --cached --ignore-unmatch -- "${setup_path}"
+                rm -f -- "${setup_path}"
+              fi
+            done
+          }
+          check_sync_scope() {
+            local entry path failed=0
+            git status --porcelain=v1 -z --untracked-files=all > "${RUNNER_TEMP}/pm-github-sync-status"
+            while IFS= read -r -d '' entry; do
+              path="${entry:3}"
+              check_sync_path "${path}" || failed=1
+              # Porcelain -z renames/copies contain a second, original path.
+              if [[ "${entry:0:2}" == *R* || "${entry:0:2}" == *C* ]]; then
+                IFS= read -r -d '' path || { echo '::error::Incomplete Git status record.'; return 1; }
+                check_sync_path "${path}" || failed=1
+              fi
+            done < "${RUNNER_TEMP}/pm-github-sync-status"
+            return "${failed}"
+          }
+          check_sync_path() {
+            case "$1" in
+              "${PM_SYNC_TRACKER}"/extensions|"${PM_SYNC_TRACKER}"/extensions/*|"${PM_SYNC_TRACKER}"/locks|"${PM_SYNC_TRACKER}"/locks/*|"${PM_SYNC_TRACKER}"/checkpoints|"${PM_SYNC_TRACKER}"/checkpoints/*) ;;
+              "${PM_SYNC_TRACKER}"/*|CHANGELOG.md) return 0 ;;
+            esac
+            printf '::error::Changed path outside sync commit scope: %q\n' "$1"
+            return 1
+          }
+          gate_sync_change() {
+            check_sync_scope
+            git ls-files -z --modified --deleted --others --exclude-standard -- "${sync_scope[0]}" "${sync_scope[@]:2}" > "${RUNNER_TEMP}/pm-github-sync-stage-paths"
+            if [[ -s "${RUNNER_TEMP}/pm-github-sync-stage-paths" ]]; then
+              git --literal-pathspecs add --pathspec-from-file="${RUNNER_TEMP}/pm-github-sync-stage-paths" --pathspec-file-nul
+            fi
+            if [[ -e CHANGELOG.md ]] || git ls-files --error-unmatch -- CHANGELOG.md >/dev/null 2>&1; then
+              git --literal-pathspecs add -- CHANGELOG.md
+            fi
+            git diff --cached --name-only -z --no-renames -- "${sync_scope[@]}" > "${RUNNER_TEMP}/pm-github-sync-commit-paths"
+            mapfile -d '' -t sync_paths < "${RUNNER_TEMP}/pm-github-sync-commit-paths"
+            : > "${RUNNER_TEMP}/pm-github-sync.patch"
+            if [[ ${#sync_paths[@]} -gt 0 ]]; then
+              git --literal-pathspecs diff --cached --no-color --no-ext-diff --no-textconv --no-renames --binary --unified=2147483647 -- "${sync_paths[@]}" > "${RUNNER_TEMP}/pm-github-sync.patch"
+            fi
+            pm github gate --diff "${RUNNER_TEMP}/pm-github-sync.patch" --json
+          }
+          SCOPE
+
+      - name: Install pinned pm-github extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          pm package install "npm:pm-github@${PM_GITHUB_VERSION}" --project
+          node -e 'if (require("./" + process.argv[2] + "/extensions/pm-github/package.json").version !== process.argv[1]) process.exit(1)' "${PM_GITHUB_VERSION}" "${PM_SYNC_TRACKER}"
+
+      - name: Configure PM merge drivers
+        run: pm merge install
+
+      - name: Verify gate is available
+        run: pm github gate --json
+
+      - name: Close delivered tracker items
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Full history catches up after missed schedules; the command skips terminal items.
+          # Keep the report private until the proposed change has passed the privacy gate.
+          if ! pm github closeout --repo "${REPOSITORY}" --since 1970-01-01 --apply --json > "${RUNNER_TEMP}/pm-github-closeout.json" 2> "${RUNNER_TEMP}/pm-github-closeout.err"; then
+            echo "::error::Closeout refused; check token read access to pull requests, checks and branch rules, and tracker close validation. No branch was published."
+            exit 1
+          fi
+          jq -e '.command == "github closeout" and .dry_run == false and .failed == 0 and (.closed | type == "number")' "${RUNNER_TEMP}/pm-github-closeout.json" >/dev/null
+          # Only a local tracker refusal makes missing head evidence actionable.
+          # Foreign, terminal, excluded and unlinked PRs cannot block this run.
+          jq -e 'all(.plan[]; (.code | type) == "string")' "${RUNNER_TEMP}/pm-github-closeout.json" >/dev/null
+          if jq -e 'any(.plan[]; .action == "skip" and .code == "head_evidence_unavailable")' "${RUNNER_TEMP}/pm-github-closeout.json" >/dev/null; then
+            echo "::error::Closeout refused; check token read access to head checks for linked local tracker items. No branch was published."
+            exit 1
+          fi
+          # Merge facts are checked before head lookup and have a distinct decision.
+          if jq -e 'any(.plan[]; .action == "skip" and .code == "incomplete_merge")' "${RUNNER_TEMP}/pm-github-closeout.json" >/dev/null; then
+            echo "::error::Closeout refused; incomplete merged-PR metadata blocks a linked local tracker item. No branch was published."
+            exit 1
+          fi
+          printf 'CLOSEOUT_CLOSED=%s\n' "$(jq -r '.closed' "${RUNNER_TEMP}/pm-github-closeout.json")" >> "${GITHUB_ENV}"
+
+      - name: Run caller post-closeout script
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${POST_CLOSEOUT_SCRIPT}" ]]; then
+            (cd "${NPM_PROJECT_PATH}" && npm run --if-present "${POST_CLOSEOUT_SCRIPT}")
+          fi
+
+      # Check every changed path immediately after the caller script. Extension
+      # setup files stay outside the patch and are restored before publication.
+      - name: Gate tracker and regenerated changelog
+        shell: bash
+        run: |
+          set -euo pipefail
+          source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
+          gate_sync_change
+
+      - name: Verify strict pm health
+        run: pm health --strict-exit
+
+      - name: Commit gated closeout changes and open review PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'echo "::error::Closeout publication refused; token requires contents:write and pull-requests:write, and repository settings must allow Actions to create PRs."' ERR
+          source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
+          gate_sync_change
+          # gh pr list --head matches branch names, and a fork can open a PR
+          # from a branch with the same name, so filter the results to PRs whose
+          # head repository is this repository (never trust .[0] alone).
+          own_open_pr() {
+            gh pr list -R "${REPOSITORY}" --head "${SYNC_BRANCH}" --base "${DEFAULT_BRANCH}" --state open \
+              --json number,headRepository,headRepositoryOwner,isCrossRepository \
+              | jq -r --arg repository "${REPOSITORY}" \
+                '[ .[] | select(.isCrossRepository == false and (.headRepositoryOwner.login + "/" + .headRepository.name) == $repository) | .number ][0] // empty'
+          }
+          close_own_open_pr() {
+            local number
+            number="$(own_open_pr)"
+            if [[ -n "${number}" ]]; then
+              gh pr close "${number}" -R "${REPOSITORY}" --comment "No delivered tracker items remain to close; closing this review PR."
+            fi
+          }
+          if [[ "${CLOSEOUT_CLOSED}" == 0 ]] || git diff --cached --quiet -- "${sync_scope[0]}" "${sync_scope[@]:2}"; then
+            # Changelog drift alone belongs to the caller's changelog check;
+            # publish regenerated output only alongside tracker changes.
+            if ! git diff --cached --quiet -- CHANGELOG.md; then
+              if git cat-file -e HEAD:CHANGELOG.md 2>/dev/null; then
+                git --literal-pathspecs restore --source=HEAD --staged --worktree -- CHANGELOG.md
+              else
+                git --literal-pathspecs rm -q --cached --ignore-unmatch -- CHANGELOG.md
+                rm -f -- CHANGELOG.md
+              fi
+              echo "::notice::The caller's changelog differs from a fresh regeneration; the repository's own changelog:check owns that drift. Discarding CHANGELOG.md because no tracker item changed."
+            fi
+            restore_sync_setup
+            echo "No delivered tracker items closed; no branch or PR is needed."
+            # A stale own review PR would still look actionable although this
+            # run has no change to propose, so close it before returning.
+            close_own_open_pr
+            exit 0
+          fi
+          git diff --cached --check
+          links_file="${RUNNER_TEMP}/pm-github-sync-links.md"
+          : > "${links_file}"
+          while IFS= read -r changed; do
+            case "${changed}" in
+              "${PM_SYNC_TRACKER}"/*/*.toon)
+                item_id="${changed##*/}"
+                item_id="${item_id%.toon}"
+                # The default-branch link is the permanent one after merge; the branch link
+                # shows the proposed item while the review PR is open.
+                printf -- '- [%s](https://github.com/%s/blob/%s/%s) ([proposed](https://github.com/%s/blob/%s/%s))\n' "${item_id}" "${REPOSITORY}" "${DEFAULT_BRANCH}" "${changed}" "${REPOSITORY}" "${SYNC_BRANCH}" "${changed}" >> "${links_file}"
+                ;;
+            esac
+          done < <(git diff --cached --name-only -- "${sync_scope[0]}" "${sync_scope[@]:2}")
+          if [[ ! -s "${links_file}" ]]; then
+            echo "::error::Closeout changed tracker state but no item link could be generated."
+            exit 1
+          fi
+          # Publish only actionable decisions and counts, with no API prose.
+          summary_file="${RUNNER_TEMP}/pm-github-closeout-summary.json"
+          jq '{plan: [.plan[] | select(.code != "already_terminal" and .code != "other_repository" and .code != "duplicate_selection" and .code != "explicit_skip") | {item, pr, action: (if .action == "close" then "close" else "refuse" end), code}], skipped: ([.plan[] | select(.code == "already_terminal" or .code == "other_repository" or .code == "duplicate_selection" or .code == "explicit_skip")] | group_by(.code) | map({key: .[0].code, value: length}) | from_entries)}' "${RUNNER_TEMP}/pm-github-closeout.json" > "${summary_file}"
+          # Scan the public summary as added diff content before any publication.
+          summary_patch="${RUNNER_TEMP}/pm-github-closeout-summary.patch"
+          {
+            printf '%s\n' '--- /dev/null' '+++ b/closeout-summary.json'
+            printf '@@ -0,0 +1,%s @@\n' "$(wc -l < "${summary_file}")"
+            sed 's/^/+/' "${summary_file}"
+          } > "${summary_patch}"
+          pm github gate --diff "${summary_patch}" --json
+          # Re-enumerate all status paths, re-stage and re-scan immediately before
+          # committing. --only prevents any unrelated staged path from leaking
+          # even if the scope check is bypassed. NUL paths preserve odd filenames.
+          gate_sync_change
+          restore_sync_setup
+          check_sync_scope
+          git --literal-pathspecs commit --only --pathspec-from-file="${RUNNER_TEMP}/pm-github-sync-commit-paths" --pathspec-file-nul -m "chore(pm): close items delivered by merged pull requests"
+          gh auth setup-git
+          git push --force-with-lease="refs/heads/${SYNC_BRANCH}:${SYNC_LEASE}" origin "HEAD:refs/heads/${SYNC_BRANCH}"
+          body_file="${RUNNER_TEMP}/pm-github-sync-pr.md"
+          {
+            printf '%s\n\n' "Automated pm-github merged-PR closeout for ${REPOSITORY}."
+            printf '%s\n\n' "The closeout command verified merged-PR delivery and head checks. The proposed tracker change and regenerated changelog passed the fail-closed privacy gate before anything was committed. \`${DEFAULT_BRANCH}\` is never pushed directly."
+            printf '%s\n\n' "Tracker items changed:"
+            cat "${links_file}"
+            printf '\n%s\n\n%s\n' 'Closeout plan (routine skips counted by reason):' '```json'
+            cat "${summary_file}"
+            printf '%s\n' '```'
+          } > "${body_file}"
+          pr_number="$(own_open_pr)"
+          if [[ -z "${pr_number}" ]]; then
+            gh pr create -R "${REPOSITORY}" --base "${DEFAULT_BRANCH}" --head "${SYNC_BRANCH}" --title "chore(pm): close items delivered by merged pull requests" --body-file "${body_file}"
+          else
+            gh pr edit "${pr_number}" -R "${REPOSITORY}" --title "chore(pm): close items delivered by merged pull requests" --body-file "${body_file}"
+          fi
+          export SYNC_PUBLISHED=true
+          printf 'SYNC_PUBLISHED=true\n' >> "${GITHUB_ENV}"
+
+      - name: Dispatch caller CI and report parked runs
+        if: env.SYNC_PUBLISHED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'echo "::error::Caller CI dispatch failed; token requires actions:write and configured workflows must support workflow_dispatch. The review PR remains unmerged."' ERR
+          [[ "${SYNC_PUBLISHED:-false}" == true ]] || exit 0
+          while IFS= read -r workflow_file; do
+            [[ -n "${workflow_file}" ]] || continue
+            [[ "${workflow_file}" =~ ^[a-zA-Z0-9_.-]+\.ya?ml$ ]] || { echo "::error::ci-workflows must contain workflow filenames."; exit 1; }
+            if [[ ! -f ".github/workflows/${workflow_file}" ]]; then
+              echo "::notice::Skipping missing caller workflow: ${workflow_file}"
+              continue
+            fi
+            gh workflow run "${workflow_file}" -R "${REPOSITORY}" --ref "${SYNC_BRANCH}"
+          done < <(printf '%s\n' "${CI_WORKFLOWS}" | tr ' \t\r' '\n')
+          head_sha="$(git rev-parse HEAD)"
+          parked_runs="$(gh run list -R "${REPOSITORY}" --commit "${head_sha}" --status action_required --limit 100 --json url --jq '.[].url')"
+          while IFS= read -r run_url; do
+            [[ -n "${run_url}" ]] || continue
+            echo "::notice::A pull-request workflow requires maintainer approval: ${run_url}. Review this parked run if needed; caller CI dispatch runs are separate."
+          done <<< "${parked_runs}"
