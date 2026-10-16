@@ -2,11 +2,13 @@ id: pm-github-0x3y
 title: Add a reusable gated closeout PR workflow
 description: Follow up on pm-github closeout with a workflow_call automation surface after command acceptance. Reuse the gated sync safety model without changing its existing workflow or inputs.
 type: Task
-status: in_progress
+status: closed
 priority: 2
-tags: []
+tags[1]: added
 created_at: "2026-10-14T21:46:44.372Z"
-updated_at: "2026-10-16T05:52:04.621Z"
+updated_at: "2026-10-16T06:24:41.057Z"
+closed_at: "2026-10-16T06:24:41.045Z"
+completed_at: "2026-10-16T06:22:47.000Z"
 author: codex-agent
 acceptance_criteria: "Run verified closeout on a bot branch and open or update a PR; never push main; validate tracker privacy, regenerate changelog, and dispatch required CI before publication.; Test clean, malicious, no-op, permission-limited and repeat invocations with explicit evidence; document least-privilege callers."
 comments[17]{created_at,author,text}:
@@ -42,4 +44,5 @@ tests[5]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,
 docs[2]{path,scope}:
   docs/closeout-workflow-caller.yml,project
   README.md,project
+close_reason: "{\"pr\":132,\"url\":\"https://github.com/unbraind/pm-github/pull/132\",\"merge_commit_sha\":\"4c1beafbacb4a51c6a92301a41a0b6c310658ac2\",\"head_sha\":\"6aef689f20b0758a25be1b9821877052d985049b\",\"merged_at\":\"2026-10-16T06:22:47Z\",\"checks\":[\"CodeQL\",\"CodeRabbit\",\"codeql\",\"semgrep-cloud-platform/scan\",\"test (22)\",\"test (26)\"]}"
 body: ""

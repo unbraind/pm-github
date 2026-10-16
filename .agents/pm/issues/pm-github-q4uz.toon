@@ -2,11 +2,13 @@ id: pm-github-q4uz
 title: Refuse reusable sync runs outside the caller default branch
 description: "Track https://github.com/unbraind/pm-github/issues/128. Add a first-step fail-closed ref guard with injection-safe environment inputs, document caller behavior, and execute real workflow shell contract tests without changing the remaining pipeline."
 type: Issue
-status: in_progress
+status: closed
 priority: 1
 tags[1]: "gh:unbraind/pm-github#128"
 created_at: "2026-10-15T20:46:41.947Z"
-updated_at: "2026-10-16T00:16:46.640Z"
+updated_at: "2026-10-16T06:24:41.008Z"
+closed_at: "2026-10-16T06:24:40.999Z"
+completed_at: "2026-10-16T00:42:36.000Z"
 author: codex-agent
 acceptance_criteria: First-step guard refuses non-default refs and accepts schedule and workflow_dispatch on the default branch; behavioural revert fails; npm and Bun release gates pass at unchanged thresholds.
 comments[11]{created_at,author,text}:
@@ -29,4 +31,5 @@ tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
 docs[2]{path,scope}:
   docs/sync-workflow-caller.yml,project
   README.md,project
+close_reason: "{\"pr\":131,\"url\":\"https://github.com/unbraind/pm-github/pull/131\",\"merge_commit_sha\":\"bf282dd0c1608bb8e979af3c8792bdeed0f4a026\",\"head_sha\":\"9feb31f62bec59d68b2e147070d9486b3a7e8db2\",\"merged_at\":\"2026-10-16T00:42:36Z\",\"checks\":[\"CodeQL\",\"CodeRabbit\",\"Sourcery review\",\"codeql\",\"semgrep-cloud-platform/scan\",\"test (22)\",\"test (26)\"]}"
 body: ""
