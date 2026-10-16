@@ -1,0 +1,186 @@
+/** Source lifecycle, release-window and cross-provider identity rules for issue imports. */
+import { spawnSync } from "node:child_process";
+import {
+  acquireLock, appendHistoryEntry, canonicalDocument, createHistoryEntry, getHistoryPath,
+  locateItem, readLocatedItem, readSettings, resolveItemTypeRegistry, resolvePmRoot, runActiveOnWriteHooks, serializeItemDocument, writeFileAtomic,
+} from "@unbrained/pm-cli/sdk";
+import { CommandError, fetchJSON, githubApiBase, githubGraphQL, parseNextLink, type GhIssue, type PmItem } from "./index.ts";
+
+/** One locally available release tag and its actual Git date. */
+export interface ImportRelease { tag: string; date: string }
+/** Auditable desired source metadata, persisted beside the native lifecycle. */
+export interface ImportFidelity {
+  github_url: string;
+  github_number: number;
+  github_state: string;
+  github_state_reason: string;
+  github_created_at: string;
+  github_updated_at: string;
+  github_closed_at: string;
+  github_close_reason: string;
+  github_release: string;
+}
+/** Identity decision recorded before any import writes. */
+export interface ImportMatch { item?: PmItem; linkOnly: boolean; via: string }
+
+/** Normalize only complete HTTP issue/provider locators, never substring identities. */
+function locators(value: unknown): string[] {
+  const text = typeof value === "string" ? value : JSON.stringify(value) ?? "";
+  return [...text.matchAll(/https?:\/\/[^\s<>"'`]+/gi)].map(match => match[0]!.replace(/[),.;]+$/, "").replace(/\/$/, "").toLowerCase());
+}
+
+/** Extract declared provider fields and the description/body markers used by provider exporters. */
+function providerProvenance(item: PmItem): string {
+  return Object.entries(item).filter(([key, value]) => /^(linear|jira|ado)_/.test(key) ||
+    (/description|body|provenance/.test(key) && typeof value === "string" &&
+      /\[(linear|jira|ado)\]|\b(linear|jira|ado)_(id|key|url)=|Jira(?:\s+[A-Z][A-Z0-9]+-\d+)?:\s/i.test(value)))
+    .map(([, value]) => typeof value === "string" ? value : JSON.stringify(value)).join("\n");
+}
+
+/** Match GitHub locators or provider back-links before creation, refusing multiple owners. */
+export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, tagged?: PmItem): ImportMatch {
+  const issueUrl = issue.html_url.toLowerCase().replace(/\/$/, "");
+  const bodyUrls = new Set(locators(issue.body ?? ""));
+  const candidates = items.filter(item => item.id && (item.id === tagged?.id ||
+    Object.entries(item).some(([key, value]) => /url|link|provenance|source|external|description/.test(key) && locators(value).includes(issueUrl)) ||
+    locators(providerProvenance(item)).some(url => bodyUrls.has(url))));
+  if (candidates.length > 1) throw new CommandError(`GitHub issue #${issue.number} has multiple existing owners; import plan is not idempotent. No item was written.`);
+  const item = candidates[0];
+  const provider = item && (Boolean(providerProvenance(item)) || item.tags?.some(tag => /^(linear|jira|ado):/.test(tag)));
+  return { item, linkOnly: Boolean(item && (provider || item.github_link_only === true || item.id !== tagged?.id)),
+    via: item ? (provider ? "provider-link" : item.id === tagged?.id ? "provenance-tag" : "github-url") : "new" };
+}
+
+/** Read calendar release tags from the selected tracker checkout, including annotated tag dates. */
+export function readImportReleases(pmRoot: string): ImportRelease[] {
+  const result = spawnSync("git", ["-C", pmRoot, "for-each-ref", "--format=%(refname:short)%09%(creatordate:iso-strict)", "refs/tags"], { encoding: "utf8" });
+  if (result.status !== 0) return [];
+  return result.stdout.trim().split("\n").flatMap(line => {
+    const [tag, date] = line.split("\t");
+    return /^v?\d{4}\.\d{1,2}\.\d{1,2}$/.test(tag!) && Number.isFinite(Date.parse(date!)) ? [{ tag: tag!, date: date! }] : [];
+  }).sort((a, b) => Date.parse(a.date) - Date.parse(b.date) || a.tag.localeCompare(b.tag));
+}
+
+/** Fetch every timeline page; only closure-specific events may supply resolution evidence. */
+export async function fetchImportTimeline(issue: GhIssue, repo: string, token?: string): Promise<unknown[]> {
+  if (issue.state !== "closed") return [];
+  let url: string | undefined = `${githubApiBase()}/repos/${repo}/issues/${issue.number}/timeline?per_page=100`;
+  const events: unknown[] = [];
+  while (url) {
+    const response = await fetchJSON(url, token);
+    if (response.status !== 200) throw new CommandError(`Could not read closure timeline for issue #${issue.number} (HTTP ${response.status}).`);
+    let page: unknown;
+    try { page = JSON.parse(response.body); }
+    catch { throw new CommandError(`Closure timeline for issue #${issue.number} is not valid JSON.`); }
+    if (!Array.isArray(page)) throw new CommandError(`Invalid closure timeline for issue #${issue.number}.`);
+    events.push(...page);
+    url = parseNextLink(response.linkHeader);
+  }
+  if (token && !events.some(event => event !== null && typeof event === "object" && "commit_id" in event && "created_at" in event && event.created_at === issue.closed_at && typeof event.commit_id === "string")) {
+    const [owner, name] = repo.split("/");
+    let cursor: string | null = null;
+    do {
+      const data: { repository: { issue: { timelineItems: { nodes: Array<Record<string, unknown>>; pageInfo: { hasNextPage: boolean; endCursor: string } } } } } = await githubGraphQL(token,
+        `query($owner:String!,$name:String!,$number:Int!,$cursor:String) { repository(owner:$owner,name:$name) { issue: ${issue.pull_request ? "pullRequest" : "issue"}(number:$number) { timelineItems(first:100,after:$cursor,itemTypes:[CLOSED_EVENT,CONNECTED_EVENT]) { nodes { __typename ... on ClosedEvent { createdAt closer { __typename ... on PullRequest { url title } ... on Commit { url messageHeadline oid } } } ... on ConnectedEvent { createdAt subject { __typename ... on PullRequest { url title } } } } pageInfo { hasNextPage endCursor } } } } }`,
+        { owner, name, number: issue.number, cursor });
+      const connection = data.repository?.issue?.timelineItems;
+      if (!connection || !Array.isArray(connection.nodes) || typeof connection.pageInfo?.hasNextPage !== "boolean") {
+        throw new CommandError(`Invalid GraphQL closure timeline for issue #${issue.number}.`);
+      }
+      events.push(...connection.nodes);
+      cursor = connection.pageInfo.hasNextPage ? connection.pageInfo.endCursor : null;
+    } while (cursor);
+  }
+  return events;
+}
+
+/** Accept only GitHub PR/commit evidence tied to the latest closure, excluding pre-reopen events. */
+export function importCloseReason(issue: GhIssue, events: readonly unknown[]): string {
+  const reason = issue.state_reason ?? "unspecified";
+  const base = `Closed on GitHub as ${reason} on ${issue.closed_at ?? "an unknown date"}`;
+  const records = events.filter((event): event is Record<string, unknown> => event !== null && typeof event === "object" && !Array.isArray(event));
+  const closed = records.filter(event => event.event === "closed" && event.created_at === issue.closed_at).at(-1);
+  if (closed && typeof closed.commit_id === "string" && /^[a-f0-9]{40}$/i.test(closed.commit_id)) {
+    const repoUrl = issue.html_url.replace(/\/issues\/\d+$/, "");
+    return `${base}; closing commit ${repoUrl}/commit/${closed.commit_id}`;
+  }
+  for (const event of records) {
+    if (event.createdAt !== issue.closed_at) continue;
+    const closer = event.__typename === "ClosedEvent" ? event.closer : event.__typename === "ConnectedEvent" ? event.subject : undefined;
+    if (closer && typeof closer === "object" && "url" in closer && typeof closer.url === "string" && /^https:\/\/github\.com\/[^/]+\/[^/]+\/(pull\/\d+|commit\/[a-f0-9]{40})$/.test(closer.url)) {
+      const title = "title" in closer ? closer.title : "messageHeadline" in closer ? closer.messageHeadline : undefined;
+      return `${base}; closing ${closer.url.includes("/pull/") ? "PR" : "commit"} ${closer.url}${typeof title === "string" ? ` (${JSON.stringify(title)})` : ""}`;
+    }
+  }
+  const connected = records.find(event => event.event === "connected" && event.created_at === issue.closed_at && typeof event.url === "string" && /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(event.url));
+  return connected ? `${base}; closing PR ${connected.url}` : base;
+}
+
+/** Validate source lifetimes and assign the earliest release tag at or after the closure. */
+export function buildImportFidelity(issue: GhIssue, releases: readonly ImportRelease[], timeline: readonly unknown[]): ImportFidelity {
+  const created = Date.parse(issue.created_at);
+  const updated = Date.parse(issue.updated_at);
+  const closed = issue.closed_at ? Date.parse(issue.closed_at) : undefined;
+  if (!Number.isFinite(created) || !Number.isFinite(updated) || updated < created ||
+    (closed !== undefined && (!Number.isFinite(closed) || closed < created || closed > updated))) {
+    throw new CommandError(`GitHub issue #${issue.number} has an invalid source lifetime; nothing may be imported.`);
+  }
+  return {
+    github_url: issue.html_url, github_number: issue.number, github_state: issue.state,
+    github_state_reason: issue.state_reason ?? "unspecified",
+    github_created_at: issue.created_at, github_updated_at: issue.updated_at,
+    github_closed_at: issue.state === "closed" ? issue.closed_at ?? "" : "",
+    github_close_reason: issue.state === "closed" ? importCloseReason(issue, timeline) : "",
+    github_release: issue.state === "closed" && closed !== undefined ? releases.find(release => Date.parse(release.date) >= closed)?.tag ?? "" : "",
+  };
+}
+
+/**
+ * Finalize source metadata through public SDK lock, serialization and append-only history primitives.
+ * High-level create/update reserve native timestamps. This import adapter appends a real
+ * before/after event instead of editing past history; retrying identical metadata is a no-op.
+ * Cross-provider owners retain their creation/completion dates, content and release.
+ */
+export async function persistImportFidelity(pmRoot: string, id: string, fidelity: ImportFidelity, linkOnly: boolean): Promise<void> {
+  pmRoot = resolvePmRoot(process.cwd(), pmRoot);
+  const settings = await readSettings(pmRoot);
+  const unlock = await acquireLock(pmRoot, id, settings.locks.ttl_seconds, "pm-github", false,
+    settings.governance.force_required_for_stale_lock, settings.locks.wait_ms);
+  try {
+    const located = await locateItem(pmRoot, id, settings.id_prefix, settings.item_format, resolveItemTypeRegistry(settings).type_to_folder);
+    if (!located) throw new CommandError(`Imported item ${id} is missing during lifecycle finalization.`);
+    const { document, raw } = await readLocatedItem(located);
+    const before = canonicalDocument(document);
+    Object.assign(document.metadata, fidelity);
+    document.metadata.github_link_only = linkOnly;
+    if (!linkOnly) {
+      document.metadata.created_at = fidelity.github_created_at;
+      if (fidelity.github_closed_at) {
+        document.metadata.closed_at = fidelity.github_closed_at;
+        document.metadata.completed_at = fidelity.github_closed_at;
+        document.metadata.close_reason = fidelity.github_close_reason;
+      } else if (fidelity.github_state === "open") {
+        delete document.metadata.closed_at;
+        delete document.metadata.completed_at;
+        delete document.metadata.close_reason;
+      }
+      if (fidelity.github_release) document.metadata.release = fidelity.github_release;
+      else delete document.metadata.release;
+    }
+    if (JSON.stringify(before) === JSON.stringify(canonicalDocument(document))) return;
+    // SDK bulk rollback addresses history by native updated_at. Keep that clock
+    // equal to the appended event timestamp; source time lives in github_updated_at.
+    const now = new Date().toISOString();
+    document.metadata.updated_at = now;
+    const after = canonicalDocument(document);
+    const history = createHistoryEntry({ nowIso: now, author: "pm-github", op: "import", before, after,
+      message: `Preserve GitHub source lifecycle for issue #${fidelity.github_number}` });
+    await writeFileAtomic(located.itemPath, serializeItemDocument(after, { format: located.item_format }));
+    try { await appendHistoryEntry(getHistoryPath(pmRoot, id), history); }
+    catch (error) { await writeFileAtomic(located.itemPath, raw); throw error; }
+    const hookContext = { scope: "project" as const, item_id: id, item_type: after.metadata.type,
+      before, after, changed_fields: history.patch.map(patch => patch.path) };
+    await runActiveOnWriteHooks({ ...hookContext, path: located.itemPath, op: "import" });
+    await runActiveOnWriteHooks({ ...hookContext, path: getHistoryPath(pmRoot, id), op: "import:history" });
+  } finally { await unlock(); }
+}

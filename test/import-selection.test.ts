@@ -44,6 +44,11 @@ async function tracker<T>(fn: (root: string, pmRoot: string) => Promise<T>): Pro
 /** Replay recorded issue endpoints; a list request is visible and returns extra issues. */
 const recorded: MockGithubHandler = (request, response) => {
   const url = request.url ?? "";
+  if (url === "/graphql") {
+    jsonResponse(response, 200, { data: { repository: { issue: { timelineItems: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } } });
+    return;
+  }
+  if (url.includes("/timeline?")) { jsonResponse(response, 200, []); return; }
   if (url === "/repos/unbraind/pm-web/issues/175/comments?per_page=100") {
     jsonResponse(response, 200, comments);
     return;
@@ -110,7 +115,7 @@ test("recorded standup issue imports directly into a real tracker", async () => 
     const { result } = await importing(pmRoot, { issue: "unbraind/pm-slack-standup#113" }, "unbraind/pm-slack-standup");
     assert.equal(result.imported, 1);
     assert.equal(readPmItems(pmRoot)[0]!.body, slack.body!.trim());
-    assert.deepEqual(server.requests.map(request => request.url), ["/repos/unbraind/pm-slack-standup/issues/113"]);
+    assert.deepEqual(server.requests.filter(request => request.url !== "/graphql" && !request.url.includes("/timeline?")).map(request => request.url), ["/repos/unbraind/pm-slack-standup/issues/113"]);
   });
 }));
 
@@ -119,7 +124,7 @@ test("explicit selection imports closed issues without a state filter", async ()
     const { result } = await importing(pmRoot, { issue: "189,#96" });
     assert.equal(result.imported, 2);
     assert.equal(readPmItems(pmRoot).find(item => item.tags?.includes("gh:unbraind/pm-web#96"))!.status, "closed");
-    assert.deepEqual(server.requests.map(request => request.url), ["/repos/unbraind/pm-web/issues/189", "/repos/unbraind/pm-web/issues/96"]);
+    assert.deepEqual(server.requests.filter(request => request.url !== "/graphql" && !request.url.includes("/timeline?")).map(request => request.url), ["/repos/unbraind/pm-web/issues/189", "/repos/unbraind/pm-web/issues/96"]);
   });
 }));
 
@@ -173,7 +178,7 @@ test("selection composes atomic, gate, comment modes and dependency linking with
     assert.equal(repeat.result.imported, 0);
     assert.equal(readPmItems(pmRoot).length, 2);
     assert.equal((await readComments(item.id!, {}, { pmRoot })).comments.length, 1);
-    assert.ok(server.requests.every(request => /\/issues\/(189|175)(\/comments\?per_page=100)?$/.test(request.url)));
+    assert.ok(server.requests.every(request => request.url === "/graphql" || /\/issues\/(189|175)(\/(comments|timeline)\?per_page=100)?$/.test(request.url)));
   });
 }));
 
