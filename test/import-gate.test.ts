@@ -607,7 +607,7 @@ test("the reusable sync workflow is a workflow_call with an optional legacy vers
 test("the caller default branch guard is first and preserves the remaining step order", () => {
   const steps = workflow.split(/\n      - name: /).slice(1);
   assert.deepEqual(steps.map(step => step.split("\n")[0]), [
-    "Require caller default branch", "Validate sync inputs", "Checkout caller default branch",
+    "Require caller default branch", "Resolve pm-github release version", "Validate sync inputs", "Checkout caller default branch",
     "Validate npm project directory", "Setup Node.js", "Prepare sync branch from default branch",
     "Install dependencies", "Resolve sync commit scope", "Install pinned pm-github extension",
     "Configure PM merge drivers", "Verify gate is available", "Validate GitHub access",

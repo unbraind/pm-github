@@ -1,4 +1,5 @@
 # Pin a reviewed release SHA and its matching tag comment; Dependabot maintains both.
+# The workflow resolves its exact package version from the release tag on that SHA.
 # See README.md for the daily github-actions pm-toolchain group configuration.
 # Callers need no guard of their own: API default-branch resolution supports schedule
 # payloads without repository metadata; manual dispatch from another branch fails closed.

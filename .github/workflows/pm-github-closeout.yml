@@ -12,10 +12,10 @@ on:
         required: false
         default: ${{ github.repository }}
       pm-github-version:
-        description: "Deprecated: ignored if different from the embedded release version; pin a release SHA instead"
+        description: "Deprecated: fallback only for a non-release commit; pin a release SHA instead"
         type: string
         required: false
-        default: "2026.10.16" # release-stamped default
+        default: ""
       npm-project-dir:
         description: "Caller npm project directory for dependencies and post-closeout-script (relative, inside the workspace)"
         type: string
@@ -56,7 +56,6 @@ jobs:
     env:
       REPOSITORY: ${{ inputs.repository }}
       SYNC_BRANCH: pm-github/closeout
-      PM_GITHUB_VERSION: "2026.10.16" # release-stamped install version
       REQUESTED_PM_GITHUB_VERSION: ${{ inputs.pm-github-version }}
       NPM_PROJECT_DIR: ${{ inputs.npm-project-dir }}
       POST_CLOSEOUT_SCRIPT: ${{ inputs.post-closeout-script }}
@@ -86,14 +85,55 @@ jobs:
           printf 'branch=%s\n' "${DEFAULT_BRANCH}" >> "${GITHUB_OUTPUT}"
           printf 'DEFAULT_BRANCH=%s\n' "${DEFAULT_BRANCH}" >> "${GITHUB_ENV}"
 
+      - name: Resolve pm-github release version
+        shell: bash
+        env:
+          # The job context identifies the reusable workflow, not the caller.
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          [[ "${WORKFLOW_SHA}" =~ ^[a-f0-9]{40}$ ]] || { echo "::error::Cannot identify the reusable workflow commit from job.workflow_sha."; exit 1; }
+          # No checkout, authentication, API pagination, or local tags involved.
+          remote_tags="$(git ls-remote --tags https://github.com/unbraind/pm-github 'refs/tags/v*')" || { echo "::error::Cannot read pm-github release tags; refusing an unverified install."; exit 1; }
+          declare -A tag_commits=() peeled_commits=()
+          while read -r sha ref; do
+            [[ "${sha}" =~ ^[a-f0-9]{40}$ ]] || continue
+            if [[ "${ref}" == *'^{}' ]]; then
+              peeled_commits["${ref%'^{}'}"]="${sha}"
+            elif [[ "${ref}" == refs/tags/v* ]]; then
+              tag_commits["${ref}"]="${sha}"
+            fi
+          done <<< "${remote_tags}"
+          PM_GITHUB_VERSION=""
+          for ref in "${!tag_commits[@]}"; do
+            # Annotated tags must match their peeled commit, never the tag object.
+            [[ "${peeled_commits[$ref]-${tag_commits[$ref]}}" == "${WORKFLOW_SHA}" ]] || continue
+            candidate="${ref#refs/tags/v}"
+            [[ "${candidate}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]] || continue
+            if [[ -n "${PM_GITHUB_VERSION}" && "${PM_GITHUB_VERSION}" != "${candidate}" ]]; then
+              echo "::error::Multiple release versions tag this workflow commit; refusing an ambiguous install."
+              exit 1
+            fi
+            PM_GITHUB_VERSION="${candidate}"
+          done
+          if [[ -z "${PM_GITHUB_VERSION}" ]]; then
+            if [[ -z "${REQUESTED_PM_GITHUB_VERSION}" ]]; then
+              echo "::error::No release tag matches this reusable workflow commit. Pin a release SHA (a commit tagged vN.N.N or vN.N.N-N)."
+              exit 1
+            fi
+            echo "::warning::pm-github-version is deprecated; no release tag matches this workflow commit, so using the exact legacy input. Pin a release SHA instead."
+            PM_GITHUB_VERSION="${REQUESTED_PM_GITHUB_VERSION}"
+          elif [[ -n "${REQUESTED_PM_GITHUB_VERSION}" && "${REQUESTED_PM_GITHUB_VERSION}" != "${PM_GITHUB_VERSION}" ]]; then
+            echo "::warning::pm-github-version is deprecated and differs from the workflow release tag; using the tag version."
+          fi
+          [[ "${PM_GITHUB_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]] || { echo "::error::pm-github-version must be an exact numeric version: N.N.N or N.N.N-N."; exit 1; }
+          printf 'PM_GITHUB_VERSION=%s\n' "${PM_GITHUB_VERSION}" >> "${GITHUB_ENV}"
+
       - name: Validate closeout inputs
         shell: bash
         run: |
           set -euo pipefail
           [[ "${REPOSITORY}" == "${CALLING_REPOSITORY}" ]] || { echo "::error::repository must equal the calling repository (${CALLING_REPOSITORY})."; exit 1; }
-          if [[ "${REQUESTED_PM_GITHUB_VERSION-${PM_GITHUB_VERSION}}" != "${PM_GITHUB_VERSION}" ]]; then
-            echo "::warning::pm-github-version is deprecated and differs from the embedded release version; using pm-github@${PM_GITHUB_VERSION}."
-          fi
           [[ "${PM_GITHUB_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]] || { echo "::error::pm-github-version must be an exact numeric version: N.N.N or N.N.N-N."; exit 1; }
           [[ "${SYNC_BRANCH}" == pm-github/closeout ]] || { echo "::error::Closeout branch must be pm-github/closeout."; exit 1; }
           git check-ref-format "refs/heads/${SYNC_BRANCH}"

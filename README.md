@@ -452,45 +452,38 @@ The `gate` receipt reports the verdict, scanned file count, findings, and allowl
 
 ## Self-versioned workflows and Dependabot
 
-Both reusable workflows install their own embedded **exact** pm-github version
-and verify the installed package version. During release preparation, `release.yml`
-stamps the optional input default and the literal install version in both workflow
-files from `package.json`, before the release checks and metadata commit. Those
-files are included in the release commit that is merged, published and tagged.
-The caller checkout is never used to discover the reusable workflow's version.
+Both reusable workflows resolve their own **exact** pm-github release version at
+runtime and verify the installed package version. GitHub's documented
+[`job.workflow_sha`](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#job-context)
+is the commit of the workflow that defines the current job, including a reusable
+workflow. `github.job_workflow_sha` is not a documented context property;
+`job_workflow_sha` is an OIDC claim. The caller checkout and caller commit are
+never used to discover the reusable workflow's version. These workflow identity
+context properties are not available on GitHub Enterprise Server.
 
-Release maintainer setup (pm-github only): install a dedicated GitHub App on this
-repository with **Contents: write**, **Workflows: write**, **Pull requests: write**,
-**Actions: write**, and **Checks: read**. Set repository variable
-`RELEASE_APP_CLIENT_ID` and repository secret `RELEASE_APP_PRIVATE_KEY` to that
-app's client ID and private key. The SHA-pinned `actions/create-github-app-token`
-step mints a short-lived token automatically for each run, scoped to this
-repository and those permissions, and revokes it at job completion. Checkout uses
-it for the release-branch push; the release PR step uses it for PR creation, CI
-dispatch, approval and merge. No-release runs can use `GITHUB_TOKEN`; release runs
-refuse missing app configuration before version preparation. Incorrect permissions
-or invalid credentials fail at authentication. npm publishing continues to use
-OIDC. GitHub's [contents API requirements](https://docs.github.com/en/rest/repos/contents#create-or-update-file-contents)
-require workflow-write authorization for workflow changes; granting `actions:
-write` to `GITHUB_TOKEN` does not supply it. See
-[additional token permissions](https://docs.github.com/en/actions/tutorials/authenticate-with-github_token#granting-additional-permissions).
+The resolver uses public `git ls-remote --tags https://github.com/unbraind/pm-github
+'refs/tags/v*'`. It matches lightweight tags directly and annotated tags by their
+peeled `^{}` commit (never the tag object), strips `v`, and requires an exact
+numeric version `N.N.N` or `N.N.N-N`. It reads all matching refs in one request,
+without API pagination or new credentials. Lookup errors and multiple release
+versions on one commit fail closed. No GitHub App or release-time workflow
+stamping is required; the release workflow keeps its existing token behavior.
 
 Pin **release commit SHAs**, with their matching tag in a same-line comment
 (for example `uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@<40-character-release-sha> # v2026.10.16`).
-On non-release commits such as main between releases, the embedded version is the
-last released version; pinning an arbitrary main commit does not select a new
-package release. New callers omit `pm-github-version`. Existing callers can keep
-that deprecated optional input: if it differs from the embedded version, the job
-emits `::warning::` and uses the embedded version without failing. Even a floating
-or malformed legacy input cannot change what gets installed. Embedded versions
-still require an exact numeric version; no `latest`, range or floating tag is used.
+New callers omit `pm-github-version`. If no release tag matches the workflow
+commit, the job fails with instructions to pin a release SHA. For compatibility,
+a nonempty deprecated input provides an exact-version fallback with a warning
+only when no tag matches. If a tag matches and the input differs, the job warns
+and uses the tag version. Untrusted input is passed through `env:`, never inserted
+into shell source or warning text. No `latest`, range, or floating install tag is used.
 
 GitHub documents [reusable-workflow updates](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/auto-update-actions)
 and [SHA pins and same-line version comments](https://docs.github.com/en/code-security/reference/supply-chain-security/supported-ecosystems-and-repositories#github-actions).
 Dependabot updates SHA-pinned remote `uses:` references and their version comments
 when the pinned commit has a matching release tag. GitHub warns that untagged
 commits can instead advance to the latest commit, which may differ from the latest
-release. A SHA update therefore selects the new embedded install version without
+release. A SHA update therefore selects the new runtime-resolved install version without
 editing any caller input.
 
 Merge this entry into the caller's `.github/dependabot.yml` (retain other ecosystems
@@ -548,7 +541,7 @@ This works for scheduled payloads without a `repository` object and for branches
 such as `trunk` or `release/stable`. The caller's pinned PM CLI comes from
 `npm ci --ignore-scripts` in `npm-project-dir` (default `.`), which must resolve
 inside the workspace and contain `package.json`. The SDK resolves the tracker
-from the repository root. The exact embedded release version is installed and verified.
+from the repository root. The exact release version resolved from the workflow commit is installed and verified.
 
 Each run rebuilds the bot branch from the current default branch and invokes
 `pm github closeout --since 1970-01-01 --apply --json`. Scanning all merge history
