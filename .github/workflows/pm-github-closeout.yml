@@ -31,6 +31,11 @@ on:
         type: string
         required: false
         default: "ci.yml"
+      required-checks:
+        description: "Whitespace-separated required contexts to verify when protection metadata is unavailable"
+        type: string
+        required: false
+        default: ""
       node-version:
         description: "Node.js version for the pm CLI"
         type: string
@@ -59,6 +64,7 @@ jobs:
       REQUESTED_PM_GITHUB_VERSION: ${{ inputs.pm-github-version }}
       NPM_PROJECT_DIR: ${{ inputs.npm-project-dir }}
       POST_CLOSEOUT_SCRIPT: ${{ inputs.post-closeout-script }}
+      REQUIRED_CHECKS: ${{ inputs.required-checks }}
       CI_WORKFLOWS: ${{ inputs.ci-workflows }}
       CALLING_REPOSITORY: ${{ github.repository }}
     steps:
@@ -283,7 +289,11 @@ jobs:
           set -euo pipefail
           # Full history catches up after missed schedules; the command skips terminal items.
           # Keep the report private until the proposed change has passed the privacy gate.
-          if ! pm github closeout --repo "${REPOSITORY}" --since 1970-01-01 --apply --json > "${RUNNER_TEMP}/pm-github-closeout.json" 2> "${RUNNER_TEMP}/pm-github-closeout.err"; then
+          required_args=()
+          if [[ -n "${REQUIRED_CHECKS:-}" ]]; then
+            required_args+=(--required-checks "${REQUIRED_CHECKS}")
+          fi
+          if ! pm github closeout --repo "${REPOSITORY}" --since 1970-01-01 --apply --json "${required_args[@]}" > "${RUNNER_TEMP}/pm-github-closeout.json" 2> "${RUNNER_TEMP}/pm-github-closeout.err"; then
             echo "::error::Closeout refused; check token read access to pull requests, checks and branch rules, and tracker close validation. No branch was published."
             exit 1
           fi
@@ -291,8 +301,8 @@ jobs:
           # Only a local tracker refusal makes missing head evidence actionable.
           # Foreign, terminal, excluded and unlinked PRs cannot block this run.
           jq -e 'all(.plan[]; (.code | type) == "string")' "${RUNNER_TEMP}/pm-github-closeout.json" >/dev/null
-          if jq -e 'any(.plan[]; .action == "skip" and .code == "head_evidence_unavailable")' "${RUNNER_TEMP}/pm-github-closeout.json" >/dev/null; then
-            echo "::error::Closeout refused; check token read access to head checks for linked local tracker items. No branch was published."
+          if jq -e 'any(.plan[]; .action == "skip" and (.code == "head_evidence_unavailable" or .code == "required_checks_unverified"))' "${RUNNER_TEMP}/pm-github-closeout.json" >/dev/null; then
+            echo "::error::Closeout refused; check token read access to head checks for linked local tracker items, and declare required-checks when protection metadata is unavailable. No branch was published."
             exit 1
           fi
           # Merge facts are checked before head lookup and have a distinct decision.

@@ -146,6 +146,7 @@ esac
   const server = await startMockGithub((req, res) => {
     const url = req.url!;
     if (url.includes("/check-runs")) env.HEAD_LOOKUPS = String(Number(env.HEAD_LOOKUPS ?? 0) + 1);
+    if (env.PROTECTION_DENIED === "true" && (url.includes("/protection/") || url.includes("/rules/branches/"))) { jsonResponse(res, 403, {}); return; }
     if (env.READ_DENIED === "true" || (env.CHECKS_DENIED === "true" && url.includes("/check-runs"))) { jsonResponse(res, 403, { message: "Resource not accessible by integration" }); return; }
     const sha = "a".repeat(40);
     if (url.includes("/pulls?")) jsonResponse(res, 200, env.NO_DELIVERY === "true" ? [] : [{ number: 42, merged_at: "2026-10-15T00:00:00Z", updated_at: "2026-10-15T00:00:00Z" }]);
@@ -154,7 +155,7 @@ esac
       head: { sha }, base: { ref: "trunk", repo: { full_name: "acme/widgets" } } });
     else if (url.includes("/protection/")) jsonResponse(res, 200, { contexts: ["CI"], checks: [] });
     else if (url.includes("/rules/branches/")) jsonResponse(res, 200, []);
-    else if (url.includes("/check-runs")) jsonResponse(res, 200, { total_count: 1, check_runs: [{ name: "CI", head_sha: sha, status: "completed", conclusion: "success", app: { id: 7 } }] });
+    else if (url.includes("/check-runs")) jsonResponse(res, 200, { total_count: 1, check_runs: [{ name: "CI", head_sha: sha, status: env.HEAD_STATUS ?? "completed", conclusion: env.HEAD_CONCLUSION ?? "success", app: { id: 7 } }] });
     else if (url.includes("/statuses")) jsonResponse(res, 200, []);
     else jsonResponse(res, 404, {});
   });
@@ -207,7 +208,10 @@ test("closeout contract keeps sync safety helpers, exact pins, env bindings and 
   assert.match(caller, /workflow_dispatch:/);
   assert.match(caller, /npm-project-dir: "\."/);
   assert.match(caller, /@RELEASE_COMMIT_SHA/);
-  assert.match(caller, /checks: read/);
+  assert.match(caller, /^permissions: \{\}$/m);
+  assert.match(caller, /gated-closeout:\n    permissions:\n      contents: write\n      pull-requests: write\n      checks: read\n      actions: write/);
+  assert.match(caller, /required-checks: ""/);
+  assert.match(workflow, /REQUIRED_CHECKS: \$\{\{ inputs.required-checks \}\}/);
   assert.doesNotMatch(caller, /issues: read/);
 });
 
@@ -398,3 +402,33 @@ test("compact PR summary is privacy gated before the bot branch is published", a
   unpublished(f.git);
   assert.equal(existsSync(f.env.PR_STATE!), false);
 }));
+
+for (const mode of ["undeclared", "missing", "neutral", "skipped", "pending", "success", "metadata"]) {
+  test(`required-check metadata boundary ${mode} uses the real workflow and command`, async () => fixture(async f => {
+    f.env.PROTECTION_DENIED = mode === "metadata" ? "false" : "true";
+    // A declared policy never replaces a complete readable policy.
+    f.env.REQUIRED_CHECKS = mode === "undeclared" ? "" : mode === "missing" || mode === "metadata" ? "CI missing" : "CI";
+    if (["neutral", "skipped"].includes(mode)) f.env.HEAD_CONCLUSION = mode;
+    if (mode === "pending") f.env.HEAD_STATUS = "queued";
+    const before = readFileSync(join(f.pmRoot, "tasks", `${f.id}.toon`), "utf8");
+    const result = await f.run([...setup, ...finish]);
+    const report = JSON.parse(readFileSync(join(f.base, "pm-github-closeout.json"), "utf8")) as { closed: number; plan: { code: string }[] };
+    const passes = mode === "success" || mode === "metadata";
+    assert.equal(report.closed, passes ? 1 : 0);
+    assert.equal((await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item.status, passes ? "closed" : "in_progress");
+    if (passes) {
+      assert.equal(result.code, 0, result.out);
+      assert.equal(existsSync(f.env.PR_STATE!), true);
+      assert.notEqual(f.git("ls-remote", "origin", `refs/heads/${branch}`), "");
+      const item = (await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item;
+      assert.match(String(item.actual_result), mode === "metadata" ? /required checks satisfied/ : /caller-declared and readable required checks satisfied/);
+    } else {
+      assert.equal(report.plan[0]!.code, mode === "undeclared" ? "required_checks_unverified" : "head_checks_failed");
+      if (mode === "undeclared") assert.equal(result.code, 1, result.out);
+      assert.equal(readFileSync(join(f.pmRoot, "tasks", `${f.id}.toon`), "utf8"), before);
+      assert.equal(existsSync(f.env.PR_STATE!), false);
+      unpublished(f.git);
+      assert.doesNotMatch(readFileSync(f.env.RECEIPTS!, "utf8"), /pr (create|edit)|workflow run/);
+    }
+  }));
+}

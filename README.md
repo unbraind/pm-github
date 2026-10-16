@@ -65,14 +65,21 @@ latest status. Check-run, status and ruleset pages are fully read. Rulesets are
 read through GitHub's [effective branch rules API](https://docs.github.com/en/rest/repos/rules#get-rules-for-a-branch).
 The check policy reflects the rules readable at invocation time.
 
-When a protection source is unreadable (HTTP 403/404), or no required contexts
-are configured, the report labels the **fallback** rule. Every readable required
-context still must conclude success, including its app binding. The fallback
-additionally requires at least one head check run, every run completed with
-`success`, `neutral` or `skipped`, and successful latest legacy head statuses.
-It never discards a known requirement because another source is unreadable.
-Missing, malformed or incomplete head evidence, malformed metadata and other
-metadata errors fail closed. The plan reports which rule was used.
+When either protection source is unreadable (HTTP 403/404), the row is ineligible
+with `required_checks_unverified`. Observed green runs cannot prove that every
+required context ran. Supply `--required-checks "CI CodeQL"` to declare a
+whitespace-separated set of required context names when metadata is unavailable.
+Every declared context must conclude **success** on the exact head (or have a
+successful latest legacy status); missing, pending, neutral or skipped contexts
+refuse closure. Readable requirements remain enforced, including app bindings.
+This **declared** policy does not require unrelated optional runs to succeed.
+When both metadata sources are readable, declarations do not replace their policy.
+
+With fully readable metadata and no required contexts configured, the report
+labels the **fallback** rule: at least one head check run must exist, every run
+must complete with `success`, `neutral` or `skipped`, and latest legacy statuses
+must succeed. Missing, malformed or incomplete evidence and other metadata errors
+fail closed. The plan reports which rule was used.
 
 TOON lists actionable `close`/`refuse` rows individually and summarizes routine skips
 as counts by stable code, for example `skipped: {already_terminal: 30,
@@ -105,8 +112,10 @@ structured close fields it supports, without overriding tracker policy:
   otherwise `Delivered by the linked pull request, merged after its head check gate passed.`
 - `actual_result`: `Merged at <time>; required checks satisfied; successful head checks:
   <names>` when branch protection or rulesets name required checks (the list holds every
-  successful head check, optional ones included). Under the fallback rule (no readable
-  required contexts) it reads `Merged at <time>; no readable required checks, so every
+  successful head check, optional ones included). Under the declared policy it reads
+  `Merged at <time>; caller-declared and readable required checks satisfied; successful
+  head checks: <names>`. Under the fallback rule (fully readable, empty policy) it reads
+  `Merged at <time>; no readable required checks, so every
   completed head check run had to succeed, be neutral or be skipped; successful checks:
   <names>`, or `…; no check reported success` when only neutral or skipped runs exist.
   Only the verified merge time, the applied check policy and sorted successful check
@@ -543,6 +552,13 @@ such as `trunk` or `release/stable`. The caller's pinned PM CLI comes from
 inside the workspace and contain `package.json`. The SDK resolves the tracker
 from the repository root. The exact release version resolved from the workflow commit is installed and verified.
 
+`required-checks` is an optional workflow input with an empty default. Set it to
+all required context names (for example `"CI CodeQL"`) when the token cannot read
+branch-protection or ruleset metadata, as is common with `GITHUB_TOKEN`. The workflow
+passes this value as one quoted command argument. Without a declaration, unavailable
+metadata refuses closeout and prevents publishing a branch or PR. Keep this list
+aligned with the caller's required checks; it is a caller-owned policy declaration.
+
 Each run rebuilds the bot branch from the current default branch and invokes
 `pm github closeout --since 1970-01-01 --apply --json`. Scanning all merge history
 avoids losing deliveries during schedule outages; it costs more API reads for
@@ -572,13 +588,15 @@ certify that they passed. Review and required-check enforcement remain with the
 caller's protected branch. A repository concurrency group serializes closeout
 runs, and the explicit lease rejects competing writers.
 
-The caller grants only `contents: write`, `pull-requests: write`, `checks: read`
+The caller template uses top-level `permissions: {}` and grants its
+`gated-closeout` job only `contents: write`, `pull-requests: write`, `checks: read`
 and `actions: write`. Closeout uses `checks: read` instead of sync's `issues: read`
 to retrieve head-check evidence ([GitHub Checks API permissions](https://docs.github.com/en/rest/checks/runs#list-check-runs-for-a-git-reference)).
 The reusable workflow cannot elevate the caller's token
 permissions ([GitHub reusable workflow permissions](https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations)).
 Repository Actions settings must allow Actions to create PRs. Read denial stops
-closeout before push with a diagnostic, including unavailable head-check evidence
+closeout before push with a diagnostic, including `required_checks_unverified` and
+unavailable head-check evidence
 reported by the command as a skip when it blocks a local, existing, non-terminal,
 non-excluded tracker item. Unlinked PRs and foreign/terminal/excluded links do
 not fail the run for unavailable evidence. Incomplete merge facts use a separate

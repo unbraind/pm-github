@@ -20,13 +20,13 @@ export interface CloseoutRow {
 /** Stable decisions used by automation and compact skip counts. */
 export type CloseoutCode = "already_terminal" | "other_repository" | "duplicate_selection" | "explicit_skip"
   | "unknown_item" | "epic" | "active_children" | "not_delivery" | "close_failed"
-  | "head_checks_passed" | "head_checks_failed" | "head_evidence_unavailable" | "incomplete_merge";
+  | "head_checks_passed" | "head_checks_failed" | "head_evidence_unavailable" | "required_checks_unverified" | "incomplete_merge";
 
 /** Which head-check policy was evaluated for one selected pull request. */
 interface CheckGate {
   pr: number;
   code: CloseoutCode;
-  rule: "required" | "fallback" | "unavailable";
+  rule: "required" | "declared" | "fallback" | "unavailable";
   reason: string;
   passed: string[];
   ok: boolean;
@@ -47,7 +47,7 @@ interface PullRequest {
 /** A required context may be bound to a particular GitHub App. */
 interface RequiredCheck { name: string; app: number | null }
 /** Preserve readable requirements while recording a metadata gap or an empty policy. */
-interface RequiredPolicy { checks: RequiredCheck[]; fallback: boolean }
+interface RequiredPolicy { checks: RequiredCheck[]; fallback: boolean; unavailable: boolean }
 /** Only check-run facts used to decide whether a head passed. */
 interface CheckRun { name: string; head_sha: string; status: string; conclusion: string | null; app: { id: number } }
 /** Legacy commit statuses are newest first; only the latest per context counts. */
@@ -181,15 +181,24 @@ async function requirements(api: CloseoutApi, repo: string, branch: string): Pro
       checks.push({ name: text(check.context), app: typeof app === "number" ? app : null });
     }
   }
-  return { checks, fallback: classic === null || rules === null || checks.length === 0 };
+  return { checks, fallback: checks.length === 0, unavailable: classic === null || rules === null };
 }
 
-/** Verify required checks or the explicitly reported conservative fallback at the PR head. */
-export async function checkCloseoutHead(api: CloseoutApi, repo: string, pr: PullRequest): Promise<CheckGate> {
+/** Verify metadata-backed or caller-declared requirements before considering observed head runs. */
+export async function checkCloseoutHead(api: CloseoutApi, repo: string, pr: PullRequest, declared: string[] = []): Promise<CheckGate> {
   const result: CheckGate = { pr: pr.number, code: "head_evidence_unavailable", rule: "unavailable", reason: "Head check evidence unavailable or incomplete.", passed: [], ok: false };
   try {
     const policy = await requirements(api, repo, pr.base.ref);
-    result.rule = policy.fallback ? "fallback" : "required";
+    if (policy.unavailable) {
+      if (declared.length === 0) {
+        result.code = "required_checks_unverified";
+        result.reason = "Required-check metadata unavailable; declare --required-checks to verify the required contexts.";
+        return result;
+      }
+      policy.checks.push(...declared.map(name => ({ name, app: null })));
+      policy.fallback = false;
+    }
+    result.rule = policy.unavailable ? "declared" : policy.fallback ? "fallback" : "required";
     const runs: CheckRun[] = (await pages(api, `/repos/${repo}/commits/${pr.head.sha}/check-runs?filter=latest&per_page=100`, true)).map(value => {
       const run = record(value);
       const app = record(run.app);
@@ -214,7 +223,8 @@ export async function checkCloseoutHead(api: CloseoutApi, repo: string, pr: Pull
       }
     }
     if (!policy.fallback) {
-      result.reason = "Required head checks concluded success (branch-protection and ruleset rule).";
+      result.reason = policy.unavailable ? "Caller-declared and readable required head checks concluded success."
+        : "Required head checks concluded success (branch-protection and ruleset rule).";
     } else {
       if (runs.length === 0) { result.reason = "Fallback rule: no check runs at head; evidence missing."; return result; }
       if (runs.some(run => run.status !== "completed" || !["success", "neutral", "skipped"].includes(String(run.conclusion)))
@@ -222,7 +232,7 @@ export async function checkCloseoutHead(api: CloseoutApi, repo: string, pr: Pull
         result.reason = "Fallback rule: every head run must be completed with success, neutral or skipped, and head statuses must succeed.";
         return result;
       }
-      result.reason = "Fallback rule: readable required checks succeeded; protection unavailable or no required contexts; every head run completed with success, neutral or skipped; head statuses succeeded.";
+      result.reason = "Fallback rule: protection metadata is readable with no required contexts; every head run completed with success, neutral or skipped; head statuses succeeded.";
     }
     result.passed = [...new Set([...runs.filter(run => run.status === "completed" && run.conclusion === "success").map(run => run.name),
       ...[...statuses.values()].filter(status => status.state === "success").map(status => status.context)])].sort();
@@ -326,12 +336,13 @@ function usage<T>(parse: () => T): T {
 /**
  * Describe the verified check evidence for a passed gate without overstating it.
  *
- * The required rule states that the required checks were satisfied and lists every successful head check (optional
- * ones included). The fallback rule (no readable required contexts)
+ * The required and declared rules state that their required checks were satisfied and list every successful head check (optional
+ * ones included). The fallback rule (fully readable metadata with no required contexts)
  * may pass on neutral or skipped runs alone, so it states that policy and lists successful checks only when any exist.
  */
 export function checkEvidence(gate: CheckGate): string {
   // gate.passed holds every successful head check, optional ones included, so it is never labelled as the required set.
+  if (gate.rule === "declared") return `caller-declared and readable required checks satisfied; successful head checks: ${gate.passed.join(", ")}`;
   if (gate.rule === "required") return `required checks satisfied; successful head checks: ${gate.passed.join(", ")}`;
   const successes = gate.passed.length > 0 ? `successful checks: ${gate.passed.join(", ")}` : "no check reported success";
   return `no readable required checks, so every completed head check run had to succeed, be neutral or be skipped; ${successes}`;
@@ -346,6 +357,8 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
   });
   const since = options.since === undefined ? undefined : usage(() => isoDate(text(options.since)));
   if ((numbers.length === 0) === (since === undefined)) throw new CloseoutUsageError("Select either repeatable --pr <n> or --since <ISO date>.");
+  const declaredOptions = { "required-checks": options["required-checks"] ?? options.requiredChecks };
+  const declared = usage(() => repeated(declaredOptions, "required-checks")).flatMap(value => value.split(/\s+/));
   const skip = new Set(usage(() => repeated(options, "skip")));
   const apply = options.apply === true && options["dry-run"] !== true && options.dryRun !== true;
   if (since !== undefined) {
@@ -376,7 +389,7 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
   for (const number of [...new Set(numbers)].sort((a, b) => a - b)) {
     const pr = pullRequest(await payload(api, `/repos/${repo}/pulls/${number}`), repo, number);
     let gate: CheckGate = { pr: number, code: "incomplete_merge", rule: "unavailable", ok: false, passed: [], reason: "Pull request is not merged or merge evidence is incomplete." };
-    if (mergeEvidence(pr)) gate = await checkCloseoutHead(api, repo, pr);
+    if (mergeEvidence(pr)) gate = await checkCloseoutHead(api, repo, pr, declared);
     checks.push(gate);
     for (const ref of extractCloseoutItems(pr.body ?? "")) {
       let reason: string;
