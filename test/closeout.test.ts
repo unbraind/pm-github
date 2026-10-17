@@ -7,7 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { create, close, update, get, config, acquireLock, PmCliError } from "@unbrained/pm-cli/sdk";
 import extension, { fetchJSON, githubApiBase, parseNextLink } from "../index.ts";
-import { CloseoutUsageError, closeoutFailureReason, compactCloseoutReport, declaresDelivery, extractCloseoutItems, runCloseout, type CloseoutApi } from "../closeout.ts";
+import { CloseoutUsageError, closeoutFailureReason, compactCloseoutReport, checkCloseoutHead, declaresDelivery, extractCloseoutItems, runCloseout, type CloseoutApi } from "../closeout.ts";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import { decode } from "@toon-format/toon";
 import { boundedCli } from "./helpers/bounded-cli.ts";
@@ -280,7 +280,7 @@ test("legacy required statuses use newest context and cannot bypass a failed run
 }));
 
 for (const protection of [403, 404, "empty"] as const) {
-  test(`fallback ${protection} accepts only complete success/neutral/skipped head runs`, async () => tracker(async (root, ids) => {
+  test(`protection ${protection} refuses gaps and preserves readable-empty fallback`, async () => tracker(async (root, ids) => {
     for (const conclusion of ["success", "neutral", "skipped", "failure", null]) {
       const before = snapshot(root);
       await withMockGithub(fixture(link(ids[0]!), (request, response) => {
@@ -288,19 +288,19 @@ for (const protection of [403, 404, "empty"] as const) {
         if (request.url!.includes("/check-runs")) jsonResponse(response, 200, { total_count: 1, check_runs: [run({ conclusion })] });
       }), async () => {
         const report = await closeout(root);
-        assert.equal(report.checks[0]!.rule, "fallback");
-        assert.equal(report.plan[0]!.action, conclusion === "failure" || conclusion === null ? "skip" : "close");
-        assert.match(report.plan[0]!.reason, /Fallback rule/);
+        assert.equal(report.checks[0]!.rule, protection === "empty" ? "fallback" : "unavailable");
+        assert.equal(report.plan[0]!.action, protection !== "empty" || conclusion === "failure" || conclusion === null ? "skip" : "close");
+        assert.equal(report.plan[0]!.code, protection !== "empty" ? "required_checks_unverified" : conclusion === "failure" || conclusion === null ? "head_checks_failed" : "head_checks_passed");
         assert.equal(snapshot(root), before);
       });
     }
   }));
 }
 
-test("fallback rejects empty runs, pending runs and failing legacy statuses", async () => tracker(async (root, ids) => {
+test("readable-empty fallback rejects empty runs, pending runs and failing legacy statuses", async () => tracker(async (root, ids) => {
   for (const mode of ["empty", "pending", "status"]) {
     await withMockGithub(fixture(link(ids[0]!), (request, response) => {
-      if (request.url!.includes("/protection/")) jsonResponse(response, 404, {});
+      if (request.url!.includes("/protection/")) jsonResponse(response, 200, { contexts: [], checks: [] });
       if (request.url!.includes("/check-runs")) jsonResponse(response, 200, { total_count: mode === "empty" ? 0 : 1,
         check_runs: mode === "empty" ? [] : [run({ status: mode === "pending" ? "queued" : "completed" })] });
       if (request.url!.includes("/statuses") && mode === "status") jsonResponse(response, 200, [{ context: "legacy", state: "pending" }]);
@@ -369,7 +369,7 @@ test("invalid selectors fail before HTTP or writes", async () => tracker(async (
   await withMockGithub(fixture(null), async server => {
     for (const options of [{}, { pr: [] }, { pr: false }, { pr: "" }, { pr: ["42", 43] }, { pr: "0" }, { pr: "1.2" }, { pr: "9007199254740992" },
       { pr: "42", since: "2026-10-01" }, { since: "yesterday" }, { since: "2026-02-30" }, { since: "2026-10-01T12:00:00" },
-      { since: "2026-10-01T99:00:00Z" }, { since: false }, { since: "" }, { pr: "42", skip: [] }, { pr: "42", skip: true }]) {
+      { since: "2026-10-01T99:00:00Z" }, { since: false }, { since: "" }, { pr: "42", skip: [] }, { pr: "42", skip: true }, { pr: "42", "required-checks": ["CI", 42] }, { pr: "42", "required-checks": false }]) {
       await assert.rejects(() => closeout(root, options), CloseoutUsageError);
     }
     for (const repository of [undefined, "invalid", "bad/repo/name", "./repo", "../repo", "fixture/.", "fixture/.."]) await assert.rejects(() => runCloseout(root, repository, { pr: "42" }, api()), CloseoutUsageError);
@@ -570,8 +570,8 @@ test("unreadable effective rules preserve known requirements without hiding auth
       if (request.url!.includes("/rules/branches/")) jsonResponse(response, status, {});
     }), async () => {
       const report = await closeout(root);
-      assert.equal(report.checks[0]!.rule, status === 401 ? "unavailable" : "fallback");
-      assert.equal(report.plan[0]!.action, status === 401 ? "skip" : "close");
+      assert.equal(report.checks[0]!.rule, "unavailable");
+      assert.equal(report.plan[0]!.action, "skip");
     });
   }
 }));
@@ -628,7 +628,7 @@ test("unauthorized classic protection cannot invoke the permissive fallback", as
   });
 }));
 
-test("fallback preserves readable ruleset requirements when classic protection is unavailable", async () => tracker(async (root, ids) => {
+test("declared policy preserves readable ruleset requirements when classic protection is unavailable", async () => tracker(async (root, ids) => {
   for (const conclusion of ["success", "neutral", "skipped", "failure"]) {
     await withMockGithub(fixture(link(ids[0]!), (request, response) => {
       if (request.url!.includes("/protection/")) jsonResponse(response, 403, {});
@@ -637,22 +637,22 @@ test("fallback preserves readable ruleset requirements when classic protection i
       } }]);
       if (request.url!.includes("/check-runs")) jsonResponse(response, 200, { total_count: 1, check_runs: [run({ conclusion })] });
     }), async () => {
-      const report = await closeout(root);
-      assert.equal(report.checks[0]!.rule, "fallback");
+      const report = await closeout(root, { pr: "42", "required-checks": "CI" });
+      assert.equal(report.checks[0]!.rule, "declared");
       assert.equal(report.plan[0]!.action, conclusion === "success" ? "close" : "skip");
     });
   }
 }));
 
-test("unreadable protection sources retain fallback without hiding invalid authorization", async () => tracker(async (root, ids) => {
+test("unreadable protection sources refuse without hiding invalid authorization", async () => tracker(async (root, ids) => {
   for (const status of [403, 404, 401]) {
     await withMockGithub(fixture(link(ids[0]!), (request, response) => {
       if (request.url!.includes("/protection/")) jsonResponse(response, 403, {});
       if (request.url!.includes("/rules/branches/")) jsonResponse(response, status, {});
     }), async () => {
       const report = await closeout(root);
-      assert.equal(report.checks[0]!.rule, status === 401 ? "unavailable" : "fallback");
-      assert.equal(report.plan[0]!.action, status === 401 ? "skip" : "close");
+      assert.equal(report.checks[0]!.rule, "unavailable");
+      assert.equal(report.plan[0]!.action, "skip");
     });
   }
 }));
@@ -692,7 +692,7 @@ test("fallback closes describe the applied check policy and never claim required
     const id = (await create({ title: `Fallback ${conclusion}`, type: "Task", author: "fixture" }, { pmRoot: root, noExtensions: true })).item.id;
     await update(id, { status: "in_progress" }, { pmRoot: root, noExtensions: true });
     await withMockGithub(fixture(link(id), (request, response) => {
-      if (request.url!.includes("/protection/")) jsonResponse(response, 404, {});
+      if (request.url!.includes("/protection/")) jsonResponse(response, 200, { contexts: [], checks: [] });
       if (request.url!.includes("/check-runs")) jsonResponse(response, 200, { total_count: 1, check_runs: [run({ conclusion })] });
     }), async () => {
       assert.equal((await closeout(root, { pr: "42", apply: true })).closed, 1);
@@ -727,5 +727,61 @@ test("compact report counts routine skips and retains individual refusals with t
     assert.equal(report.plan[0]!.code, "head_checks_failed");
     assert.equal(report.checks.length, 1);
     assert.equal(full.plan.length, 3);
+  });
+}));
+
+test("declared contexts verify exact names and latest statuses without requiring optional success", async () => tracker(async (root, ids) => {
+  await withMockGithub(fixture(link(ids[0]!), (request, response) => {
+    if (request.url!.includes("/protection/") || request.url!.includes("/rules/branches/")) jsonResponse(response, 403, {});
+    if (request.url!.includes("/check-runs")) jsonResponse(response, 200, { total_count: 2, check_runs: [run(), run({ name: "optional", conclusion: "failure" })] });
+    if (request.url!.includes("/statuses")) jsonResponse(response, 200, [{ context: "legacy", state: "success" }, { context: "legacy", state: "failure" }]);
+  }), async () => {
+    const before = snapshot(root);
+    assert.equal((await checkCloseoutHead(api(), repo, pull(link(ids[0]!)))).code, "required_checks_unverified");
+    for (const names of ["CI\nLegacy", "CI\nmissing"]) {
+      const report = await closeout(root, { pr: "42", apply: true, "required-checks": names });
+      assert.equal(report.closed, 0);
+      assert.equal(report.plan[0]!.code, "head_checks_failed");
+      assert.equal(snapshot(root), before);
+    }
+    const report = await closeout(root, { pr: "42", apply: true, "required-checks": "  CI\nlegacy\nCI  " });
+    assert.equal(report.closed, 1);
+    assert.equal(report.checks[0]!.rule, "declared");
+    assert.equal(report.checks[0]!.code, "head_checks_passed");
+    assert.equal(report.checks[0]!.reason, "Caller-declared checks concluded success; repository required-check metadata was unavailable.");
+    assert.deepEqual(report.checks[0]!.passed, ["CI", "legacy"]);
+  });
+}));
+
+test("declared names cannot bypass a readable app binding", async () => tracker(async (root, ids) => {
+  await withMockGithub(fixture(link(ids[0]!), (request, response) => {
+    if (request.url!.includes("/rules/branches/")) jsonResponse(response, 403, {});
+    if (request.url!.includes("/check-runs")) jsonResponse(response, 200, { total_count: 1, check_runs: [run({ app: { id: 8 } })] });
+  }), async () => {
+    const before = snapshot(root);
+    const report = await closeout(root, { pr: "42", apply: true, "required-checks": "CI" });
+    assert.equal(report.closed, 0);
+    assert.equal(report.plan[0]!.code, "head_checks_failed");
+    assert.equal(snapshot(root), before);
+  });
+}));
+
+test("newline context arrays preserve literal names and empty declarations fail closed", async () => tracker(async (root, ids) => {
+  await withMockGithub(fixture(link(ids[0]!), (request, response) => {
+    if (request.url!.includes("/protection/") || request.url!.includes("/rules/branches/")) jsonResponse(response, 403, {});
+    if (request.url!.includes("/check-runs")) jsonResponse(response, 200, { total_count: 2, check_runs: [run({ name: "test (22)" }), run({ name: "test (26)" })] });
+  }), async () => {
+    const before = snapshot(root);
+    for (const names of [[], "", " \n\t\r\n ", ["", "\n"]]) {
+      const report = await closeout(root, { pr: "42", apply: true, "required-checks": names });
+      assert.equal(report.plan[0]!.code, "required_checks_unverified");
+      assert.equal(snapshot(root), before);
+    }
+    // A former space-separated list is one literal name, so observed runs cannot satisfy it.
+    const missing = await closeout(root, { pr: "42", apply: true, "required-checks": "test (22) test (26)" });
+    assert.equal(missing.plan[0]!.code, "head_checks_failed");
+    assert.equal(snapshot(root), before);
+    const report = await closeout(root, { pr: "42", apply: true, requiredChecks: ["  test (22)\n\n", "test (26)\r\n"] });
+    assert.equal(report.closed, 1);
   });
 }));
