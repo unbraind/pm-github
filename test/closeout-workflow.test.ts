@@ -129,6 +129,8 @@ case "$1 $2" in
       if [[ "$1" == --body-file ]]; then cp "$2" "$PR_BODY"; break; fi
       shift
     done ;;
+  "pr merge") [[ "\${AUTO_MERGE_DENIED:-false}" != true ]] || exit 1 ;;
+  "pr view") printf '{"state":"MERGED"}\\n' ;;
   "pr close") rm -f "$PR_STATE" ;;
   "workflow run") [[ "\${DISPATCH_DENIED:-false}" != true ]] || exit 1 ;;
   "run list") ;;
@@ -181,7 +183,7 @@ ${shell(name, source)}
 const setup = ["Require caller default branch", "Validate closeout inputs", "Validate npm project directory", "Prepare sync branch from default branch",
   "Install dependencies", "Resolve sync commit scope", "Install pinned pm-github extension", "Configure PM merge drivers", "Verify gate is available"];
 const finish = ["Close delivered tracker items", "Run caller post-closeout script", "Gate tracker and regenerated changelog", "Verify strict pm health",
-  "Commit gated closeout changes and open review PR", "Dispatch caller CI and report parked runs"];
+  "Validate publication credentials", "Commit gated closeout changes and open review PR", "Dispatch caller CI and report parked runs"];
 
 /** No remote bot ref is the publication invariant for every refused or no-op run. */
 function unpublished(git: (...args: string[]) => string): void {

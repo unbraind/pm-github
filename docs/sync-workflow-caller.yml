@@ -1,6 +1,7 @@
 # Pin a reviewed release SHA and its matching tag comment; Dependabot maintains both.
 # The workflow resolves its exact package version from the release tag on that SHA.
 # See README.md for the daily github-actions pm-toolchain group configuration.
+# Unattended landing needs the optional App client ID/key mapping below.
 # Each configured CI workflow must enable workflow_dispatch and produce its required
 # check names on that event. Missing files are skipped with a notice.
 # Parked action_required PR runs are reported with URLs; dispatch runs separately.
@@ -29,7 +30,10 @@ jobs:
   gated-sync:
     uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@RELEASE_COMMIT_SHA # vRELEASE_VERSION
     with:
+      automation-app-client-id: ${{ vars.PM_GITHUB_APP_CLIENT_ID }}
       npm-project-dir: "." # For pm-rust, use: npm-project-dir: tests/oracle
-      # Defaults shown explicitly; use "" to disable either optional action.
+      # Defaults shown explicitly; use "" to disable an optional action; empty CI also disables auto-merge.
       post-import-script: "changelog:full"
-      ci-workflows: "ci.yml" # Whitespace-separated filenames, e.g. "ci.yml codeql.yml".
+      ci-workflows: "ci.yml codeql.yml" # Whitespace-separated filenames, e.g. "ci.yml codeql.yml".
+    secrets:
+      automation_app_private_key: ${{ secrets.PM_GITHUB_APP_PRIVATE_KEY }}

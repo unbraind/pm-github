@@ -3,6 +3,7 @@
 # See README.md for the daily github-actions pm-toolchain group configuration.
 # Callers need no guard of their own: API default-branch resolution supports schedule
 # payloads without repository metadata; manual dispatch from another branch fails closed.
+# Unattended landing needs the optional App client ID/key mapping below.
 # Configure required CI workflows to support workflow_dispatch and emit their usual checks.
 # Missing CI filenames are skipped with a notice, matching the reusable sync workflow.
 # Settings -> Actions -> General must allow Actions to create pull requests.
@@ -21,10 +22,13 @@ jobs:
       actions: write
     uses: unbraind/pm-github/.github/workflows/pm-github-closeout.yml@RELEASE_COMMIT_SHA # vRELEASE_VERSION
     with:
+      automation-app-client-id: ${{ vars.PM_GITHUB_APP_CLIENT_ID }}
       npm-project-dir: "." # Use tools/oracle or another contained npm project when needed.
       post-closeout-script: "changelog:full" # Missing script skips; "" disables it.
       # One context per line; match your repository's required checks when metadata cannot be read.
       required-checks: |
         test (22)
         test (26)
-      ci-workflows: "ci.yml" # Whitespace-separated workflow filenames; "" disables dispatch.
+      ci-workflows: "ci.yml codeql.yml" # Whitespace-separated workflow filenames; "" disables dispatch and auto-merge.
+    secrets:
+      automation_app_private_key: ${{ secrets.PM_GITHUB_APP_PRIVATE_KEY }}
