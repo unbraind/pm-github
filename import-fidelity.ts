@@ -2,7 +2,7 @@
 import { spawnSync } from "node:child_process";
 import {
   acquireLock, appendHistoryEntry, canonicalDocument, createHistoryEntry, getHistoryPath,
-  locateItem, readLocatedItem, readSettings, resolveItemTypeRegistry, resolvePmRoot, runActiveOnWriteHooks, serializeItemDocument, writeFileAtomic,
+  locateItem, normalizeItemId, readLocatedItem, readSettings, resolveItemTypeRegistry, resolvePmRoot, runActiveOnWriteHooks, serializeItemDocument, writeFileAtomic,
 } from "@unbrained/pm-cli/sdk";
 import { CommandError, fetchJSON, githubApiBase, githubGraphQL, parseNextLink, type GhIssue, type PmItem } from "./index.ts";
 
@@ -150,6 +150,7 @@ export function buildImportFidelity(issue: GhIssue, releases: readonly ImportRel
 export async function persistImportFidelity(pmRoot: string, id: string, fidelity: ImportFidelity, linkOnly: boolean): Promise<void> {
   pmRoot = resolvePmRoot(process.cwd(), pmRoot);
   const settings = await readSettings(pmRoot);
+  id = normalizeItemId(id, settings.id_prefix);
   const unlock = await acquireLock(pmRoot, id, settings.locks.ttl_seconds, "pm-github", false,
     settings.governance.force_required_for_stale_lock, settings.locks.wait_ms);
   try {

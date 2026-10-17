@@ -311,6 +311,40 @@ test("a gated non-atomic import fails closed when a planned write fails", async 
   }
 });
 
+for (const linking of [false, true]) {
+  test(`a refused ${linking ? "provider link" : "source cancellation"} cannot pass the import gate`, async () => {
+    const root = gitTracker("pm-github-fidelity-refused-");
+    const tracker = path.join(root, ".agents/pm");
+    const recorded = JSON.parse(fs.readFileSync(new URL("fixtures/import-fidelity/pm-beads-85.json", import.meta.url), "utf8")) as GhIssue;
+    const source: GhIssue = { ...recorded, state_reason: "not_planned" };
+    try {
+      const owner = (await create({ title: "Existing owner", type: "Task",
+        description: linking ? `[linear] linear_id=fixture github_url=${source.html_url}` : "Existing GitHub owner",
+        tags: linking ? "linear:fixture" : "gh:unbraind/pm-beads#85" }, { pmRoot: tracker })).item;
+      const refused = linking ? "--add-tags" : "canceled";
+      await withFakePm(`
+        for arg in "$@"; do
+          if [ "$arg" = "${refused}" ]; then echo fixture-refused >&2; exit 1; fi
+        done
+        exec "$REAL_PM" "$@"
+      `, async () => {
+        await withMockGithub((request, response) => {
+          jsonResponse(response, 200, request.url?.includes("/timeline") ? [] : [source]);
+        }, async () => {
+          await captureStderr(() => assert.rejects(runImport("unbraind/pm-beads", tracker, opts({ gate: true }),
+            { resolveToken: () => undefined }), linking ? /Could not link/ : /Could not cancel/));
+        });
+      });
+      const corpus = certifyCompleteListResult(await listAllComplete({}, { pmRoot: tracker, noExtensions: true }));
+      assert.equal(corpus.items.length, 1);
+      assert.equal(corpus.items[0]!.id, owner.id);
+      assert.equal(corpus.items[0]!.status, "open");
+      assert.equal(corpus.items[0]!.closed_at, undefined);
+      assert.equal(corpus.items[0]!.github_state, undefined);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
 // A gated --comments-mode annotations|both import must be all-or-nothing for
 // native comments too: a contended comment-sync lock, a refused per-comment
 // add, and an unparsable created id all leave planned comments unwritten while

@@ -44,6 +44,7 @@ import {
   listAllItemMetadata as sdkListAllItemMetadata,
   normalizeItemId as sdkNormalizeItemId,
   readSettings as sdkReadSettings,
+  resolvePmRoot as sdkResolvePmRoot,
   type BulkItemMutation,
   type CommentsCommandOptions,
   type CommentsResult,
@@ -1533,6 +1534,7 @@ export async function importGithubAtomic(
   recoveredItems?: number;
   itemIds: Map<number, string>;
 }> {
+  pmRoot = sdkResolvePmRoot(process.cwd(), pmRoot);
   const {
     commitItemMutations: commit,
     normalizeItemId,

@@ -143,7 +143,7 @@ test("a real completed SDK journal with reset item files cannot authorize a push
       await runGatedImport(root, { atomic: true, gate: true });
       assert.equal(git(["add", ".agents/pm"]).status, 0);
       assert.equal(git(["reset", "--hard", "HEAD"]).status, 0);
-      await assert.rejects(runGatedImport(root, { atomic: true, gate: true }), /persisted corpus does not account/);
+      await assert.rejects(runGatedImport(root, { atomic: true, gate: true }), /committed journal.*nothing may be pushed/);
       assert.deepEqual(remoteRefs(bare), ["refs/heads/main"]);
     });
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
@@ -529,12 +529,15 @@ test("clean flow: gated import passes, health stays strict, the push reaches the
         "the clean gated change reaches the remote",
       );
 
-      // Second gated run: everything matches by provenance — zero creates, all
-      // updates, no new items, gate passes again. That is the provenance-keyed
-      // no-op guarantee the plan phase verifies on every gated run.
+      // The identical plan resumes its completed journal without new writes.
+      // Recovered counts describe the durable batch, rather than new updates.
       const second = await runGatedImport(root, { atomic: true, gate: true });
       assert.strictEqual(second.imported, 0);
-      assert.strictEqual(second.updated, 2);
+      assert.strictEqual(second.updated, 0);
+      assert.strictEqual(second.recovered, true);
+      assert.strictEqual(second.recoveredItems, 2);
+      assert.strictEqual(second.transactionId, first.transactionId);
+      assert.strictEqual(git(["diff", "--name-only", "--", ".agents/pm"]).stdout.trim(), "");
       assert.strictEqual((second.gate as ImportGateReceipt).verdict, "pass");
 
       const list = spawnSync(

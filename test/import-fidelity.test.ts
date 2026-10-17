@@ -266,8 +266,10 @@ test("closure and identity edge cases retain exact evidence rather than inventin
 test("finalization appends history, is a true no-op on retry, restores files on append failure and releases locks", async () => tracker(async (_directory, pmRoot) => {
   const item = (await create({ title: "Finalize fixture", type: "Task" }, { pmRoot })).item;
   const fidelity = buildImportFidelity({ ...recorded("pm-beads-85"), state: "open", closed_at: null }, [], []);
-  await persistImportFidelity(pmRoot, item.id, fidelity, false);
+  const shortId = item.id.slice((await readSettings(pmRoot)).id_prefix.length);
+  await persistImportFidelity(pmRoot, shortId, fidelity, false);
   const historyPath = getHistoryPath(pmRoot, item.id);
+  assert.equal((await readHistorySnapshot(historyPath, item.id)).entries.at(-1)!.op, "import");
   const before = readFileSync(historyPath, "utf8");
   await persistImportFidelity(pmRoot, item.id, fidelity, false);
   assert.equal(readFileSync(historyPath, "utf8"), before);

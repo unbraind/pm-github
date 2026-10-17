@@ -6,11 +6,11 @@ status: in_progress
 priority: 2
 tags[4]: changelog-unreleased,fidelity,github,import
 created_at: "2026-10-16T22:29:39.865Z"
-updated_at: "2026-10-17T00:22:28.429Z"
+updated_at: "2026-10-17T00:33:40.746Z"
 assignee: codex-agent
 claim_principal: codex-agent
 author: codex-agent
-comments[7]{created_at,author,text}:
+comments[9]{created_at,author,text}:
   "2026-10-16T22:30:04.918Z",codex-agent,"Read all twelve unresolved Sourcery threads and the changed tracker/changelog files in the six consumer sync PRs. Scope: fix import only; preserve append-only history and leave unrelated closeout work untouched. The pinned SDK exposes completedAt but reserves created_at, updated_at and closed_at; source timestamp metadata plus an explicit SDK-gap receipt is required unless a supported import path proves otherwise. No upstream SDK issue will be filed under the queue rules."
   "2026-10-16T22:35:10.689Z",codex-agent,"Found public SDK import primitives beyond high-level create/update: item locks, canonical document serialization, before/after history entries and appendHistoryEntry. Implementing an idempotent finalization event with real native dates and source metadata, without modifying any historical record. Existing provider owners receive provenance links only; their content, native lifecycle, release and export identity remain authoritative. Local Git calendar tag dates select the first release at or after source closure; later closures remain pending. GraphQL ClosedEvent closer provides actual closing PR attribution where REST commit_id is null."
   "2026-10-16T23:09:24.995Z",codex-agent,"SDK candidate: bulk compensation captures native updated_at and passes it to restore as a history timestamp. Backdating that field disconnects the rollback version from its event. Preserve source creation/closure/completion natively for momentum and cycle time, and retain the exact source update date in github_updated_at while native updated_at stays the SDK mutation clock. Lifecycle finalization now runs at the SDK committing transition before the journal commits, with real compensation acceptance and a post-recovery idempotent check. No historical entries are rewritten."
@@ -18,14 +18,19 @@ comments[7]{created_at,author,text}:
   "2026-10-17T00:07:53.005Z",codex-agent,"The source-date, provider-link, privacy-plan and invalid-lifetime targeted checks pass 9/9 after certified SDK corpus reads replaced repeated CLI reads. A real tracker exposed the remaining canceled-to-completed transition: the SDK requires explicit repeat-closure authorization. Import reconciliation uses that supported transition with source closure evidence, and both modes now exercise canceled, completed and reopened states. The earlier release-gate probe had obsolete fixture assumptions and was stopped; final gates will run after these corrections."
   "2026-10-17T00:13:15.552Z",codex-agent,"Terminal reconciliation checks pass 3/3: canceled source records become completed when GitHub does, and reopen clears terminal evidence, in both import modes. Expanded provider matching also follows generic url/external_links when a provider id or tag declares ownership. Final release gates are being restarted against this complete implementation; no coverage thresholds, exemptions or dependency pins changed."
   "2026-10-17T00:22:28.429Z",codex-agent,"Behavioral revert proof at implementation 5999329: scratch copies retained the real recorded-API and temporary-tracker tests, rebuilding before each independent function control. Omitting persistImportFidelity yields 9 expected failures across source lifetime fixtures and state-conflict scenarios. Restoring generic importCloseReason wording yields 2 expected failures (beads and slack-standup); dropping linked closure evidence yields 1 (brief closing PR). Tag-only matchImportedIssue yields 2 expected failures (plain and atomic provider owner linking). Clearing buildImportFidelity release attribution yields 1 expected failure in the two-tag before/between/after fixture. Total: 15 expected behavioral failures, zero passes, skips or cancellations; no SDK mocks. Positive targeted checks passed 9/9, terminal transitions 3/3 and expanded identity checks 2/2. Full unchanged release gates remain in progress."
-files[8]{path,scope}:
+  "2026-10-17T00:27:33.274Z",codex-agent,"The broad gate exposed a real adapter defect for callers passing a repository root: readSettings used the unresolved path, and finalization could append history using a noncanonical item id. Atomic planning now resolves the tracker first; finalization normalizes the id before locking, writing history and invoking hooks. The existing full gate/strict-health fixture and an explicit shortened-id finalization assertion cover this. Updated legacy HTTP replay fixtures to serve closure timelines, and the recovered-journal assertion now expects the earlier explicit no-push refusal. The broad run is diagnostic while these corrections are verified; final release gates will be rerun against frozen source."
+  "2026-10-17T00:33:40.746Z",codex-agent,"Canonical-id finalization, both repaired HTTP closure fixtures and recovered-journal refusal pass their targeted assertions. The clean strict-health/push/no-op flow now asserts the correct durable-journal recovery counts and passes; the concurrent two-process race also passes with five distinct comments, keeping the production lock wait and every deduplication assertion unchanged. Refused source cancellation and refused provider-link tests pass 2/2 with real tracker writes, recorded HTTP fixtures and CLI fault boundaries; neither can pass the gate or create a duplicate. Pinned typecheck and test compilation pass. Strict health passes with an isolated global registry; default local health sees a pre-existing shared-registry host-version skew. No dependency or registry changes made. Final PM-linked fixtures and unchanged full release gates are now running against frozen source."
+files[11]{path,scope}:
   import-fidelity.ts,project
   index.ts,project
   test/coverage-edges.test.ts,project
   test/coverage-remainder.test.ts,project
   test/fixtures/import-fidelity/README.md,project
+  test/handler-failures.test.ts,project
   test/import-errors.test.ts,project
   test/import-fidelity.test.ts,project
+  test/import-gate.test.ts,project
+  test/import-lock.test.ts,project
   test/import-selection.test.ts,project
 tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
   node --test test/import-fidelity.test.ts,project,2400,codex-agent,"2026-10-16T23:09:21.738Z",local_mutation,feat/import-fidelity
