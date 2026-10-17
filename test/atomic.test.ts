@@ -167,6 +167,11 @@ test("transaction identity is content-sensitive and independent of fetch order",
     id,
     "changed mutation targets cannot collide with an incompatible recovery journal",
   );
+  assert.notEqual(deriveAtomicTransactionId("acme/widgets", [first, second], plan, ["owner:revision-1"]),
+    deriveAtomicTransactionId("acme/widgets", [first, second], plan, ["owner:revision-2"]));
+  assert.equal(deriveAtomicTransactionId("acme/widgets", [first, second], plan, ["one:1", "two:2"]),
+    deriveAtomicTransactionId("acme/widgets", [second, first], plan, ["two:2", "one:1"]));
+
 });
 
 test("atomic all-skipped imports fail without invoking the SDK", async () => {

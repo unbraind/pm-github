@@ -1,0 +1,25 @@
+{
+  "data": {
+    "repository": {
+      "issue": {
+        "timelineItems": {
+          "nodes": [
+            {
+              "__typename": "ClosedEvent",
+              "createdAt": "2026-10-07T12:19:04Z",
+              "closer": {
+                "__typename": "PullRequest",
+                "url": "https://github.com/unbraind/pm-brief/pull/137",
+                "title": "Enforce chosen rendered brief token budgets"
+              }
+            }
+          ],
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          }
+        }
+      }
+    }
+  }
+}

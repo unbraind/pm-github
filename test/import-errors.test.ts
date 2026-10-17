@@ -101,16 +101,15 @@ test("import rejects an unknown item type and allows a corrected retry", async t
   });
 });
 
-test("import records failed close reconciliation for an already canceled item", async t => {
+test("import reconciles a canceled item when GitHub reports completion", async t => {
   const root = tracker(t);
   pm(root, ["create", "task", "Canceled", "--status", "canceled", "--tags", "gh:acme/widgets#1"]);
   await withMockGithub((_req, res) => jsonResponse(res, 200, [issue({ state: "closed" })]), async () => {
-    const { stderr } = await captureStderr(async () => {
-      await assert.rejects(runImport("acme/widgets", root, parseImportOptions({}), { resolveToken: () => undefined }), /Imported 0 issue\(s\); 1 failed/);
-    });
-    assert.match(stderr.join("\n"), /close reconciliation failed/);
+    const result = await runImport("acme/widgets", root, parseImportOptions({}), { resolveToken: () => undefined });
+    assert.ok("updated" in result);
+    assert.equal(result.updated, 1);
   });
-  assert.equal(readPmItems(root)[0].status, "canceled");
+  assert.equal(readPmItems(root)[0].status, "closed");
 });
 
 test("comment sync degrades on an unavailable lock directory and handles a missing item", async t => {

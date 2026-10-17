@@ -1125,8 +1125,9 @@ test("runImport closes a linked item whose upstream issue was closed", async () 
   try {
     createLinkedItem(root, "Linked", "gh:a/b#5", "open");
     await withEnv({ GITHUB_TOKEN: "tok", GH_TOKEN: undefined }, async () => {
-      await withMockGithub((_req, res) => {
-        jsonResponse(res, 200, [upstreamIssue(5, "Linked", "closed")]);
+      await withMockGithub((request, res) => {
+        if (request.url === "/graphql") graphqlOk(res, { repository: { issue: { timelineItems: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } });
+        else jsonResponse(res, 200, request.url?.includes("/timeline") ? [] : [upstreamIssue(5, "Linked", "closed")]);
       }, async () => {
         const result = (await runImport("a/b", root, parseImportOptions({}))) as Record<string, unknown>;
         assert.strictEqual(result.updated, 1);
@@ -1153,8 +1154,9 @@ test("runImport creates and closes an unlinked issue that is already closed upst
   const root = freshTracker();
   try {
     await withEnv({ GITHUB_TOKEN: "tok", GH_TOKEN: undefined }, async () => {
-      await withMockGithub((_req, res) => {
-        jsonResponse(res, 200, [upstreamIssue(7, "Born closed", "closed")]);
+      await withMockGithub((request, res) => {
+        if (request.url === "/graphql") graphqlOk(res, { repository: { issue: { timelineItems: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } });
+        else jsonResponse(res, 200, request.url?.includes("/timeline") ? [] : [upstreamIssue(7, "Born closed", "closed")]);
       }, async () => {
         const result = (await runImport("a/b", root, parseImportOptions({}))) as Record<string, unknown>;
         assert.strictEqual(result.imported, 1, "the new issue is imported");

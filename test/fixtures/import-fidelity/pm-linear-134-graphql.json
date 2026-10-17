@@ -1,0 +1,25 @@
+{
+  "data": {
+    "repository": {
+      "issue": {
+        "timelineItems": {
+          "nodes": [
+            {
+              "__typename": "ClosedEvent",
+              "createdAt": "2026-10-07T13:09:11Z",
+              "closer": {
+                "__typename": "PullRequest",
+                "url": "https://github.com/unbraind/pm-linear/pull/136",
+                "title": "Certify complete local reads before Linear sync and export"
+              }
+            }
+          ],
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          }
+        }
+      }
+    }
+  }
+}
