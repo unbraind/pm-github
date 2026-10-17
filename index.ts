@@ -1452,6 +1452,12 @@ export function buildAtomicImportMutations(
     ...(entry.status === "canceled" ? { closeReason: entry.fidelity?.github_close_reason ?? `GitHub issue #${entry.issueNumber} closed` } : {}),
   };
 
+  // Explicit terminal reconciliation also handles canceled -> completed. The
+  // supported force option permits that source-authoritative repeat closure;
+  // finalization restores the real dates before the transaction commits.
+  const statusOptions = entry.status === "closed"
+    ? entry.fidelity ? { status: "closed", closeReason: entry.fidelity.github_close_reason, force: true } : {}
+    : { status: entry.status };
   const managedItemId = deriveAtomicItemId(
     repo,
     entry.issueNumber,
@@ -1476,16 +1482,16 @@ export function buildAtomicImportMutations(
       id: managedItemId,
       options: {
         ...sharedOptions,
-        ...(entry.status !== "closed" ? { status: entry.status } : {}),
+        ...statusOptions,
       },
     }];
-    if (entry.status === "closed") {
+    if (entry.status === "closed" && !entry.fidelity) {
       mutations.push({
         op: "close",
         id: managedItemId,
-        reason: entry.fidelity?.github_close_reason ?? `GitHub issue #${entry.issueNumber} closed`,
+        reason: `GitHub issue #${entry.issueNumber} closed`,
         // Legacy callers can supply completion directly; full plans finalize both lifecycle dates.
-        ...(entry.closedAt && !entry.fidelity ? { options: { completedAt: entry.closedAt } } : {}),
+        ...(entry.closedAt ? { options: { completedAt: entry.closedAt } } : {}),
       });
     }
     return {
@@ -1495,24 +1501,19 @@ export function buildAtomicImportMutations(
   }
 
   const itemId = entry.match.id;
-  const updateOptions: Record<string, unknown> = { ...sharedOptions };
-  // close has a dedicated mutation so its reason is preserved. Every other
-  // transition (open/reopen/canceled) is safely reversible as part of update.
-  if (entry.status !== "closed") {
-    updateOptions.status = entry.status;
-  }
+  const updateOptions: Record<string, unknown> = { ...sharedOptions, ...statusOptions };
   const mutations: BulkItemMutation[] = [{
     op: "update",
     id: itemId,
     options: updateOptions,
   }];
-  if (entry.status === "closed") {
+  if (entry.status === "closed" && !entry.fidelity) {
     mutations.push({
       op: "close",
       id: itemId,
-      reason: entry.fidelity?.github_close_reason ?? `GitHub issue #${entry.issueNumber} closed`,
+      reason: `GitHub issue #${entry.issueNumber} closed`,
       // Legacy callers can supply completion directly; full plans finalize both lifecycle dates.
-      ...(entry.closedAt && !entry.fidelity ? { options: { completedAt: entry.closedAt } } : {}),
+      ...(entry.closedAt ? { options: { completedAt: entry.closedAt } } : {}),
     });
   }
   return { itemId, mutations };
@@ -3184,7 +3185,13 @@ export async function runImport(
   // reported "would import N, skip 0" where the real run performs updates for
   // already-linked issues. A preview that overstates creates reads as "this will
   // duplicate my whole tracker" and is the one thing --dry-run exists to rule out.
-  const existingItems = (dependencies.readItems ?? readPmItems)(pmRoot);
+  /** Read the complete raw corpus in-process, retaining all provider metadata and bodies. */
+  const readImportItems = async (): Promise<PmItem[]> => {
+    if (dependencies.readItems) return dependencies.readItems(pmRoot);
+    const corpus = certifyCompleteListResult(await listAllComplete({ includeBody: true }, { pmRoot, cwd: pmRoot, noExtensions: true }));
+    return decodeCompletePmItems(corpus);
+  };
+  const existingItems = await readImportItems();
   const existing = indexByProvenance(existingItems);
   const fidelityContext = { items: existingItems, releases: readImportReleases(pmRoot),
     timeline: dependencies.fetchIssueTimeline ?? (dependencies.fetchIssues ? async () => [] : fetchImportTimeline) };
@@ -3256,7 +3263,7 @@ export async function runImport(
   // Preview output omits unscanned PR-title quotes and private provider close text.
   const fidelityPlan = () => gatePlan!.map(entry => {
     const source = entry.fidelity!;
-    const reason = source.github_close_reason.replace(/ \(".*"\)$/, "");
+    const reason = source.github_close_reason.split(" (", 1)[0]!;
     return { issue: entry.issueNumber, item: entry.match?.id,
       action: entry.linkOnly ? "link" : entry.match?.id ? "update" : "create", status: entry.status,
       ...source, github_close_reason: reason,
@@ -3322,7 +3329,7 @@ export async function runImport(
     }
 
     const result = await (dependencies.commitAtomic ?? importGithubAtomic)(pmRoot, repo, prepared);
-    if (opts.gate) verifyImportedProvenance((dependencies.readItems ?? readPmItems)(pmRoot), prepared, repo);
+    if (opts.gate) verifyImportedProvenance(await readImportItems(), prepared, repo);
     // Planned native comments are part of the verified plan: a contended lock,
     // a refused add, or a committed entry whose created id is missing from the
     // post-commit routing map all leave planned comments unwritten, so they are
@@ -3436,10 +3443,11 @@ export async function runImport(
       continue;
     }
 
-    if (prepared.linkOnly && match?.id) {
-      const linked = pmRun(["--path", pmRoot, "update", match.id, "--add-tags", tags.join(",")]);
+    if (prepared.linkOnly) {
+      const ownerId = match!.id!;
+      const linked = pmRun(["--path", pmRoot, "update", ownerId, "--add-tags", tags.join(",")]);
       if (!linked.ok) throw new CommandError(`Could not link GitHub issue #${issue.number} to its existing owner.`);
-      await persistImportFidelity(pmRoot, match.id, prepared.fidelity!, true);
+      await persistImportFidelity(pmRoot, ownerId, prepared.fidelity!, true);
       updated++;
       continue;
     }
@@ -3470,7 +3478,7 @@ export async function runImport(
       if (status === "closed" && match.status !== "closed") {
         // Close through `pm close` so the reason is real provenance; pass the
         // source completion time as --completed-at when GitHub recorded one.
-        const close = pmRun(githubCloseArgs(match.id));
+        const close = pmRun([...githubCloseArgs(match.id), ...(match.status === "canceled" ? ["--force"] : [])]);
         if (!close.ok) {
           console.error(`#${issue.number}: close reconciliation failed — ${close.stderr}`);
           skipped++;
@@ -3487,7 +3495,7 @@ export async function runImport(
       if (syncAnnotations) {
         commentWriteFailures += (await syncGithubCommentsToAnnotations(match.id, comments, pmRoot, issue.number)).failed;
       }
-      if (prepared.fidelity) await persistImportFidelity(pmRoot, match.id, prepared.fidelity, false);
+      await persistImportFidelity(pmRoot, match.id, prepared.fidelity!, false);
       updated++;
       continue;
     }
@@ -3513,14 +3521,14 @@ export async function runImport(
     if (milestone) createArgs.push("--sprint", milestone);
     // --json lets a following close (or annotations sync) address the freshly
     // created item by id without re-scanning the workspace.
-    if (mustClose || syncAnnotations || prepared.fidelity) createArgs.push("--json");
+    createArgs.push("--json");
     const created = pmRun(createArgs);
     if (!created.ok) {
       console.error(`#${issue.number}: create failed — ${created.stderr}`);
       skipped++;
       continue;
     }
-    const createdId = (mustClose || syncAnnotations || prepared.fidelity) ? parseCreatedItemId(created.stdout) : undefined;
+    const createdId = parseCreatedItemId(created.stdout);
     if (mustClose) {
       if (createdId) {
         const close = pmRun(githubCloseArgs(createdId));
@@ -3550,10 +3558,8 @@ export async function runImport(
         commentWriteFailures += comments.length;
       }
     }
-    if (prepared.fidelity) {
-      if (!createdId) throw new CommandError(`Could not finalize GitHub issue #${issue.number}: created id missing.`);
-      await persistImportFidelity(pmRoot, createdId, prepared.fidelity, false);
-    }
+    if (!createdId) throw new CommandError(`Could not finalize GitHub issue #${issue.number}: created id missing.`);
+    await persistImportFidelity(pmRoot, createdId, prepared.fidelity!, false);
     imported++;
   }
 
@@ -3597,7 +3603,7 @@ export async function runImport(
   reportDepLink(depLink);
   // Gated pipeline, phase 2 — the writes are on disk but nothing is committed or
   // pushed; scan the proposed tracker change now and fail closed.
-  if (opts.gate) verifyImportedProvenance((dependencies.readItems ?? readPmItems)(pmRoot), gatePlan!, repo);
+  if (opts.gate) verifyImportedProvenance(await readImportItems(), gatePlan!, repo);
   const gateReceipt = opts.gate ? gateImportWrites(pmRoot) : undefined;
   return { imported, updated, skipped, ...fetchFields, ...depLinkResultFields(depLink), ...(opts.gate ? { plan: fidelityPlan() } : {}), ...(gateReceipt ? { gate: gateReceipt } : {}) };
 }

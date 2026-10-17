@@ -26,7 +26,8 @@ export interface ImportMatch { item?: PmItem; linkOnly: boolean; via: string }
 /** Normalize only complete HTTP issue/provider locators, never substring identities. */
 function locators(value: unknown): string[] {
   const text = typeof value === "string" ? value : JSON.stringify(value) ?? "";
-  return [...text.matchAll(/https?:\/\/[^\s<>"'`]+/gi)].map(match => match[0]!.replace(/[),.;]+$/, "").replace(/\/$/, "").toLowerCase());
+  return [...text.matchAll(/https?:\/\/[^\s<>"'`]+/gi)].map(match => match[0]!.replace(/[),.;]+$/, "").replace(/\/$/, "").toLowerCase()
+    .replace(/^https?:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/]+)\/(?:issues|pull)\/(\d+)\/?(?:[?#].*)?$/, "https://github.com/$1/$2/issues/$3"));
 }
 
 /** Extract declared provider fields and the description/body markers used by provider exporters. */
@@ -39,7 +40,7 @@ function providerProvenance(item: PmItem): string {
 
 /** Match GitHub locators or provider back-links before creation, refusing multiple owners. */
 export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, tagged?: PmItem): ImportMatch {
-  const issueUrl = issue.html_url.toLowerCase().replace(/\/$/, "");
+  const issueUrl = locators(issue.html_url)[0]!;
   const bodyUrls = new Set(locators(issue.body ?? ""));
   const candidates = items.filter(item => item.id && (item.id === tagged?.id ||
     Object.entries(item).some(([key, value]) => /url|link|provenance|source|external|description/.test(key) && locators(value).includes(issueUrl)) ||
@@ -101,19 +102,22 @@ export function importCloseReason(issue: GhIssue, events: readonly unknown[]): s
   const records = events.filter((event): event is Record<string, unknown> => event !== null && typeof event === "object" && !Array.isArray(event));
   const closed = records.filter(event => event.event === "closed" && event.created_at === issue.closed_at).at(-1);
   if (closed && typeof closed.commit_id === "string" && /^[a-f0-9]{40}$/i.test(closed.commit_id)) {
-    const repoUrl = issue.html_url.replace(/\/issues\/\d+$/, "");
+    const repoUrl = issue.html_url.replace(/\/(?:issues|pull)\/\d+$/, "");
     return `${base}; closing commit ${repoUrl}/commit/${closed.commit_id}`;
   }
-  for (const event of records) {
-    if (event.createdAt !== issue.closed_at) continue;
-    const closer = event.__typename === "ClosedEvent" ? event.closer : event.__typename === "ConnectedEvent" ? event.subject : undefined;
+  const graphEvents = [
+    ...records.filter(event => event.__typename === "ClosedEvent" && event.createdAt === issue.closed_at),
+    ...records.filter(event => event.__typename === "ConnectedEvent").reverse(),
+  ];
+  for (const event of graphEvents) {
+    const closer = event.__typename === "ClosedEvent" ? event.closer : event.subject;
     if (closer && typeof closer === "object" && "url" in closer && typeof closer.url === "string" && /^https:\/\/github\.com\/[^/]+\/[^/]+\/(pull\/\d+|commit\/[a-f0-9]{40})$/.test(closer.url)) {
       const title = "title" in closer ? closer.title : "messageHeadline" in closer ? closer.messageHeadline : undefined;
-      return `${base}; closing ${closer.url.includes("/pull/") ? "PR" : "commit"} ${closer.url}${typeof title === "string" ? ` (${JSON.stringify(title)})` : ""}`;
+      return `${base}; ${event.__typename === "ClosedEvent" ? "closing" : "linked"} ${closer.url.includes("/pull/") ? "PR" : "commit"} ${closer.url}${typeof title === "string" ? ` (${JSON.stringify(title)})` : ""}`;
     }
   }
-  const connected = records.find(event => event.event === "connected" && event.created_at === issue.closed_at && typeof event.url === "string" && /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(event.url));
-  return connected ? `${base}; closing PR ${connected.url}` : base;
+  const connected = records.find(event => event.event === "connected" && typeof event.url === "string" && /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(event.url));
+  return connected ? `${base}; linked PR ${connected.url}` : base;
 }
 
 /** Validate source lifetimes and assign the earliest release tag at or after the closure. */
@@ -155,10 +159,10 @@ export async function persistImportFidelity(pmRoot: string, id: string, fidelity
     document.metadata.github_link_only = linkOnly;
     if (!linkOnly) {
       document.metadata.created_at = fidelity.github_created_at;
+      if (fidelity.github_state === "closed") document.metadata.close_reason = fidelity.github_close_reason;
       if (fidelity.github_closed_at) {
         document.metadata.closed_at = fidelity.github_closed_at;
         document.metadata.completed_at = fidelity.github_closed_at;
-        document.metadata.close_reason = fidelity.github_close_reason;
       } else if (fidelity.github_state === "open") {
         delete document.metadata.closed_at;
         delete document.metadata.completed_at;
@@ -166,6 +170,9 @@ export async function persistImportFidelity(pmRoot: string, id: string, fidelity
       }
       if (fidelity.github_release) document.metadata.release = fidelity.github_release;
       else delete document.metadata.release;
+    }
+    if (document.metadata.closed_at && Date.parse(document.metadata.closed_at) < Date.parse(document.metadata.created_at)) {
+      throw new CommandError(`GitHub issue #${fidelity.github_number} needs a source closure date before its lifecycle can be imported safely.`);
     }
     if (JSON.stringify(before) === JSON.stringify(canonicalDocument(document))) return;
     // SDK bulk rollback addresses history by native updated_at. Keep that clock

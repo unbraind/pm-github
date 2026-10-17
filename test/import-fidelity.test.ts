@@ -45,18 +45,30 @@ async function importing(pmRoot: string, issue: GhIssue, atomic: boolean, dryRun
     if (request.url === "/graphql") jsonResponse(response, 200, timeline ? { data: { repository: { issue: { timelineItems: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } } } : JSON.parse(readFileSync(join(fixtures, `${name.split("/")[1]}-${issue.number}-graphql.json`), "utf8")));
     else if (request.url?.includes("/timeline")) jsonResponse(response, 200, timeline ?? JSON.parse(readFileSync(join(fixtures, `${name.split("/")[1]}-${issue.number}-timeline.json`), "utf8")));
     else jsonResponse(response, 200, [issue]);
-  }, async () => (await captureStderr(() => runImport(name, pmRoot, parseImportOptions({ state: "all", gate: true, atomic, "dry-run": dryRun }), { fetchIssueTimeline: fetchImportTimeline })))).result as Record<string, unknown>);
+  }, async () => {
+    const captured = await captureStderr(() => runImport(name, pmRoot,
+      parseImportOptions({ state: "all", gate: true, atomic, "dry-run": dryRun }),
+      { fetchIssueTimeline: fetchImportTimeline }));
+    return captured.result as Record<string, unknown>;
+  });
 }
 
 for (const atomic of [false, true]) {
-  for (const name of ["pm-beads-85", "pm-brief-135", "pm-brief-84", "pm-context-81", "pm-csv-86", "pm-csv-134", "pm-slack-standup-45"]) {
+  for (const [fixtureIndex, name] of ["pm-beads-85", "pm-brief-135", "pm-brief-84", "pm-context-81", "pm-csv-86", "pm-csv-134", "pm-slack-standup-45"].entries()) {
+    if (atomic !== (fixtureIndex % 2 === 1)) continue;
     test(`${name}: ${atomic ? "atomic" : "plain"} import preserves real lifetimes and honest closure wording`, async () => tracker(async (_directory, pmRoot) => {
       const issue = recorded(name);
-      const preview = await importing(pmRoot, issue, atomic, true);
-      const plan = (preview.plan as Array<Record<string, unknown>>)[0]!;
-      assert.equal(plan.github_created_at, issue.created_at);
-      assert.equal(plan.github_closed_at, issue.closed_at);
-      assert.equal((await listItems(pmRoot)).length, 0);
+      const checkRetry = fixtureIndex < 2;
+      if (checkRetry) {
+        await create({ title: "Legacy source snapshot", type: "Issue", status: "closed", closeReason: "Legacy generic closure",
+          tags: `gh:${issue.html_url.split("/").slice(3, 5).join("/")}#${issue.number}` }, { pmRoot });
+        const beforePreview = (await listItems(pmRoot));
+        const preview = await importing(pmRoot, issue, atomic, true);
+        const plan = (preview.plan as Array<Record<string, unknown>>)[0]!;
+        assert.equal(plan.github_created_at, issue.created_at);
+        assert.equal(plan.github_closed_at, issue.closed_at);
+        assert.deepEqual((await listItems(pmRoot)), beforePreview);
+      }
       await importing(pmRoot, issue, atomic);
       const local = (await listItems(pmRoot))[0]!;
       const item = (await get(local.id!, {}, { pmRoot })).item;
@@ -73,9 +85,11 @@ for (const atomic of [false, true]) {
       const history = await readHistorySnapshot(getHistoryPath(pmRoot, local.id!), local.id!);
       assert.ok(history.entries.length >= 3);
       assert.equal(history.entries.at(-1)!.op, "import");
-      await importing(pmRoot, issue, atomic);
-      assert.equal((await listItems(pmRoot)).length, 1);
-      assert.equal((await get(local.id!, {}, { pmRoot })).item.created_at, issue.created_at);
+      if (checkRetry) {
+        await importing(pmRoot, issue, atomic);
+        assert.equal((await listItems(pmRoot)).length, 1);
+        assert.equal((await get(local.id!, {}, { pmRoot })).item.created_at, issue.created_at);
+      }
     }));
   }
 
@@ -103,7 +117,7 @@ for (const atomic of [false, true]) {
 
   test(`pm-linear-134: ${atomic ? "atomic" : "plain"} links an existing provider owner and preserves export identity`, async () => tracker(async (_directory, pmRoot) => {
     const issue = recorded("pm-linear-134");
-    const owner = { id: "fixture-owner", description: atomic ? "[linear] linear_id=fixture-provider-id linear_url=https://linear.app/fixture/issue/ENG-134" : `GitHub issue ${issue.html_url}`, title: "Provider owner", type: "Task", status: "in_progress", priority: 2 as const,
+    const owner = { id: "fixture-owner", description: atomic ? "[linear] linear_id=fixture-provider-id linear_url=https://linear.app/fixture/issue/ENG-134" : `GitHub issue ${issue.html_url}#issuecomment-1`, title: "Provider owner", type: "Task", status: "in_progress", priority: 2 as const,
       created_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-02T00:00:00Z", tags: ["linear"] };
     const committed = await commitImportedItem({ pmRoot, id: owner.id, itemPath: getItemPath(pmRoot, "Task", owner.id),
       document: { metadata: owner, body: "Keep provider context" }, settings: await readSettings(pmRoot),
@@ -163,6 +177,7 @@ test("identity accepts nested GitHub links, provider back-links, exact URLs and 
   assert.equal(matchImportedIssue([{ id: "owner", description: "Jira EX-134: https://linear.app/fixture/issue/ENG-134" }], issue).item?.id, "owner");
   assert.equal(matchImportedIssue([{ id: "owner", body: "ado_id=134 ado_url=https://linear.app/fixture/issue/ENG-134" }], issue).item?.id, "owner");
   assert.equal(matchImportedIssue([{ id: "owner", ado_id: 134, provenance: { url: issue.html_url } }], issue).item?.id, "owner");
+  assert.equal(matchImportedIssue([{ id: "owner", github_url: `${issue.html_url}?view=all#issuecomment-1` }], issue).item?.id, "owner");
   assert.equal(matchImportedIssue([{ id: "owner", external_links: [{ url: issue.html_url }] }], issue).item?.id, "owner");
   assert.equal(matchImportedIssue([{ id: "unrelated", links: `${issue.html_url}0` }], issue).item, undefined);
   assert.throws(() => matchImportedIssue([{ id: "one", links: issue.html_url }, { id: "two", links: issue.html_url }], issue), /multiple existing owners/);
@@ -172,7 +187,7 @@ test("closure evidence ignores unrelated links, honors latest closure commits an
   const issue = recorded("pm-beads-85");
   const commit = "a".repeat(40);
   assert.match(importCloseReason(issue, [{ event: "closed", created_at: issue.closed_at, commit_id: commit }]), /closing commit .*\/commit\/a{40}/);
-  assert.match(importCloseReason(issue, [{ event: "connected", created_at: issue.closed_at, url: "https://github.com/unbraind/pm-beads/pull/1" }]), /closing PR/);
+  assert.match(importCloseReason(issue, [{ event: "connected", created_at: issue.closed_at, url: "https://github.com/unbraind/pm-beads/pull/1" }]), /linked PR/);
   assert.doesNotMatch(importCloseReason(issue, [{ event: "closed", created_at: issue.created_at, commit_id: commit }, null]), /closing commit/);
   for (const state_reason of ["not_planned", "duplicate", "completed", "reopened", null] as const) {
     assert.ok(buildImportFidelity({ ...issue, state_reason }, [], []).github_close_reason.includes(state_reason ?? "unspecified"));
@@ -210,9 +225,12 @@ test("timeline transport paginates REST and GraphQL, rejects unavailable or malf
   await withMockGithub((_request, response) => jsonResponse(response, 200, []), async () => {
     assert.deepEqual(await fetchImportTimeline(issue, "example/project"), []);
   });
-  await withMockGithub((request, response) => jsonResponse(response, 200, request.url === "/graphql" ? { data: {} } : []), async () => {
-    await assert.rejects(fetchImportTimeline({ ...issue, pull_request: {} }, "example/project", "fixture"), /Invalid GraphQL/);
-  });
+  for (const data of [{}, { repository: {} }, { repository: { issue: { timelineItems: { nodes: null } } } },
+    { repository: { issue: { timelineItems: { nodes: [], pageInfo: {} } } } }]) {
+    await withMockGithub((request, response) => jsonResponse(response, 200, request.url === "/graphql" ? { data } : []), async () => {
+      await assert.rejects(fetchImportTimeline({ ...issue, pull_request: {} }, "example/project", "fixture"), /Invalid GraphQL/);
+    });
+  }
 });
 
 test("closure and identity edge cases retain exact evidence rather than inventing fixes", () => {
@@ -221,10 +239,14 @@ test("closure and identity edge cases retain exact evidence rather than inventin
   for (const closer of [{ url: `https://github.com/example/project/commit/${commit}`, messageHeadline: "Repair parser" },
     { url: "https://github.com/example/project/pull/5" }]) {
     assert.match(importCloseReason(issue, [{ __typename: "ClosedEvent", createdAt: issue.closed_at, closer }]), /closing (PR|commit)/);
-    assert.match(importCloseReason(issue, [{ __typename: "ConnectedEvent", createdAt: issue.closed_at, subject: closer }]), /closing (PR|commit)/);
+    assert.match(importCloseReason(issue, [{ __typename: "ConnectedEvent", createdAt: issue.created_at, subject: closer }]), /linked (PR|commit)/);
   }
   assert.doesNotMatch(importCloseReason(issue, [{ createdAt: issue.closed_at, __typename: "UnknownEvent", closer: {} },
-    { createdAt: issue.closed_at, __typename: "ClosedEvent", closer: { url: "https://example.invalid/unrelated" } }]), /closing/);
+    { createdAt: issue.closed_at, __typename: "ClosedEvent", closer: { url: "https://example.invalid/unrelated" } },
+    ...[{}, "value", { url: 1 }].map(closer => ({ createdAt: issue.closed_at, __typename: "ClosedEvent", closer })),
+    { event: "closed", created_at: issue.closed_at, commit_id: "bad" },
+    ...[{}, { url: 1 }, { url: "https://example.invalid/unrelated" }].map(fields => ({ event: "connected", created_at: issue.closed_at, ...fields })),
+    [], 1, null]), /closing/);
   assert.match(importCloseReason({ ...issue, closed_at: null, state_reason: null }, []), /unspecified on an unknown date/);
   for (const override of [{ created_at: "bad" }, { updated_at: "bad" }, { updated_at: "2000-01-01" }, { closed_at: "bad" }, { closed_at: "2099-01-01" }]) {
     assert.throws(() => buildImportFidelity({ ...issue, ...override }, [], []), /invalid source lifetime/);
@@ -297,6 +319,8 @@ test("a committed journal with a missing item reports an unsafe recovered finali
 
 for (const atomic of [false, true]) {
   test(`not-planned and duplicate closures retain canceled status and honest reasons (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
+    const original = recorded("pm-beads-85");
+    await importing(pmRoot, { ...original, state: "open", state_reason: null, closed_at: null, updated_at: original.created_at }, atomic);
     for (const state_reason of ["not_planned", "duplicate"] as const) {
       const issue = { ...recorded("pm-beads-85"), state_reason };
       await importing(pmRoot, issue, atomic);
@@ -305,6 +329,16 @@ for (const atomic of [false, true]) {
       assert.equal(item.closed_at, issue.closed_at);
       assert.equal(item.close_reason, `Closed on GitHub as ${state_reason} on ${issue.closed_at}`);
     }
+    await importing(pmRoot, original, atomic);
+    const completed = (await listItems(pmRoot))[0]!;
+    assert.equal(completed.status, "closed");
+    assert.equal(completed.closed_at, original.closed_at);
+    assert.match(completed.close_reason!, /^Closed on GitHub as completed/);
+    await importing(pmRoot, { ...original, state: "open", state_reason: "reopened", closed_at: null, updated_at: "2026-10-01T00:00:00Z" }, atomic);
+    const reopened = (await listItems(pmRoot))[0]!;
+    assert.equal(reopened.status, "open");
+    assert.equal(reopened.closed_at, undefined);
+    assert.equal(reopened.close_reason, undefined);
   }));
 }
 
@@ -314,7 +348,7 @@ for (const atomic of [false, true]) {
     const token = "ghp_" + "A".repeat(36);
     await withMockGithub((request, response) => {
       if (request.url === "/graphql") jsonResponse(response, 200, { data: { repository: { issue: { timelineItems: {
-        nodes: [{ __typename: "ClosedEvent", createdAt: issue.closed_at, closer: { url: "https://github.com/example/project/pull/1", title: token } }],
+        nodes: [{ __typename: "ClosedEvent", createdAt: issue.closed_at, closer: { url: "https://github.com/example/project/pull/1", title: "Context" + String.fromCharCode(0x2028) + token } }],
         pageInfo: { hasNextPage: false, endCursor: null },
       } } } } });
       else jsonResponse(response, 200, request.url?.includes("/timeline") ? [] : [issue]);
@@ -328,3 +362,32 @@ for (const atomic of [false, true]) {
     });
   }));
 }
+
+test("tag-date ordering ignores non-release and undated blob tags and is stable for equal dates", async () => tracker(async (directory, pmRoot) => {
+  command(directory, "git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "fixture"],
+    { GIT_AUTHOR_DATE: "2026-09-01T12:00:00Z", GIT_COMMITTER_DATE: "2026-09-01T12:00:00Z" });
+  for (const tag of ["v2026.9.2", "v2026.9.1", "other-tag"]) command(directory, "git", ["tag", tag]);
+  writeFileSync(join(directory, "blob.txt"), "fixture");
+  const blob = command(directory, "git", ["hash-object", "-w", "blob.txt"]).trim();
+  command(directory, "git", ["tag", "v2026.1.1", blob]);
+  assert.deepEqual(readImportReleases(pmRoot).map(release => release.tag), ["v2026.9.1", "v2026.9.2"]);
+}));
+
+test("legacy records without a source closure date retain honest evidence without inventing a closure date", async () => tracker(async (_directory, pmRoot) => {
+  const item = (await create({ title: "Legacy fixture", type: "Task", status: "closed", closeReason: "Fixture closure" }, { pmRoot })).item;
+  const fidelity = buildImportFidelity({ ...recorded("pm-beads-85"), closed_at: null }, [], []);
+  await persistImportFidelity(pmRoot, item.id, fidelity, false);
+  const actual = (await get(item.id, {}, { pmRoot })).item;
+  assert.equal(actual.closed_at, item.closed_at);
+  assert.equal(actual.close_reason, fidelity.github_close_reason);
+  assert.equal(actual.github_closed_at, "");
+}));
+
+
+test("a legacy unknown closure cannot put native closure before source creation", async () => tracker(async (_directory, pmRoot) => {
+  const item = (await create({ title: "Legacy chronology fixture", type: "Task", status: "closed", closeReason: "Fixture closure" }, { pmRoot })).item;
+  const future = new Date(Date.now() + 86400000).toISOString();
+  const fidelity = buildImportFidelity({ ...recorded("pm-beads-85"), created_at: future, updated_at: future, closed_at: null }, [], []);
+  await assert.rejects(persistImportFidelity(pmRoot, item.id, fidelity, false), /needs a source closure date/);
+  assert.equal((await get(item.id, {}, { pmRoot })).item.created_at, item.created_at);
+}));

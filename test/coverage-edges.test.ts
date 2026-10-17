@@ -28,7 +28,7 @@ function tracker(t: TestContext, git = false): string {
 }
 function issue(extra: Partial<github.GhIssue> = {}): github.GhIssue {
   return { number: 1, title: "Widget", body: null, state: "open", labels: [], assignee: null, milestone: null,
-    created_at: "2026-01-01T00:00:00Z", updated_at: "2026-10-01T00:00:00Z", html_url: "https://example.test/acme/widgets/issues/1", user: null, ...extra };
+    created_at: "2026-01-01T00:00:00Z", updated_at: "2026-10-01T00:00:00Z", html_url: `https://example.test/acme/widgets/issues/${extra.number ?? 1}`, user: null, ...extra };
 }
 function entry(extra: Partial<github.PreparedGithubImport> = {}): github.PreparedGithubImport {
   return { issueNumber: 1, title: "Widget", itemType: "Task", status: "open", description: "d", body: "b",
