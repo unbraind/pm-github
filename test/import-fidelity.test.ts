@@ -38,6 +38,14 @@ async function listItems(pmRoot: string) {
   certifyCompleteListResult(result);
   return result.items;
 }
+/** Seed identity metadata through the real SDK without adding import provenance tags. */
+async function identityItem(pmRoot: string, fields: Record<string, unknown>) {
+  const item = (await create({ title: "Existing local item", type: "Task", status: "in_progress" }, { pmRoot })).item;
+  await commitImportedItem({ pmRoot, id: item.id, itemPath: getItemPath(pmRoot, "Task", item.id),
+    document: { metadata: { ...item, ...fields }, body: "Local context" }, settings: await readSettings(pmRoot),
+    author: "fixture", message: "Seed identity fixture", conflictWarningPrefix: "fixture" });
+  return (await get(item.id, {}, { pmRoot })).item;
+}
 /** Replay recorded REST responses through the normal HTTP importer without SDK mocks. */
 async function importing(pmRoot: string, issue: GhIssue, atomic: boolean, dryRun = false, timeline?: unknown[], onTransition?: AtomicImportOptions["onTransition"]) {
   const name = issue.html_url.split("/").slice(3, 5).join("/");
@@ -118,7 +126,7 @@ for (const atomic of [false, true]) {
 
   test(`pm-linear-134: ${atomic ? "atomic" : "plain"} links an existing provider owner and preserves export identity`, async () => tracker(async (_directory, pmRoot) => {
     const issue = recorded("pm-linear-134");
-    const owner = { id: "fixture-owner", description: atomic ? "[linear] linear_id=fixture-provider-id linear_url=https://linear.app/fixture/issue/ENG-134" : `GitHub issue ${issue.html_url}#issuecomment-1`, title: "Provider owner", type: "Task", status: "in_progress", priority: 2 as const,
+    const owner = { id: "fixture-owner", description: "[linear] linear_id=fixture-provider-id linear_url=https://linear.app/fixture/issue/ENG-134", title: "Provider owner", type: "Task", status: "in_progress", priority: 2 as const,
       created_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-02T00:00:00Z", tags: ["linear"] };
     const committed = await commitImportedItem({ pmRoot, id: owner.id, itemPath: getItemPath(pmRoot, "Task", owner.id),
       document: { metadata: owner, body: "Keep provider context" }, settings: await readSettings(pmRoot),
@@ -139,9 +147,70 @@ for (const atomic of [false, true]) {
     assert.equal(actual.description, before.description);
     const plan = (await importing(pmRoot, issue, atomic, true)).plan as Array<Record<string, unknown>>;
     assert.equal(plan[0]!.action, "link");
-    assert.equal((plan[0]!.identity as { via: string }).via, atomic ? "provider-link" : "provenance-tag");
+    assert.equal((plan[0]!.identity as { via: string }).via, "provider-link");
+  }));
+
+  test(`description mentions never adopt or block another issue (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
+    const issue = recorded("pm-linear-134");
+    const owners = await Promise.all(["Blocked by", "See also"].map(text => identityItem(pmRoot, {
+      description: `${text} ${issue.html_url}#issuecomment-1`, body_url: issue.html_url,
+      source_description: issue.html_url, unrelated_url: issue.html_url,
+    })));
+    await importing(pmRoot, issue, atomic);
+    const items = await listItems(pmRoot);
+    assert.equal(items.length, 3);
+    for (const owner of owners) assert.deepEqual((await get(owner.id, {}, { pmRoot })).item, owner);
+    const imported = items.find(item => item.github_url === issue.html_url)!;
+    assert.equal(imported.status, "closed");
+    assert.ok(imported.tags?.includes("gh:unbraind/pm-linear#134"));
+  }));
+
+  test(`URL-only GitHub owner refreshes native lifecycle and release (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
+    const issue = recorded("pm-csv-72");
+    const owner = await identityItem(pmRoot, { github_url: issue.html_url, release: "stale-release" });
+    const preview = await importing(pmRoot, issue, atomic, true);
+    const plan = (preview.plan as Array<{ identity: { via: string; linkOnly: boolean } }>)[0]!;
+    assert.equal(plan.identity.via, "github-url");
+    await importing(pmRoot, issue, atomic);
+    assert.equal((await listItems(pmRoot)).length, 1);
+    const actual = (await get(owner.id, {}, { pmRoot })).item;
+    assert.equal(actual.status, "closed");
+    assert.equal(actual.created_at, issue.created_at);
+    assert.equal(actual.closed_at, issue.closed_at);
+    assert.equal(actual.completed_at, issue.closed_at);
+    assert.equal(actual.release, undefined);
+    assert.equal(actual.github_link_only, false);
+    assert.match(actual.close_reason!, /^Closed on GitHub/);
   }));
 }
+
+for (const mode of ["plain", "gate", "atomic"] as const) {
+  test(`ambiguous later issue documents write boundary (${mode})`, async () => tracker(async (_directory, pmRoot) => {
+    const second = { ...recorded("pm-csv-72"), state: "open" as const, closed_at: null };
+    const first = { ...second, number: 1, html_url: "https://github.com/unbraind/pm-csv/issues/1", title: "Earlier issue" };
+    await identityItem(pmRoot, { github_url: second.html_url });
+    await identityItem(pmRoot, { github_url: second.html_url });
+    const before = await listItems(pmRoot);
+    await assert.rejects(captureStderr(() => runImport("unbraind/pm-csv", pmRoot,
+      parseImportOptions({ state: "all", gate: mode === "gate", atomic: mode === "atomic" }),
+      { fetchIssues: async () => [first, second], resolveToken: () => undefined })), /multiple existing owners/);
+    const after = await listItems(pmRoot);
+    if (mode === "plain") {
+      assert.equal(after.length, before.length + 1);
+      assert.equal(after.find(item => item.github_url === first.html_url)?.title, first.title);
+    } else assert.deepEqual(after, before);
+  }));
+}
+
+test("empty filtered gated selections omit plan for preview and apply", async () => tracker(async (_directory, pmRoot) => {
+  for (const dryRun of [false, true]) {
+    const result = await captureStderr(() => runImport("unbraind/pm-csv", pmRoot,
+      parseImportOptions({ gate: true, "dry-run": dryRun, "skip-drafts": true, "include-prs": true }),
+      { fetchIssues: async () => [{ ...recorded("pm-csv-72"), draft: true, pull_request: {} }], resolveToken: () => undefined }));
+    assert.equal(Object.hasOwn(result.result, "plan"), false);
+    assert.equal((await listItems(pmRoot)).length, 0);
+  }
+}));
 
 test("release fixture: two actual tags place closures before, between and after their actual dates", async () => tracker(async (directory, pmRoot) => {
   command(directory, "git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "fixture"],
@@ -200,6 +269,24 @@ test("identity accepts nested GitHub links, provider back-links, exact URLs and 
   assert.throws(() => matchImportedIssue([{ id: "one", links: issue.html_url }, { id: "two", links: issue.html_url }], issue), /multiple existing owners/);
 });
 
+test("identity excludes descriptions even when multiple items mention another issue", () => {
+  const issue = recorded("pm-linear-134");
+  const references = ["one", "two"].map(id => ({ id, description: `Blocked by ${issue.html_url}#issuecomment-1`,
+    body: issue.html_url, source_description: issue.html_url, unrelated_url: issue.html_url }));
+  assert.doesNotThrow(() => matchImportedIssue(references, issue));
+  assert.deepEqual(matchImportedIssue(references, issue), { item: undefined, linkOnly: false, via: "new" });
+  const owner = { id: "owner", github_url: issue.html_url };
+  assert.equal(matchImportedIssue([...references, owner], issue).item, owner);
+  assert.throws(() => matchImportedIssue([owner, { ...owner, id: "competitor" }], issue), /multiple existing owners/);
+});
+
+test("identity classifies URL-only GitHub owners for lifecycle refresh", () => {
+  const issue = recorded("pm-csv-72");
+  const owner = { id: "owner", github_url: issue.html_url };
+  assert.deepEqual(matchImportedIssue([owner], issue), { item: owner, linkOnly: false, via: "github-url" });
+  assert.equal(matchImportedIssue([{ ...owner, github_link_only: true }], issue).linkOnly, true);
+});
+
 test("closure evidence ignores unrelated links, honors latest closure commits and preserves every state reason", () => {
   const issue = recorded("pm-beads-85");
   const commit = "a".repeat(40);
@@ -215,6 +302,46 @@ test("closure evidence ignores unrelated links, honors latest closure commits an
     assert.ok(buildImportFidelity({ ...issue, state_reason }, [], []).github_close_reason.includes(state_reason ?? "unspecified"));
   }
   assert.throws(() => buildImportFidelity({ ...issue, closed_at: "2000-01-01T00:00:00Z" }, [], []), /invalid source lifetime/);
+});
+
+test("closure evidence accepts forward skew and never borrows an older closure generation", async () => {
+  const issue = recorded("pm-beads-85");
+  const timestamp = (delta: number) => new Date(Date.parse(issue.closed_at!) + delta).toISOString();
+  const commit = "d".repeat(40);
+  const rest = { event: "closed", created_at: timestamp(1000), commit_id: commit };
+  const graph = { __typename: "ClosedEvent", createdAt: timestamp(1000),
+    closer: { url: "https://github.com/example/project/pull/42", title: "Current fix" } };
+  assert.match(importCloseReason(issue, [rest]), /closing commit/);
+  assert.match(importCloseReason(issue, [graph]), /closing PR .*42/);
+  assert.match(importCloseReason(issue, [{ ...rest, created_at: timestamp(5000) }]), /closing commit/);
+  for (const delta of [-1000, 5001]) {
+    assert.doesNotMatch(importCloseReason(issue, [{ ...rest, created_at: timestamp(delta) }, { ...graph, createdAt: timestamp(delta) }]), /closing (commit|PR)/);
+  }
+  // Reverse chronological input still selects the newest candidate; null closers
+  // on that candidate cannot borrow a commit or PR from an earlier generation.
+  const latestRest = { ...rest, created_at: timestamp(2000), commit_id: null };
+  const latestGraph = { ...graph, createdAt: timestamp(2000), closer: null };
+  assert.doesNotMatch(importCloseReason(issue, [latestRest, rest, latestGraph, graph]), /closing (commit|PR)/);
+  assert.match(importCloseReason(issue, [latestRest, rest, graph]), /closing PR .*42/);
+  assert.doesNotMatch(importCloseReason(issue, [{ event: "closed" }, { ...rest, created_at: "invalid" },
+    { ...graph, createdAt: "invalid" }]), /closing (commit|PR)/);
+  assert.doesNotMatch(importCloseReason({ ...issue, closed_at: null }, [rest, graph]), /closing (commit|PR)/);
+  for (const events of [[rest], [latestRest, rest], [{ ...rest, created_at: timestamp(-1000) }], [{ ...rest, commit_id: "bad" }],
+    [null, [], 1, { ...rest, event: "referenced" }]]) {
+    let graphRequests = 0;
+    await withMockGithub((request, response) => {
+      if (request.url === "/graphql") {
+        graphRequests++;
+        jsonResponse(response, 200, { data: { repository: { issue: { timelineItems: {
+          nodes: [graph], pageInfo: { hasNextPage: false, endCursor: null },
+        } } } } });
+      } else jsonResponse(response, 200, events);
+    }, async () => {
+      const timeline = await fetchImportTimeline(issue, "example/project", "fixture");
+      assert.equal(graphRequests, events[0] === rest ? 0 : 1);
+      assert.match(importCloseReason(issue, timeline), events[0] === rest ? /closing commit/ : /closing PR .*42/);
+    });
+  }
 });
 
 test("timeline transport paginates REST and GraphQL, rejects unavailable or malformed evidence", async () => {
@@ -279,7 +406,7 @@ test("closure and identity edge cases retain exact evidence rather than inventin
   assert.equal(matchImportedIssue([tagged], issue, tagged).linkOnly, false);
   assert.equal(matchImportedIssue([{ id: "tagged", github_link_only: true }], issue, tagged).linkOnly, true);
   assert.equal(matchImportedIssue([{ id: "provider", github_url: issue.html_url, tags: ["jira:EX-1"] }], issue).via, "provider-link");
-  assert.equal(matchImportedIssue([{ links: [issue.html_url] }, { id: "other", ado_url: undefined }], { ...issue, body: null }).item, undefined);
+  assert.equal(matchImportedIssue([{ links: [issue.html_url] }, { id: "other", github_url: undefined, ado_url: undefined }], { ...issue, body: null }).item, undefined);
   assert.deepEqual(readImportReleases(tmpdir()), []);
 });
 

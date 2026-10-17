@@ -72,12 +72,12 @@ export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, tag
   const issueUrl = locators(issue.html_url)[0]!;
   const bodyUrls = new Set(locators(issue.body ?? ""));
   const candidates = items.filter(item => item.id && (item.id === tagged?.id ||
-    Object.entries(item).some(([key, value]) => /url|link|provenance|source|external|description/i.test(key) && locators(value).includes(issueUrl)) ||
+    Object.entries(item).some(([key, value]) => /^(?:github_?url|provenance|external_?(?:links?|url)|links?)$/i.test(key) && locators(value).includes(issueUrl)) ||
     locators(providerProvenance(item)).some(url => bodyUrls.has(url))));
-  if (candidates.length > 1) throw new CommandError(`GitHub issue #${issue.number} has multiple existing owners; import plan is not idempotent. No item was written.`);
+  if (candidates.length > 1) throw new CommandError(`GitHub issue #${issue.number} has multiple existing owners; import plan is not idempotent. No item was written for this issue.`);
   const item = candidates[0];
   const provider = item && (Boolean(providerProvenance(item)) || (item.github_link_only !== false && item.tags?.some(tag => /^(linear|jira|ado):/i.test(tag))));
-  return { item, linkOnly: Boolean(item && (provider || item.github_link_only === true || item.id !== tagged?.id)),
+  return { item, linkOnly: Boolean(item && (provider || item.github_link_only === true)),
     via: item ? (provider ? "provider-link" : item.id === tagged?.id ? "provenance-tag" : "github-url") : "new" };
 }
 
@@ -89,6 +89,17 @@ export function readImportReleases(pmRoot: string): ImportRelease[] {
     const [tag, date] = line.split("\t");
     return /^v?\d{4}\.\d{1,2}\.\d{1,2}$/.test(tag!) && Number.isFinite(Date.parse(date!)) ? [{ tag: tag!, date: date! }] : [];
   }).sort((a, b) => Date.parse(a.date) - Date.parse(b.date) || a.tag.localeCompare(b.tag));
+}
+
+/** Select only the latest closure within GitHub's observed forward timestamp skew. */
+function latestClosure(events: readonly unknown[], closedAt: string | null | undefined, graphql = false): Record<string, unknown> | undefined {
+  const candidates = events.filter((event): event is Record<string, unknown> => event !== null && typeof event === "object" && !Array.isArray(event))
+    .filter(event => graphql ? event.__typename === "ClosedEvent" : event.event === "closed");
+  const key = graphql ? "createdAt" : "created_at";
+  return candidates.filter(event => {
+    const delta = typeof event[key] === "string" && closedAt ? Date.parse(event[key]) - Date.parse(closedAt) : NaN;
+    return Number.isFinite(delta) && delta >= 0 && delta <= 5_000;
+  }).sort((left, right) => Date.parse(String(left[key])) - Date.parse(String(right[key]))).at(-1);
 }
 
 /** Fetch every timeline page; only closure-specific events may supply resolution evidence. */
@@ -106,7 +117,8 @@ export async function fetchImportTimeline(issue: GhIssue, repo: string, token?: 
     events.push(...page);
     url = parseNextLink(response.linkHeader);
   }
-  if (token && !events.some(event => event !== null && typeof event === "object" && "commit_id" in event && "created_at" in event && event.created_at === issue.closed_at && typeof event.commit_id === "string")) {
+  const closed = latestClosure(events, issue.closed_at);
+  if (token && !(typeof closed?.commit_id === "string" && /^[a-f0-9]{40}$/i.test(closed.commit_id))) {
     const [owner, name] = repo.split("/");
     let cursor: string | null = null;
     do {
@@ -129,7 +141,7 @@ export function importCloseReason(issue: GhIssue, events: readonly unknown[]): s
   const reason = issue.state_reason ?? "unspecified";
   const base = `Closed on GitHub as ${reason} on ${issue.closed_at ?? "an unknown date"}`;
   const records = events.filter((event): event is Record<string, unknown> => event !== null && typeof event === "object" && !Array.isArray(event));
-  const closed = records.filter(event => event.event === "closed" && event.created_at === issue.closed_at).at(-1);
+  const closed = latestClosure(records, issue.closed_at);
   if (closed && typeof closed.commit_id === "string" && /^[a-f0-9]{40}$/i.test(closed.commit_id)) {
     const linkedCommit = typeof closed.commit_url === "string"
       ? /^https:\/\/api\.github\.com\/repos\/([^/]+)\/([^/]+)\/commits\/([a-f0-9]{40})$/.exec(closed.commit_url) : null;
@@ -137,8 +149,9 @@ export function importCloseReason(issue: GhIssue, events: readonly unknown[]): s
       ? `https://github.com/${linkedCommit[1]}/${linkedCommit[2]}` : issue.html_url.replace(/\/(?:issues|pull)\/\d+$/, "");
     return `${base}; closing commit ${repoUrl}/commit/${closed.commit_id}`;
   }
+  const graphClosed = latestClosure(records, issue.closed_at, true);
   const graphEvents = [
-    ...records.filter(event => event.__typename === "ClosedEvent" && event.createdAt === issue.closed_at),
+    ...(graphClosed ? [graphClosed] : []),
     ...records.filter(event => event.__typename === "ConnectedEvent").reverse(),
   ];
   for (const event of graphEvents) {

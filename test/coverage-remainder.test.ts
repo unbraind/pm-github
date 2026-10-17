@@ -316,10 +316,11 @@ for (const linking of [false, true]) {
     const root = gitTracker("pm-github-fidelity-refused-");
     const tracker = path.join(root, ".agents/pm");
     const recorded = JSON.parse(fs.readFileSync(new URL("fixtures/import-fidelity/pm-beads-85.json", import.meta.url), "utf8")) as GhIssue;
-    const source: GhIssue = { ...recorded, state_reason: "not_planned" };
+    const source: GhIssue = { ...recorded, state_reason: "not_planned",
+      ...(linking ? { body: "Mirrored from https://linear.app/fixture/issue/ENG-85" } : {}) };
     try {
       const owner = (await create({ title: "Existing owner", type: "Task",
-        description: linking ? `[linear] linear_id=fixture github_url=${source.html_url}` : "Existing GitHub owner",
+        description: linking ? "[linear] linear_id=fixture linear_url=https://linear.app/fixture/issue/ENG-85" : "Existing GitHub owner",
         tags: linking ? "linear:fixture" : "gh:unbraind/pm-beads#85" }, { pmRoot: tracker })).item;
       const refused = linking ? "--add-tags" : "canceled";
       await withFakePm(`
