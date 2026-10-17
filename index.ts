@@ -25,7 +25,7 @@ import type {
 } from "@unbrained/pm-cli/sdk/authoring";
 import { CloseoutUsageError, compactCloseoutReport, runCloseout } from "./closeout.ts";
 import {
-  buildImportFidelity, fetchImportTimeline, matchImportedIssue, persistImportFidelity, readImportReleases,
+  buildImportFidelity, fetchImportTimeline, matchImportedIssue, persistImportFidelity, readImportReleases, selectImportContextIndex,
   type ImportFidelity,
 } from "./import-fidelity.ts";
 import http from "node:http";
@@ -45,6 +45,8 @@ import {
   normalizeItemId as sdkNormalizeItemId,
   readSettings as sdkReadSettings,
   resolvePmRoot as sdkResolvePmRoot,
+  getHistoryPath as sdkGetHistoryPath,
+  readHistorySnapshot as sdkReadHistorySnapshot,
   type BulkItemMutation,
   type CommentsCommandOptions,
   type CommentsResult,
@@ -1381,11 +1383,13 @@ async function resolveAtomicSdkFunctions(opts: AtomicImportOptions): Promise<{
  * Derive an order-independent transaction id from the desired import state and
  * exact ordered mutation plan. Content or target changes produce a fresh
  * transaction; a reordered retry of the same plan resumes the durable journal.
+ * External history revisions distinguish a local edit from a retry of import-owned writes.
  */
 export function deriveAtomicTransactionId(
   repo: string,
   entries: readonly PreparedGithubImport[],
   mutations: readonly BulkItemMutation[],
+  contextVersions: readonly string[] = [],
 ): string {
   const canonical = [...entries]
     .sort((a, b) => a.issueNumber - b.issueNumber)
@@ -1402,7 +1406,7 @@ export function deriveAtomicTransactionId(
       fidelity: entry.fidelity ?? null,
       linkOnly: entry.linkOnly ?? false,
     }));
-  const digest = crypto
+  const payload = crypto
     .createHash("sha256")
     .update(repo.toLowerCase())
     .update("\x1f")
@@ -1411,10 +1415,9 @@ export function deriveAtomicTransactionId(
     // Recovery requires the exact ordered step plan. Include targets and
     // options so a changed id_prefix or provenance match gets a fresh journal
     // instead of colliding with an incompatible prior attempt.
-    .update(JSON.stringify(mutations))
-    .digest("hex")
-    .slice(0, 16);
-  return `${ATOMIC_IMPORT_PREFIX}${digest}`;
+    .update(JSON.stringify(mutations));
+  if (contextVersions.length > 0) payload.update("\x1f").update(JSON.stringify([...contextVersions].sort()));
+  return `${ATOMIC_IMPORT_PREFIX}${payload.digest("hex").slice(0, 16)}`;
 }
 
 /** Stable create id keyed by the external GitHub issue, never by fetch order. */
@@ -1477,7 +1480,7 @@ export function buildAtomicImportMutations(
     const mutations: BulkItemMutation[] = [{
       op: "create",
       id: managedItemId,
-      options: { ...sharedOptions, status: createStatus },
+      options: { ...sharedOptions, status: createStatus, message: `pm-github import create ${repo.toLowerCase()}#${entry.issueNumber}` },
     }, {
       op: "update",
       id: managedItemId,
@@ -1520,6 +1523,22 @@ export function buildAtomicImportMutations(
   return { itemId, mutations };
 }
 
+/**
+ * Bind atomic plans to the latest external edit or different lifecycle generation.
+ * The importer's desired-state and compensation writes leave retries stable;
+ * local edits and later state cycles invalidate completed journals.
+ */
+async function importContextVersions(pmRoot: string, entries: readonly PreparedGithubImport[]): Promise<string[]> {
+  const versions: string[] = [];
+  for (const entry of entries) {
+    if (!entry.fidelity || !entry.match?.id) continue;
+    const snapshot = await sdkReadHistorySnapshot(sdkGetHistoryPath(pmRoot, entry.match.id), entry.match.id);
+    const context = snapshot.entries[selectImportContextIndex(snapshot.entries, entry.status)];
+    if (context) versions.push(`${entry.match.id}:${crypto.createHash("sha256").update(JSON.stringify(context)).digest("hex")}`);
+  }
+  return versions;
+}
+
 /** Commit a complete issue-import batch under one crash-resumable transaction. */
 export async function importGithubAtomic(
   pmRoot: string,
@@ -1560,7 +1579,7 @@ export async function importGithubAtomic(
     itemIds.set(entry.issueNumber, planned.itemId);
     mutations.push(...planned.mutations);
   }
-  const transactionId = deriveAtomicTransactionId(repo, entries, mutations);
+  const transactionId = deriveAtomicTransactionId(repo, entries, mutations, await importContextVersions(pmRoot, entries));
 
   /** Finalize before the SDK commits, and repair source metadata on recovered journals. */
   const finalize = async (): Promise<void> => {
@@ -3432,7 +3451,7 @@ export async function runImport(
      * avoiding an intermediate completion date before the SDK creation date.
      */
     const githubCloseArgs = (id: string): string[] => {
-      const args = ["--path", pmRoot, "close", id, "--reason", prepared.fidelity?.github_close_reason ?? `GitHub issue #${issue.number} closed`];
+      const args = ["--path", pmRoot, "close", id, "--reason", prepared.fidelity!.github_close_reason];
       return args;
     };
 

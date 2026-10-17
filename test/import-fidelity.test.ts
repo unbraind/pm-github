@@ -5,9 +5,9 @@ import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import test from "node:test";
-import { get, create, deleteItem, readHistorySnapshot, getHistoryPath, listAllComplete, certifyCompleteListResult, commitImportedItem, getItemPath, readSettings } from "@unbrained/pm-cli/sdk";
-import { importGithubAtomic, parseImportOptions, runImport, type GhIssue, type PreparedGithubImport } from "../index.ts";
-import { buildImportFidelity, fetchImportTimeline, importCloseReason, matchImportedIssue, readImportReleases, persistImportFidelity } from "../import-fidelity.ts";
+import { get, create, update, WorkspaceTransactionInterruptedError, deleteItem, readHistorySnapshot, getHistoryPath, listAllComplete, certifyCompleteListResult, commitImportedItem, getItemPath, readSettings } from "@unbrained/pm-cli/sdk";
+import { importGithubAtomic, parseImportOptions, runImport, type GhIssue, type PreparedGithubImport, type AtomicImportOptions } from "../index.ts";
+import { buildImportFidelity, fetchImportTimeline, importCloseReason, matchImportedIssue, readImportReleases, persistImportFidelity, selectImportContextIndex } from "../import-fidelity.ts";
 import { captureStderr, jsonResponse, withEnv, withMockGithub } from "./helpers/mock-github-server.ts";
 
 const root = join(import.meta.dirname, "..");
@@ -39,7 +39,7 @@ async function listItems(pmRoot: string) {
   return result.items;
 }
 /** Replay recorded REST responses through the normal HTTP importer without SDK mocks. */
-async function importing(pmRoot: string, issue: GhIssue, atomic: boolean, dryRun = false, timeline?: unknown[]) {
+async function importing(pmRoot: string, issue: GhIssue, atomic: boolean, dryRun = false, timeline?: unknown[], onTransition?: AtomicImportOptions["onTransition"]) {
   const name = issue.html_url.split("/").slice(3, 5).join("/");
   return withMockGithub((request, response) => {
     if (request.url === "/graphql") jsonResponse(response, 200, timeline ? { data: { repository: { issue: { timelineItems: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } } } : JSON.parse(readFileSync(join(fixtures, `${name.split("/")[1]}-${issue.number}-graphql.json`), "utf8")));
@@ -48,7 +48,8 @@ async function importing(pmRoot: string, issue: GhIssue, atomic: boolean, dryRun
   }, async () => {
     const captured = await captureStderr(() => runImport(name, pmRoot,
       parseImportOptions({ state: "all", gate: true, atomic, "dry-run": dryRun }),
-      { fetchIssueTimeline: fetchImportTimeline }));
+      { fetchIssueTimeline: fetchImportTimeline,
+        ...(onTransition ? { commitAtomic: (root, repo, entries) => importGithubAtomic(root, repo, entries, { onTransition }) } : {}) }));
     return captured.result as Record<string, unknown>;
   });
 }
@@ -181,6 +182,20 @@ test("identity accepts nested GitHub links, provider back-links, exact URLs and 
   assert.equal(matchImportedIssue([{ id: "owner", ado_id: 134, provenance: { url: issue.html_url } }], issue).item?.id, "owner");
   assert.equal(matchImportedIssue([{ id: "owner", github_url: `${issue.html_url}?view=all#issuecomment-1` }], issue).item?.id, "owner");
   assert.equal(matchImportedIssue([{ id: "owner", external_links: [{ url: issue.html_url }] }], issue).item?.id, "owner");
+  assert.equal(matchImportedIssue([{ id: "owner", GitHubURL: issue.html_url }], issue).item?.id, "owner");
+  assert.equal(matchImportedIssue([{ id: "owner", provenance: { provider: "pm-linear", url: "https://linear.app/fixture/issue/ENG-134" } }], issue).item?.id, "owner");
+  assert.equal(matchImportedIssue([{ id: "owner", provider: "pm-jira", external_url: "https://bugs.example.test/EX-1" }], { ...issue, body: "Mirrored from https://bugs.example.test/EX-1" }).item?.id, "owner");
+  const githubOwner = { id: "github-owner", tags: ["gh:unbraind/pm-linear#134", "linear:documentation"], github_url: issue.html_url,
+    github_link_only: false, body: "Example: [linear] linear_id=sample linear_url=https://linear.app/fixture/issue/ENG-134",
+    linear_id: null, jira_url: "", ado_key: "   ", linear_status: "open", source: undefined };
+  assert.equal(matchImportedIssue([githubOwner], issue, githubOwner).linkOnly, false);
+  const documentation = { ...githubOwner, source: "https://docs.example.test/?provider=linear" };
+  assert.equal(matchImportedIssue([documentation], issue, documentation).linkOnly, false);
+
+  const adopted = { ...githubOwner, description: "[linear] linear_id=fixture linear_url=https://linear.app/fixture/issue/ENG-134" };
+  assert.equal(matchImportedIssue([adopted], issue, adopted).linkOnly, true);
+
+
   assert.equal(matchImportedIssue([{ id: "unrelated", links: `${issue.html_url}0` }], issue).item, undefined);
   assert.throws(() => matchImportedIssue([{ id: "one", links: issue.html_url }, { id: "two", links: issue.html_url }], issue), /multiple existing owners/);
 });
@@ -188,6 +203,11 @@ test("identity accepts nested GitHub links, provider back-links, exact URLs and 
 test("closure evidence ignores unrelated links, honors latest closure commits and preserves every state reason", () => {
   const issue = recorded("pm-beads-85");
   const commit = "a".repeat(40);
+  const foreign = { event: "closed", created_at: issue.closed_at, commit_id: "a".repeat(40), commit_url: `https://api.github.com/repos/example/fix/commits/${"a".repeat(40)}` };
+  assert.match(importCloseReason(issue, [foreign]), /closing commit https:\/\/github.com\/example\/fix\/commit\//);
+  assert.match(importCloseReason(issue, [{ ...foreign, commit_url: "https://example.invalid/commit" }]), /unbraind\/pm-beads\/commit\//);
+  assert.match(importCloseReason(issue, [{ ...foreign, commit_id: "b".repeat(40) }]), /unbraind\/pm-beads\/commit\//);
+
   assert.match(importCloseReason(issue, [{ event: "closed", created_at: issue.closed_at, commit_id: commit }]), /closing commit .*\/commit\/a{40}/);
   assert.match(importCloseReason(issue, [{ event: "connected", created_at: issue.closed_at, url: "https://github.com/unbraind/pm-beads/pull/1" }]), /linked PR/);
   assert.doesNotMatch(importCloseReason(issue, [{ event: "closed", created_at: issue.created_at, commit_id: commit }, null]), /closing commit/);
@@ -324,6 +344,12 @@ test("a committed journal with a missing item reports an unsafe recovered finali
 for (const atomic of [false, true]) {
   test(`not-planned and duplicate closures retain canceled status and honest reasons (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
     const original = recorded("pm-beads-85");
+    await importing(pmRoot, { ...original, state_reason: "not_planned" }, atomic);
+    const first = (await listItems(pmRoot))[0]!;
+    assert.equal(first.status, "canceled");
+    assert.equal(first.created_at, original.created_at);
+    assert.equal(first.closed_at, original.closed_at);
+    assert.equal(first.close_reason, `Closed on GitHub as not_planned on ${original.closed_at}`);
     await importing(pmRoot, { ...original, state: "open", state_reason: null, closed_at: null, updated_at: original.created_at }, atomic);
     for (const state_reason of ["not_planned", "duplicate"] as const) {
       const issue = { ...recorded("pm-beads-85"), state_reason };
@@ -395,3 +421,58 @@ test("a legacy unknown closure cannot put native closure before source creation"
   await assert.rejects(persistImportFidelity(pmRoot, item.id, fidelity, false), /needs a source closure date/);
   assert.equal((await get(item.id, {}, { pmRoot })).item.created_at, item.created_at);
 }));
+
+/** Keep the supported legacy atomic plan usable when no source metadata was supplied. */
+test("legacy atomic cancellation creates a terminal item with an explicit closure reason", async () => tracker(async (_directory, pmRoot) => {
+  const source = recorded("pm-beads-85");
+  const entry = { ...atomicEntry(source), status: "canceled", fidelity: undefined };
+  const result = await importGithubAtomic(pmRoot, "unbraind/pm-beads", [entry]);
+  const item = (await get(result.itemIds.get(source.number)!, {}, { pmRoot })).item;
+  assert.equal(item.status, "canceled");
+  assert.equal(item.close_reason, `GitHub issue #${source.number} closed`);
+  assert.equal((await listItems(pmRoot)).length, 1);
+}));
+
+test("local edits invalidate a completed journal while interrupted reconciliation resumes its original plan", async () => tracker(async (_directory, pmRoot) => {
+  const issue = recorded("pm-beads-85");
+  const first = await importing(pmRoot, issue, true);
+  const id = (await listItems(pmRoot))[0]!.id!;
+  await update(id, { status: "open", author: "fixture", message: "Local reopen after completed import" }, { pmRoot });
+  const preview = await importing(pmRoot, issue, true, true);
+  assert.match(JSON.stringify(preview.plan), /github-source-wins/);
+  let interruptedId = "";
+  await assert.rejects(importing(pmRoot, issue, true, false, undefined, context => {
+    if (context.transition === "step_recorded" && context.stepId?.includes("update")) {
+      interruptedId = context.transactionId;
+      throw new WorkspaceTransactionInterruptedError("Fixture interrupted after governed update");
+    }
+  }), /journal is resumable/);
+  assert.ok(interruptedId);
+  assert.notEqual(interruptedId, first.transactionId);
+  const resumed = await importing(pmRoot, issue, true);
+  assert.equal(resumed.recovered, true);
+  assert.equal(resumed.transactionId, interruptedId);
+  const item = (await get(id, {}, { pmRoot })).item;
+  assert.equal(item.status, "closed");
+  assert.equal(item.closed_at, issue.closed_at);
+  const before = readFileSync(getHistoryPath(pmRoot, id), "utf8");
+  const retry = await importing(pmRoot, issue, true);
+  assert.equal(retry.transactionId, interruptedId);
+  assert.equal(readFileSync(getHistoryPath(pmRoot, id), "utf8"), before);
+  assert.equal((await listItems(pmRoot)).length, 1);
+}));
+
+test("history context ignores staging and rollback while recognizing external edits and state cycles", () => {
+  const created = { message: "pm-github import create fixture#1", patch: [{ path: "/metadata/status", value: "open" }] };
+  const closed = { message: "bulk-item-transaction github-import-first 1-update apply", patch: [{ path: "/metadata/status", value: "closed" }] };
+  const finalized = { message: "Preserve GitHub source lifecycle for issue #1", patch: [{ path: "/metadata/github_state", value: "closed" }] };
+  const reopened = { message: "bulk-item-transaction github-import-second 1-update apply", patch: [{ path: "/metadata/status", value: "open" }] };
+  const restored = { message: "bulk-item-transaction github-import-second 1-update compensate", patch: [{ path: "/metadata/status", value: "open" }] };
+  assert.equal(selectImportContextIndex([], "closed"), -1);
+  assert.equal(selectImportContextIndex([finalized], "closed"), -1);
+  assert.equal(selectImportContextIndex([created, closed, finalized], "closed"), -1);
+  assert.equal(selectImportContextIndex([created, closed, finalized, reopened, restored], "closed"), 3);
+  assert.equal(selectImportContextIndex([created, closed, finalized, reopened, closed, finalized], "closed"), 3);
+  assert.equal(selectImportContextIndex([{ patch: [] }], "closed"), 0);
+  assert.equal(selectImportContextIndex([created, { message: "Compensate interrupted bulk transaction github-import-first", patch: [{ path: "/metadata/status" }] }], "closed"), -1);
+});

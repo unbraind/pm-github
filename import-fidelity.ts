@@ -6,6 +6,27 @@ import {
 } from "@unbrained/pm-cli/sdk";
 import { CommandError, fetchJSON, githubApiBase, githubGraphQL, parseNextLink, type GhIssue, type PmItem } from "./index.ts";
 
+/**
+ * Select the latest external edit or different lifecycle generation in immutable history.
+ * Creation staging and compensation are transient; importing the desired state again
+ * keeps the selected revision stable, including after an interrupted governed update.
+ * @internal Shared by transaction planning and deterministic history-shape tests.
+ */
+export function selectImportContextIndex(entries: readonly { message?: string; patch: readonly { path: string; value?: unknown }[] }[], status: string): number {
+  let currentStatus: unknown;
+  let selected = -1;
+  for (const [index, event] of entries.entries()) {
+    for (const patch of event.patch) {
+      if (patch.path === "/metadata/status") currentStatus = patch.value;
+    }
+    const message = event.message ?? "";
+    const owned = /^(?:pm-github import create |bulk-item-transaction github-import-|Compensate interrupted bulk transaction github-import-|Preserve GitHub source lifecycle for issue #\d+$)/.test(message);
+    const transient = /^(?:pm-github import create |Compensate interrupted bulk transaction github-import-)|^bulk-item-transaction github-import-.* compensate$/.test(message);
+    if (!owned || (currentStatus !== undefined && currentStatus !== status && !transient)) selected = index;
+  }
+  return selected;
+}
+
 /** One locally available release tag and its actual Git date. */
 export interface ImportRelease { tag: string; date: string }
 /** Auditable desired source metadata, persisted beside the native lifecycle. */
@@ -32,10 +53,16 @@ function locators(value: unknown): string[] {
 
 /** Extract declared provider fields and the description/body markers used by provider exporters. */
 function providerProvenance(item: PmItem): string {
-  const declared = Object.keys(item).some(key => /^(linear|jira|ado)_/.test(key)) || item.tags?.some(tag => /^(linear|jira|ado):/.test(tag));
-  return Object.entries(item).filter(([key, value]) => /^(linear|jira|ado)_/.test(key) ||
-    (declared && /url|link|provenance|source|external/.test(key)) ||
-    (/description|body|provenance/.test(key) && typeof value === "string" &&
+  const identities = new Set(Object.entries(item).filter(([key, value]) =>
+    /^(linear|jira|ado)_(?:.*_)?(?:id|key|url|identifier)$/i.test(key) && Boolean(value) &&
+    (typeof value !== "string" || value.trim() !== "")).map(([key]) => key));
+  const declared = identities.size > 0 || (item.github_link_only !== false && item.tags?.some(tag => /^(linear|jira|ado):/i.test(tag))) ||
+    Object.entries(item).some(([key, value]) => /^(provider|source|provenance)$/i.test(key) && (typeof value === "string"
+      ? /^(?:pm-)?(?:linear|jira|ado)$/i.test(value.trim())
+      : /"(?:provider|source|system)"\s*:\s*"(?:pm-)?(?:linear|jira|ado)"/i.test(JSON.stringify(value) ?? "")));
+  return Object.entries(item).filter(([key, value]) => identities.has(key) ||
+    (declared && /url|link|provenance|source|external/i.test(key)) ||
+    ((/description|provenance/i.test(key) || item.github_link_only !== false) && /description|body|provenance/i.test(key) && typeof value === "string" &&
       /\[(linear|jira|ado)\]|\b(linear|jira|ado)_(id|key|url)=|Jira(?:\s+[A-Z][A-Z0-9]+-\d+)?:\s/i.test(value)))
     .map(([, value]) => typeof value === "string" ? value : JSON.stringify(value)).join("\n");
 }
@@ -45,11 +72,11 @@ export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, tag
   const issueUrl = locators(issue.html_url)[0]!;
   const bodyUrls = new Set(locators(issue.body ?? ""));
   const candidates = items.filter(item => item.id && (item.id === tagged?.id ||
-    Object.entries(item).some(([key, value]) => /url|link|provenance|source|external|description/.test(key) && locators(value).includes(issueUrl)) ||
+    Object.entries(item).some(([key, value]) => /url|link|provenance|source|external|description/i.test(key) && locators(value).includes(issueUrl)) ||
     locators(providerProvenance(item)).some(url => bodyUrls.has(url))));
   if (candidates.length > 1) throw new CommandError(`GitHub issue #${issue.number} has multiple existing owners; import plan is not idempotent. No item was written.`);
   const item = candidates[0];
-  const provider = item && (Boolean(providerProvenance(item)) || item.tags?.some(tag => /^(linear|jira|ado):/.test(tag)));
+  const provider = item && (Boolean(providerProvenance(item)) || (item.github_link_only !== false && item.tags?.some(tag => /^(linear|jira|ado):/i.test(tag))));
   return { item, linkOnly: Boolean(item && (provider || item.github_link_only === true || item.id !== tagged?.id)),
     via: item ? (provider ? "provider-link" : item.id === tagged?.id ? "provenance-tag" : "github-url") : "new" };
 }
@@ -104,7 +131,10 @@ export function importCloseReason(issue: GhIssue, events: readonly unknown[]): s
   const records = events.filter((event): event is Record<string, unknown> => event !== null && typeof event === "object" && !Array.isArray(event));
   const closed = records.filter(event => event.event === "closed" && event.created_at === issue.closed_at).at(-1);
   if (closed && typeof closed.commit_id === "string" && /^[a-f0-9]{40}$/i.test(closed.commit_id)) {
-    const repoUrl = issue.html_url.replace(/\/(?:issues|pull)\/\d+$/, "");
+    const linkedCommit = typeof closed.commit_url === "string"
+      ? /^https:\/\/api\.github\.com\/repos\/([^/]+)\/([^/]+)\/commits\/([a-f0-9]{40})$/.exec(closed.commit_url) : null;
+    const repoUrl = linkedCommit && linkedCommit[3] === closed.commit_id
+      ? `https://github.com/${linkedCommit[1]}/${linkedCommit[2]}` : issue.html_url.replace(/\/(?:issues|pull)\/\d+$/, "");
     return `${base}; closing commit ${repoUrl}/commit/${closed.commit_id}`;
   }
   const graphEvents = [
