@@ -386,7 +386,9 @@ for (const atomic of [false, true]) {
       const options = { state: "all", atomic, gate: true };
       const preview = await captureStderr(() => runImport("unbraind/pm-beads", pmRoot, parseImportOptions({ ...options, "dry-run": true })));
       assert.ok(!JSON.stringify(preview).includes(token));
-      assert.ok(JSON.stringify(preview.result).includes("https://github.com/example/project/pull/1"));
+      assert.ok("plan" in preview.result);
+      const plan = preview.result.plan as { github_close_reason: string }[];
+      assert.equal(plan[0]!.github_close_reason, `Closed on GitHub as completed on ${issue.closed_at}; closing PR https://github.com/example/project/pull/1`);
       await assert.rejects(runImport("unbraind/pm-beads", pmRoot, parseImportOptions(options)), /FAIL before write/);
       assert.equal((await listItems(pmRoot)).length, 0);
     });
