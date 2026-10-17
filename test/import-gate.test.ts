@@ -41,7 +41,8 @@ const MANIFEST_CAPABILITIES = ["commands", "importers", "schema", "hooks", "pref
 const harnessPromise: Promise<ExtensionTestHarness> =
   createExtensionTestHarness(extension, { capabilities: [...MANIFEST_CAPABILITIES] });
 
-const PM_BIN = process.platform === "win32" ? "pm.cmd" : "pm";
+// Match npm and CI even when this file is invoked directly beside a newer global host.
+const PM_BIN = path.resolve(import.meta.dirname, "../node_modules/.bin", process.platform === "win32" ? "pm.cmd" : "pm");
 // Real scratch trackers must not inherit unrelated globally installed extensions.
 const fixtureGlobalRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-gate-global-"));
 test.after(() => fs.rmSync(fixtureGlobalRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));
@@ -593,7 +594,7 @@ test("the reusable sync workflow is a workflow_call with an optional legacy vers
   assert.match(workflow, /pm-github-version:\n\s+description:[^\n]+\n\s+type: string\n\s+required: false/);
   assert.match(workflow, /repository:\n\s+description:/);
   assert.match(workflow, /post-import-script:[\s\S]*?default: "changelog:full"/);
-  assert.match(workflow, /ci-workflows:[\s\S]*?default: "ci.yml"/);
+  assert.match(workflow, /ci-workflows:[\s\S]*?default: "ci.yml codeql.yml"/);
   assert.doesNotMatch(workflow, /^on:\n  schedule:/m, "the schedule stays with the caller");
   // Job permissions cover issue reads, branch pushes, review PR writes and dispatch.
   const permissions = /^    permissions:\n      contents: write\n      pull-requests: write\n      issues: read\n      actions: write\n/m;
@@ -614,6 +615,7 @@ test("the caller default branch guard is first and preserves the remaining step 
     "Revalidate GitHub blockers (report only)", "Preview GitHub to pm plan",
     "Gated GitHub to pm import", "Verify repeat import is a no-op", "Run caller post-import script",
     "Gate tracker and regenerated changelog", "Verify strict pm health",
+    "Create automation app token", "Validate publication credentials",
     "Commit gated sync changes and open review PR", "Dispatch caller CI and report parked runs",
   ]);
   assert.match(steps[0]!, /RUN_REF: \$\{\{ github.ref \}\}/);
@@ -811,7 +813,13 @@ async function prepareWorkflowFixture(root: string, base: string): Promise<NodeJ
   // Match caller dependency/runtime ignores before installing the extension;
   // fixture setup itself must not masquerade as a post-import change.
   fs.appendFileSync(path.join(root, ".gitignore"), "\nnode_modules/\n.agents/pm/extensions/\n.agents/pm/locks/\n.agents/pm/checkpoints/\n");
-  assert.equal(spawnSync("git", ["add", "--", "package.json", ".gitignore"], { cwd: root }).status, 0);
+  // Positive callers need the same real dispatchable workflow the publisher now verifies.
+  const ciWorkflow = path.join(root, ".github", "workflows", "ci.yml");
+  if (!fs.existsSync(ciWorkflow)) {
+    fs.mkdirSync(path.dirname(ciWorkflow), { recursive: true });
+    fs.writeFileSync(ciWorkflow, "on:\n  pull_request:\n  workflow_dispatch:\n");
+  }
+  assert.equal(spawnSync("git", ["add", "--", "package.json", ".gitignore", ".github/workflows/ci.yml"], { cwd: root }).status, 0);
   assert.equal(spawnSync("git", ["-c", "user.name=Sync Fixture", "-c", "user.email=fixture@users.noreply.github.com",
     "commit", "-qm", "caller dependency configuration"], { cwd: root }).status, 0);
   const bin = path.join(root, "node_modules", ".bin");
@@ -829,6 +837,7 @@ case "$1 $2" in
   "pr list")
     printf '%s\\n' "$*" >> "\${REVIEW_ACTIONS}.pr-args"
     entries=""
+    if [[ -z "\${OWN_OPEN_PR:-}" && -s "\${REVIEW_RECEIPT}" ]]; then OWN_OPEN_PR=1; fi
     if [[ -n "\${OWN_OPEN_PR:-}" ]]; then
       entries+="{\\"number\\":\${OWN_OPEN_PR},\\"headRepository\\":{\\"name\\":\\"\${REPOSITORY#*/}\\"},\\"headRepositoryOwner\\":{\\"login\\":\\"\${REPOSITORY%%/*}\\"},\\"isCrossRepository\\":false},"
     fi
@@ -847,6 +856,8 @@ case "$1 $2" in
     done
     printf 'https://example.invalid/review/1\\n'
     ;;
+  "pr merge") exit "\${AUTO_MERGE_STATUS:-0}" ;;
+  "pr view") printf '{"state":"MERGED"}\\n' ;;
   "pr close")
     printf 'close\\n' >> "\${REVIEW_ACTIONS}"
     while [[ $# -gt 0 ]]; do
@@ -871,7 +882,7 @@ esac
     GH_TOKEN: "synthetic-test-token", GITHUB_TOKEN: "synthetic-test-token", PM_AUTHOR: "codex-sol",
     PM_GLOBAL_PATH: fixtureGlobalRoot, PM_TELEMETRY_INLINE_FLUSH: "1", PM_PATH: path.join(root, ".agents", "pm"), REPOSITORY: "acme/widgets", CALLING_REPOSITORY: "acme/widgets",
     NPM_PROJECT_PATH: root, GITHUB_WORKSPACE: root,
-    POST_IMPORT_SCRIPT: "changelog:full", CI_WORKFLOWS: "ci.yml",
+    POST_IMPORT_SCRIPT: "changelog:full", CI_WORKFLOWS: "ci.yml", SYNC_PR_NUMBER: "1",
     PM_GITHUB_VERSION: "2026.10.4", DEFAULT_BRANCH: "main", SYNC_BRANCH, SYNC_LEASE: "", RUNNER_TEMP: base,
     GITHUB_ENV: path.join(base, "job-env"), REVIEW_RECEIPT: path.join(base, "review.md"), REVIEW_ACTIONS: path.join(base, "review-actions") };
   const packageRoot = path.resolve(import.meta.dirname, "..");
@@ -888,7 +899,7 @@ esac
 
 const WORKFLOW_IMPORT_SEQUENCE = ["Resolve sync commit scope", "Validate GitHub access", "Revalidate GitHub blockers (report only)", "Preview GitHub to pm plan", "Gated GitHub to pm import",
   "Verify repeat import is a no-op", "Run caller post-import script", "Gate tracker and regenerated changelog",
-  "Verify strict pm health", "Commit gated sync changes and open review PR", "Dispatch caller CI and report parked runs"] as const;
+  "Verify strict pm health", "Validate publication credentials", "Commit gated sync changes and open review PR", "Dispatch caller CI and report parked runs"] as const;
 
 test("workflow packing isolates prepare from the caller tracker in clones and linked worktrees", async () => {
   const { root, base } = initSyncRepo();
@@ -1069,10 +1080,10 @@ test("the caller default branch trunk flows from schedule guard through real Git
       assert.equal(result.code, 0, result.stdout + result.stderr);
       assert.deepEqual(remoteRefs(bare), ["refs/heads/" + SYNC_BRANCH, "refs/heads/trunk"].sort());
       const prArgs = fs.readFileSync(env.REVIEW_ACTIONS! + ".pr-args", "utf8").trim().split("\n");
-      assert.equal(prArgs.length, 2);
       for (const args of prArgs) assert.match(args, /--base trunk(?: |$)/);
       assert.match(prArgs[0]!, /^pr list /);
-      assert.match(prArgs[1]!, /^pr create /);
+      assert.equal(prArgs.filter(args => /^pr create /.test(args)).length, 1, "create only one proposal");
+      assert.match(prArgs.at(-1)!, /^pr list /, "retain the verified owned PR number after publication");
       const body = fs.readFileSync(env.REVIEW_RECEIPT!, "utf8");
       assert.match(body, /https:\/\/github\.com\/acme\/widgets\/blob\/trunk\/\.agents\/pm\/issues\/[^)]+\.toon/);
       assert.ok(body.includes("`trunk` is never pushed directly."));

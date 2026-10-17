@@ -478,7 +478,7 @@ The resolver uses public `git ls-remote --tags https://github.com/unbraind/pm-gi
 peeled `^{}` commit (never the tag object), strips `v`, and requires an exact
 numeric version `N.N.N` or `N.N.N-N`. It reads all matching refs in one request,
 without API pagination or new credentials. Lookup errors and multiple release
-versions on one commit fail closed. No GitHub App or release-time workflow
+versions on one commit fail closed. Release version discovery needs no GitHub App or release-time workflow
 stamping is required; the release workflow keeps its existing token behavior.
 
 Pin **release commit SHAs**, with their matching tag in a same-line comment
@@ -592,15 +592,45 @@ The script must emit the root `CHANGELOG.md` and remain inside the publication s
 | Validation | Strict PM health; explicit item/history scope committed together |
 | Branch and PR | Explicit force-with-lease against the observed bot ref; push only bot branch; owned PR lookup excludes forks |
 | No-op | Zero closes or no tracker diff creates no remote branch or PR; caller-only drift unpublished; stale owned PR closed |
-| CI | Caller workflow dispatch after PR create/update; parked approval-required runs reported; no merge |
+| CI and landing | Dispatch caller checks after publication and branch refresh; request protected squash auto-merge; report parked approval-required runs |
 
-`ci-workflows` defaults to `ci.yml`; use whitespace-separated filenames for every
-required caller CI workflow. Each must support `workflow_dispatch` and produce
-its required checks on that event. Missing files are skipped with a notice,
-matching sync; empty disables dispatch. CI dispatch starts checks; it does not
-certify that they passed. Review and required-check enforcement remain with the
-caller's protected branch. A repository concurrency group serializes closeout
-runs, and the explicit lease rejects competing writers.
+`ci-workflows` defaults to `ci.yml codeql.yml`, covering the fleet's CI and
+CodeQL workflows without querying branch protection. An explicit list replaces
+that inventory (use `ci.yaml` or `codeql.yaml` when appropriate). Missing files
+emit a notice; existing files without a recognized `workflow_dispatch` trigger
+emit a warning naming the one-line repair. Standard block triggers and compact
+`on: workflow_dispatch` / `on: [pull_request, workflow_dispatch]` forms are
+supported. Each dispatched workflow must emit its required context names on
+that event. Zero dispatchable workflows fails; `""` deliberately disables both
+dispatch and automatic landing. Dispatch errors fail the run.
+
+GitHub does not evaluate `workflow_dispatch` job checks for PR branch rules,
+even when those checks pass on the head SHA. For unattended landing, configure
+`automation-app-client-id` and the optional `automation_app_private_key` secret.
+After the local gates, the pinned official App-token action mints a token for
+only the caller repository, with contents/pull-requests/actions write and
+checks/statuses read. Publication and refresh use that token, so native
+`pull_request` workflows run without the GITHUB_TOKEN approval prompt and
+provide eligible required checks. Manual head dispatch remains additional
+verification. Empty credentials retain GITHUB_TOKEN and emit a setup notice;
+partial or failed App credentials stop publication. The private key is passed
+only to the token action, after caller scripts have completed.
+
+After dispatch the workflow requests `gh pr merge --auto --squash` with the
+expected head SHA. A repository that disallows auto-merge emits a notice.
+GitHub enforces required checks and conversation resolution. The same run
+polls once per minute: when the PR is `BEHIND`, it requests a branch update
+against the expected head, then dispatches all selected workflows and requests
+auto-merge again when the new head appears. App mode stops within forty minutes,
+inside its token's one-hour lifetime; legacy mode has a two-hour bound. The
+existing daily schedules and separate sync/closeout concurrency groups remain.
+A base change after the monitor window waits for the next daily rebuild.
+Unresolved conversations continue to block landing.
+
+See [the caller audit and one-time setup](docs/bot-pr-automation.md) for the App
+credential mapping, CodeQL trigger changes and explicit CI overrides. GitHub
+documents [the token approval behavior](https://docs.github.com/en/actions/concepts/security/github_token)
+and [why manual job checks do not satisfy PR branch rules](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks).
 
 The caller template uses top-level `permissions: {}` and grants its
 `gated-closeout` job only `contents: write`, `pull-requests: write`, `checks: read`
@@ -643,7 +673,8 @@ Optional inputs:
 | --- | --- | --- |
 | `npm-project-dir` | `.` | Relative npm project directory for `npm ci --ignore-scripts`, the CLI `node_modules/.bin` PATH entry, and `post-import-script`. Must have `package.json`, contain no `..` segments, and resolve inside the workspace (including symlinks); invalid paths fail before caching/install. The tracker and publication scope stay at the repository root. |
 | `post-import-script` | `changelog:full` | Caller npm script name invoked with `npm run --if-present` after import and before the final scan. Override for a different package script, or set `""` to disable. Missing scripts are skipped. Raw shell commands are not accepted. Generated `CHANGELOG.md` is staged with the tracker. Changing any file outside the documented scope fails the run, whether staged, unstaged, or untracked. |
-| `ci-workflows` | `ci.yml` | Whitespace-separated filenames in the caller's `.github/workflows`, for example `ci.yml codeql.yml`. Missing files emit a notice and are skipped; set `""` to disable dispatch. Existing workflows must enable `workflow_dispatch`; dispatch errors fail the sync job. |
+| `automation-app-client-id` | `""` | Optional GitHub App client ID, paired with the `automation_app_private_key` workflow-call secret. Enables eligible native PR runs through a fresh repo-scoped token; absent credentials retain GITHUB_TOKEN with a notice. |
+| `ci-workflows` | `ci.yml codeql.yml` | Explicit whitespace-separated filename override in the caller's `.github/workflows`. Missing/non-dispatchable workflows are reported; zero dispatchable workflows fails. Empty disables dispatch and auto-merge. See the CI and landing contract above. |
 
 A fleet repo owns the schedule and calls it with a pinned release SHA (see [`docs/sync-workflow-caller.yml`](docs/sync-workflow-caller.yml)):
 
@@ -663,6 +694,10 @@ permissions:
 jobs:
   gated-sync:
     uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@RELEASE_COMMIT_SHA # vRELEASE_VERSION
+    with:
+      automation-app-client-id: ${{ vars.PM_GITHUB_APP_CLIENT_ID }}
+    secrets:
+      automation_app_private_key: ${{ secrets.PM_GITHUB_APP_PRIVATE_KEY }}
 ```
 
 Replace `RELEASE_COMMIT_SHA` with a reviewed release commit containing this change and `vRELEASE_VERSION` with its matching tag. Configure [Dependabot](#self-versioned-workflows-and-dependabot) to maintain future pins automatically. The selected npm project needs a committed npm lockfile (`package-lock.json` or `npm-shrinkwrap.json`) and `@unbrained/pm-cli` as a devDependency (the workflow's `npm ci` provides the CLI) and its pm tracker at `.agents/pm` committed on the caller's default branch. Under **Settings → Actions → General → Workflow permissions** it must allow read and write token permissions and enable **Allow GitHub Actions to create and approve pull requests** (an organization can disable this), or the run pushes the sync branch and then fails to open the review PR. The caller must grant `actions: write`; a reusable workflow cannot elevate its caller's permissions.
@@ -673,7 +708,16 @@ provides the CLI and post-import npm script; Git and pm tracker operations still
 run from the repository root. A script that regenerates the changelog must write
 the repository-root `CHANGELOG.md` to stay within the publication allowlist.
 
-Bot-created review PRs may have missing required checks or `pull_request` runs parked in `action_required`. After a successful push and PR creation/update, the reusable workflow uses the job's `GITHUB_TOKEN` to run `gh workflow run <file> --ref "$SYNC_BRANCH"` for each configured caller CI workflow. Explicit `workflow_dispatch` creates runs on the sync head, so callers must enable that trigger and ensure those runs produce their required check names (and do not restrict the required jobs to the `pull_request` event). It also lists `action_required` runs for the exact pushed SHA and prints their URLs as notices without failing because approval is needed. Missing workflows, disabled dispatch, or approval notices do not establish that required CI passed; inspect the dispatched checks. A no-change sync closes its stale own review PR and dispatches nothing. See GitHub's [GITHUB_TOKEN event rules](https://docs.github.com/en/actions/concepts/security/github_token) and [dispatch trigger and permission requirements](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event).
+Bot-created PRs using GITHUB_TOKEN may have `pull_request` runs parked in
+`action_required`. The optional App token makes publication and branch refresh
+start native eligible PR workflows automatically. Configured manual workflows
+are also dispatched on the bot head; these jobs are additional verification,
+because GitHub excludes manual job checks from PR branch-rule evaluation. Each
+manual workflow must support `workflow_dispatch` and produce its intended check
+names on that event. Parked-run notices include their URLs. A no-change sync
+closes its stale owned review PR and dispatches nothing. See GitHub's
+[token event rules](https://docs.github.com/en/actions/concepts/security/github_token)
+and [required-check eligibility](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks).
 
 ### Installed CLI timeout acceptance
 
