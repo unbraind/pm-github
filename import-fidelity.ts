@@ -32,7 +32,9 @@ function locators(value: unknown): string[] {
 
 /** Extract declared provider fields and the description/body markers used by provider exporters. */
 function providerProvenance(item: PmItem): string {
+  const declared = Object.keys(item).some(key => /^(linear|jira|ado)_/.test(key)) || item.tags?.some(tag => /^(linear|jira|ado):/.test(tag));
   return Object.entries(item).filter(([key, value]) => /^(linear|jira|ado)_/.test(key) ||
+    (declared && /url|link|provenance|source|external/.test(key)) ||
     (/description|body|provenance/.test(key) && typeof value === "string" &&
       /\[(linear|jira|ado)\]|\b(linear|jira|ado)_(id|key|url)=|Jira(?:\s+[A-Z][A-Z0-9]+-\d+)?:\s/i.test(value)))
     .map(([, value]) => typeof value === "string" ? value : JSON.stringify(value)).join("\n");

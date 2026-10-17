@@ -172,6 +172,8 @@ test("identity accepts nested GitHub links, provider back-links, exact URLs and 
     const value = matchImportedIssue([{ id: "owner", [`${provider}_url`]: "https://linear.app/fixture/issue/ENG-134" }], issue);
     assert.equal(value.item?.id, "owner");
     assert.equal(value.linkOnly, true);
+    assert.equal(matchImportedIssue([{ id: "owner", tags: [`${provider}:fixture`], external_links: [{ url: "https://linear.app/fixture/issue/ENG-134" }] }], issue).item?.id, "owner");
+    assert.equal(matchImportedIssue([{ id: "owner", [`${provider}_id`]: "fixture", url: "https://linear.app/fixture/issue/ENG-134" }], issue).item?.id, "owner");
   }
   assert.equal(matchImportedIssue([{ id: "owner", description: "[linear] linear_id=fixture linear_url=https://linear.app/fixture/issue/ENG-134" }], issue).item?.id, "owner");
   assert.equal(matchImportedIssue([{ id: "owner", description: "Jira EX-134: https://linear.app/fixture/issue/ENG-134" }], issue).item?.id, "owner");
