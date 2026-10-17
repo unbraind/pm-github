@@ -740,7 +740,7 @@ test("the caller default branch drives checkout, reset, PR bases and permanent i
     /https:\/\/github\.com\/%s\/blob\/%s\/%s/,
     "the link template accepts the resolved default branch",
   );
-  assert.match(workflow, /"\$\{PM_SYNC_TRACKER\}"\/\*\/\*\.toon/);
+  assert.match(workflow, /"\$\{PM_SYNC_TRACKER\}\/"\*\/\*\.toon/);
   assert.match(workflow, /gh pr create/);
   assert.match(workflow, /gh pr edit/);
   assert.doesNotMatch(workflow, /\bmain\b/, "no operation or documentation in the reusable workflow hard-codes main");
