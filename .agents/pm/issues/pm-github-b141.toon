@@ -6,11 +6,9 @@ status: in_progress
 priority: 1
 tags[2]: changelog-unreleased,"gh:unbraind/pm-github#141"
 created_at: "2026-10-18T04:05:25.251Z"
-updated_at: "2026-10-18T09:38:08.612Z"
-assignee: codex-agent
-claim_principal: codex-agent
+updated_at: "2026-10-18T10:42:30.410Z"
 author: codex-agent
-comments[7]{created_at,author,text}:
+comments[8]{created_at,author,text}:
   "2026-10-18T04:05:38.030Z",codex-agent,"Round 1: issue read in full; searched existing tracker and no issue-specific import exists. Implement in fix/import-and-release-issues from origin/main; add behavioral revert proof and run unchanged npm and Bun release gates with isolated CI identity."
   "2026-10-18T04:09:09.240Z",codex-agent,"Validate each effective rule type as a nonempty string before accepting it as unrelated policy. New real-tracker matrix reproduces unsafe closure for missing/null/numeric/object/empty types and a hidden required-check row, in both readable-empty and declared-policy modes: baseline fails 12/12. Fixed refusals must retain byte-identical durable tracker state; valid deletion rules retain fallback."
   "2026-10-18T04:09:56.876Z",codex-agent,"Isolated revert proof: restore only closeout.ts to origin/main with all new tests retained; the missing-type/readable-empty regression fails because closed=1. Restore the fix: all 12 malformed discriminator cases refuse with byte-identical durable files and the unrelated-rule control passes. Combined real-tracker acceptance passes 23/23, zero skips."
@@ -18,6 +16,7 @@ comments[7]{created_at,author,text}:
   "2026-10-18T06:51:49.425Z",codex-agent,"PR #148 follow-up after merging current main: no unresolved review threads or substantive CodeRabbit review are present. Existing implementation and behavioral revert proofs are unchanged. Re-run this item's linked real regression command and collect both exact isolated npm/Bun release receipts; retain Fixes links and leave closure to the orchestrator."
   "2026-10-18T06:58:50.345Z",codex-agent,"PR #148 integration validation: the linked malformed-rule and valid-unrelated-rule command passes 13/13. Exact npm run release:check and bun run release:check both pass 836/836 at 762285d94e90e645927b90e8032292c191772b49, zero failures/skips/cancellations/todos, all 14 authored modules at exact 100/100/100/100. Existing behavioral revert proof and implementation remain unchanged. Fresh-clone strict health passes. Full gate receipts: actions/runs/39105101037. No CodeRabbit review is available yet; final CI will be recorded in the PR body."
   "2026-10-18T09:38:08.612Z",codex-agent,"PR #148 review round: merged current main (#146/#147). No new malformed-policy finding in the complete review or open issues. Original #141 fix and revert evidence retained; repeat linked regression and both complete release gates after the ownership fix."
+  "2026-10-18T10:42:28.446Z",codex-agent,"PR #148 final review receipt: original malformed-policy fix retained after merging #146/#147. Linked malformed-rule/valid-unrelated real-SDK regressions PASS 13/13. Original production-only revert proof remains recorded. Exact isolated npm run release:check and bun run release:check both PASS: 893/893 tests, zero failures/skips/cancellations/todos, exact 100/100/100/100 coverage across 14 authored modules, unchanged thresholds. Hosted receipts: https://github.com/unbraind/pm-github/actions/runs/39119457879 (npm job 117651896197; Bun job 117651896368). Validation commit 059e4f0ed9308c9970ee4af6df941fcda8afe804 differs from source commit 0b6d7cb3eef2d056adecd4c44fa47817b177e6c3 only by a temporary validation workflow. Final-head CI will be reported in the PR. Claims released without closing items; orchestrator owns closure."
 files[2]{path,scope}:
   closeout.ts,project
   test/closeout.test.ts,project
