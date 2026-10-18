@@ -44,15 +44,25 @@ on:
         required: false
         default: "changelog:full"
       ci-workflows:
-        description: "Whitespace-separated caller workflow filenames with workflow_dispatch; empty disables dispatch"
+        description: "Caller workflow filenames with workflow_dispatch; empty disables dispatch and auto-merge"
         type: string
         required: false
-        default: "ci.yml"
+        default: "ci.yml codeql.yml"
+      automation-app-client-id:
+        description: "Optional GitHub App client ID; pair with automation_app_private_key for eligible native PR checks"
+        type: string
+        required: false
+        default: ""
       node-version:
         description: "Node.js version for the pm CLI"
         type: string
         required: false
         default: "22.18.0"
+
+    secrets:
+      automation_app_private_key:
+        description: "Private key for the optional automation App installed on the calling repository"
+        required: false
 
 concurrency:
   group: pm-github-sync-${{ inputs.repository }}
@@ -370,9 +380,49 @@ jobs:
       - name: Verify strict pm health
         run: pm health --strict-exit
 
+      # Mint only after caller scripts and local gates have finished. The key
+      # is passed only to the pinned official action; its token is repo-scoped.
+      - name: Create automation app token
+        id: automation_token
+        if: inputs.automation-app-client-id != ''
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ inputs.automation-app-client-id }}
+          private-key: ${{ secrets.automation_app_private_key }}
+          repositories: ${{ github.repository }}
+          skip-token-revoke: false
+          permission-contents: write
+          permission-pull-requests: write
+          permission-actions: write
+          permission-checks: read
+          permission-statuses: read
+
+      - name: Validate publication credentials
+        id: publication_auth
+        env:
+          APP_CLIENT_ID: ${{ inputs.automation-app-client-id }}
+          HAS_APP_PRIVATE_KEY: ${{ secrets.automation_app_private_key != '' }}
+          HAS_AUTOMATION_TOKEN: ${{ steps.automation_token.outputs.token != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${APP_CLIENT_ID:-}" ]]; then
+            if [[ "${HAS_APP_PRIVATE_KEY:-false}" == true ]]; then
+              echo "::error::automation_app_private_key requires automation-app-client-id."
+              exit 1
+            fi
+            echo "::notice::Using GITHUB_TOKEN: native PR runs require approval, and dispatched checks cannot satisfy PR branch rules. Configure the optional automation App for unattended landing."
+          elif [[ "${HAS_APP_PRIVATE_KEY:-false}" != true || "${HAS_AUTOMATION_TOKEN:-false}" != true ]]; then
+            echo "::error::Configured automation App did not produce a token; check its private key, installation and repository permissions."
+            exit 1
+          else
+            # Start the App deadline immediately after minting, before publication.
+            printf 'deadline=%s\n' "$(( $(date +%s) + 2400 ))" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Commit gated sync changes and open review PR
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.automation_token.outputs.token || github.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -451,17 +501,32 @@ jobs:
           else
             gh pr edit "${pr_number}" -R "${REPOSITORY}" --body-file "${body_file}"
           fi
+          pr_number="$(own_open_pr)"
+          [[ "${pr_number}" =~ ^[0-9]+$ ]] || { echo "::error::Cannot resolve the owned automation PR number."; exit 1; }
+          export SYNC_PR_NUMBER="${pr_number}"
+          printf 'SYNC_PR_NUMBER=%s\n' "${pr_number}" >> "${GITHUB_ENV}"
           export SYNC_PUBLISHED=true
           printf 'SYNC_PUBLISHED=true\n' >> "${GITHUB_ENV}"
 
       - name: Dispatch caller CI and report parked runs
         if: env.SYNC_PUBLISHED == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.automation_token.outputs.token || github.token }}
+          MAINTENANCE_ATTEMPTS: ${{ steps.automation_token.outputs.token != '' && '40' || '120' }}
+          MAINTENANCE_SECONDS: ${{ steps.automation_token.outputs.token != '' && '2400' || '7200' }}
+          APP_DEADLINE: ${{ steps.publication_auth.outputs.deadline }}
         shell: bash
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
+          trap 'echo "::error::Caller check dispatch or PR maintenance failed; token requires actions:write, contents:write and pull-requests:write, and selected workflows must support workflow_dispatch. Inspect the bot PR state; no protection was bypassed."' ERR
           [[ "${SYNC_PUBLISHED:-false}" == true ]] || exit 0
+          # Default inventory covers the fleet's CI and CodeQL names. An explicit
+          # list replaces it; empty disables dispatch AND automatic landing.
+          if [[ -z "${CI_WORKFLOWS}" ]]; then
+            echo "::notice::Caller CI dispatch and automatic landing are disabled by ci-workflows."
+            exit 0
+          fi
+          workflows=()
           while IFS= read -r workflow_file; do
             [[ -n "${workflow_file}" ]] || continue
             [[ "${workflow_file}" =~ ^[a-zA-Z0-9_.-]+\.ya?ml$ ]] || { echo "::error::ci-workflows must contain workflow filenames."; exit 1; }
@@ -469,11 +534,106 @@ jobs:
               echo "::notice::Skipping missing caller workflow: ${workflow_file}"
               continue
             fi
-            gh workflow run "${workflow_file}" -R "${REPOSITORY}" --ref "${SYNC_BRANCH}"
+            # Standard block and compact trigger forms; nested job/input keys
+            # cannot make a workflow dispatchable. Unknown forms fail closed.
+            if ! awk '
+              /^(on|"on"|\047on\047) *: *workflow_dispatch *(#.*)?$/ { found=1 }
+              /^(on|"on"|\047on\047) *: *\[([^]]*, *)?workflow_dispatch *(,|\])/ { found=1 }
+              /^(on|"on"|\047on\047) *: *($|#)/ { in_on=1; depth=-1; next }
+              /^[^[:space:]#]/ && !/^- +/ { in_on=0 }
+              in_on && /^[[:space:]]*[^[:space:]#]/ {
+                match($0, /^[[:space:]]*/)
+                if (depth < 0) depth=RLENGTH
+                if (RLENGTH == depth) {
+                  rest=substr($0, depth + 1); sub(/^- +/, "", rest)
+                  if (rest ~ /^workflow_dispatch *(:|$|#)/) found=1
+                }
+              }
+              END { exit !found }
+            ' ".github/workflows/${workflow_file}"; then
+              echo "::warning::Skipping non-dispatchable caller workflow: ${workflow_file}. Add workflow_dispatch: under on: on the default branch for manual head validation. Eligible native PR checks must still pass."
+              continue
+            fi
+            mapfile -O "${#workflows[@]}" -t workflows < <(printf '%s\n' "${workflow_file}")
           done < <(printf '%s\n' "${CI_WORKFLOWS}" | tr ' \t\r' '\n')
+          if [[ ${#workflows[@]} == 0 ]]; then
+            echo "::error::No dispatchable caller workflow; automatic landing refused."
+            exit 1
+          fi
+          # Dispatch every selected workflow before requesting protected auto-merge.
+          dispatch_checks() {
+            local workflow_file
+            for workflow_file in "${workflows[@]}"; do
+              gh workflow run "${workflow_file}" -R "${REPOSITORY}" --ref "${SYNC_BRANCH}"
+            done
+          }
+          # --auto respects required checks and conversation resolution. The SHA
+          # guard refuses a changed head; a disabled repository setting is soft.
+          enable_auto_merge() {
+            if [[ -z "${APP_DEADLINE:-}" ]]; then
+              echo "::notice::Auto-merge not armed with GITHUB_TOKEN: its merge does not start push workflows on the default branch. Configure the optional automation App for unattended landing."
+              return 0
+            fi
+            if ! gh pr merge "${SYNC_PR_NUMBER}" -R "${REPOSITORY}" --auto --squash --match-head-commit "${head_sha}"; then
+              echo "::notice::Squash auto-merge unavailable for the bot PR; repository settings or branch rules require attention. No protection was bypassed."
+            fi
+          }
           head_sha="$(git rev-parse HEAD)"
+          dispatch_checks
+          enable_auto_merge
           parked_runs="$(gh run list -R "${REPOSITORY}" --commit "${head_sha}" --status action_required --limit 100 --json url --jq '.[].url')"
           while IFS= read -r run_url; do
             [[ -n "${run_url}" ]] || continue
-            echo "::notice::A pull-request workflow requires maintainer approval: ${run_url}. Review this parked run if needed; caller CI dispatch runs are separate."
+            echo "::notice::A pull-request workflow requires maintainer approval: ${run_url}. Dispatched head checks do not satisfy PR branch rules; the optional automation App starts eligible native PR runs."
           done <<< "${parked_runs}"
+          # A daily release can advance the base AFTER publication. Keep this
+          # same daily run alive rather than adding push triggers. App tokens
+          # expire after one hour, so their monitor stops within forty minutes.
+          # Concurrency serializes runs of this kind; it is not a daily quota.
+          last_dispatched="${head_sha}"
+          update_requested=""
+          maintenance_deadline=$((SECONDS + ${MAINTENANCE_SECONDS:-7200}))
+          if [[ -n "${APP_DEADLINE:-}" ]]; then
+            remaining_auth_seconds=$((APP_DEADLINE - $(date +%s)))
+            (( remaining_auth_seconds > 0 )) || remaining_auth_seconds=0
+            maintenance_deadline=$((SECONDS + remaining_auth_seconds))
+          fi
+          base_ref="$(jq -nr --arg ref "${DEFAULT_BRANCH}" '$ref | @uri')"
+          max_attempts="${MAINTENANCE_ATTEMPTS:-120}"
+          for ((attempt=0; attempt<max_attempts; attempt++)); do
+            (( SECONDS < maintenance_deadline )) || break
+            if ! pr="$(gh pr view "${SYNC_PR_NUMBER}" -R "${REPOSITORY}" --json number,state,headRefOid)"; then
+              echo "::notice::Bot PR state unavailable; retrying."
+              sleep 60
+              continue
+            fi
+            [[ "$(jq -r '.state' <<< "${pr}")" == OPEN ]] || exit 0
+            head_sha="$(jq -er '.headRefOid | select(test("^[a-f0-9]{40}$"))' <<< "${pr}")"
+            if [[ "${head_sha}" != "${last_dispatched}" ]]; then
+              dispatch_checks
+              enable_auto_merge
+              last_dispatched="${head_sha}"
+              update_requested=""
+            fi
+            # Merge-state labels can be BLOCKED or UNKNOWN while the base has
+            # advanced. Contents-read ancestry is independent of that policy label.
+            if ! behind_by="$(gh api "repos/${REPOSITORY}/compare/${base_ref}...${head_sha}" --jq '.behind_by')"; then
+              echo "::notice::Bot branch ancestry unavailable; retrying."
+              sleep 60
+              continue
+            fi
+            [[ "${behind_by}" =~ ^[0-9]+$ ]] || { echo "::error::Cannot verify bot branch ancestry."; exit 1; }
+            if (( behind_by > 0 )) && [[ "${update_requested}" != "${head_sha}" ]]; then
+              number="$(jq -er '.number | select(type == "number")' <<< "${pr}")"
+              # GitHub merges the current protected base into this same-repo bot
+              # branch. expected_head_sha prevents racing another branch writer.
+              if gh api --method PUT "repos/${REPOSITORY}/pulls/${number}/update-branch" -f "expected_head_sha=${head_sha}" >/dev/null; then
+                update_requested="${head_sha}"
+                echo "::notice::Updating the behind bot branch; checks will be dispatched again when the new head appears."
+              else
+                echo "::notice::Bot branch update refused; retrying without bypassing protections."
+              fi
+            fi
+            sleep 60
+          done
+          echo "::notice::Bot PR maintenance reached its configured bound; auto-merge remains enabled when allowed. The next scheduled run rebuilds from the current default branch. Unresolved conversations still require resolution."

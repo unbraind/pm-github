@@ -1,0 +1,12 @@
+id: pm-github-lfcf
+title: Closeout changelog generation attributes new deliveries to an old package release
+description: "Verified unresolved review at https://github.com/unbraind/pm-ado/pull/32#discussion_r4301991646: October delivery is rendered under package version 2026.9.2 and its September heading. Auto-merge must leave conversation resolution intact. Investigate caller changelog/release policy separately from check dispatch and PR freshness; coordinate with import-fidelity PR 142 without changing that branch."
+type: Issue
+status: open
+priority: 1
+tags: []
+created_at: "2026-10-17T09:45:00.893Z"
+updated_at: "2026-10-17T09:45:00.893Z"
+author: codex-agent
+acceptance_criteria: Regenerated closeout output keeps historical release sections intact and presents post-release deliveries under the correct unreleased or released heading; regression fails when the release placement rule is reverted.
+body: ""
