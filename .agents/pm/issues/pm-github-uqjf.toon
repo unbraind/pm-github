@@ -6,17 +6,17 @@ status: in_progress
 priority: 1
 tags[1]: changelog-unreleased
 created_at: "2026-10-18T18:19:06.214Z"
-updated_at: "2026-10-18T18:57:14.608Z"
-assignee: codex-agent
-claim_principal: codex-agent
+updated_at: "2026-10-18T22:13:45.196Z"
 author: codex-agent
-comments[6]{created_at,author,text}:
+comments[8]{created_at,author,text}:
   "2026-10-18T18:21:36.252Z",codex-agent,"Root cause confirmed: in_progress bypasses delivery declarations, and ascending PR selection chooses the earlier gap-reporting PR. https://github.com/unbraind/pm-ado/issues/33 compares https://github.com/unbraind/pm-ado/pull/16 with https://github.com/unbraind/pm-ado/pull/19. Neither body declares closure, so both must be reported without closing unless a canonical item-to-PR link supplies delivery evidence. A separate fix/closeout-explicit-delivery PR will retain all prior history."
   "2026-10-18T18:27:43.386Z",codex-agent,"Implemented explicit delivery declarations (closing canonical links, whole-line closing item ids or pm-github trailers, and exact PR URL metadata). The full selection is resolved before SDK writes; competing merged delivery claims receive ambiguous_delivery. Added minimal public title/body/commit fixtures from real pm-ado PRs 16 and 19. The real bodies contain only mentions; both are now refused until delivery is explicitly linked. Updated previous positive fixtures to declare delivery instead of relying on status."
   "2026-10-18T18:30:07.355Z",codex-agent,"Function-only behavioral revert: restored the old in_progress bypass in runCloseout while retaining both real-shape regression tests. Both tests fail: the earlier gap-reporting PR is accepted and the explicit PR 19 selection loses provenance. Restoring explicit attribution makes the linked four-case suite pass, including ambiguous-claim refusal and whole-line declarations. The package pins, source inventory and 100 percent thresholds remain unchanged."
   "2026-10-18T18:48:06.831Z",codex-agent,"PR https://github.com/unbraind/pm-github/pull/150 is open at 69ab7dec54bd1493e632d98dab5aa3b7f09a4fee. Fresh --no-local clone strict health passes with required merge drivers in an isolated home. The current full npm gate passes all 4 new real-shape attribution cases, including the additional foreign/unknown canonical-link boundary. Current-head function-only revert copies are being rechecked without mutating any running gate checkout. CodeQL and Semgrep pass; full runtime gates and Node 22/26 CI are still running."
   "2026-10-18T18:54:50.388Z",codex-agent,"CI Node 26 passed 897/897 tests with zero failures, skips or cancellations, then the unchanged exact branch gate correctly refused 99.96 percent. closeout.ts line 490 lacked the compact-report positive-close arm after former multi-PR success fixtures became ambiguity refusals. Added an assertion that a real single-delivery dry-run remains close in compact output; no production code or threshold change. Superseded local closeout gates were stopped to rerun the complete corrected test corpus."
   "2026-10-18T18:57:14.608Z",codex-agent,"Focused compact projection verification passed: node --test --test-name-pattern=\"dry-run plans same-repo\" test/closeout.test.ts, 1/1 with zero failures/skips. This preserves a valid single-delivery close action alongside individual refusals and routine skip counts; the exact branch gate will rerun without weakening its threshold. Current-head real-shape function-only revert copies failed 2/2, with zero test-load failures."
+  "2026-10-18T21:13:13.683Z",codex-agent,"Code-head CI is green at b21ff5bdbdcfdab6c97b1204d73ff528b0f65745: Node 22 and 26 passed with exact 100/100/100/100 coverage over 14 authored modules; Node 22 reports 897/897 tests with zero skips or failures. CodeQL and Semgrep passed. Full local npm and Bun release checks are still running; no local completion is claimed yet. Automated reviewer approval is missing: Sourcery quota, CodeRabbit skipped review, and Greptile ended trial. CI: https://github.com/unbraind/pm-github/actions/runs/39156538670."
+  "2026-10-18T22:13:39.500Z",codex-agent,"Full local npm run release:check and bun run release:check both exited 0 at code head b21ff5bdbdcfdab6c97b1204d73ff528b0f65745. Each passed 897/897 tests with zero failures, skips or cancellations and exact 100/100/100/100 over all 14 authored modules: 10471 lines and statements, 274 functions and 3187 branches, all covered. Typecheck, build, docstrings, lint, duplication, privacy, production audit, pack dry run, changelog check and publication-attestation checks passed at unchanged pins and thresholds. The linked real-shape suite passed 4/4 and the compact single-delivery case passed 1/1; reverting only the old in-progress bypass makes both real-shape regressions fail. GitHub independently confirms delivery PR 19 merged at 2026-10-08T01:19:51Z. PR 150 is separate from release PR 149; existing pm-ado PR 32 records remain untouched and need regeneration with explicit PR 19 evidence. Final receipt checks and final-head CI follow. No merge, release dispatch, tag or publication was performed."
 files[7]{path,scope}:
   closeout.ts,project
   README.md,project
@@ -25,8 +25,9 @@ files[7]{path,scope}:
   test/closeout.test.ts,project
   test/fixtures/closeout-attribution/pm-ado-16.json,project
   test/fixtures/closeout-attribution/pm-ado-19.json,project
-tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+tests[2]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   node --test test/closeout-attribution.test.ts,project,codex-agent,"2026-10-18T18:27:23.663Z",local_mutation,fix/closeout-explicit-delivery
+  node --test --test-name-pattern='dry-run plans same-repo' test/closeout.test.ts,project,codex-agent,"2026-10-18T19:11:07.119Z",local_mutation,fix/closeout-explicit-delivery
 docs[2]{path,scope}:
   docs/explicit-closeout-attribution.md,project
   README.md,project
