@@ -66,7 +66,7 @@ function providerProvenance(item: PmItem): string {
       ? /^(?:pm-)?(?:linear|jira|ado)$/i.test(value.trim())
       : /"(?:provider|source|system)"\s*:\s*"(?:pm-)?(?:linear|jira|ado)"/i.test(JSON.stringify(value) ?? "")));
   return Object.entries(item).filter(([key, value]) => identities.has(key) ||
-    (declared && /url|link|provenance|source|external/i.test(key)) ||
+    (declared && /^provider$|url|link|provenance|source|external/i.test(key)) ||
     ((/description|provenance/i.test(key) || copiedProviderMarkersOwnItem(item)) && /description|body|provenance/i.test(key) && typeof value === "string" &&
       /\[(linear|jira|ado)\]|\b(linear|jira|ado)_(id|key|url)=|Jira(?:\s+[A-Z][A-Z0-9]+-\d+)?:\s/i.test(value)))
     .map(([, value]) => typeof value === "string" ? value : JSON.stringify(value)).join("\n");
