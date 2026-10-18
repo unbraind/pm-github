@@ -6,14 +6,40 @@ that list. Both CI and CodeQL must produce the same required contexts when
 manually dispatched as for a pull request. No branch-protection API access is
 needed or assumed for selecting workflows.
 
-## Eligible native PR checks and one-time App setup
+## Eligible native PR checks and optional App setup
 
 GitHub excludes job checks triggered by workflow_dispatch from PR checks and
 required branch-rule evaluation, even when they pass on the head SHA. This is
 why REST check-runs can show green CI while `gh pr checks` omits it. Dispatching
-CodeQL alone cannot fix unattended merging. The documented supported path is
-publication with a GitHub App installation token, which starts eligible native
-pull_request runs without the GITHUB_TOKEN approval prompt.
+CodeQL alone cannot fix unattended merging. Two supported paths are
+maintainer approval of the parked native pull_request runs, or optional
+publication with a GitHub App installation token to start those runs without
+the GITHUB_TOKEN approval prompt.
+
+### No-App path: approve the native PR runs
+
+Leave the App inputs empty to keep GITHUB_TOKEN publication. After reviewing
+the bot PR and its workflow changes, a maintainer can select **Approve workflows
+to run** in the PR, or approve each parked native run with an operator credential:
+
+```sh
+gh run list -R OWNER/REPO --commit HEAD_SHA --event pull_request \
+  --status action_required --json databaseId,url
+gh api --method POST repos/OWNER/REPO/actions/runs/RUN_ID/approve
+```
+
+Select each RUN_ID from that exact-head list and repeat the POST for each
+approval-required run. The orchestrator verified that this endpoint unparks
+bot-PR action_required runs without an App. GitHub documents write access for
+the PR approval UI and Actions write permission for fine-grained tokens on the
+[approval endpoint](https://docs.github.com/en/rest/actions/workflow-runs#approve-a-workflow-run-for-a-fork-pull-request).
+Use the maintainer's authorized credential; this reusable workflow does not
+approve itself. Wait for the native PR checks to pass and required conversations
+to be resolved, then merge through the protected PR using the maintainer
+credential. The fallback does not arm auto-merge. A new bot head may require
+approval again. Manually dispatched checks remain extra head validation.
+
+### App path: unattended native PR runs
 
 Install an automation App on the selected callers with Contents, Pull requests
 and Actions write, plus Checks and Commit statuses read. Set its client ID as
@@ -46,6 +72,7 @@ a maintainer must approve eligible runs and merge the protected PR. Required che
 
 Sources: [GitHub token event behavior](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow),
 [required-check eligibility](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks),
+[GITHUB_TOKEN PR approval behavior](https://docs.github.com/en/actions/concepts/security/github_token),
 and [official App-token action](https://github.com/actions/create-github-app-token).
 
 ## Caller audit (2026-10-17)
@@ -80,7 +107,8 @@ successful dispatched test (22)/test (26) checks on their head SHA while their
 pull_request CI/CodeQL runs are action_required. None has auto-merge enabled.
 The named sync PRs also have successful dispatched head checks; several have
 base advances. The request names eleven PRs in total, all inspected read-only. Those REST results establish manual head execution; they do not satisfy PR
-branch rules. Eligible native PR runs require the App setup described above.
+branch rules. Eligible native PR runs can be unparked through the no-App approval path
+above; App setup removes that approval step for unattended operation.
 
 ## Existing closeout evidence policy
 
@@ -124,13 +152,14 @@ code cannot safely infer unknown required context names from workflow filenames.
 ## Freshness and protected merging
 
 The proposal is rebuilt on the default branch each daily run. After publication,
-a bounded monitor handles a base advance (including the daily release) by
+a bounded monitor retries failed PR-state and ancestry reads, and handles a base advance (including the daily release) by
 checking compare-API ancestry even when the merge label is BLOCKED or UNKNOWN,
 requesting update-branch with expected_head_sha, then redispatching every
 selected workflow for the new head. In App mode it requests squash auto-merge with a matching
 head SHA; GitHub still enforces required checks and conversation resolution.
 Disallowed auto-merge is a notice, failed check dispatch is an error. No bypass
-or thread resolution is attempted. App mode stops within forty minutes and legacy mode within two hours. A base
+or thread resolution is attempted. Successful ancestry responses must still contain a nonnegative integer; invalid
+values fail closed. App mode stops within forty minutes and legacy mode within two hours. A base
 change outside that window is handled by the next daily run, so permanent freshness is not claimed.
 
 The existing daily schedules and per-kind concurrency groups are retained. No

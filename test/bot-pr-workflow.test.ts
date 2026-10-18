@@ -47,6 +47,11 @@ case "$1 $2" in
   'pr merge') exit "\${AUTO_DENIED:-0}" ;;
   'run list') ;;
   'pr view')
+    if [[ "\${PR_READ_FAILURE:-none}" != none ]]; then
+      if [[ "\${PR_READ_FAILURE}" == always || ! -f "$STATE.pr-read" ]]; then
+        touch "$STATE.pr-read"; exit 1
+      fi
+    fi
     if [[ "\${BEHIND:-false}" == true && ! -f "$STATE" ]]; then
       printf '{"number":7,"state":"OPEN","headRefOid":"%s","mergeStateStatus":"%s"}' "$(git rev-parse HEAD)" "\${MERGE_STATE:-BEHIND}"
     elif [[ "\${BEHIND:-false}" == true && ! -f "$STATE.done" ]]; then
@@ -55,7 +60,14 @@ case "$1 $2" in
     elif [[ "\${BLOCKED:-false}" == true ]]; then
       printf '{"number":7,"state":"OPEN","headRefOid":"%s","mergeStateStatus":"BLOCKED"}' "$(git rev-parse HEAD)"
     else printf '{"state":"MERGED"}'; fi ;;
-  'api repos/acme/widgets/compare/'*) git rev-list --count HEAD..origin/trunk ;;
+  'api repos/acme/widgets/compare/'*)
+    if [[ "\${COMPARE_READ_FAILURE:-none}" != none ]]; then
+      if [[ "\${COMPARE_READ_FAILURE}" == always || ! -f "$STATE.compare-read" ]]; then
+        touch "$STATE.compare-read"; exit 1
+      fi
+    fi
+    if [[ "\${INVALID_ANCESTRY:-false}" == true ]]; then printf 'invalid';
+    else git rev-list --count HEAD..origin/trunk; fi ;;
   'api --method')
     [[ "$*" == *"expected_head_sha=$(git rev-parse HEAD)"* ]] || exit 9
     git fetch -q origin trunk
@@ -142,6 +154,34 @@ for (const kind of ["sync", "closeout"]) {
     assert.match(f.receipts(), /update-branch/);
     assert.equal(f.receipts().split("\n").filter(line => line.startsWith("workflow run")).length, 4);
     assert.equal(readFileSync(join(f.dir, "release.txt"), "utf8"), "Release advances base\n");
+  }));
+  for (const boundary of ["PR", "COMPARE"]) {
+    test(`${kind}: transient ${boundary} poll failure retries and still updates and redispatches`, () => fixture(f => {
+      Object.assign(f.env, { BEHIND: "true", MAINTENANCE_ATTEMPTS: "4", [`${boundary}_READ_FAILURE`]: "once" });
+      const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
+      assert.match(String(r.stdout), /unavailable; retrying/);
+      assert.doesNotMatch(String(r.stdout), /Cannot verify|token requires/);
+      assert.match(f.receipts(), /update-branch/);
+      const dispatches = f.receipts().split("\n").filter(line => line.startsWith("workflow run"));
+      assert.equal(dispatches.length, 4);
+      assert.notEqual(dispatches[0]!.split("HEAD=")[1], dispatches[2]!.split("HEAD=")[1]);
+      assert.equal(readFileSync(join(f.dir, "release.txt"), "utf8"), "Release advances base\n");
+    }));
+    test(`${kind}: persistent ${boundary} poll errors stop at the configured bound`, () => fixture(f => {
+      Object.assign(f.env, { BLOCKED: "true", MAINTENANCE_ATTEMPTS: "3", [`${boundary}_READ_FAILURE`]: "always" });
+      const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
+      assert.match(String(r.stdout), /configured bound/);
+      assert.equal(f.receipts().split("\n").filter(line => line.startsWith("pr view")).length, 3);
+      assert.doesNotMatch(f.receipts(), /update-branch/);
+    }));
+  }
+  test(`${kind}: successful ancestry reads with invalid data still fail closed`, () => fixture(f => {
+    Object.assign(f.env, { BLOCKED: "true", INVALID_ANCESTRY: "true", MAINTENANCE_ATTEMPTS: "3" });
+    const r = f.execute(kind); assert.equal(r.status, 1, String(r.stderr));
+    assert.match(String(r.stdout), /Cannot verify bot branch ancestry/);
+    assert.doesNotMatch(String(r.stdout), /unavailable; retrying/);
+    assert.doesNotMatch(f.receipts(), /update-branch/);
+    assert.equal(f.receipts().split("\n").filter(line => line.startsWith("pr view")).length, 1);
   }));
   test(`${kind}: dispatch denial reports the token diagnostic before auto-merge`, () => fixture(f => {
     f.env.DISPATCH_DENIED = "1";

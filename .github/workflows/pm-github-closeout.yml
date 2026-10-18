@@ -588,7 +588,11 @@ jobs:
           max_attempts="${MAINTENANCE_ATTEMPTS:-120}"
           for ((attempt=0; attempt<max_attempts; attempt++)); do
             (( SECONDS < maintenance_deadline )) || break
-            pr="$(gh pr view "${SYNC_PR_NUMBER}" -R "${REPOSITORY}" --json number,state,headRefOid)"
+            if ! pr="$(gh pr view "${SYNC_PR_NUMBER}" -R "${REPOSITORY}" --json number,state,headRefOid)"; then
+              echo "::notice::Bot PR state unavailable; retrying."
+              sleep 60
+              continue
+            fi
             [[ "$(jq -r '.state' <<< "${pr}")" == OPEN ]] || exit 0
             head_sha="$(jq -er '.headRefOid | select(test("^[a-f0-9]{40}$"))' <<< "${pr}")"
             if [[ "${head_sha}" != "${last_dispatched}" ]]; then
@@ -599,7 +603,11 @@ jobs:
             fi
             # Merge-state labels can be BLOCKED or UNKNOWN while the base has
             # advanced. Contents-read ancestry is independent of that policy label.
-            behind_by="$(gh api "repos/${REPOSITORY}/compare/${base_ref}...${head_sha}" --jq '.behind_by')"
+            if ! behind_by="$(gh api "repos/${REPOSITORY}/compare/${base_ref}...${head_sha}" --jq '.behind_by')"; then
+              echo "::notice::Bot branch ancestry unavailable; retrying."
+              sleep 60
+              continue
+            fi
             [[ "${behind_by}" =~ ^[0-9]+$ ]] || { echo "::error::Cannot verify bot branch ancestry."; exit 1; }
             if (( behind_by > 0 )) && [[ "${update_requested}" != "${head_sha}" ]]; then
               number="$(jq -er '.number | select(type == "number")' <<< "${pr}")"
