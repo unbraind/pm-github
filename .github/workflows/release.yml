@@ -462,10 +462,16 @@ jobs:
               # minutes after the release had already given up. Try to approve it -
               # the token often may not, which is harmless - and always surface the
               # run so the wait is diagnosable.
-              pending_runs="$(gh api \
+              awaiting_approval=unknown
+              if pending_runs="$(gh api \
                 "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${release_commit}&per_page=100" \
                 --jq '.workflow_runs[]? | select(.conclusion=="action_required" or .status=="waiting") | .id' \
-                2>/dev/null || true)"
+                2>/dev/null)"; then
+                awaiting_approval=0
+              else
+                pending_runs=""
+                echo "::warning::Could not read current workflow approval state; retrying without assuming approval is required."
+              fi
               if [[ -n "$pending_runs" ]]; then
                 while IFS= read -r run_id; do
                   [[ -z "$run_id" ]] && continue
@@ -481,8 +487,10 @@ jobs:
             fi
 
             if (( SECONDS >= deadline )); then
-              if (( awaiting_approval == 1 )); then
+              if [[ "$awaiting_approval" == 1 ]]; then
                 echo "::error::Release PR #${pr_number} did not merge within 30 minutes because its CI run is awaiting workflow approval (last state: ${merge_state}). Approve the run linked above once; this repository requires approval for a contributor that has no merged PR yet. Nothing was published or tagged."
+              elif [[ "$awaiting_approval" == unknown ]]; then
+                echo "::error::Release PR #${pr_number} did not merge within 30 minutes; current workflow approval state is unavailable (last state: ${merge_state}; still settling: ${unsettled:-none}; failing: ${failing:-none}). Inspect workflow runs and required checks; nothing was published or tagged."
               else
                 echo "::error::Release PR #${pr_number} did not merge within 30 minutes (last state: ${merge_state}; still settling: ${unsettled:-none}; failing: ${failing:-none}). A required check failed or never reported, or a required review is missing; not merging or publishing."
               fi

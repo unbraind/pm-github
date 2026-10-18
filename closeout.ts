@@ -179,6 +179,7 @@ async function requirements(api: CloseoutApi, repo: string, branch: string): Pro
   }
   for (const value of rules ?? []) {
     const rule = record(value);
+    text(rule.type);
     if (rule.type !== "required_status_checks") continue;
     const parameters = record(rule.parameters);
     if (!Array.isArray(parameters.required_status_checks)) throw new Error("Missing ruleset checks.");

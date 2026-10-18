@@ -785,3 +785,34 @@ test("newline context arrays preserve literal names and empty declarations fail 
     assert.equal(report.closed, 1);
   });
 }));
+
+for (const invalid of [{}, { type: null }, { type: 4 }, { type: {} }, { type: "" },
+  { parameters: { required_status_checks: [{ context: "not-run", integration_id: 7 }] } }]) {
+  for (const declared of [false, true]) {
+    test(`malformed rule discriminator refuses durable closeout ${JSON.stringify(invalid)} declared=${declared}`, async () => tracker(async (root, ids) => {
+      await withMockGithub(fixture(link(ids[0]!), (request, response) => {
+        if (request.url!.includes("/protection/")) jsonResponse(response, declared ? 403 : 200, { contexts: [], checks: [] });
+        if (request.url!.includes("/rules/branches/")) jsonResponse(response, 200, [invalid]);
+      }), async () => {
+        const before = snapshot(root);
+        const report = await closeout(root, { pr: "42", apply: true, ...(declared ? { "required-checks": "CI" } : {}) });
+        assert.equal(report.closed, 0);
+        assert.equal(report.checks[0]!.code, "head_evidence_unavailable");
+        assert.equal(report.checks[0]!.rule, "unavailable");
+        assert.equal((await get(ids[0]!, {}, { pmRoot: root })).item.status, "in_progress");
+        assert.equal(snapshot(root), before);
+      });
+    }));
+  }
+}
+
+test("valid unrelated effective rule retains readable-empty fallback", async () => tracker(async (root, ids) => {
+  await withMockGithub(fixture(link(ids[0]!), (request, response) => {
+    if (request.url!.includes("/protection/")) jsonResponse(response, 200, { contexts: [], checks: [] });
+    if (request.url!.includes("/rules/branches/")) jsonResponse(response, 200, [{ type: "deletion" }]);
+  }), async () => {
+    const report = await closeout(root, { pr: "42", apply: true });
+    assert.equal(report.closed, 1);
+    assert.equal(report.checks[0]!.rule, "fallback");
+  });
+}));

@@ -605,3 +605,57 @@ test("history context ignores staging and rollback while recognizing external ed
   assert.equal(selectImportContextIndex([{ patch: [] }], "closed"), 0);
   assert.equal(selectImportContextIndex([created, { message: "Compensate interrupted bulk transaction github-import-first", patch: [{ path: "/metadata/status" }] }], "closed"), -1);
 });
+
+for (const atomic of [false, true]) {
+  for (const copied of ["body", "label"]) {
+    test(`legacy GitHub ownership survives copied provider ${copied} (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
+      const issue = { ...recorded("pm-csv-72"), title: "Upstream revised title" };
+      const created = (await create({ title: "Old imported title", type: "Issue", status: "open",
+        tags: "gh:unbraind/pm-csv#72", description: `GH issue #72: ${issue.html_url}` }, { pmRoot })).item;
+      await commitImportedItem({ pmRoot, id: created.id, itemPath: getItemPath(pmRoot, "Issue", created.id),
+        document: { metadata: { ...created, ...(copied === "label" ? { tags: [...created.tags!, "linear:documentation"] } : {}) },
+          body: copied === "body" ? "Documentation example: [jira]" : "Ordinary copied body" },
+        settings: await readSettings(pmRoot), author: "fixture", message: "Seed legacy GitHub import", conflictWarningPrefix: "fixture" });
+      assert.equal((await get(created.id, {}, { pmRoot })).item.github_link_only, undefined);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await importing(pmRoot, issue, atomic);
+        const actual = (await get(created.id, {}, { pmRoot })).item;
+        assert.equal(actual.title, issue.title);
+        assert.equal(actual.status, "closed");
+        assert.equal(actual.created_at, issue.created_at);
+        assert.equal(actual.closed_at, issue.closed_at);
+        assert.equal(actual.completed_at, issue.closed_at);
+        assert.equal(actual.github_link_only, false);
+        assert.equal((await listItems(pmRoot)).length, 1);
+      }
+    }));
+  }
+  test(`provider-only descriptor preserves external ownership without a locator (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
+    const issue = recorded("pm-csv-72");
+    const owner = await identityItem(pmRoot, { provider: "pm-jira", tags: ["gh:unbraind/pm-csv#72", "jira:EX-1"], release: "external-release" });
+    assert.equal(owner.external_url, undefined);
+    assert.equal(owner.github_link_only, undefined);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await importing(pmRoot, issue, atomic);
+      const actual = (await get(owner.id, {}, { pmRoot })).item;
+      for (const key of ["title", "status", "created_at", "closed_at", "completed_at", "release", "body"] as const) assert.equal(actual[key], owner[key]);
+      assert.deepEqual(actual.tags, owner.tags);
+      assert.equal(actual.github_link_only, true);
+      assert.equal((await listItems(pmRoot)).length, 1);
+    }
+  }));
+  for (const evidence of [
+    { jira_id: "EX-1" },
+    { provider: "pm-jira", external_url: "https://bugs.example.test/EX-1" },
+    { description: "[jira] jira_id=EX-1 jira_url=https://bugs.example.test/EX-1" },
+  ]) {
+    test(`legacy GitHub tag preserves authoritative external owner ${JSON.stringify(evidence)} (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
+      const issue = recorded("pm-csv-72");
+      const owner = await identityItem(pmRoot, { ...evidence, tags: ["gh:unbraind/pm-csv#72"], github_link_only: false, release: "external-release" });
+      await importing(pmRoot, issue, atomic);
+      const actual = (await get(owner.id, {}, { pmRoot })).item;
+      for (const key of ["title", "status", "created_at", "release"] as const) assert.equal(actual[key], owner[key]);
+      assert.equal(actual.github_link_only, true);
+    }));
+  }
+}
