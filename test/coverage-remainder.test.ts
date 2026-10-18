@@ -13,6 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { create, listAllComplete, certifyCompleteListResult } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness, type ExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 
 import extension, {
@@ -55,9 +56,9 @@ function issue(overrides: Partial<GhIssue> = {}): GhIssue {
     labels: [{ name: "bug" }, { name: "" }],
     assignee: null,
     milestone: null,
-    created_at: "",
-    updated_at: "",
-    html_url: "https://example.test/acme/widgets/issues/7",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-10-01T00:00:00Z",
+    html_url: `https://example.test/acme/widgets/issues/${overrides.number ?? 7}`,
     user: null,
     ...overrides,
   };
@@ -77,6 +78,23 @@ function gitTracker(prefix: string): string {
   const init = spawnSync(REAL_PM, ["--path", tracker, "init", "test"], { encoding: "utf8", cwd: root });
   assert.equal(init.status, 0, init.stderr);
   return root;
+}
+
+/** Create the real target represented by a command-failure fixture snapshot. */
+async function seedGithubItem(root: string, number: number) {
+  return (await create({ title: "old", type: "Task", tags: `gh:acme/widgets#${number}` },
+    { pmRoot: path.join(root, ".agents/pm") })).item;
+}
+
+/** Prime source metadata so a readonly fixture isolates optional annotation writes. */
+async function primeSourceTask(root: string): Promise<string> {
+  const tracker = path.join(root, ".agents/pm");
+  await captureStderr(() => runImport("acme/widgets", tracker, opts({ type: "Task" }), {
+    resolveToken: () => undefined, fetchIssues: async () => [issue()],
+  }));
+  const result = await listAllComplete({}, { pmRoot: tracker, noExtensions: true });
+  certifyCompleteListResult(result);
+  return result.items[0]!.id;
 }
 
 async function withFakePm(body: string, fn: () => Promise<void>): Promise<void> {
@@ -269,18 +287,17 @@ test("a gated non-atomic import fails closed when a planned write fails", async 
   // only the write count can show that the tracker no longer matches the plan.
   const root = gitTracker("pm-github-gated-write-fail-");
   try {
+    const existing = await seedGithubItem(root, 8);
+    const clean = await seedGithubItem(root, 9);
     await withFakePm(`
       for arg in "$@"; do
         if [ "$arg" = "close" ]; then echo close-refused >&2; exit 1; fi
       done
-      exit 0
+      exec "$REAL_PM" "$@"
     `, async () => {
       await captureStderr(() => assert.rejects(runImport("acme/widgets", root, opts({ gate: true }), {
         resolveToken: () => "tok",
-        readItems: () => [
-          { id: "pm-existing", title: "old", status: "open", tags: ["gh:acme/widgets#8"] },
-          { id: "pm-clean", title: "old", status: "open", tags: ["gh:acme/widgets#9"] },
-        ],
+        readItems: () => [existing, clean],
         // #9 updates cleanly, so the import is not an all-failed run; only the
         // write count can show that #8's close never happened.
         fetchIssues: async () => [
@@ -294,6 +311,41 @@ test("a gated non-atomic import fails closed when a planned write fails", async 
   }
 });
 
+for (const linking of [false, true]) {
+  test(`a refused ${linking ? "provider link" : "source cancellation"} cannot pass the import gate`, async () => {
+    const root = gitTracker("pm-github-fidelity-refused-");
+    const tracker = path.join(root, ".agents/pm");
+    const recorded = JSON.parse(fs.readFileSync(new URL("fixtures/import-fidelity/pm-beads-85.json", import.meta.url), "utf8")) as GhIssue;
+    const source: GhIssue = { ...recorded, state_reason: "not_planned",
+      ...(linking ? { body: "Mirrored from https://linear.app/fixture/issue/ENG-85" } : {}) };
+    try {
+      const owner = (await create({ title: "Existing owner", type: "Task",
+        description: linking ? "[linear] linear_id=fixture linear_url=https://linear.app/fixture/issue/ENG-85" : "Existing GitHub owner",
+        tags: linking ? "linear:fixture" : "gh:unbraind/pm-beads#85" }, { pmRoot: tracker })).item;
+      const refused = linking ? "--add-tags" : "canceled";
+      await withFakePm(`
+        for arg in "$@"; do
+          if [ "$arg" = "${refused}" ]; then echo fixture-refused >&2; exit 1; fi
+        done
+        exec "$REAL_PM" "$@"
+      `, async () => {
+        await withMockGithub((request, response) => {
+          jsonResponse(response, 200, request.url?.includes("/timeline") ? [] : [source]);
+        }, async () => {
+          await captureStderr(() => assert.rejects(runImport("unbraind/pm-beads", tracker, opts({ gate: true }),
+            { resolveToken: () => undefined }), linking ? /Could not link/ : /Could not cancel/));
+        });
+      });
+      const corpus = certifyCompleteListResult(await listAllComplete({}, { pmRoot: tracker, noExtensions: true }));
+      assert.equal(corpus.items.length, 1);
+      assert.equal(corpus.items[0]!.id, owner.id);
+      assert.equal(corpus.items[0]!.status, "open");
+      assert.equal(corpus.items[0]!.closed_at, undefined);
+      assert.equal(corpus.items[0]!.github_state, undefined);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
 // A gated --comments-mode annotations|both import must be all-or-nothing for
 // native comments too: a contended comment-sync lock, a refused per-comment
 // add, and an unparsable created id all leave planned comments unwritten while
@@ -303,16 +355,17 @@ test("a gated non-atomic import fails closed when a planned write fails", async 
 
 test("a gated import fails closed when the comment-sync lock is contended", async () => {
   const root = gitTracker("pm-github-gated-lock-");
+  const existing = await seedGithubItem(root, 7);
   const holder = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" });
   try {
     assert.ok(holder.pid && holder.pid > 0);
-    const lockPath = importCommentSyncLockPath(root, "pm-existing");
+    const lockPath = importCommentSyncLockPath(root, existing.id);
     fs.mkdirSync(path.dirname(lockPath), { recursive: true });
     fs.writeFileSync(lockPath, JSON.stringify({ pid: holder.pid, token: "held", created_at: new Date().toISOString() }) + "\n");
-    await withFakePm(`exit 0`, async () => {
+    await withFakePm(`exec "$REAL_PM" "$@"`, async () => {
       const gated = await captureStderr(() => assert.rejects(runImport("acme/widgets", root, opts({ gate: true, "comments-mode": "annotations" }), {
         resolveToken: () => "tok",
-        readItems: () => [{ id: "pm-existing", title: "old", status: "open", tags: ["gh:acme/widgets#7"] }],
+        readItems: () => [existing],
         fetchIssues: async () => [issue({ comments: 1 })],
         fetchIssueComments: async () => [{ id: 3, user: { login: "octo" }, created_at: "2026-01-01T00:00:00Z", body: "held note" }],
       }), /planned write\(s\) failed/));
@@ -327,10 +380,7 @@ test("a gated import fails closed when the comment-sync lock is contended", asyn
 test("a gated import fails closed when a per-comment add fails mid-sync", nonRootOnly, async () => {
   const root = gitTracker("pm-github-gated-add-fail-");
   const tracker = path.join(root, ".agents", "pm");
-  const created = spawnSync(REAL_PM, ["--path", tracker, "create", "task", "Commented", "--tags", "gh:acme/widgets#7", "--description", "d"], { encoding: "utf8" });
-  assert.equal(created.status, 0, created.stderr);
-  const listed = spawnSync(REAL_PM, ["--pm-path", root, "--json", "list", "--full"], { encoding: "utf8" });
-  const itemId = (JSON.parse(listed.stdout) as { items?: Array<{ id: string }> }).items?.[0]?.id;
+  const itemId = await primeSourceTask(root);
   assert.ok(itemId);
   const syncedComment = { id: 21, user: { login: "octo" }, created_at: "2026-01-01T00:00:00Z", body: "already synced" };
   const failingComment = { id: 22, user: { login: "octo" }, created_at: "2026-01-02T00:00:00Z", body: "cannot land" };
@@ -371,7 +421,7 @@ test("a gated import fails closed when a created id cannot be parsed with annota
         readItems: () => [],
         fetchIssues: async () => [issue({ comments: 1 })],
         fetchIssueComments: async () => [{ id: 31, user: { login: "octo" }, created_at: "2026-01-01T00:00:00Z", body: "note" }],
-      }), /planned write\(s\) failed/));
+      }), /Could not finalize.*created id missing/));
       assert.match(gated.stderr.join("\n"), /could not parse created item id — comments not synced/);
     });
   } finally {
@@ -400,10 +450,7 @@ test("a gated atomic import fails closed when committed items lack their planned
 test("the same comment-sync failures without --gate still import with a warning", nonRootOnly, async () => {
   const root = gitTracker("pm-github-ungated-comments-");
   const tracker = path.join(root, ".agents", "pm");
-  const created = spawnSync(REAL_PM, ["--path", tracker, "create", "task", "Commented", "--tags", "gh:acme/widgets#7", "--description", "d"], { encoding: "utf8" });
-  assert.equal(created.status, 0, created.stderr);
-  const listed = spawnSync(REAL_PM, ["--pm-path", root, "--json", "list", "--full"], { encoding: "utf8" });
-  const itemId = (JSON.parse(listed.stdout) as { items?: Array<{ id: string }> }).items?.[0]?.id;
+  const itemId = await primeSourceTask(root);
   assert.ok(itemId);
   const failingComment = { id: 52, user: { login: "octo" }, created_at: "2026-01-01T00:00:00Z", body: "cannot land" };
   const holder = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" });
@@ -746,10 +793,9 @@ test("plain create close failures and unreadable annotation identities report in
       assert.match(stderr.join("\n"), /close after import failed/);
     });
     await withFakePm(`for arg in "$@"; do if [ "$arg" = "create" ]; then printf 'not-json'; exit 0; fi; done\nexec "$REAL_PM" "$@"`, async () => {
-      const { stderr, result } = await captureStderr(() => runImport("acme/widgets", tracker, opts({ "comments-mode": "annotations" }), {
+      const { stderr } = await captureStderr(() => assert.rejects(runImport("acme/widgets", tracker, opts({ "comments-mode": "annotations" }), {
         resolveToken: () => undefined, fetchIssues: async () => [issue({ number: 2 })], fetchIssueComments: async () => [],
-      }));
-      assert.ok("imported" in result && result.imported === 1);
+      }), /Could not finalize.*created id missing/));
       assert.match(stderr.join("\n"), /comments not synced/);
     });
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
