@@ -90,6 +90,13 @@ esac
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
+test("README distinguishes App auto-merge from no-App maintainer landing", () => {
+  const readme = readFileSync(join(root, "README.md"), "utf8").replace(/\s+/g, " ");
+  assert.match(readme, /In App mode, after dispatch the workflow requests `gh pr merge --auto --squash` with the expected head SHA/);
+  assert.match(readme, /Without an App, maintainers approve native PR runs, wait for required checks and conversations, and merge with an authorized credential; the workflow does not arm auto-merge/);
+  assert.match(readme, /dispatches all selected workflows and, in App mode, requests auto-merge again when the new head appears/);
+});
+
 for (const kind of ["sync", "closeout"]) {
   test(`${kind}: default selects CI and CodeQL, respecting explicit overrides`, () => fixture(f => {
     const source = readFileSync(join(root, `.github/workflows/pm-github-${kind}.yml`), "utf8");

@@ -592,7 +592,7 @@ The script must emit the root `CHANGELOG.md` and remain inside the publication s
 | Validation | Strict PM health; explicit item/history scope committed together |
 | Branch and PR | Explicit force-with-lease against the observed bot ref; push only bot branch; owned PR lookup excludes forks |
 | No-op | Zero closes or no tracker diff creates no remote branch or PR; caller-only drift unpublished; stale owned PR closed |
-| CI and landing | Dispatch caller checks after publication and branch refresh; request protected squash auto-merge; report parked approval-required runs |
+| CI and landing | Dispatch caller checks after publication and branch refresh; request protected squash auto-merge in App mode; report parked approval-required runs |
 
 `ci-workflows` defaults to `ci.yml codeql.yml`, covering the fleet's CI and
 CodeQL workflows without querying branch protection. An explicit list replaces
@@ -616,13 +616,16 @@ verification. Empty credentials retain GITHUB_TOKEN and emit a setup notice;
 partial or failed App credentials stop publication. The private key is passed
 only to the token action, after caller scripts have completed.
 
-After dispatch the workflow requests `gh pr merge --auto --squash` with the
-expected head SHA. A repository that disallows auto-merge emits a notice.
+In App mode, after dispatch the workflow requests `gh pr merge --auto --squash`
+with the expected head SHA. A repository that disallows auto-merge emits a notice.
+Without an App, maintainers approve native PR runs, wait for required checks and
+conversations, and merge with an authorized credential; the workflow does not arm
+auto-merge.
 GitHub enforces required checks and conversation resolution. The same run
 polls once per minute: when the PR is `BEHIND`, it requests a branch update
-against the expected head, then dispatches all selected workflows and requests
-auto-merge again when the new head appears. App mode stops within forty minutes,
-inside its token's one-hour lifetime; legacy mode has a two-hour bound. The
+against the expected head, then dispatches all selected workflows and, in App
+mode, requests auto-merge again when the new head appears. App mode stops within
+forty minutes, inside its token's one-hour lifetime; legacy mode has a two-hour bound. The
 existing daily schedules and separate sync/closeout concurrency groups remain.
 A base change after the monitor window waits for the next daily rebuild.
 Unresolved conversations continue to block landing.
