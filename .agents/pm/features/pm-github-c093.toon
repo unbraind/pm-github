@@ -6,11 +6,9 @@ status: in_progress
 priority: 2
 tags[4]: changelog-unreleased,fidelity,github,import
 created_at: "2026-10-16T22:29:39.865Z"
-updated_at: "2026-10-18T18:29:20.384Z"
-assignee: codex-agent
-claim_principal: codex-agent
+updated_at: "2026-10-18T22:04:28.505Z"
 author: codex-agent
-comments[37]{created_at,author,text}:
+comments[40]{created_at,author,text}:
   "2026-10-16T22:30:04.918Z",codex-agent,"Read all twelve unresolved Sourcery threads and the changed tracker/changelog files in the six consumer sync PRs. Scope: fix import only; preserve append-only history and leave unrelated closeout work untouched. The pinned SDK exposes completedAt but reserves created_at, updated_at and closed_at; source timestamp metadata plus an explicit SDK-gap receipt is required unless a supported import path proves otherwise. No upstream SDK issue will be filed under the queue rules."
   "2026-10-16T22:35:10.689Z",codex-agent,"Found public SDK import primitives beyond high-level create/update: item locks, canonical document serialization, before/after history entries and appendHistoryEntry. Implementing an idempotent finalization event with real native dates and source metadata, without modifying any historical record. Existing provider owners receive provenance links only; their content, native lifecycle, release and export identity remain authoritative. Local Git calendar tag dates select the first release at or after source closure; later closures remain pending. GraphQL ClosedEvent closer provides actual closing PR attribution where REST commit_id is null."
   "2026-10-16T23:09:24.995Z",codex-agent,"SDK candidate: bulk compensation captures native updated_at and passes it to restore as a history timestamp. Backdating that field disconnects the rollback version from its event. Preserve source creation/closure/completion natively for momentum and cycle time, and retain the exact source update date in github_updated_at while native updated_at stays the SDK mutation clock. Lifecycle finalization now runs at the SDK committing transition before the journal commits, with real compensation acceptance and a post-recovery idempotent check. No historical entries are rewritten."
@@ -48,6 +46,9 @@ comments[37]{created_at,author,text}:
   "2026-10-17T13:40:46.635Z",codex-agent,"Round 1 implementation and local verification complete. Both literal CI-identity release gates PASSED: npm run release:check and bun run release:check each 797/797 tests, zero failures/skips/cancellations/TODOs, exact 100/100/100/100 across 14 authored modules (10438/10438 lines/statements, 273/273 functions, 3157/3157 branches). Audit found zero vulnerabilities; docstrings, lint, duplication, privacy, packing, changelog and attestation pass. Four function-only behavioral reverts produced the expected assertion failures. README partial-write and empty-plan qualifications are verified with real trackers. Marker startup probe is bounded separately while retaining its 10-second work deadline and a forced-spin control. Existing pm-github-sah1 remains open for its original acceptance-watchdog case. Releasing the coding claim for orchestrator verification; next actions are commit/push, replies to the five original review threads, and bounded CI monitoring. No items will be closed."
   "2026-10-18T18:19:03.447Z",codex-agent,"Read-only real-public-data verification will use main build and dry-run gated plans in scratch clones. Caller blockers: https://github.com/unbraind/pm-beads/pull/145 https://github.com/unbraind/pm-brief/pull/154 https://github.com/unbraind/pm-context/pull/147 https://github.com/unbraind/pm-csv/pull/163 https://github.com/unbraind/pm-linear/pull/150 https://github.com/unbraind/pm-slack-standup/pull/127. Evidence will compare source dates, release placement and pm-brief momentum without editing consumer checkouts."
   "2026-10-18T18:28:36.151Z",codex-agent,"Main dc86e83 built without importer source changes. Live public dry-run gated atomic plans completed for pm-csv (3 issues), pm-brief (2), and pm-context (5; 2 new open plus 3 existing terminal). All 8 previously terminal imports match source created_at, closed_at, github_state and github_updated_at; durable tracker fingerprints are unchanged. Projected completed_at follows the existing adapter source closure assignment; no importer apply ran. Real pm-changelog stdin rendering includes every projected historical item under its explicit containing release and none under Unreleased. Real pm-brief summarizeMomentum reports GitHub lifetimes of 1.2 to 7.0 days instead of the old zero-day imports (or distorted older owners). No import defect found; no import-fix PR is needed."
+  "2026-10-18T19:03:42.812Z",codex-agent,"Additional real-consumer proof at a normal seven-day window (observation 2026-10-18T19:00:00Z): the eight baseline terminal records produce closedCount=8 and median cycle=0 days. Projected main fields produce closedCount=1 and median cycle=2.3 days; only pm-context issue 136 remains, with GitHub closed_at=2026-10-13T17:54:36Z. All seven older imports leave current throughput. The actual pm-brief summarizeMomentum export ran on both sets; importer apply remains unused. Updated docs/daily-release-refresh.md with this bounded result."
+  "2026-10-18T19:05:50.551Z",codex-agent,"Present-window proof is now verified from certified COMPLETE SDK records for the scratch caller heads, preserving the native updated_at fallback required by legacy terminal rows. The first scratch attempt used only selected table columns and correctly failed its baseline-count assertion because updated_at was absent from that projection. The complete records pass: recent closures 8 to 1, median cycle 0 to 2.3 days, only pm-context issue 136 remains. This is a verification-harness correction, not a pm-github or pm-brief defect; no importer apply ran and no historical event was rewritten."
+  "2026-10-18T22:03:48.244Z",codex-agent,"Real-public-data proof is complete for pm-csv issues 72, 134 and 86; pm-brief issues 135 and 84; and pm-context issues 136, 81 and canceled 53. Main gated atomic dry runs account for every fetched issue and preserve all durable tracker fingerprints. Planned created_at, closed_at, github_state and github_updated_at match GitHub. completed_at is explicitly projected from the existing persistence assignment because the dry-run schema omits it; the linked real-SDK pm-brief-135 fidelity test passed 1/1. Actual pm-changelog rendering includes every projected row in a historical release; six prior Unreleased entries become zero. Actual pm-brief momentum over these eight records at the documented seven-day observation changes 8 recent closures to 1 and median cycle 0 to 2.3 days. Full package npm and Bun release checks each passed 897/897 tests and exact 100/100/100/100. No importer defect remains and no import apply or caller edit occurred. Evidence: docs/daily-release-refresh.md; PR https://github.com/unbraind/pm-github/pull/149. Release/adoption remains with the orchestrator and pm-github-aiok."
 files[13]{path,scope}:
   import-fidelity.ts,project
   index.ts,project
@@ -62,9 +63,30 @@ files[13]{path,scope}:
   test/import-gate.test.ts,project
   test/import-lock.test.ts,project
   test/import-selection.test.ts,project
-tests[2]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
-  node --test test/import-fidelity.test.ts,project,2400,codex-agent,"2026-10-16T23:09:21.738Z",local_mutation,feat/import-fidelity
-  "node --test --test-name-pattern=\"closure evidence accepts forward skew\" test/import-fidelity.test.ts",project,2400,codex-agent,"2026-10-17T10:34:46.689Z",local_mutation,feat/import-fidelity
+tests[3]:
+  - command: node --test test/import-fidelity.test.ts
+    scope: project
+    timeout_seconds: 2400
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-16T23:09:21.738Z"
+      source_kind: local_mutation
+      source_ref: feat/import-fidelity
+  - command: "node --test --test-name-pattern=\"closure evidence accepts forward skew\" test/import-fidelity.test.ts"
+    scope: project
+    timeout_seconds: 2400
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-17T10:34:46.689Z"
+      source_kind: local_mutation
+      source_ref: feat/import-fidelity
+  - command: node --test --test-name-pattern='pm-brief-135' test/import-fidelity.test.ts
+    scope: project
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-18T20:33:13.416Z"
+      source_kind: local_mutation
+      source_ref: fix/daily-release-refreshes-stale-pr
 docs[2]{path,scope}:
   docs/daily-release-refresh.md,project
   README.md,project

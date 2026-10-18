@@ -86,6 +86,10 @@ Baseline Unreleased membership comes from the actual caller PR CHANGELOG.md. All
 | unbraind/pm-context#81 | yes → no | 0 → 4.6 |
 | unbraind/pm-context#53 | no → no | 0 → 1.2 |
 
+## Present-window momentum
+
+The same real pm-brief export was also run at 2026-10-18T19:00:00Z with its normal seven-day window over all eight baseline/projected terminal records. This calculation uses certified complete SDK records, retaining native updated_at for legacy terminal records without closed_at; the selected columns in the comparison table are not its input. The baseline counts all 8 as recent closures and has a 0-day median. Main counts only the genuinely recent pm-context issue 136, using its GitHub closure on 2026-10-13T17:54:36Z and a 2.3-day cycle. The seven older imports leave the recent-throughput window. The importer remains dry-run only.
+
 ## Caller adoption
 
 https://github.com/unbraind/pm-beads/pull/145, https://github.com/unbraind/pm-brief/pull/154, https://github.com/unbraind/pm-context/pull/147, https://github.com/unbraind/pm-csv/pull/163, https://github.com/unbraind/pm-linear/pull/150, https://github.com/unbraind/pm-slack-standup/pull/127. Publication alone does not update their pins; adoption remains tracked in pm-github-aiok.
@@ -122,6 +126,8 @@ The same numeric-suffix block exists in the following 25 sibling workflows. pm-o
 
 ## Validation
 
-Function-only behavioral revert restores today-only branch selection and same-day eligibility, retaining the tests. The stale-PR and once-per-day regressions fail (2 failures). Restored release suites pass 13/13. npm and Bun release:check retain unchanged thresholds; final receipts are recorded in the linked tracker items and PR.
+Function-only behavioral revert restores today-only branch selection and same-day eligibility, retaining the tests. The stale-PR and once-per-day regressions fail (2 failures). The current release decision, workflow and publication-auditor suites pass 21/21.
+
+Both npm run release:check and bun run release:check exited 0 at code head 12601d6d325d6e6ad1264c0729ff70bb18c90feb. Each ran 897/897 tests with zero failures, cancellations or skips. Both measured exact 100/100/100/100 over all 15 authored modules, at unchanged thresholds and pins: 10466/10466 lines and statements, 275/275 functions, and 3171/3171 (npm) or 3172/3172 (Bun invocation) branches. All remaining release-check stages passed. Final tracker/documentation receipts are regenerated and checked separately; final-head CI and fresh-clone strict health are reported in the PR.
 
 GitHub documents that GITHUB_TOKEN-created pull-request runs may require approval; existing bounded approval diagnostics remain: https://docs.github.com/en/actions/concepts/security/github_token. Refresh correctness does not certify GitHub approval or npm publisher policy.
