@@ -1,0 +1,21 @@
+id: pm-github-b145
+title: Release timeout must report current workflow approval state
+description: "Fix GitHub issue #145: stale approval state and unavailable workflow-run reads misdiagnose release timeouts. Preserve protected merge and publication boundaries."
+type: Issue
+status: in_progress
+priority: 1
+tags[2]: changelog-unreleased,"gh:unbraind/pm-github#145"
+created_at: "2026-10-18T04:05:21.907Z"
+updated_at: "2026-10-18T04:10:02.028Z"
+author: codex-agent
+comments[2]{created_at,author,text}:
+  "2026-10-18T04:05:29.333Z",codex-agent,"Round 1: issue read in full; searched existing tracker and no issue-specific import exists. Implement in fix/import-and-release-issues from origin/main; add behavioral revert proof and run unchanged npm and Bun release gates with isolated CI identity."
+  "2026-10-18T04:08:58.091Z",codex-agent,"Implemented current-poll approval state with a separate unavailable state; successful empty reads clear old approval observations. Actual release-loop shell regressions cover pending-to-running timeout, still-pending timeout with run URL, API read failure, and subsequent verified merge. Reverting only release.yml with tests retained fails 2/4; restored shell passes 4/4. No live merge or publication was performed."
+files[2]{path,scope}:
+  .github/workflows/release.yml,project
+  test/release-approval.test.ts,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test test/release-approval.test.ts,project,codex-agent,"2026-10-18T04:07:04.437Z",local_mutation,fix/import-and-release-issues
+docs[1]{path,scope}:
+  README.md,project
+body: ""

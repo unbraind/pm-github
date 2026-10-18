@@ -1,0 +1,22 @@
+id: pm-github-b141
+title: Reject malformed effective-rule discriminators before closeout
+description: "Fix GitHub issue #141: malformed rule type cannot establish readable-empty or declared policy; require zero durable writes on refusal."
+type: Issue
+status: in_progress
+priority: 1
+tags[2]: changelog-unreleased,"gh:unbraind/pm-github#141"
+created_at: "2026-10-18T04:05:25.251Z"
+updated_at: "2026-10-18T04:10:12.988Z"
+author: codex-agent
+comments[3]{created_at,author,text}:
+  "2026-10-18T04:05:38.030Z",codex-agent,"Round 1: issue read in full; searched existing tracker and no issue-specific import exists. Implement in fix/import-and-release-issues from origin/main; add behavioral revert proof and run unchanged npm and Bun release gates with isolated CI identity."
+  "2026-10-18T04:09:09.240Z",codex-agent,"Validate each effective rule type as a nonempty string before accepting it as unrelated policy. New real-tracker matrix reproduces unsafe closure for missing/null/numeric/object/empty types and a hidden required-check row, in both readable-empty and declared-policy modes: baseline fails 12/12. Fixed refusals must retain byte-identical durable tracker state; valid deletion rules retain fallback."
+  "2026-10-18T04:09:56.876Z",codex-agent,"Isolated revert proof: restore only closeout.ts to origin/main with all new tests retained; the missing-type/readable-empty regression fails because closed=1. Restore the fix: all 12 malformed discriminator cases refuse with byte-identical durable files and the unrelated-rule control passes. Combined real-tracker acceptance passes 23/23, zero skips."
+files[2]{path,scope}:
+  closeout.ts,project
+  test/closeout.test.ts,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test --test-name-pattern='malformed rule discriminator|valid unrelated effective rule' test/closeout.test.ts,project,codex-agent,"2026-10-18T04:07:29.618Z",local_mutation,fix/import-and-release-issues
+docs[1]{path,scope}:
+  README.md,project
+body: ""

@@ -51,18 +51,23 @@ function locators(value: unknown): string[] {
     .replace(/^https?:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/]+)\/(?:issues|pull)\/(\d+)\/?(?:[?#].*)?$/, "https://github.com/$1/$2/issues/$3"));
 }
 
+/** Copied body text and labels cannot transfer an established GitHub import to another owner. */
+function copiedProviderMarkersOwnItem(item: PmItem): boolean {
+  return item.github_link_only !== false && !item.tags?.some(tag => /^gh:[^/]+\/[^#]+#\d+$/.test(tag));
+}
+
 /** Extract declared provider fields and the description/body markers used by provider exporters. */
 function providerProvenance(item: PmItem): string {
   const identities = new Set(Object.entries(item).filter(([key, value]) =>
     /^(linear|jira|ado)_(?:.*_)?(?:id|key|url|identifier)$/i.test(key) && Boolean(value) &&
     (typeof value !== "string" || value.trim() !== "")).map(([key]) => key));
-  const declared = identities.size > 0 || (item.github_link_only !== false && item.tags?.some(tag => /^(linear|jira|ado):/i.test(tag))) ||
+  const declared = identities.size > 0 || (copiedProviderMarkersOwnItem(item) && item.tags?.some(tag => /^(linear|jira|ado):/i.test(tag))) ||
     Object.entries(item).some(([key, value]) => /^(provider|source|provenance)$/i.test(key) && (typeof value === "string"
       ? /^(?:pm-)?(?:linear|jira|ado)$/i.test(value.trim())
       : /"(?:provider|source|system)"\s*:\s*"(?:pm-)?(?:linear|jira|ado)"/i.test(JSON.stringify(value) ?? "")));
   return Object.entries(item).filter(([key, value]) => identities.has(key) ||
     (declared && /url|link|provenance|source|external/i.test(key)) ||
-    ((/description|provenance/i.test(key) || item.github_link_only !== false) && /description|body|provenance/i.test(key) && typeof value === "string" &&
+    ((/description|provenance/i.test(key) || copiedProviderMarkersOwnItem(item)) && /description|body|provenance/i.test(key) && typeof value === "string" &&
       /\[(linear|jira|ado)\]|\b(linear|jira|ado)_(id|key|url)=|Jira(?:\s+[A-Z][A-Z0-9]+-\d+)?:\s/i.test(value)))
     .map(([, value]) => typeof value === "string" ? value : JSON.stringify(value)).join("\n");
 }
@@ -76,7 +81,7 @@ export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, tag
     locators(providerProvenance(item)).some(url => bodyUrls.has(url))));
   if (candidates.length > 1) throw new CommandError(`GitHub issue #${issue.number} has multiple existing owners; import plan is not idempotent. No item was written for this issue.`);
   const item = candidates[0];
-  const provider = item && (Boolean(providerProvenance(item)) || (item.github_link_only !== false && item.tags?.some(tag => /^(linear|jira|ado):/i.test(tag))));
+  const provider = item && (Boolean(providerProvenance(item)) || (copiedProviderMarkersOwnItem(item) && item.tags?.some(tag => /^(linear|jira|ado):/i.test(tag))));
   return { item, linkOnly: Boolean(item && (provider || item.github_link_only === true)),
     via: item ? (provider ? "provider-link" : item.id === tagged?.id ? "provenance-tag" : "github-url") : "new" };
 }
