@@ -6,12 +6,13 @@ status: in_progress
 priority: 1
 tags[2]: changelog-unreleased,"gh:unbraind/pm-github#145"
 created_at: "2026-10-18T04:05:21.907Z"
-updated_at: "2026-10-18T04:21:53.302Z"
+updated_at: "2026-10-18T04:43:04.463Z"
 author: codex-agent
-comments[3]{created_at,author,text}:
+comments[4]{created_at,author,text}:
   "2026-10-18T04:05:29.333Z",codex-agent,"Round 1: issue read in full; searched existing tracker and no issue-specific import exists. Implement in fix/import-and-release-issues from origin/main; add behavioral revert proof and run unchanged npm and Bun release gates with isolated CI identity."
   "2026-10-18T04:08:58.091Z",codex-agent,"Implemented current-poll approval state with a separate unavailable state; successful empty reads clear old approval observations. Actual release-loop shell regressions cover pending-to-running timeout, still-pending timeout with run URL, API read failure, and subsequent verified merge. Reverting only release.yml with tests retained fails 2/4; restored shell passes 4/4. No live merge or publication was performed."
   "2026-10-18T04:21:53.302Z",codex-agent,Run the unchanged npm and Bun release gates on isolated GitHub runners using a temporary read-only validation workflow while local gates continue. Remove the workflow after collecting exact source-head receipts.
+  "2026-10-18T04:43:04.458Z",codex-agent,"CI at 7a1b616 passed 824/824 tests and exact 100/100/100/100 coverage across 14 authored modules in both npm and Bun release commands, then refused the stale generated changelog ordering. The temporary validation note changed item ordering after generation. Regenerate after every tracker write, verify changelog:check, and rerun both full gates; these runs are failed gate evidence, not acceptance."
 files[2]{path,scope}:
   .github/workflows/release.yml,project
   test/release-approval.test.ts,project

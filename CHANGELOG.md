@@ -8,9 +8,9 @@
 
 ### Fixed
 
+- Release timeout must report current workflow approval state ([pm-github-b145](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-b145.toon))
 - Reject malformed effective-rule discriminators before closeout ([pm-github-b141](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-b141.toon))
 - Preserve legacy GitHub ownership across copied provider examples ([pm-github-b143](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-b143.toon))
-- Release timeout must report current workflow approval state ([pm-github-b145](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-b145.toon))
 
 ## 2026.10.16 - 2026-10-16
 
