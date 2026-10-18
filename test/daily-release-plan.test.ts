@@ -31,7 +31,7 @@ test("an unchanged release or a publication already dated today skips, even afte
 
 test("workflow rebuilds before preparation and runs the canonical generator before checks and leased PR refresh", () => {
   const workflow = readFileSync(new URL("../.github/workflows/release.yml", import.meta.url), "utf8");
-  assert.match(workflow, /import \{ decideDailyRelease \} from '\.\/scripts\/daily-release-plan\.ts'/);
+  assert.match(workflow, /import \{ decideDailyRelease \} from "\.\/scripts\/daily-release-plan\.ts"/);
   assert.ok(workflow.indexOf("git checkout --detach origin/main") < workflow.indexOf("- name: Install dependencies"));
   const generation = workflow.slice(workflow.indexOf("- name: Generate changelog"), workflow.indexOf("- name: Run release checks"));
   assert.match(generation, /npm run changelog:full/);

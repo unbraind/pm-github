@@ -97,8 +97,8 @@ jobs:
           fi
           export RELEASE_EXISTING_PR="$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --state open \
             --json number,headRefName --jq '[.[] | select(.headRefName | startswith("release/"))][0] // null')"
-          node --input-type=module <<'NODE' >> "$GITHUB_OUTPUT"
-          import { decideDailyRelease } from './scripts/daily-release-plan.ts';
+          node --input-type=module -e '
+          import { decideDailyRelease } from "./scripts/daily-release-plan.ts";
           const e = process.env;
           const pr = JSON.parse(e.RELEASE_EXISTING_PR);
           const plan = decideDailyRelease({
@@ -106,9 +106,9 @@ jobs:
             mainSha: e.RELEASE_MAIN_SHA, today: e.RELEASE_TODAY,
             lastRelease: e.RELEASE_LAST_TAG ? { tag: e.RELEASE_LAST_TAG, sha: e.RELEASE_LAST_SHA } : null,
           });
-          for (const [key, value] of Object.entries(plan)) console.log(`${key}=${value}`);
-          console.log(`latest_tag=${e.RELEASE_LAST_TAG}`);
-          NODE
+          for (const [key, value] of Object.entries(plan)) console.log(key + "=" + value);
+          console.log("latest_tag=" + e.RELEASE_LAST_TAG);
+          ' >> "$GITHUB_OUTPUT"
 
       # Refuse non-main release runs BEFORE publishing. `github.ref` is the
       # authoritative workflow trigger ref: schedule -> refs/heads/main;
