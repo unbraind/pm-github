@@ -830,15 +830,54 @@ test("partial-only alerts and unresolved bare references return complete reports
 });
 
 
-test("marker extraction finishes on repeated unclosed marker prefixes", () => {
+/** Guard parser work after module readiness, with a separate finite startup limit. */
+function markerProbe(t: TestContext, operation: string, deadlineMs = 10_000): Promise<{
+  status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; ready: boolean; timedOut: boolean;
+}> {
   const script = `import { extractBlockerCommentMarkers } from './index.ts';
-    const text = '<!--pm-github:blockers:' + '<!--pm-github:blockers:!'.repeat(40000);
-    console.log(extractBlockerCommentMarkers([{ text }]).size);`;
-  const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
-    cwd: path.resolve(import.meta.dirname, ".."), encoding: "utf8", timeout: 10000, killSignal: "SIGKILL",
+    process.stdin.once('data', () => { ${operation} });
+    console.log('ready');`;
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ["--input-type=module", "-e", script], { cwd: path.resolve(import.meta.dirname, "..") });
+    t.after(() => { child.kill("SIGKILL"); });
+    let stdout = "";
+    let stderr = "";
+    let ready = false;
+    let timedOut = false;
+    const kill = () => { timedOut = true; child.kill("SIGKILL"); };
+    let timer = setTimeout(kill, 60_000);
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+      if (!ready && stdout.includes("ready\n")) {
+        ready = true;
+        clearTimeout(timer);
+        timer = setTimeout(kill, deadlineMs);
+        child.stdin.end("run\n");
+      }
+    });
+    child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+    child.once("error", error => { clearTimeout(timer); reject(error); });
+    child.once("close", (status, signal) => { clearTimeout(timer); resolve({ status, signal, stdout, stderr, ready, timedOut }); });
   });
-  assert.equal(result.status, 0, result.error?.message ?? result.stderr);
-  assert.equal(result.stdout.trim(), "0");
+}
+
+test("marker extraction finishes on repeated unclosed marker prefixes", async t => {
+  const result = await markerProbe(t, `const text = '<!--pm-github:blockers:' + '<!--pm-github:blockers:!'.repeat(40000);
+    console.log(extractBlockerCommentMarkers([{ text }]).size);`);
+  assert.equal(result.ready, true, result.stderr);
+  assert.equal(result.timedOut, false, result.stderr);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), "ready\n0");
+});
+
+test("marker watchdog force-kills an operation stalled after readiness", async t => {
+  const result = await markerProbe(t, "while (true) {}", 100);
+  assert.equal(result.ready, true, result.stderr);
+  assert.equal(result.timedOut, true);
+  assert.equal(result.status, null);
+  assert.equal(result.signal, "SIGKILL");
 });
 
 

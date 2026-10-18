@@ -1,0 +1,14 @@
+{
+  "number": 72,
+  "title": "Full git history retains personal identity and redacted host-path blobs",
+  "state": "closed",
+  "state_reason": "completed",
+  "created_at": "2026-08-20T19:42:05Z",
+  "updated_at": "2026-10-14T11:34:13Z",
+  "closed_at": "2026-08-27T04:12:45Z",
+  "html_url": "https://github.com/unbraind/pm-csv/issues/72",
+  "labels": [],
+  "assignee": null,
+  "milestone": null,
+  "body": "Recorded lifecycle fixture; source prose omitted."
+}

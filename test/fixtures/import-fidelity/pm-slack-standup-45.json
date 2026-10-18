@@ -1,0 +1,14 @@
+{
+  "number": 45,
+  "title": "Authorize reachable-history privacy remediation before next release",
+  "state": "closed",
+  "state_reason": "completed",
+  "created_at": "2026-08-21T10:35:08Z",
+  "updated_at": "2026-10-14T11:34:26Z",
+  "closed_at": "2026-08-27T04:12:50Z",
+  "html_url": "https://github.com/unbraind/pm-slack-standup/issues/45",
+  "labels": [],
+  "assignee": null,
+  "milestone": null,
+  "body": "Recorded lifecycle fixture; source prose omitted."
+}
