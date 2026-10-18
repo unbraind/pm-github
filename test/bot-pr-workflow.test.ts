@@ -26,7 +26,7 @@ function fixture(run: (f: { dir: string; env: NodeJS.ProcessEnv; receipts: () =>
   const bin = join(dir, "bin");
   const env: NodeJS.ProcessEnv & { RECEIPTS: string } = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1",
     GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@users.noreply.github.com", GIT_COMMITTER_EMAIL: "fixture@users.noreply.github.com",
-    REPOSITORY: "acme/widgets", DEFAULT_BRANCH: "trunk", SYNC_BRANCH: "automation/proposal", SYNC_PUBLISHED: "true", SYNC_PR_NUMBER: "7", CI_WORKFLOWS: "ci.yml codeql.yml",
+    APP_DEADLINE: "1700002400", REPOSITORY: "acme/widgets", DEFAULT_BRANCH: "trunk", SYNC_BRANCH: "automation/proposal", SYNC_PUBLISHED: "true", SYNC_PR_NUMBER: "7", CI_WORKFLOWS: "ci.yml codeql.yml",
     RECEIPTS: join(dir, "receipts"), STATE: join(dir, "state"), PATH: bin + ":" + process.env.PATH };
   const git = (...args: string[]) => {
     const r = spawnSync("git", args, { cwd: dir, env, encoding: "utf8" });
@@ -87,6 +87,32 @@ for (const kind of ["sync", "closeout"]) {
     assert.match(f.receipts(), /workflow run ci.yml/); assert.doesNotMatch(f.receipts(), /workflow run codeql.yml/);
     assert.match(f.receipts(), /pr merge 7 .*--auto --squash --match-head-commit [a-f0-9]{40}/);
     assert.doesNotMatch(f.receipts(), /--admin|--force|resolve/);
+  }));
+  for (const trigger of [
+    '"on":\n  workflow_dispatch:\n', "'on':\n    workflow_dispatch:\n",
+    "on:\n workflow_dispatch:\n", "on:\n    workflow_dispatch:\n",
+    "on:\n  - pull_request\n  - workflow_dispatch\n", "on:\n- pull_request\n- workflow_dispatch\n",
+    '"on": workflow_dispatch\n', "'on': [pull_request, workflow_dispatch]\n",
+  ]) {
+    test(`${kind}: dispatch accepts common YAML trigger ${JSON.stringify(trigger)}`, () => fixture(f => {
+      writeFileSync(join(f.dir, ".github/workflows/ci.yml"), trigger);
+      f.env.CI_WORKFLOWS = "ci.yml";
+      const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
+      assert.match(f.receipts(), /workflow run ci.yml/);
+    }));
+  }
+  test(`${kind}: nested dispatch input cannot masquerade as a trigger`, () => fixture(f => {
+    writeFileSync(join(f.dir, ".github/workflows/ci.yml"), '"on":\n    push:\n      inputs:\n        workflow_dispatch: ignored\n');
+    f.env.CI_WORKFLOWS = "ci.yml";
+    const r = f.execute(kind); assert.equal(r.status, 1);
+    assert.doesNotMatch(f.receipts(), /workflow run|pr merge/);
+  }));
+  test(`${kind}: GITHUB_TOKEN fallback dispatches validation without arming auto-merge`, () => fixture(f => {
+    delete f.env.APP_DEADLINE;
+    const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr));
+    assert.match(f.receipts(), /workflow run ci.yml/);
+    assert.doesNotMatch(f.receipts(), /pr merge/);
+    assert.match(String(r.stdout), /Auto-merge not armed with GITHUB_TOKEN/);
   }));
   test(`${kind}: no dispatchable workflow refuses automatic landing`, () => fixture(f => {
     for (const name of ["ci", "codeql"]) writeFileSync(join(f.dir, `.github/workflows/${name}.yml`), "on:\n  pull_request:\nenv:\n  workflow_dispatch: ignored\njobs:\n  test:\n    workflow_dispatch: ignored\n");

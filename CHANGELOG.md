@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Preserve imported GitHub lifetimes, closure evidence and release attribution while linking cross-provider items ([pm-github-c093](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-c093.toon))
+
 ## 2026.10.16 - 2026-10-16
 
 ### Added

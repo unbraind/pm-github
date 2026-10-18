@@ -144,7 +144,7 @@ test("a real completed SDK journal with reset item files cannot authorize a push
       await runGatedImport(root, { atomic: true, gate: true });
       assert.equal(git(["add", ".agents/pm"]).status, 0);
       assert.equal(git(["reset", "--hard", "HEAD"]).status, 0);
-      await assert.rejects(runGatedImport(root, { atomic: true, gate: true }), /persisted corpus does not account/);
+      await assert.rejects(runGatedImport(root, { atomic: true, gate: true }), /committed journal.*nothing may be pushed/);
       assert.deepEqual(remoteRefs(bare), ["refs/heads/main"]);
     });
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
@@ -166,6 +166,14 @@ function githubHandler(
 ): MockGithubHandler {
   return (req, res) => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    if (url.pathname === "/graphql") {
+      jsonResponse(res, 200, { data: { repository: { issue: { timelineItems: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } } });
+      return;
+    }
+    if (/\/issues\/\d+\/timeline$/.test(url.pathname)) {
+      jsonResponse(res, 200, []);
+      return;
+    }
     const commentsMatch = /\/repos\/acme\/widgets\/issues\/(\d+)\/comments$/.exec(url.pathname);
     if (commentsMatch) {
       jsonResponse(res, 200, commentsByNumber.get(Number(commentsMatch[1])) ?? []);
@@ -530,12 +538,15 @@ test("clean flow: gated import passes, health stays strict, the push reaches the
         "the clean gated change reaches the remote",
       );
 
-      // Second gated run: everything matches by provenance — zero creates, all
-      // updates, no new items, gate passes again. That is the provenance-keyed
-      // no-op guarantee the plan phase verifies on every gated run.
+      // The identical plan resumes its completed journal without new writes.
+      // Recovered counts describe the durable batch, rather than new updates.
       const second = await runGatedImport(root, { atomic: true, gate: true });
       assert.strictEqual(second.imported, 0);
-      assert.strictEqual(second.updated, 2);
+      assert.strictEqual(second.updated, 0);
+      assert.strictEqual(second.recovered, true);
+      assert.strictEqual(second.recoveredItems, 2);
+      assert.strictEqual(second.transactionId, first.transactionId);
+      assert.strictEqual(git(["diff", "--name-only", "--", ".agents/pm"]).stdout.trim(), "");
       assert.strictEqual((second.gate as ImportGateReceipt).verdict, "pass");
 
       const list = spawnSync(
@@ -1003,7 +1014,7 @@ fs.writeFileSync("CHANGELOG.md", "# Changelog\\n- " + items[0] + "\\n");
     env.CI_WORKFLOWS = "ci.yml missing.yml\ncodeql.yaml";
     env.PARKED_RUN_URL = "https://example.invalid/actions/runs/123";
     assert.equal(git(["switch", "-c", SYNC_BRANCH]).status, 0);
-    const handle = githubHandler([{ ...issue(1, "Synthetic issue", "Reviewed public body."), state: "closed" }]);
+    const handle = githubHandler([{ ...issue(1, "Synthetic issue", "Reviewed public body."), state: "closed", state_reason: "completed", closed_at: "2026-10-02T00:00:00Z" }]);
     await withMockGithub((req, res, url, server) => {
       if (req.url === "/repos/acme/widgets") jsonResponse(res, 200, { private: false });
       else handle(req, res, url, server);

@@ -1,0 +1,21 @@
+{
+  "data": {
+    "repository": {
+      "issue": {
+        "timelineItems": {
+          "nodes": [
+            {
+              "__typename": "ClosedEvent",
+              "createdAt": "2026-09-01T04:51:39Z",
+              "closer": null
+            }
+          ],
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          }
+        }
+      }
+    }
+  }
+}

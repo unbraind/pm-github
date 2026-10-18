@@ -1,0 +1,14 @@
+{
+  "number": 134,
+  "title": "Certify complete local item reads before Linear sync and export",
+  "state": "closed",
+  "state_reason": "completed",
+  "created_at": "2026-10-05T05:06:20Z",
+  "updated_at": "2026-10-07T13:09:11Z",
+  "closed_at": "2026-10-07T13:09:11Z",
+  "html_url": "https://github.com/unbraind/pm-linear/issues/134",
+  "labels": [],
+  "assignee": null,
+  "milestone": null,
+  "body": "Mirrored from Linear https://linear.app/fixture/issue/ENG-134"
+}

@@ -517,11 +517,18 @@ jobs:
             # Standard block and compact trigger forms; nested job/input keys
             # cannot make a workflow dispatchable. Unknown forms fail closed.
             if ! awk '
-              /^on: *workflow_dispatch *(#.*)?$/ { found=1 }
-              /^on: *\[([^]]*, *)?workflow_dispatch *(,|\])/ { found=1 }
-              /^on: *($|#)/ { in_on=1; next }
-              /^[^[:space:]#]/ { in_on=0 }
-              in_on && /^  workflow_dispatch:/ { found=1 }
+              /^(on|"on"|\047on\047) *: *workflow_dispatch *(#.*)?$/ { found=1 }
+              /^(on|"on"|\047on\047) *: *\[([^]]*, *)?workflow_dispatch *(,|\])/ { found=1 }
+              /^(on|"on"|\047on\047) *: *($|#)/ { in_on=1; depth=-1; next }
+              /^[^[:space:]#]/ && !/^- +/ { in_on=0 }
+              in_on && /^[[:space:]]*[^[:space:]#]/ {
+                match($0, /^[[:space:]]*/)
+                if (depth < 0) depth=RLENGTH
+                if (RLENGTH == depth) {
+                  rest=substr($0, depth + 1); sub(/^- +/, "", rest)
+                  if (rest ~ /^workflow_dispatch *(:|$|#)/) found=1
+                }
+              }
               END { exit !found }
             ' ".github/workflows/${workflow_file}"; then
               echo "::warning::Skipping non-dispatchable caller workflow: ${workflow_file}. Add workflow_dispatch: under on: on the default branch for manual head validation. Eligible native PR checks must still pass."
@@ -543,6 +550,10 @@ jobs:
           # --auto respects required checks and conversation resolution. The SHA
           # guard refuses a changed head; a disabled repository setting is soft.
           enable_auto_merge() {
+            if [[ -z "${APP_DEADLINE:-}" ]]; then
+              echo "::notice::Auto-merge not armed with GITHUB_TOKEN: its merge does not start push workflows on the default branch. Configure the optional automation App for unattended landing."
+              return 0
+            fi
             if ! gh pr merge "${SYNC_PR_NUMBER}" -R "${REPOSITORY}" --auto --squash --match-head-commit "${head_sha}"; then
               echo "::notice::Squash auto-merge unavailable for the bot PR; repository settings or branch rules require attention. No protection was bypassed."
             fi

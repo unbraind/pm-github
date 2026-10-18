@@ -41,8 +41,8 @@ The private key is supplied only to that action after local gates and caller
 scripts finish. App-enabled monitoring has forty polls and a forty-minute
 absolute deadline recorded immediately after token creation, so publication
 time also counts toward the budget. This stays inside the one-hour token lifetime. Legacy
-GITHUB_TOKEN monitoring retains the two-hour bound and cannot guarantee landing
-without approval. Required checks and conversations stay enforced by GitHub.
+GITHUB_TOKEN monitoring retains the two-hour bound and does not arm auto-merge;
+a maintainer must approve eligible runs and merge the protected PR. Required checks and conversations stay enforced by GitHub.
 
 Sources: [GitHub token event behavior](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow),
 [required-check eligibility](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks),
@@ -127,7 +127,7 @@ The proposal is rebuilt on the default branch each daily run. After publication,
 a bounded monitor handles a base advance (including the daily release) by
 checking compare-API ancestry even when the merge label is BLOCKED or UNKNOWN,
 requesting update-branch with expected_head_sha, then redispatching every
-selected workflow for the new head. It requests squash auto-merge with a matching
+selected workflow for the new head. In App mode it requests squash auto-merge with a matching
 head SHA; GitHub still enforces required checks and conversation resolution.
 Disallowed auto-merge is a notice, failed check dispatch is an error. No bypass
 or thread resolution is attempted. App mode stops within forty minutes and legacy mode within two hours. A base

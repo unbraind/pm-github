@@ -6,13 +6,14 @@ status: open
 priority: 1
 tags: []
 created_at: "2026-10-05T09:23:42.980Z"
-updated_at: "2026-10-17T10:58:24.790Z"
+updated_at: "2026-10-18T04:03:19.282Z"
 author: codex-sol
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-github-f1at,related,"2026-10-05T09:32:54.728Z",codex-sol,"cli:update:dep",detected
-comments[2]{created_at,author,text}:
+comments[3]{created_at,author,text}:
   "2026-10-05T09:25:31.280Z",codex-sol,"The caller example intentionally uses release commit and exact version placeholders. The currently published extension predates the gate, and this work is authorized only in the pm-github worktree. No pilot workflow in another repository was changed, enabled, or dispatched. Resolve the placeholders only after a reviewed release and separately authorized caller adoption."
   "2026-10-17T10:58:16.179Z",codex-agent,"Remaining rollout follow-up for pm-github-8r7c: GitHub excludes workflow_dispatch job checks from PR branch rules. After the reviewed provider release, authorize one-time caller App client-ID/private-key mapping for eligible native PR runs, add CodeQL workflow_dispatch for additional head verification, remove or expand explicit closeout ci.yml overrides, and declare required-checks per current protection policy. docs/bot-pr-automation.md lists all 24 callers and contexts. Preserve existing disabled pilot states until separately authorized; this task inspected callers read-only and did not change, enable or dispatch them."
+  "2026-10-18T04:03:19.282Z",codex-agent,"Additional release-adoption dependency from pm-github-c093: the default-branch pm-github-sync callers in pm-beads, pm-brief, pm-context, pm-csv, pm-linear and pm-slack-standup all pin workflow SHA 67a5e3e1514fddeeae29951da00513f06f7aa0ab and pm-github-version 2026.10.16. Regeneration with the import-fidelity fix requires adoption of its reviewed release in both pins; the next scheduled sync using that release can then regenerate the existing sync PRs. Keep rollout as separately authorized work; the import-fidelity task does not change or dispatch consumer workflows."
 files[2]{path,scope}:
   .github/workflows/pm-github-sync.yml,project
   docs/sync-workflow-caller.yml,project

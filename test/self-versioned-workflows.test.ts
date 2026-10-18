@@ -125,3 +125,10 @@ test("release retains token behavior and never stamps or commits reusable workfl
     assert.doesNotMatch(shell(release, step), /pm-github-(?:sync|closeout)\.yml/);
   }
 });
+
+/** Keep the two independent version-discovery requirements explicit in caller documentation. */
+test("version discovery documents App-free lookup and no release-time stamping", () => {
+  const readme = readFileSync(join(root, "README.md"), "utf8").replace(/\s+/g, " ");
+  assert.match(readme, /Release version discovery needs no GitHub App, and no release-time workflow stamping is required\./);
+  assert.match(readme, /The release workflow keeps its existing token behavior\./);
+});

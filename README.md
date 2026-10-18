@@ -478,8 +478,8 @@ The resolver uses public `git ls-remote --tags https://github.com/unbraind/pm-gi
 peeled `^{}` commit (never the tag object), strips `v`, and requires an exact
 numeric version `N.N.N` or `N.N.N-N`. It reads all matching refs in one request,
 without API pagination or new credentials. Lookup errors and multiple release
-versions on one commit fail closed. Release version discovery needs no GitHub App or release-time workflow
-stamping is required; the release workflow keeps its existing token behavior.
+versions on one commit fail closed. Release version discovery needs no GitHub App, and no release-time workflow
+stamping is required. The release workflow keeps its existing token behavior.
 
 Pin **release commit SHAs**, with their matching tag in a same-line comment
 (for example `uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@<40-character-release-sha> # v2026.10.16`).
@@ -776,3 +776,36 @@ itself lists each affected stream in its output; `pm history --verify <id>` spot
 content, so `reconcile` only re-greens the hash chain (no data loss) — see the authoritative
 [pm-cli merge-safety guide](https://github.com/unbraind/pm-cli/blob/main/docs/MERGE_SAFETY.md). The
 older blunt `pm history-repair --all` remains available as a lower-level primitive.
+
+## What an imported issue looks like
+
+An issue owned by the GitHub importer keeps GitHub's creation and closure dates in the native lifecycle fields used by momentum and cycle-time readers. The import records a new, append-only before/after history event at the time of synchronization; it does not rewrite old events. The public SDK's high-level create/update commands reserve these dates, so finalization uses its public item lock, serialization and history primitives.
+
+```yaml
+status: closed
+created_at: "2026-09-02T10:00:00Z"
+updated_at: "2026-10-16T12:00:00Z"
+closed_at: "2026-09-04T12:00:00Z"
+completed_at: "2026-09-04T12:00:00Z"
+close_reason: 'Closed on GitHub as completed on 2026-09-04T12:00:00Z; closing PR https://github.com/example/project/pull/8 ("Restore the parser")'
+release: v2026.9.5
+github_url: https://github.com/example/project/issues/7
+github_number: 7
+github_state: closed
+github_state_reason: completed
+github_created_at: "2026-09-02T10:00:00Z"
+github_updated_at: "2026-09-04T12:00:00Z"
+github_closed_at: "2026-09-04T12:00:00Z"
+github_release: v2026.9.5
+github_link_only: false
+```
+
+`completed` maps to `closed`; `not_planned` and `duplicate` map to `canceled`. An open or reopened issue maps to `open` and clears old closure evidence and import-assigned release attribution. A closure reason names the closing commit from the REST timeline or closing PR/commit identified by GraphQL `ClosedEvent`, when available. A `ConnectedEvent` supplies a quoted linked PR without claiming that the association caused the closure. Otherwise it says `Closed on GitHub as <reason> on <date>`. Closing a report alone does not establish that its described defect or privacy exposure was repaired.
+
+Release attribution uses the actual dates of locally available calendar tags, including annotated tag dates. A closed issue belongs to the first tag at or after its closure: before the first tag goes to that first release, between two tags goes to the second, and after the latest tag remains pending. Fetch the complete tag history before importing; the reusable sync workflow already does this. Regenerate with pm-changelog's `--respect-item-release` so a historical import stays in its declared release window.
+
+Before creating an item, import checks the complete tracker for its provenance tag, GitHub URLs in provenance or link metadata, and Linear/Jira/ADO links referenced by the GitHub issue body. A unique existing external owner receives the GitHub tag and source metadata; its title, body, provider identity, creation/completion dates and release remain intact. A persisted `github_link_only` marker preserves that ownership on subsequent syncs. Free-text descriptions and bodies do not declare GitHub ownership. Ambiguous matches refuse the import before writes with `--gate` or `--atomic`. A plain multi-issue import may write earlier issues before rejecting a later ambiguous match.
+
+With `--gate` and a nonempty filtered issue list, both preview and apply results include a `plan` with source dates, closure reason, release, target identity, link/create/update action and state-conflict decision. An empty filtered issue list returns without a `plan`, including with `--gate --dry-run`. GitHub wins lifecycle conflicts for GitHub-owned imports. A canceled item that GitHub later reports as completed uses the SDK's explicit repeat-closure transition with the source reason. A linked external owner keeps its local status, and the plan records `preserve-provider-owner`; `github_state` still records the source state. Atomic transaction identity includes the latest external edit or different lifecycle generation in history. Local state edits and repeated state cycles force reconciliation, while staging and compensation keep crash retries on the same journal. Finalization runs before the SDK commits and is compensated with the batch on failure. It is idempotent and runs again after a recovered atomic journal, so an interrupted finalization can be repaired by retrying the same import before the gate permits a push.
+
+SDK limitation: native `updated_at` remains the local mutation clock because the bulk SDK uses it to address rollback history. The GitHub update date is retained exactly in `github_updated_at`, and the gated plan discloses this policy. Backdating native `updated_at` safely requires an SDK import mutation whose version identity is independent of source time. Native creation, closure and completion dates still preserve GitHub lifetimes for momentum and cycle-time readers.

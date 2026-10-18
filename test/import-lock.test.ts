@@ -468,7 +468,9 @@ test(
     const root = makeWorkspace();
     try {
       const id = firstItemId(root);
-      const comments = Array.from({ length: 20 }, (_, i) =>
+      // Several distinct ids prove cross-process deduplication without making
+      // the bounded lock waiter depend on twenty sequential SDK disk writes.
+      const comments = Array.from({ length: 5 }, (_, i) =>
         ghComment({ id: 9000 + i, user: { login: "racer" }, body: `cross-process race ${i}` }),
       );
       // Start barrier: both children are spawned first and only begin syncing

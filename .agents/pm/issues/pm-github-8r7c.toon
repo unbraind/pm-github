@@ -6,10 +6,10 @@ status: in_progress
 priority: 1
 tags: []
 created_at: "2026-10-17T09:26:43.864Z"
-updated_at: "2026-10-17T14:16:10.371Z"
+updated_at: "2026-10-18T04:06:53.435Z"
 author: codex-agent
 acceptance_criteria: Dispatch declared caller workflows on the proposal head; refresh behind proposals; request protected squash auto-merge; adversarial executable workflow regressions and npm/Bun release gates pass.
-comments[15]{created_at,author,text}:
+comments[17]{created_at,author,text}:
   "2026-10-17T09:27:20.424Z",codex-agent,"Live audit: all 24 caller CodeQL workflows lack workflow_dispatch. Required codeql is missing on pm-jev, pm-lint, pm-review and pm-swarm bot heads; dispatched CI checks succeed on heads despite parked pull_request runs. All closeout callers explicitly select ci.yml. Preserve override semantics and document one-time trigger/override setup. Refresh against the latest default branch, request protected squash auto-merge, and execute adversarial workflow tests. Keep import-fidelity PR 142 untouched."
   "2026-10-17T09:34:40.209Z",codex-agent,"Regression proof: replacing only both final dispatch/maintenance step bodies with origin/main makes the new bot PR suite fail; fixed suite passes 11/11. Tests perform a real default-branch advance and merge and require both CI and CodeQL to redispatch on the new SHA. Missing CodeQL dispatch is warned; zero dispatchable workflows fails; auto-merge denial is soft; unresolved conversations stay blocked. Maintenance is bounded to two hours, with the next daily run rebuilding afterward. Existing explicit ci.yml overrides require one-time removal or expansion alongside the CodeQL trigger."
   "2026-10-17T09:46:00.517Z",codex-agent,"Read-only follow-up audit: pm-ado PR 32 is also blocked by an unresolved changelog placement review (October delivery under the September package release), tracked separately as pm-github-lfcf. Required conversations are preserved. The new monitor uses the verified owned PR number so same-name fork branches cannot be selected for auto-merge."
@@ -25,15 +25,19 @@ comments[15]{created_at,author,text}:
   "2026-10-17T13:38:34.138Z",codex-agent,"Corrected positive fixtures pass 3/3: caller trunk through real preparation/publication, fork PR isolation, and nested npm project. Full restarted npm suite passes 777/777 with zero failures/skips; coverage aggregation and remaining release gates are still pending. Workflow behavior remains protected; fixture initialization is pinned and positive fixtures now include dispatchable CI."
   "2026-10-17T13:46:22.650Z",codex-agent,"Final behavioral revert receipt against the complete current 23-case file: restoring only the two original workflow implementations in an isolated copy yields 1 pass and 22 failures, zero skips. Fixed implementations pass 23/23 (including under the full 777/777 npm suite). The independent ancestry-only revert fails both masked-base-advance cases; restoring ancestry passes 2/2. Full npm release gate exits 0 with all 13 authored modules at exact 100/100/100/100; Bun release gate remains running."
   "2026-10-17T14:16:09.163Z",codex-agent,"Final local gates PASS with isolated CI identity (HOME scratch, global/system Git config disabled): npm run release:check and bun run release:check both exit 0, each 777/777 tests, zero failures/skips, all 13 authored modules at exact 100% statements/branches/functions/lines. Linked pm commands pass 23/23 maintenance plus 3/3 real-workflow positive fixtures. Revert receipts: original workflow implementations fail 22/23; ancestry-only, ERR-inheritance and App-pairing reverts each fail 2/2. Caller audit is read-only; all 24 setup requirements are documented, rollout tracked in pm-github-aiok, changelog-placement finding in pm-github-lfcf. No caller dispatch, merge or release performed; PR 142 remains separate."
-files[5]{path,scope}:
+  "2026-10-18T04:03:26.253Z",codex-agent,"Round 1: merge origin/main preserving import fidelity, address all five review threads with isolated revert proofs, then run both release gates under isolated CI identity. The review body has no outside-diff or nitpick findings. The merge driver attempted history re-anchoring; restored the existing PR history unchanged and replayed the main-branch rollout note through the pinned CLI instead."
+  "2026-10-18T04:06:49.014Z",codex-agent,"Round 1 fixes: both detectors accept quoted on keys, one/four-space children, indented and indentless event sequences while rejecting nested input keys. Both auto-merge functions require the App deadline; GITHUB_TOKEN fallback still dispatches checks without arming a merge. README separates App-free version lookup from no release-time stamping. Revert proofs retain every new test: reverting only both detectors fails 16/16 trigger cases; reverting only both auto-merge guards fails 2/2 fallback cases; reverting only the README sentence fails 1/1 documentation contract. Restored fixes pass the focused 21/21 cases."
+files[6]{path,scope}:
   .github/workflows/pm-github-closeout.yml,project
   .github/workflows/pm-github-sync.yml,project
   test/bot-pr-workflow.test.ts,project
   test/closeout-workflow.test.ts,project
   test/import-gate.test.ts,project
-tests[2]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  test/self-versioned-workflows.test.ts,project
+tests[3]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   node --test test/bot-pr-workflow.test.ts,project,codex-agent,"2026-10-17T09:35:21.256Z",local_mutation,fix/bot-prs-run-required-checks-and-stay-current
   node --test --test-name-pattern='^(the caller default branch trunk flows from schedule guard through real Git preparation and review|the workflow never edits a fork PR sharing the sync branch name|npm-project-dir subdirectory CLI and SDK keep the tracker and publication at the repository root)$' test/import-gate.test.ts,project,codex-agent,"2026-10-17T13:38:31.648Z",local_mutation,fix/bot-prs-run-required-checks-and-stay-current
+  node --test test/self-versioned-workflows.test.ts,project,codex-agent,"2026-10-18T04:06:14.124Z",local_mutation,fix/bot-prs-run-required-checks-and-stay-current
 docs[1]{path,scope}:
   docs/bot-pr-automation.md,project
 body: ""
