@@ -1,0 +1,13 @@
+id: pm-github-sagl
+title: Audit copied fleet release workflows for canonical generation and one daily publication
+description: Read-only inventory found 25 sibling workflows with the same numeric-suffix decision block. No shared release template exists in pm-ops. Use the sibling inventory in docs/daily-release-refresh.md to plan package-owned follow-up work without modifying other repositories in the current task.
+type: Task
+status: open
+priority: 2
+tags: []
+created_at: "2026-10-18T18:32:44.499Z"
+updated_at: "2026-10-18T18:34:24.577Z"
+author: codex-agent
+docs[1]{path,scope}:
+  docs/daily-release-refresh.md,project
+body: ""
