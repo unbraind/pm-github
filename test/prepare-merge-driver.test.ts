@@ -71,9 +71,9 @@ function stubPm(name: string, status: number, body = ""): string {
   return bin;
 }
 
-/** Run the launcher as npm's `prepare` hook would: as the entry point, from `cwd`, with `path` as PATH. */
-function prepare(cwd: string, path: string): SpawnSyncReturns<string> {
-  return spawnSync(nodeExecutable, [launcher], { cwd, encoding: "utf8", env: { ...process.env, PATH: path, NODE_PATH: "" } });
+/** Run npm's prepare entry point with an explicit lifecycle command and PATH. */
+function prepare(cwd: string, path: string, command = "ci"): SpawnSyncReturns<string> {
+  return spawnSync(nodeExecutable, [launcher], { cwd, encoding: "utf8", env: { ...process.env, npm_command: command, PATH: path, NODE_PATH: "" } });
 }
 
 /** The merge drivers registered in a checkout's LOCAL Git config, by name. */
@@ -149,3 +149,24 @@ test("an installer killed by a signal fails the install instead of reporting suc
   const result = prepare(checkout("killed", "pinned"), stubPm("killed", 0, "kill -9 $PPID"));
   assert.equal(result.status, 1, result.stderr);
 });
+
+for (const command of ["pack", "publish"]) {
+  test(`${command} without development tools leaves Git configuration untouched and reports the omission`, () => {
+    const directory = checkout(`artifact-${command}`, "absent");
+    /** Read the entire local config so any artifact-time mutation is visible. */
+    const config = () => spawnSync("git", ["config", "--local", "--list"], { cwd: directory, encoding: "utf8" });
+    const before = config();
+    assert.equal(before.status, 0, before.stderr);
+    const attributes = readFileSync(join(directory, ".gitattributes"), "utf8");
+    const result = prepare(directory, hostPath, command);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, "");
+    assert.match(result.stderr, /skipping merge-driver install/);
+    assert.equal(result.stderr.trim().split("\n").length, 1, "one explicit omission notice");
+    const after = config();
+    assert.equal(after.status, 0, after.stderr);
+    assert.equal(after.stdout, before.stdout);
+    assert.equal(readFileSync(join(directory, ".gitattributes"), "utf8"), attributes);
+    assert.deepEqual(registeredDrivers(directory), []);
+  });
+}
