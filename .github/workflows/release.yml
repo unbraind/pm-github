@@ -95,14 +95,14 @@ jobs:
           if [[ -n "$latest_tag" ]]; then
             export RELEASE_LAST_SHA="$(git rev-list -n 1 "$latest_tag")"
           fi
-          export RELEASE_EXISTING_PR="$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --state open \
-            --json number,headRefName --jq '[.[] | select(.headRefName | startswith("release/"))][0] // null')"
+          RELEASE_EXISTING_PRS="$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --state open \
+            --json number,headRefName,isCrossRepository,author)"
+          export RELEASE_EXISTING_PRS
           node --input-type=module -e '
           import { decideDailyRelease } from "./scripts/daily-release-plan.ts";
           const e = process.env;
-          const pr = JSON.parse(e.RELEASE_EXISTING_PR);
           const plan = decideDailyRelease({
-            existingPr: pr && { number: pr.number, branch: pr.headRefName },
+            existingPrs: JSON.parse(e.RELEASE_EXISTING_PRS),
             mainSha: e.RELEASE_MAIN_SHA, today: e.RELEASE_TODAY,
             lastRelease: e.RELEASE_LAST_TAG ? { tag: e.RELEASE_LAST_TAG, sha: e.RELEASE_LAST_SHA } : null,
           });
@@ -287,6 +287,7 @@ jobs:
           RELEASE_TAG: ${{ steps.decide.outputs.tag }}
           NPM_VERSION: ${{ steps.decide.outputs.npm_version }}
           RELEASE_BRANCH: ${{ steps.decide.outputs.release_branch }}
+          RELEASE_PR_NUMBER: ${{ steps.decide.outputs.pr_number }}
         run: |
           set -euo pipefail
           git fetch origin main --force
@@ -297,11 +298,18 @@ jobs:
           fi
 
           release_branch="$RELEASE_BRANCH"
+          pr_number="$RELEASE_PR_NUMBER"
+          remote_branch_sha="$(git ls-remote --heads origin "refs/heads/${release_branch}" | cut -f1)"
+          if [[ -z "$pr_number" && -n "$remote_branch_sha" ]]; then
+            echo "::error::Refusing to overwrite a release branch without a verified workflow PR."
+            exit 1
+          fi
           release_commit="$(git rev-parse HEAD)"
           if [[ "$release_commit" == "$current_main_sha" ]]; then
             echo "Release metadata is already present on main; resuming the publish/tag transaction."
-            if git ls-remote --exit-code --heads origin "refs/heads/${release_branch}" > /dev/null 2>&1; then
-              git push origin --delete "$release_branch"
+            if [[ -n "$remote_branch_sha" ]]; then
+              git push --force-with-lease="refs/heads/${release_branch}:${remote_branch_sha}" \
+                origin ":refs/heads/${release_branch}"
             fi
             {
               echo "merged_sha=$current_main_sha"
@@ -310,22 +318,9 @@ jobs:
             exit 0
           fi
 
-          remote_branch_sha="$(git ls-remote --heads origin "refs/heads/${release_branch}" | cut -f1)"
-          if [[ -n "$remote_branch_sha" ]]; then
-            git push \
-              --force-with-lease="refs/heads/${release_branch}:${remote_branch_sha}" \
-              origin "HEAD:refs/heads/${release_branch}"
-          else
-            git push origin "HEAD:refs/heads/${release_branch}"
-          fi
-
-          pr_number="$(gh pr list \
-            --repo "$GITHUB_REPOSITORY" \
-            --base main \
-            --head "$release_branch" \
-            --state open \
-            --json number \
-            --jq '.[0].number // empty')"
+          git push \
+            --force-with-lease="refs/heads/${release_branch}:${remote_branch_sha}" \
+            origin "HEAD:refs/heads/${release_branch}"
           if [[ -z "$pr_number" ]]; then
             pr_url="$(gh pr create \
               --repo "$GITHUB_REPOSITORY" \
