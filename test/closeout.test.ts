@@ -116,6 +116,7 @@ test("dry-run plans same-repo, foreign, unknown, terminal and excluded items wit
     const report = await closeout(root, { pr: ["42", "42"], skip: [ids[3], ids[3]] });
     assert.equal(report.dry_run, true);
     assert.equal(report.closed, 0);
+    assert.equal(compactCloseoutReport(report).plan[0]!.action, "close");
     assert.deepEqual(report.plan.map(row => row.action), ["close", "skip", "skip", "skip", "skip", "skip"]);
     assert.match(report.plan[1]!.reason, /another repository/);
     assert.match(report.plan[2]!.reason, /does not exist/);
