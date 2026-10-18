@@ -406,7 +406,7 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
       // Only canonical delivery metadata or a whole-line trailer/closing declaration is authoritative.
       const linked = [item.github_pr, item.pr_url, item.pull_request_url].includes(pr.html_url);
       const id = item.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const declaration = new RegExp(`^(?:[-*]\\s+)?(?:${[...CLOSING_KEYWORDS].join("|")}|pm-github:)\\s+${id}[.!]?\\s*$`, "im").test(pr.body ?? "");
+      const declaration = new RegExp(`^(?:[-*][ \\t]+)?(?:${[...CLOSING_KEYWORDS].join("|")}|pm-github:)[ \\t]+${id}[.!]?[ \\t]*$`, "im").test(pr.body ?? "");
       if (linked || declaration) {
         const ref = refs.find(ref => ref.item === item.id && ref.repo.toLowerCase() === repo.toLowerCase());
         if (ref) ref.declared = true;
@@ -452,7 +452,8 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
   }
   // Resolve attribution across the complete selection before the first SDK write.
   for (const row of plan) {
-    if ((candidates.get(row.item)?.size ?? 0) > 1 && !["already_terminal", "other_repository", "unknown_item", "explicit_skip"].includes(row.code)) {
+    const claimants = candidates.get(row.item);
+    if (claimants && claimants.size > 1 && claimants.has(row.pr) && !["already_terminal", "other_repository", "unknown_item", "explicit_skip"].includes(row.code)) {
       row.action = "skip";
       row.code = "ambiguous_delivery";
       row.reason = "Multiple merged PRs explicitly claim delivery; select the intended PR before closing.";

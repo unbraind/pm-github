@@ -29,14 +29,14 @@ async function scenario(linked: boolean, bodies?: string[]) {
     }
     const api: CloseoutApi = { base: "https://api.github.com", next: () => undefined, get: async endpoint => {
       const n = Number(endpoint.split("/").at(-1));
-      const value = endpoint.includes("/pulls/") ? { number: n, body: (bodies?.[n === 16 ? 0 : 1] ?? recorded.find(p => p.number === n)!.body).replaceAll("pm-ado-5w3m", item.id),
+      const value = endpoint.includes("/pulls/") ? { number: n, body: (bodies?.[[16, 19, 20].indexOf(n)] ?? recorded.find(p => p.number === n)!.body).replaceAll("pm-ado-5w3m", item.id),
         merged: true, merged_at: n === 16 ? "2026-10-04T12:58:08Z" : "2026-10-08T01:19:51Z", merge_commit_sha: "b".repeat(40),
         html_url: url(n), head: { sha: head }, base: { ref: "main", repo: { full_name: repo } } }
         : endpoint.includes("/protection/") ? { contexts: ["CI"], checks: [] }
         : endpoint.includes("/check-runs") ? { total_count: 1, check_runs: [{ name: "CI", head_sha: head, status: "completed", conclusion: "success", app: { id: 7 } }] } : [];
       return { body: JSON.stringify(value) };
     } };
-    const report = await runCloseout(root, repo, { pr: ["16", "19"], apply: true }, api);
+    const report = await runCloseout(root, repo, { pr: bodies?.length === 3 ? ["16", "19", "20"] : ["16", "19"], apply: true }, api);
     return { report, item: (await get(item.id, {}, sdk)).item };
   } finally { rmSync(root, { recursive: true, force: true }); }
 }
@@ -58,12 +58,29 @@ test("the item's explicit PR link selects real delivery #19 and its merge chrono
 });
 
 test("closing item ids and pm-github trailers explicitly deliver without a canonical body link", async () => {
-  for (const declaration of ["Closes pm-ado-5w3m", "- Fixes pm-ado-5w3m.", "pm-github: pm-ado-5w3m",
+  for (const declaration of ["Closes pm-ado-5w3m", "- Fixes pm-ado-5w3m.", "pm-github: pm-ado-5w3m", "*\tFixes\tpm-ado-5w3m!\t",
     "See https://github.com/unbraind/pm-ado/blob/main/.agents/pm/issues/unrelated.toon\nSee https://github.com/other/repo/blob/main/.agents/pm/issues/pm-ado-5w3m.toon\nCloses pm-ado-5w3m"]) {
     const { report } = await scenario(false, ["No delivery claim", declaration]);
     assert.equal(report.closed, 1);
     assert.equal(report.plan[0]!.pr, 19);
   }
+});
+
+test("multiline keywords and trailers never declare delivery", async () => {
+  for (const declaration of ["Closes\npm-ado-5w3m", "pm-github:\npm-ado-5w3m", "Closes\r\npm-ado-5w3m", "pm-github:\t\npm-ado-5w3m"]) {
+    const { report, item } = await scenario(false, ["No delivery claim", declaration]);
+    assert.equal(report.closed, 0, declaration);
+    assert.equal(item.status, "in_progress");
+    assert.ok(report.plan.every(row => row.action === "skip"));
+  }
+});
+
+test("ambiguity applies to two claiming PRs while a third mention remains not_delivery", async () => {
+  const mention = "See https://github.com/unbraind/pm-ado/blob/main/.agents/pm/issues/pm-ado-5w3m.toon";
+  const { report, item } = await scenario(false, ["Closes pm-ado-5w3m", "pm-github: pm-ado-5w3m", mention]);
+  assert.equal(report.closed, 0);
+  assert.deepEqual(report.plan.map(row => [row.pr, row.code]), [[16, "ambiguous_delivery"], [19, "ambiguous_delivery"], [20, "not_delivery"]]);
+  assert.equal(item.status, "in_progress");
 });
 
 test("two explicit merged delivery claims remain ambiguous before any close", async () => {
