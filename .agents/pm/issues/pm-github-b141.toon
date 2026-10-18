@@ -6,12 +6,13 @@ status: in_progress
 priority: 1
 tags[2]: changelog-unreleased,"gh:unbraind/pm-github#141"
 created_at: "2026-10-18T04:05:25.251Z"
-updated_at: "2026-10-18T04:10:12.988Z"
+updated_at: "2026-10-18T04:57:10.354Z"
 author: codex-agent
-comments[3]{created_at,author,text}:
+comments[4]{created_at,author,text}:
   "2026-10-18T04:05:38.030Z",codex-agent,"Round 1: issue read in full; searched existing tracker and no issue-specific import exists. Implement in fix/import-and-release-issues from origin/main; add behavioral revert proof and run unchanged npm and Bun release gates with isolated CI identity."
   "2026-10-18T04:09:09.240Z",codex-agent,"Validate each effective rule type as a nonempty string before accepting it as unrelated policy. New real-tracker matrix reproduces unsafe closure for missing/null/numeric/object/empty types and a hidden required-check row, in both readable-empty and declared-policy modes: baseline fails 12/12. Fixed refusals must retain byte-identical durable tracker state; valid deletion rules retain fallback."
   "2026-10-18T04:09:56.876Z",codex-agent,"Isolated revert proof: restore only closeout.ts to origin/main with all new tests retained; the missing-type/readable-empty regression fails because closed=1. Restore the fix: all 12 malformed discriminator cases refuse with byte-identical durable files and the unrelated-rule control passes. Combined real-tracker acceptance passes 23/23, zero skips."
+  "2026-10-18T04:57:10.354Z",codex-agent,"Issue #141: 13/13 real-SDK policy fixtures pass with zero durable writes on all 12 malformed refusals; the isolated closeout.ts revert fails 1/1. Both full CI release commands PASS at 956ae58201a9058f19fab2ca6e265b7426374639: npm run release:check and bun run release:check each pass 824/824, zero failures/skips/cancellations/todos, exact 100/100/100/100 coverage across 14 authored modules. Isolated HOME and global/system Git identity were enforced. Receipts: https://github.com/unbraind/pm-github/actions/runs/39098074518/job/117588542763 and https://github.com/unbraind/pm-github/actions/runs/39098074518/job/117588542909 . Remove the temporary validation workflow; implementation/tests remain unchanged. Regenerate the changelog after ALL final tracker writes. Item remains in progress and unclaimed for orchestrator verification."
 files[2]{path,scope}:
   closeout.ts,project
   test/closeout.test.ts,project
