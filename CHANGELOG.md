@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Require explicit delivery attribution before merged-PR closeout ([pm-github-uqjf](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-uqjf.toon))
 - Release timeout must report current workflow approval state ([pm-github-b145](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-b145.toon))
 - Preserve legacy GitHub ownership across copied provider examples ([pm-github-b143](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-b143.toon))
 - Reject malformed effective-rule discriminators before closeout ([pm-github-b141](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-b141.toon))

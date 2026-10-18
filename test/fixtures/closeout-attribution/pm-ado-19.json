@@ -1,0 +1,11 @@
+{
+  "number": 19,
+  "title": "Enforce independently measured statement coverage",
+  "body": "PM item: https://github.com/unbraind/pm-ado/blob/main/.agents/pm/issues/pm-ado-5w3m.toon",
+  "commits": [
+    {
+      "messageHeadline": "Enforce independently measured statement coverage",
+      "messageBody": ""
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "number": 16,
+  "title": "Certify pm-ado on PM CLI 2026.10.4 and consolidate pending dependency updates",
+  "body": "**NOT READY for 100/100/100/100:** the pre-existing statement threshold is declared but not independently measured or enforced. README and gate comments now describe the measured scope accurately, and the threshold is preserved. Follow-up pm-ado-5w3m records actual enforcement work. Offline validation is the only shipped command; no live Azure sync/import/export, reverse relations or revision-reconciliation acceptance is claimed. Final-head CI and substantive reviews remain separate.\nExact commands and outputs: `docs/certification-2026.10.4.md`. PM: [certification pm-ado-qq1p](https://github.com/unbraind/pm-ado/blob/main/.agents/pm/chores/pm-ado-qq1p.toon), [statement enforcement pm-ado-5w3m](https://github.com/unbraind/pm-ado/blob/main/.agents/pm/issues/pm-ado-5w3m.toon). Items stay open; orchestrator merges and closes after verification.",
+  "commits": [
+    {
+      "messageHeadline": "Certify pm-ado on PM CLI 2026.10.4 with exact dependency pins",
+      "messageBody": ""
+    },
+    {
+      "messageHeadline": "Keep managed preview artifacts clone-local and document review scope",
+      "messageBody": ""
+    }
+  ]
+}

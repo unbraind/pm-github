@@ -20,7 +20,7 @@ export interface CloseoutRow {
 /** Stable decisions used by automation and compact skip counts. */
 export type CloseoutCode = "already_terminal" | "other_repository" | "duplicate_selection" | "explicit_skip"
   | "unknown_item" | "epic" | "active_children" | "not_delivery" | "close_failed"
-  | "head_checks_passed" | "head_checks_failed" | "head_evidence_unavailable" | "required_checks_unverified" | "incomplete_merge";
+  | "ambiguous_delivery" | "head_checks_passed" | "head_checks_failed" | "head_evidence_unavailable" | "required_checks_unverified" | "incomplete_merge";
 
 /** Which head-check policy was evaluated for one selected pull request. */
 interface CheckGate {
@@ -392,6 +392,7 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
     if (typeof parent === "string" && !TERMINAL_STATUSES.includes(item.status)) activeChildren.set(parent, (activeChildren.get(parent) ?? 0) + 1);
   }
   const selected = new Set<string>();
+  const candidates = new Map<string, Set<number>>();
   const plan: CloseoutRow[] = [];
   const checks: CheckGate[] = [];
   const closures: { row: CloseoutRow; reason: string; at: string; resolution: string; expectedResult: string; actualResult: string }[] = [];
@@ -400,7 +401,24 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
     let gate: CheckGate = { pr: number, code: "incomplete_merge", rule: "unavailable", ok: false, passed: [], reason: "Pull request is not merged or merge evidence is incomplete." };
     if (mergeEvidence(pr)) gate = await checkCloseoutHead(api, repo, pr, declared);
     checks.push(gate);
-    for (const ref of extractCloseoutItems(pr.body ?? "")) {
+    const refs = extractCloseoutItems(pr.body ?? "");
+    for (const item of items.values()) {
+      // Only canonical delivery metadata or a whole-line trailer/closing declaration is authoritative.
+      const linked = [item.github_pr, item.pr_url, item.pull_request_url].includes(pr.html_url);
+      const id = item.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const declaration = new RegExp(`^(?:[-*]\\s+)?(?:${[...CLOSING_KEYWORDS].join("|")}|pm-github:)\\s+${id}[.!]?\\s*$`, "im").test(pr.body ?? "");
+      if (linked || declaration) {
+        const ref = refs.find(ref => ref.item === item.id && ref.repo.toLowerCase() === repo.toLowerCase());
+        if (ref) ref.declared = true;
+        else refs.push({ item: item.id, repo, declared: true });
+      }
+    }
+    for (const ref of refs) {
+      if (ref.declared && pr.merged && ref.repo.toLowerCase() === repo.toLowerCase()) {
+        const choices = candidates.get(ref.item) ?? new Set<number>();
+        choices.add(number);
+        candidates.set(ref.item, choices);
+      }
       let reason: string;
       let code: CloseoutCode;
       if (ref.repo.toLowerCase() !== repo.toLowerCase()) { code = "other_repository"; reason = "Link points to another repository."; }
@@ -410,9 +428,9 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
       else if (!gate.ok) { code = gate.code; reason = gate.reason; }
       else if (items.get(ref.item)!.type === "Epic") { code = "epic"; reason = "Epics close when their children are done, not by a pull request."; }
       else if (activeChildren.has(ref.item)) { code = "active_children"; reason = `Item has ${activeChildren.get(ref.item)} non-terminal child item(s).`; }
-      else if (items.get(ref.item)!.status !== "in_progress" && !ref.declared) {
+      else if (!ref.declared) {
         code = "not_delivery";
-        reason = `Item is ${items.get(ref.item)!.status}, not in progress; a mention is not delivery. Prefix its link with Closes, Fixes, Resolves or Delivers to close it.`;
+        reason = "A mention is not delivery, regardless of item status. Declare Closes, Fixes, Resolves or Delivers, link the item to this PR, or use a pm-github trailer.";
       }
       else if (selected.has(ref.item)) { code = "duplicate_selection"; reason = "Item already selected by another pull request."; }
       else {
@@ -432,10 +450,19 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
       plan.push({ item: ref.item, pr: number, action: "skip", code, reason });
     }
   }
+  // Resolve attribution across the complete selection before the first SDK write.
+  for (const row of plan) {
+    if ((candidates.get(row.item)?.size ?? 0) > 1 && !["already_terminal", "other_repository", "unknown_item", "explicit_skip"].includes(row.code)) {
+      row.action = "skip";
+      row.code = "ambiguous_delivery";
+      row.reason = "Multiple merged PRs explicitly claim delivery; select the intended PR before closing.";
+    }
+  }
   let closed = 0;
   let failed = 0;
   if (apply) {
     for (const entry of closures) {
+      if (entry.row.action !== "close") continue;
       try {
         await close(entry.row.item, entry.reason, { author: "pm-github", completedAt: entry.at,
           resolution: entry.resolution, expectedResult: entry.expectedResult, actualResult: entry.actualResult,
