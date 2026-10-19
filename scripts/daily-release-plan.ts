@@ -9,9 +9,11 @@ export interface DailyReleaseInput {
 /** Rebuild from current main on every eligible run, reusing even yesterday's open PR. */
 export function decideDailyRelease(input: DailyReleaseInput) {
   // gh represents the GITHUB_TOKEN author as app/github-actions.
-  const existingPr = input.existingPrs.find(pr => pr.isCrossRepository === false
+  const candidates = input.existingPrs.filter(pr => pr.isCrossRepository === false
     && pr.author.login === "app/github-actions"
-    && /^release\/\d{4}\.\d{1,2}\.\d{1,2}$/.test(pr.headRefName));
+    && /^release\/\d{4}\.\d{1,2}\.\d{1,2}$/.test(pr.headRefName))
+    .sort((a, b) => releaseDate(b.headRefName) - releaseDate(a.headRefName) || b.number - a.number);
+  const existingPr = candidates[0];
   const version = input.today.split(".").map(Number).join(".");
   const releasedVersion = input.lastRelease?.tag.replace(/^v/, "").split("-")[0]?.split(".").map(Number).join(".");
   const shouldRelease = releasedVersion !== version && input.lastRelease?.sha !== input.mainSha;
@@ -23,5 +25,11 @@ export function decideDailyRelease(input: DailyReleaseInput) {
     base_sha: input.mainSha,
     release_branch: existingPr?.headRefName ?? `release/${input.today}`,
     pr_number: existingPr?.number ?? "",
+    superseded_pr_numbers: candidates.slice(1).map(pr => pr.number).join(" "),
   };
+}
+
+/** Compare date-shaped release branches numerically, including unpadded dates. */
+function releaseDate(branch: string): number {
+  return branch.slice("release/".length).split(".").reduce((date, part) => date * 100 + Number(part), 0);
 }

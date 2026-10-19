@@ -95,7 +95,7 @@ jobs:
           if [[ -n "$latest_tag" ]]; then
             export RELEASE_LAST_SHA="$(git rev-list -n 1 "$latest_tag")"
           fi
-          RELEASE_EXISTING_PRS="$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --state open \
+          RELEASE_EXISTING_PRS="$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --state open --limit 1000 \
             --json number,headRefName,isCrossRepository,author)"
           export RELEASE_EXISTING_PRS
           node --input-type=module -e '
@@ -276,6 +276,20 @@ jobs:
           else
             git commit -m "Release ${REPO_NAME} ${RELEASE_TAG}"
           fi
+
+      - name: Close superseded release PRs
+        if: steps.decide.outputs.should_release == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PR_NUMBER: ${{ steps.decide.outputs.pr_number }}
+          SUPERSEDED_PR_NUMBERS: ${{ steps.decide.outputs.superseded_pr_numbers }}
+        run: |
+          set -euo pipefail
+          for pr_number in $SUPERSEDED_PR_NUMBERS; do
+            gh pr close "$pr_number" --repo "$GITHUB_REPOSITORY" \
+              --comment "Superseded by release PR #${RELEASE_PR_NUMBER}."
+          done
 
       - name: Merge release metadata through protected PR
         if: steps.decide.outputs.should_release == 'true'
