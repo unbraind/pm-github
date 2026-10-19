@@ -93,11 +93,12 @@ test("two explicit merged delivery claims remain ambiguous before any close", as
 test("many items and PRs preserve declaration boundaries, casing, punctuation and ambiguity", async () => {
   const root = mkdtempSync(join(tmpdir(), "closeout-many-declarations-"));
   try {
-    const init = spawnSync(join(import.meta.dirname, "../node_modules/.bin/pm"), ["--pm-path", root, "init", "fixture"], { cwd: root, encoding: "utf8" });
+    const init = spawnSync(join(import.meta.dirname, "../node_modules/.bin/pm"), ["--pm-path", root, "init", "bulk"], { cwd: root, encoding: "utf8" });
     assert.equal(init.status, 0, init.stderr);
     const sdk = { pmRoot: root, noExtensions: true };
     const ids: string[] = [];
     for (let i = 0; i < 40; i++) ids.push((await create({ title: `Delivery candidate ${i}`, type: "Issue", author: "fixture" }, sdk)).item.id);
+    assert.ok(ids[29]!.includes("k"));
     const verbs = ["close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves", "resolved", "deliver", "delivers", "delivered"];
     const expected: string[] = [];
     const bodies = verbs.map((verb, i) => {
@@ -106,6 +107,7 @@ test("many items and PRs preserve declaration boundaries, casing, punctuation an
       return [`- ${verb.toUpperCase()}\t${ids[i * 2]!.toUpperCase()}${i % 2 ? "." : "!"}\t`,
         `pm-github:\t${ids[i * 2 + 1]}`, `Closes ${ids[i * 2]}`,
         `Closes\n${ids[26]}`, `Reports ${ids[27]}`, `Closes ${ids[28]}!!`,
+        `Closes ${ids[29]!.replace("k", "K")}`, "Closes unmatched-ß", "Closes unmatched-ſ", "Closes unmatched-Σ",
         `See https://github.com/${repo}/blob/main/.agents/pm/issues/${ids[25]}.toon`,
         ...(i < 2 ? [`Delivers ${ids[24]}`] : []),
       ].join("\r\n");

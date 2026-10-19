@@ -261,6 +261,18 @@ const TERMINAL_STATUSES: readonly string[] = ["closed", "canceled"];
 const CLOSING_KEYWORDS = new Set(["close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves", "resolved", "deliver", "delivers", "delivered"]);
 
 /**
+ * Preserve the original non-Unicode regex case rules for declaration lookup.
+ * @param id - Literal item ID or declaration token.
+ * @returns Its case-insensitive key without expanding characters or ASCII lookalikes.
+ */
+function declarationKey(id: string): string {
+  return id.replace(/[\s\S]/g, character => {
+    const upper = character.toUpperCase();
+    return upper.length !== 1 || (character.charCodeAt(0) >= 128 && upper.charCodeAt(0) < 128) ? character : upper;
+  });
+}
+
+/**
  * Whether a closing keyword directly precedes a link, given the line text before the link.
  *
  * Only earlier links (markdown or bare), commas and "and" may sit between the keyword and the link, so
@@ -407,14 +419,14 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
     for (const match of (pr.body ?? "").matchAll(/^(?:[-*][ \t]+)?([a-z]+|pm-github:)[ \t]+(\S+)[ \t]*$/gim)) {
       const keyword = match[1]!.toLowerCase();
       if (!CLOSING_KEYWORDS.has(keyword) && keyword !== "pm-github:") continue;
-      const id = match[2]!.toLowerCase();
+      const id = declarationKey(match[2]!);
       declarations.add(id);
       if (/[.!]$/.test(id)) declarations.add(id.slice(0, -1));
     }
     for (const item of items.values()) {
       // Only canonical delivery metadata or a whole-line trailer/closing declaration is authoritative.
       const linked = [item.github_pr, item.pr_url, item.pull_request_url].includes(pr.html_url);
-      if (linked || declarations.has(item.id.toLowerCase())) {
+      if (linked || declarations.has(declarationKey(item.id))) {
         const ref = refs.find(ref => ref.item === item.id && ref.repo.toLowerCase() === repo.toLowerCase());
         if (ref) ref.declared = true;
         else refs.push({ item: item.id, repo, declared: true });
