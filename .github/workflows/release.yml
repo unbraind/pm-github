@@ -95,20 +95,24 @@ jobs:
           if [[ -n "$latest_tag" ]]; then
             export RELEASE_LAST_SHA="$(git rev-list -n 1 "$latest_tag")"
           fi
-          RELEASE_EXISTING_PRS="$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --state open \
-            --json number,headRefName,isCrossRepository,author)"
-          export RELEASE_EXISTING_PRS
+          release_prs_file="$(mktemp "${RUNNER_TEMP}/release-prs.XXXXXX")"
+          trap 'if ! rm -f -- "$release_prs_file"; then
+            echo "::warning::Could not remove release PR candidate file."
+          fi' EXIT
+          gh pr list --repo "$GITHUB_REPOSITORY" --base main --state open --limit 1000 \
+            --json number,headRefName,isCrossRepository,author > "$release_prs_file"
           node --input-type=module -e '
+          import { readFileSync } from "node:fs";
           import { decideDailyRelease } from "./scripts/daily-release-plan.ts";
           const e = process.env;
           const plan = decideDailyRelease({
-            existingPrs: JSON.parse(e.RELEASE_EXISTING_PRS),
+            existingPrs: JSON.parse(readFileSync(process.argv[1], "utf8")),
             mainSha: e.RELEASE_MAIN_SHA, today: e.RELEASE_TODAY,
             lastRelease: e.RELEASE_LAST_TAG ? { tag: e.RELEASE_LAST_TAG, sha: e.RELEASE_LAST_SHA } : null,
           });
           for (const [key, value] of Object.entries(plan)) console.log(key + "=" + value);
           console.log("latest_tag=" + e.RELEASE_LAST_TAG);
-          ' >> "$GITHUB_OUTPUT"
+          ' "$release_prs_file" >> "$GITHUB_OUTPUT"
 
       # Refuse non-main release runs BEFORE publishing. `github.ref` is the
       # authoritative workflow trigger ref: schedule -> refs/heads/main;
@@ -249,7 +253,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npm run changelog:full -- --github-step-summary
+          npm run changelog:full
           npm run changelog:check
           npm run --silent release:notes > RELEASE_NOTES.md
 
@@ -307,10 +311,6 @@ jobs:
           release_commit="$(git rev-parse HEAD)"
           if [[ "$release_commit" == "$current_main_sha" ]]; then
             echo "Release metadata is already present on main; resuming the publish/tag transaction."
-            if [[ -n "$remote_branch_sha" ]]; then
-              git push --force-with-lease="refs/heads/${release_branch}:${remote_branch_sha}" \
-                origin ":refs/heads/${release_branch}"
-            fi
             {
               echo "merged_sha=$current_main_sha"
               echo "pr_number="
@@ -330,9 +330,14 @@ jobs:
               --body "Automated daily release metadata for \`${RELEASE_TAG}\`. The release gate passed before this PR was created; npm publication and tagging remain blocked until this protected PR is merged.")"
             pr_number="${pr_url##*/}"
           else
-            gh pr edit "$pr_number" --repo "$GITHUB_REPOSITORY" \
+            if ! edit_error="$(gh pr edit "$pr_number" --repo "$GITHUB_REPOSITORY" \
               --title "Release pm-github ${RELEASE_TAG}" \
-              --body "Automated daily release metadata for \`${RELEASE_TAG}\`, rebuilt from current main. The release gate passed before refresh; publication and tagging wait for the protected PR."
+              --body "Automated daily release metadata for \`${RELEASE_TAG}\`, rebuilt from current main. The release gate passed before refresh; publication and tagging wait for the protected PR." 2>&1)"; then
+              edit_error="${edit_error//$'\n'/ }"
+              edit_error="${edit_error//$'\r'/ }"
+              edit_error="${edit_error//%/%25}"
+              echo "::warning::Could not refresh title/body of release PR #${pr_number}: ${edit_error}"
+            fi
           fi
 
           owner="${GITHUB_REPOSITORY%/*}"
@@ -485,21 +490,88 @@ jobs:
             fi
             sleep 20
           done
-          rm -f "$merge_err" "$pr_view_err"
+          if ! cleanup_error="$(rm -f "$merge_err" "$pr_view_err" 2>&1)"; then
+            cleanup_error="${cleanup_error//$'\n'/ }"
+            cleanup_error="${cleanup_error//$'\r'/ }"
+            cleanup_error="${cleanup_error//%/%25}"
+            echo "::warning::Could not remove release merge diagnostic files: ${cleanup_error}"
+          fi
 
           if [[ -z "$merged_sha" || "$merged_sha" == "null" ]]; then
             echo "::error::GitHub did not return the merged main SHA for release PR #${pr_number}."
             exit 1
           fi
 
-          if git ls-remote --exit-code --heads origin "refs/heads/${release_branch}" > /dev/null 2>&1; then
-            git push origin --delete "$release_branch"
-          fi
           {
             echo "merged_sha=$merged_sha"
             echo "pr_number=$pr_number"
           } >> "$GITHUB_OUTPUT"
-          echo "Merged release metadata PR #${pr_number} at ${merged_sha}." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Close superseded release PRs
+        if: steps.decide.outputs.should_release == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PR_NUMBER: ${{ steps.decide.outputs.pr_number }}
+          SUPERSEDED_PR_NUMBERS: ${{ steps.decide.outputs.superseded_pr_numbers }}
+        run: |
+          set -euo pipefail
+          for pr_number in $SUPERSEDED_PR_NUMBERS; do
+            if close_output="$(gh pr close "$pr_number" --repo "$GITHUB_REPOSITORY" \
+              --comment "Superseded by release PR #${RELEASE_PR_NUMBER}." 2>&1)"; then
+              printf '%s\n' "$close_output"
+            else
+              close_output="${close_output//$'\n'/ }"
+              close_output="${close_output//$'\r'/ }"
+              close_output="${close_output//%/%25}"
+              echo "::warning::Could not close superseded release PR #${pr_number}: ${close_output}"
+            fi
+          done
+
+      - name: Clean up merged release branch
+        if: steps.decide.outputs.should_release == 'true'
+        shell: bash
+        env:
+          RELEASE_BRANCH: ${{ steps.decide.outputs.release_branch }}
+          RELEASE_PR_NUMBER: ${{ steps.release_pr.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          # A metadata-only resume did not merge a PR and owns no cleanup ref.
+          if [[ -n "${RELEASE_PR_NUMBER:-}" ]]; then
+            # HEAD is still the prepared commit pushed by the merge step. Never
+            # adopt a newer remote SHA as permission to delete somebody's update.
+            if expected_sha="$(git rev-parse HEAD 2>&1)"; then
+              if ! cleanup_error="$(git push --force-with-lease="refs/heads/${RELEASE_BRANCH}:${expected_sha}" \
+                origin ":refs/heads/${RELEASE_BRANCH}" 2>&1)"; then
+                cleanup_error="${cleanup_error//$'\n'/ }"
+                cleanup_error="${cleanup_error//$'\r'/ }"
+                cleanup_error="${cleanup_error//%/%25}"
+                echo "::warning::Could not delete merged release branch ${RELEASE_BRANCH}: ${cleanup_error}"
+              fi
+            else
+              expected_sha="${expected_sha//$'\n'/ }"
+              expected_sha="${expected_sha//$'\r'/ }"
+              expected_sha="${expected_sha//%/%25}"
+              echo "::warning::Could not inspect prepared commit for cleanup of ${RELEASE_BRANCH}: ${expected_sha}"
+            fi
+          fi
+
+      - name: Write release summary
+        if: steps.decide.outputs.should_release == 'true'
+        shell: bash
+        env:
+          MERGED_SHA: ${{ steps.release_pr.outputs.merged_sha }}
+        run: |
+          set -euo pipefail
+          if ! summary_error="$({
+            printf 'Release metadata at %s.\n\n' "$MERGED_SHA" &&
+              cat CHANGELOG.md RELEASE_NOTES.md
+          } 2>&1 >> "$GITHUB_STEP_SUMMARY")"; then
+            summary_error="${summary_error//$'\n'/ }"
+            summary_error="${summary_error//$'\r'/ }"
+            summary_error="${summary_error//%/%25}"
+            echo "::warning::Could not write release summary: ${summary_error}"
+          fi
 
       # The release PR can only contain the prepared release commit because the
       # base SHA is checked immediately before creation. Re-check the exact
