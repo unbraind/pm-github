@@ -216,7 +216,7 @@ function runReleaseStep(name: string, commands: string, extraEnv: NodeJS.Process
   writeFileSync(join(root, "RELEASE_NOTES.md"), "Release notes\n");
   try {
     const result: SpawnSyncReturns<string> = spawnSync("bash", ["-c", `${commands}\n${step(name).run}\nprintf 'release continues\n'`], {
-      encoding: "utf8", cwd: root, env: { ...process.env, HOME: root, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1",
+      encoding: "utf8", cwd: root, env: { ...process.env, HOME: root, TMPDIR: root, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1",
         GITHUB_REPOSITORY: "example/package", GITHUB_OUTPUT: output,
         GITHUB_STEP_SUMMARY: extraEnv.TEST_SUMMARY_FAILURE ? join(root, "missing", "summary") : summary,
         RELEASE_BRANCH: "release/2026.10.18", RELEASE_PR_NUMBER: "145", RELEASE_BASE_SHA: "base-main",
