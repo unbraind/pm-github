@@ -186,7 +186,7 @@ containing this command before adopting the updated workflow.
 |---|---|
 | `importers` | `pm github import <owner/repo>` — idempotent native import pipeline |
 | `importers` (exporter) | `pm github export` — pm items → GitHub issues (dry-run by default; upsert) |
-| `commands` | `pm gh-issues import` (legacy import alias), `pm github sync` (push status), `pm github gate` (fail-closed pre-push privacy gate), `pm github validate` (diagnostics), `pm github closeout` (verified merged-PR delivery), `pm github project list\|fields\|import\|sync` (Projects v2) |
+| `commands` | `pm github refresh <owner/repo>` (refresh linked items only), `pm gh-issues import` (legacy import alias), `pm github sync` (push status), `pm github gate` (fail-closed pre-push privacy gate), `pm github validate` (diagnostics), `pm github closeout` (verified merged-PR delivery), `pm github project list\|fields\|import\|sync` (Projects v2) |
 | `schema` | declares `github_url`, `github_number`, `github_state`, `github_author`, `github_created_at`, `github_updated_at` item fields |
 | `hooks` | `afterCommand` — opt-in sync reminder (`PM_GITHUB_SYNC`) for linked items |
 | `preflight` | early warning when a mutating github command lacks a token |
@@ -222,6 +222,53 @@ large tracker. Raising that transport cap does not weaken the completeness
 checks.
 
 ## Import
+
+### Keeping a mirror current
+
+Use `refresh` when your tracker deliberately mirrors only a few issues from a busy
+repository. It selects existing `gh:owner/repo#N` tags or explicit `github_url`
+links (also `github_repo` with `github_number`), fetches those numbers in GraphQL
+batches of at most 100, and **never creates items**. Ordinary references in text
+are not links. Conflicting identities or multiple owners fail before any write.
+
+```sh
+pm github refresh owner/repo --dry-run --json
+pm github refresh owner/repo --atomic
+pm github refresh owner/repo --since 7d --limit 50 --dry-run
+```
+
+`--limit` bounds the selected issue numbers, in ascending order, before fetching.
+`--since` filters by the fetched upstream update time, including closed issues;
+filtered items are counted separately. Omit it for a complete refresh. A GitHub
+token is required for GraphQL (`GITHUB_TOKEN`, `GH_TOKEN`, or `gh auth login`).
+Closure evidence uses the importer's timeline reader; label pages are fetched in
+full. API retries and rate limits use the shared transport.
+
+Refresh reuses import's title, labels and source lifecycle mapping, including
+real closure/completion dates and reopening. Body, local item type, assignee and
+milestone are preserved. Existing cross-provider link-only owners retain their
+native lifecycle and content, as on import. TOON (default) or `--json` returns a
+`plan` of `{id, number, changes: [{field, old, new}]}` plus `updated`, `unchanged`,
+`missing`, `filtered`, `selected` and `created: 0`. On dry-run, `updated` means
+would update; nothing is written. Missing rows carry a typed `reason` and remain
+unchanged: `not_found_or_inaccessible` (GitHub cannot distinguish deleted/hidden),
+`inaccessible`, `transferred`, `api_error`, `incomplete_response`, or `invalid_issue`.
+A request-wide failure aborts before writes.
+
+Each changed item receives an audit comment. `--atomic` applies the batch in one
+SDK workspace writer transaction with rollback; otherwise each changed item gets
+its own transaction. Review the preview before publishing tracker changes and
+apply the existing privacy gate to any proposed commit.
+
+For a weekly refresh, run this in a checkout with the extension installed, token
+available and `PM_PATH` set to the intended tracker. For example, a cron entry:
+
+```cron
+0 6 * * 1 cd "$MIRROR_CHECKOUT" && pm github refresh owner/repo --atomic --json >> "$MIRROR_LOG" 2>&1
+```
+
+Configure those environment variables in the crontab. The command updates the
+tracker locally; review and commit changes using your normal workflow.
 
 ### `pm github import <owner/repo>` (or `pm gh-issues import`)
 

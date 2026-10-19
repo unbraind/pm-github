@@ -1,0 +1,31 @@
+id: pm-github-ullj
+title: Refresh only already-linked GitHub items without importing new ones
+description: "Select explicit existing provenance, fetch linked issue numbers in GraphQL batches, reuse import lifecycle mapping, and apply audited update-only SDK transactions. Prove selection, zero creation, real lifecycle dates, missing reasons, dry-run immutability, and batch splitting."
+type: Feature
+status: in_progress
+priority: 2
+tags[3]: changelog-unreleased,github,refresh
+created_at: "2026-10-19T16:13:56.599Z"
+updated_at: "2026-10-19T17:42:12.961Z"
+author: codex-agent
+comments[10]{created_at,author,text}:
+  "2026-10-19T16:14:11.328Z",codex-agent,"Plan: reuse prepareGithubImport, source lifecycle projection and importGithubAtomic. Refresh selects explicit tag or github_url identities before transport, batches at 100, and supplies a guarded update-only transaction mode with native audit comments. Real tracker tests fake only HTTP; live acceptance uses scratch copies only."
+  "2026-10-19T16:20:35.265Z",codex-agent,"Implementation uses shared import preparation, shared source-metadata projection, and guarded SDK update transactions. Dry-run acceptance exposed that complete-list SDK reads populate runtime caches; preview reads now use disposable copies so the selected tracker is byte-identical. The pinned SDK exposes no cache-write suppression option; this SDK UX limitation will be reported in the final summary."
+  "2026-10-19T16:28:14.213Z",codex-agent,"Live read-only acceptance used independent tracker copies and the built CLI with --dry-run --json. Repository unbraind/pm-cli: selected 42, updated 42, unchanged 0, missing 0, created 0; 5 entries include status changes. Repository unbraind/pm-csv: selected 1, updated 1, unchanged 0, missing 0, created 0; 1 includes a status change. These current copies differ from the incident estimate; source-metadata backfill accounts for many planned changes. No refresh writes were applied to either original tracker."
+  "2026-10-19T16:28:31.208Z",codex-agent,"Behavioral revert proof for zero creation: in an isolated source copy, reverting only the update-only suppression of the deterministic import upsert made the real-tracker guard regression fail, exit 1: actual mutations create+update versus required update only. The production source was never reverted."
+  "2026-10-19T16:29:03.523Z",codex-agent,"Behavioral selection revert proof: in an isolated source copy, removing repository scoping from tag selection made the real-tracker only-linked regression fail, exit 1: actual selected/updated count 2 versus required 1. Together with the deterministic-id create-guard mutation proof, both negative controls fail for the intended behavior; unchanged production functions pass the focused 3-test run."
+  "2026-10-19T16:31:14.342Z",codex-agent,"PM CLI limitation: storing timeout_seconds on the linked test was refused because the declared >=2026.10.5 host range cannot guard item format 2. No host pin or format was changed. Run-time --timeout 600 provides the bounded execution budget without persisting that guarded metadata."
+  "2026-10-19T16:41:36.760Z",codex-agent,"Verified linked acceptance command: pm test pm-github-ullj --run --progress --timeout 600 passed with exit 0; all 10 real-tracker tests passed, zero failed/skipped, no timeout. The bounded batch fixture uses the SDK imported-document writer with complete valid metadata, while all behavior under test uses the production refresh command and real SDK. Current source type checks and lint also pass."
+  "2026-10-19T17:25:50.874Z",codex-agent,"Isolated-home npm run release:check passed, exit 0: 933/933 tests, zero failed/skipped, exact 100/100/100/100 coverage across all 16 authored modules (10730/10730 lines and statements, 285/285 functions, 3353/3353 branches), zero production audit findings, zero duplication at the unchanged gate, changelog check and release-publish attestation passed. Refresh help now describes ascending linked-number selection rather than inheriting import-specific limit wording; built CLI help is asserted. The required Bun gate is running on the final source."
+  "2026-10-19T17:34:59.872Z",codex-agent,"Read-only preview clarification: all 5 companion status changes are terminal-disposition corrections under the shared importer rules: 4 closed -> canceled and 1 canceled -> closed. There are no remaining active -> closed transitions in that copy. The single CSV status change is blocked -> closed. Aggregate updated counts include source-metadata and label/title backfill; no preview was applied."
+  "2026-10-19T17:42:12.226Z",codex-agent,"Final validation: isolated-home bun run release:check passed, exit 0, with 933/933 tests and zero failures/skips. Exact all-source coverage is 100/100/100/100 across 16 authored modules: 10730/10730 lines and statements, 285/285 functions, 3352/3352 branches. npm and Bun packed the same artifact hash, 39b90c2008e82c607d39cbc1c1a06c68d8b588b0. Both production audits, unchanged duplication/privacy gates, changelog checks and attestation checks passed. Strict tracker health passed with no history drift; six existing stale-in-progress advisories remain outside this feature. Ready for PR Refresh already-linked GitHub items without importing new ones; keep this item in progress for orchestrator verification."
+files[4]{path,scope}:
+  import-fidelity.ts,project
+  index.ts,project
+  refresh.ts,project
+  test/refresh.test.ts,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test test/refresh.test.ts,project,codex-agent,"2026-10-19T16:21:03.937Z",local_mutation,feat/refresh-linked-items
+docs[1]{path,scope}:
+  README.md,project
+body: ""

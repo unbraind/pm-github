@@ -189,6 +189,22 @@ export function buildImportFidelity(issue: GhIssue, releases: readonly ImportRel
   };
 }
 
+/** Project the import-owned metadata; undefined values remove stale native lifecycle fields. */
+export function importFidelityFields(fidelity: ImportFidelity, linkOnly: boolean): Record<string, unknown> {
+  return {
+    ...fidelity, github_link_only: linkOnly,
+    ...(!linkOnly ? {
+      created_at: fidelity.github_created_at,
+      close_reason: fidelity.github_state === "closed" ? fidelity.github_close_reason : undefined,
+      ...(fidelity.github_closed_at || fidelity.github_state === "open" ? {
+        closed_at: fidelity.github_closed_at || undefined,
+        completed_at: fidelity.github_closed_at || undefined,
+      } : {}),
+      release: fidelity.github_release || undefined,
+    } : {}),
+  };
+}
+
 /**
  * Finalize source metadata through public SDK lock, serialization and append-only history primitives.
  * High-level create/update reserve native timestamps. This import adapter appends a real
@@ -206,21 +222,9 @@ export async function persistImportFidelity(pmRoot: string, id: string, fidelity
     if (!located) throw new CommandError(`Imported item ${id} is missing during lifecycle finalization.`);
     const { document, raw } = await readLocatedItem(located);
     const before = canonicalDocument(document);
-    Object.assign(document.metadata, fidelity);
-    document.metadata.github_link_only = linkOnly;
-    if (!linkOnly) {
-      document.metadata.created_at = fidelity.github_created_at;
-      if (fidelity.github_state === "closed") document.metadata.close_reason = fidelity.github_close_reason;
-      if (fidelity.github_closed_at) {
-        document.metadata.closed_at = fidelity.github_closed_at;
-        document.metadata.completed_at = fidelity.github_closed_at;
-      } else if (fidelity.github_state === "open") {
-        delete document.metadata.closed_at;
-        delete document.metadata.completed_at;
-        delete document.metadata.close_reason;
-      }
-      if (fidelity.github_release) document.metadata.release = fidelity.github_release;
-      else delete document.metadata.release;
+    for (const [field, value] of Object.entries(importFidelityFields(fidelity, linkOnly))) {
+      if (value === undefined) delete document.metadata[field];
+      else document.metadata[field] = value;
     }
     if (document.metadata.closed_at && Date.parse(document.metadata.closed_at) < Date.parse(document.metadata.created_at)) {
       throw new CommandError(`GitHub issue #${fidelity.github_number} needs a source closure date before its lifecycle can be imported safely.`);

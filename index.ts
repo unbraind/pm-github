@@ -28,6 +28,7 @@ import {
   buildImportFidelity, fetchImportTimeline, matchImportedIssue, persistImportFidelity, readImportReleases, selectImportContextIndex,
   type ImportFidelity,
 } from "./import-fidelity.ts";
+import { runRefresh } from "./refresh.ts";
 import http from "node:http";
 import https from "node:https";
 import crypto from "node:crypto";
@@ -217,6 +218,8 @@ type ReadSettings = (pmRoot: string) => Promise<{ id_prefix?: string }>;
  * defaults; a test overrides only the ones it needs.
  */
 export interface AtomicImportOptions {
+  /** Refuse unmatched entries and emit updates only, including deterministic imported ids. */
+  updateOnly?: boolean;
   /** Author identity stamped onto the transaction's mutations (default `pm-github`). */
   atomicAuthor?: string;
   /** SDK transaction observer; explicit failure injection still exercises real rollback. */
@@ -1441,9 +1444,12 @@ export function buildAtomicImportMutations(
   entry: PreparedGithubImport,
   idPrefix: string,
   normalizeItemId: (input: string, prefix: string) => string,
+  updateOnly = false,
 ): { itemId: string; mutations: BulkItemMutation[] } {
+  if (updateOnly && !entry.match?.id) throw new CommandError("Refresh refuses an unlinked target; no item may be created.");
+  const audit = updateOnly ? { comment: [`Refreshed linked GitHub issue ${repo.toLowerCase()}#${entry.issueNumber}`] } : {};
   if (entry.linkOnly && entry.match?.id) {
-    return { itemId: entry.match.id, mutations: [{ op: "update", id: entry.match.id, options: { addTags: entry.tags } }] };
+    return { itemId: entry.match.id, mutations: [{ op: "update", id: entry.match.id, options: { addTags: entry.tags, ...audit } }] };
   }
   const sharedOptions: Record<string, unknown> = {
     title: entry.title,
@@ -1475,7 +1481,7 @@ export function buildAtomicImportMutations(
   // item, but commitItemMutations must still receive the original plan. The
   // create step treats an existing stable id as already applied; update then
   // makes later content-bearing transactions refresh the item normally.
-  if (!entry.match?.id || entry.match.id === managedItemId) {
+  if (!updateOnly && (!entry.match?.id || entry.match.id === managedItemId)) {
     const createStatus = entry.status === "closed" ? "open" : entry.status;
     const mutations: BulkItemMutation[] = [{
       op: "create",
@@ -1504,8 +1510,10 @@ export function buildAtomicImportMutations(
     };
   }
 
-  const itemId = entry.match.id;
-  const updateOptions: Record<string, unknown> = { ...sharedOptions, ...statusOptions };
+  const itemId = entry.match!.id!;
+  const updateOptions: Record<string, unknown> = {
+    ...(updateOnly ? { title: entry.title, tags: entry.tags.join(",") } : sharedOptions), ...statusOptions, ...audit,
+  };
   const mutations: BulkItemMutation[] = [{
     op: "update",
     id: itemId,
@@ -1575,7 +1583,7 @@ export async function importGithubAtomic(
   // by the stable GitHub issue number so a retry whose API page/order changed
   // supplies the exact same plan as well as the same transaction id.
   for (const entry of [...entries].sort((a, b) => a.issueNumber - b.issueNumber)) {
-    const planned = buildAtomicImportMutations(repo, entry, idPrefix, normalizeItemId);
+    const planned = buildAtomicImportMutations(repo, entry, idPrefix, normalizeItemId, opts.updateOnly);
     itemIds.set(entry.issueNumber, planned.itemId);
     mutations.push(...planned.mutations);
   }
@@ -2850,7 +2858,7 @@ export async function linkImportedDependencies(
  * @param fetchIssueComments - Injectable comment fetcher (defaults to {@link fetchComments}).
  * @returns The prepared import entry, or `undefined` when the issue has no title.
  */
-async function prepareGithubImport(
+export async function prepareGithubImport(
   issue: GhIssue,
   repo: string,
   opts: ImportOptions,
@@ -5512,7 +5520,7 @@ export async function githubGraphQL<T>(token: string | undefined, query: string,
 }
 
 /** Shared GraphQL client retaining partial errors for reference-level classification. */
-async function githubGraphQLResponse<T>(
+export async function githubGraphQLResponse<T>(
   token: string | undefined,
   query: string,
   variables: Record<string, unknown>,
@@ -6335,7 +6343,7 @@ async function runProjectSync(ctx: CommandHandlerContext) {
 export function isMutatingGithubCommand(command: string, options: Record<string, unknown>): boolean {
   const cmd = (command || "").toLowerCase();
   const dryRun = optionEnabled(options, "dry-run", "dryRun");
-  if (cmd === "github sync") return !dryRun;
+  if (cmd === "github sync" || cmd === "github refresh") return !dryRun;
   // Export is dry-run by default; it only mutates with an explicit apply
   // (--apply / --no-dry-run / legacy --push) AND no --dry-run override.
   if (cmd === "github export") return exportWillApply(options);
@@ -6477,6 +6485,7 @@ export default defineExtension({
     api.registerPreflight({
       commands: [
         "github sync",
+        "github refresh",
         "github export",
         "github import",
         "gh-issues import",
@@ -6663,6 +6672,23 @@ export default defineExtension({
     });
 
     // -----------------------------------------------------------------------
+    // Refresh uses the import planner and its guarded update-only transaction path.
+    api.registerCommand({
+      name: "github refresh",
+      description: "Refresh existing linked items from GitHub without importing new issues.",
+      intent: "keep a selected GitHub mirror current",
+      arguments: [{ name: "owner/repo", required: true, description: "Linked GitHub repository" }],
+      flags: [
+        { long: "--dry-run", description: "Preview linked-item field changes without writing the tracker" },
+        { long: "--since", value_name: "date|relative", description: "Only apply issues updated since this date or relative duration" },
+        { long: "--limit", value_name: "N", description: "Select at most N linked issue numbers, in ascending order, before fetching" },
+        { long: "--atomic", description: "Commit all changed linked items in one workspace writer transaction" },
+      ],
+      async run(ctx: CommandHandlerContext) {
+        return runRefresh(ctx.args[0], ctx.pm_root, ctx.options);
+      },
+    });
+
     // command — legacy `pm gh-issues import <owner/repo>` (delegates to core)
     // -----------------------------------------------------------------------
     api.registerCommand({
