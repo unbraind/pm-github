@@ -8,7 +8,7 @@ import {
   parseImportOptions, parseProvenanceTag, prepareGithubImport, resolveGitHubToken,
   type GhIssue, type PmItem, type PreparedGithubImport,
 } from "./index.ts";
-import { fetchImportTimeline, importFidelityFields, readImportReleases } from "./import-fidelity.ts";
+import { fetchImportTimeline, importFidelityFields, normalizeImportValue, readImportReleases } from "./import-fidelity.ts";
 
 /** An existing item and its unique linked issue number. */
 export interface RefreshTarget { id: string; number: number; item: PmItem }
@@ -51,11 +51,11 @@ export function selectRefreshTargets(items: readonly PmItem[], repo: string): Re
 interface RefreshNode {
   number: number; title: string; body: string; state: string; stateReason: string | null;
   createdAt: string; updatedAt: string; closedAt: string | null; url: string;
-  author: { login: string } | null;
+  author: { login: string; __typename?: string } | null;
   labels: { nodes: Array<{ name: string }>; pageInfo: { hasNextPage: boolean; endCursor: string | null } };
 }
 
-const ISSUE_FIELDS = `number title body state stateReason createdAt updatedAt closedAt url author { login }
+const ISSUE_FIELDS = `number title body state stateReason createdAt updatedAt closedAt url author { __typename login }
   labels(first:100) { nodes { name } pageInfo { hasNextPage endCursor } }`;
 
 /** Fetch only the selected numbers, preserving partial failures and every label page. */
@@ -94,7 +94,8 @@ async function fetchRefreshBatch(repo: string, targets: readonly RefreshTarget[]
       number: issue.number, title: issue.title, body: issue.body, state: issue.state.toLowerCase() as GhIssue["state"],
       state_reason: issue.stateReason?.toLowerCase() as GhIssue["state_reason"], labels,
       created_at: issue.createdAt, updated_at: issue.updatedAt, closed_at: issue.closedAt,
-      html_url: issue.url, user: issue.author, assignee: null, milestone: null,
+      html_url: issue.url, user: issue.author ? { login: issue.author.__typename === "Bot" ? `${issue.author.login.replace(/\[bot\]$/i, "")}[bot]` : issue.author.login } : null,
+      assignee: null, milestone: null,
     } });
   }
   return results;
@@ -107,21 +108,20 @@ export function refreshChanges(entry: PreparedGithubImport): RefreshChange[] {
   return Object.entries(desired).flatMap(([field, value]) => {
     const old = entry.match![field] ?? null;
     const next = value ?? null;
-    const equal = field === "tags" ? JSON.stringify([...(old as string[] ?? [])].sort()) === JSON.stringify([...value as string[]].sort())
-      : JSON.stringify(old) === JSON.stringify(next);
+    const equal = JSON.stringify(normalizeImportValue(field, old)) === JSON.stringify(normalizeImportValue(field, next));
     return equal ? [] : [{ field, old, new: next }];
   });
 }
 
-/** Isolate SDK-derived cache writes so dry-run never changes even runtime files in the selected tracker. */
-async function readRefreshItems(pmRoot: string, dryRun: boolean): Promise<PmItem[]> {
-  const scratch = dryRun ? await mkdtemp(join(tmpdir(), "pm-github-refresh-read-")) : undefined;
+/** Isolate SDK-derived cache writes for previews and no-op applies, including runtime files. */
+async function readRefreshItems(pmRoot: string): Promise<PmItem[]> {
+  const scratch = await mkdtemp(join(tmpdir(), "pm-github-refresh-read-"));
   try {
-    const root = scratch ? join(scratch, "pm") : pmRoot;
-    if (scratch) await cp(pmRoot, root, { recursive: true, filter: source => !["runtime", "locks"].includes(basename(source)) });
+    const root = join(scratch, "pm");
+    await cp(pmRoot, root, { recursive: true, filter: source => !["runtime", "locks"].includes(basename(source)) });
     return decodeCompletePmItems(certifyCompleteListResult(await listAllComplete({ includeBody: true }, { pmRoot: root, cwd: root, noExtensions: true })));
   } finally {
-    if (scratch) await rm(scratch, { recursive: true, force: true });
+    await rm(scratch, { recursive: true, force: true });
   }
 }
 
@@ -130,7 +130,7 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
   if (!repoArg || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repoArg)) throw new CommandError("Usage: pm github refresh <owner/repo> [--dry-run] [--since <date|relative>] [--limit N] [--atomic]", EXIT_CODE.USAGE);
   const repo = repoArg.toLowerCase();
   const opts = parseImportOptions(options);
-  const items = await readRefreshItems(pmRoot, opts.dryRun);
+  const items = await readRefreshItems(pmRoot);
   const all = selectRefreshTargets(items, repo);
   const targets = opts.limit === undefined ? all : all.slice(0, opts.limit);
   const token = resolveGitHubToken();

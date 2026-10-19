@@ -28,7 +28,7 @@ import {
   buildImportFidelity, fetchImportTimeline, matchImportedIssue, persistImportFidelity, readImportReleases, selectImportContextIndex,
   type ImportFidelity,
 } from "./import-fidelity.ts";
-import { runRefresh } from "./refresh.ts";
+import { refreshChanges, runRefresh } from "./refresh.ts";
 import http from "node:http";
 import https from "node:https";
 import crypto from "node:crypto";
@@ -1447,9 +1447,10 @@ export function buildAtomicImportMutations(
   updateOnly = false,
 ): { itemId: string; mutations: BulkItemMutation[] } {
   if (updateOnly && !entry.match?.id) throw new CommandError("Refresh refuses an unlinked target; no item may be created.");
+  const changed = updateOnly ? new Set(refreshChanges(entry).map(change => change.field)) : undefined;
   const audit = updateOnly ? { comment: [`Refreshed linked GitHub issue ${repo.toLowerCase()}#${entry.issueNumber}`] } : {};
   if (entry.linkOnly && entry.match?.id) {
-    return { itemId: entry.match.id, mutations: [{ op: "update", id: entry.match.id, options: { addTags: entry.tags, ...audit } }] };
+    return { itemId: entry.match.id, mutations: [{ op: "update", id: entry.match.id, options: { ...(!changed || changed.has("tags") ? { addTags: entry.tags } : {}), ...audit } }] };
   }
   const sharedOptions: Record<string, unknown> = {
     title: entry.title,
@@ -1512,7 +1513,10 @@ export function buildAtomicImportMutations(
 
   const itemId = entry.match!.id!;
   const updateOptions: Record<string, unknown> = {
-    ...(updateOnly ? { title: entry.title, tags: entry.tags.join(",") } : sharedOptions), ...statusOptions, ...audit,
+    ...(updateOnly ? {
+      ...(changed!.has("title") ? { title: entry.title } : {}),
+      ...(changed!.has("tags") ? { tags: entry.tags.join(",") } : {}),
+    } : sharedOptions), ...(!changed || changed.has("status") ? statusOptions : {}), ...audit,
   };
   const mutations: BulkItemMutation[] = [{
     op: "update",
@@ -1592,7 +1596,7 @@ export async function importGithubAtomic(
   /** Finalize before the SDK commits, and repair source metadata on recovered journals. */
   const finalize = async (): Promise<void> => {
     for (const entry of entries) {
-      if (entry.fidelity) await persistImportFidelity(pmRoot, itemIds.get(entry.issueNumber)!, entry.fidelity, Boolean(entry.linkOnly));
+      if (entry.fidelity) await persistImportFidelity(pmRoot, itemIds.get(entry.issueNumber)!, entry.fidelity, Boolean(entry.linkOnly), opts.updateOnly);
     }
   };
   let committed = false;

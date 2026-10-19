@@ -205,13 +205,20 @@ export function importFidelityFields(fidelity: ImportFidelity, linkOnly: boolean
   };
 }
 
+/** Compare source instants and tag sets without treating their serialized representation as a change. */
+export function normalizeImportValue(field: string, value: unknown): unknown {
+  if (field === "tags") return [...new Set(value as string[] ?? [])].sort();
+  if (/^(?:github_)?(?:created|updated|closed|completed)_at$/.test(field) && typeof value === "string" && Number.isFinite(Date.parse(value))) return Date.parse(value);
+  return value;
+}
+
 /**
  * Finalize source metadata through public SDK lock, serialization and append-only history primitives.
  * High-level create/update reserve native timestamps. This import adapter appends a real
  * before/after event instead of editing past history; retrying identical metadata is a no-op.
  * Cross-provider owners retain their creation/completion dates, content and release.
  */
-export async function persistImportFidelity(pmRoot: string, id: string, fidelity: ImportFidelity, linkOnly: boolean): Promise<void> {
+export async function persistImportFidelity(pmRoot: string, id: string, fidelity: ImportFidelity, linkOnly: boolean, normalizeFields = false): Promise<void> {
   pmRoot = resolvePmRoot(process.cwd(), pmRoot);
   const settings = await readSettings(pmRoot);
   id = normalizeItemId(id, settings.id_prefix);
@@ -223,6 +230,7 @@ export async function persistImportFidelity(pmRoot: string, id: string, fidelity
     const { document, raw } = await readLocatedItem(located);
     const before = canonicalDocument(document);
     for (const [field, value] of Object.entries(importFidelityFields(fidelity, linkOnly))) {
+      if (normalizeFields && JSON.stringify(normalizeImportValue(field, document.metadata[field])) === JSON.stringify(normalizeImportValue(field, value))) continue;
       if (value === undefined) delete document.metadata[field];
       else document.metadata[field] = value;
     }

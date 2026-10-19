@@ -57,6 +57,40 @@ function transport(nodes: Record<string, ReturnType<typeof node> | null>, errors
 }
 
 for (const atomic of [false, true]) {
+  test(`apply then re-apply preserves every byte and history line without cache priming (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
+    const linked = (await create({ title: "Stale", tags: "gh:fixture/repo#1" }, { pmRoot })).item;
+    const upstream = node();
+    upstream.labels.nodes.push({ name: "second-label" });
+    const upstreams = new Map([[1, upstream]]);
+    await withMockGithub((...args) => transport({ i1: upstreams.get(1)! })(...args), async () => {
+      assert.equal((await runRefresh("fixture/repo", pmRoot, { atomic })).updated, 1);
+      const before = snapshot(pmRoot);
+      const historyLines = readFileSync(getHistoryPath(pmRoot, linked.id), "utf8").trimEnd().split("\n").length;
+      const repeated = await runRefresh("fixture/repo", pmRoot, { atomic });
+      assert.equal(repeated.updated, 0);
+      assert.equal(repeated.unchanged, 1);
+      assert.deepEqual(snapshot(pmRoot), before);
+      assert.equal(readFileSync(getHistoryPath(pmRoot, linked.id), "utf8").trimEnd().split("\n").length, historyLines);
+      // Identical source instants and labels can arrive in another representation.
+      upstreams.set(1, { ...upstream, createdAt: "2026-01-01T01:00:00+01:00", updatedAt: "2026-02-03T00:00:00.000Z",
+        title: "  Upstream 1  ", labels: { ...upstream.labels, nodes: [...upstream.labels.nodes].reverse() } });
+      const normalized = await runRefresh("fixture/repo", pmRoot, { atomic });
+      assert.equal(normalized.updated, 0);
+      assert.equal(normalized.unchanged, 1);
+      assert.deepEqual(normalized.plan[0]!.changes, []);
+      assert.deepEqual(snapshot(pmRoot), before);
+      assert.equal(readFileSync(getHistoryPath(pmRoot, linked.id), "utf8").trimEnd().split("\n").length, historyLines);
+      upstreams.set(1, { ...upstreams.get(1)!, updatedAt: "2026-02-04T00:00:00Z" });
+      const genuine = await runRefresh("fixture/repo", pmRoot, { atomic });
+      assert.equal(genuine.updated, 1);
+      assert.deepEqual(genuine.plan[0]!.changes.map(change => change.field), ["github_updated_at"]);
+      const refreshed = (await get(linked.id, {}, { pmRoot })).item;
+      assert.equal(refreshed.github_updated_at, "2026-02-04T00:00:00Z");
+      assert.equal(refreshed.created_at, upstream.createdAt);
+      assert.equal(refreshed.github_created_at, upstream.createdAt);
+    });
+  }));
+
   test(`refresh only linked items with zero creates, real dates, labels, audit and reopen (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
     const linked = (await create({ title: "Stale", type: "Task", tags: "gh:fixture/repo#1,old-label", body: "keep local body" }, { pmRoot })).item;
     const other = (await create({ title: "Other repo", tags: "gh:fixture/other#2" }, { pmRoot })).item;
@@ -109,6 +143,24 @@ for (const atomic of [false, true]) {
     });
   }));
 }
+
+test("GraphQL bot authors retain REST bot-tag spelling across repeated refreshes", async () => tracker(async (_directory, pmRoot) => {
+  const linked = (await create({ title: "Stale", tags: "gh:fixture/repo#1,github_author:fixture-bot[bot]" }, { pmRoot })).item;
+  const upstreams = new Map([[1, { ...node(), author: { login: "fixture-bot", __typename: "Bot" } }]]);
+  await withMockGithub((...args) => transport({ i1: upstreams.get(1)! })(...args), async () => {
+    const first = await runRefresh("fixture/repo", pmRoot, { atomic: true });
+    const tags = first.plan[0]!.changes.find(change => change.field === "tags")!.new as string[];
+    assert.ok(tags.includes("github_author:fixture-bot[bot]"));
+    assert.ok(!tags.includes("github_author:fixture-bot"));
+    const before = snapshot(pmRoot);
+    for (const login of ["fixture-bot", "fixture-bot[bot]"]) {
+      upstreams.set(1, { ...node(), author: { login, __typename: "Bot" } });
+      assert.equal((await runRefresh("fixture/repo", pmRoot, { atomic: true })).updated, 0);
+      assert.deepEqual(snapshot(pmRoot), before);
+    }
+    assert.ok((await get(linked.id, {}, { pmRoot })).item.tags!.includes("github_author:fixture-bot[bot]"));
+  });
+}));
 
 test("explicit fields select existing owners; mentions, wrong repos, malformed and ambiguous links are refused", () => {
   assert.deepEqual(selectRefreshTargets([
@@ -184,6 +236,12 @@ test("update-only import refuses absent matches and cannot upsert a missing dete
   assert.throws(() => buildAtomicImportMutations("fixture/repo", { ...entry, match: undefined }, prefix, normalizeItemId, true), /unlinked target/);
   const mutations = buildAtomicImportMutations("fixture/repo", entry, prefix, normalizeItemId, true).mutations;
   assert.deepEqual(mutations.map(mutation => mutation.op), ["update"]);
+  const synchronized = { ...entry, match: { ...local, ...Object.fromEntries(refreshChanges(entry).map(change => [change.field, change.new])) } };
+  for (const linkOnly of [false, true]) {
+    const noOp = buildAtomicImportMutations("fixture/repo", { ...synchronized, linkOnly }, prefix, normalizeItemId, true).mutations[0]!;
+    assert.equal(noOp.op, "update");
+    if (noOp.op === "update") assert.deepEqual(Object.keys(noOp.options!), ["comment"]);
+  }
   await deleteItem(local.id, {}, { pmRoot });
   await assert.rejects(() => importGithubAtomic(pmRoot, "fixture/repo", [entry], { updateOnly: true }));
   assert.equal((await listAllComplete({}, { pmRoot })).items.length, 0);
