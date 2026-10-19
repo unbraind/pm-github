@@ -266,18 +266,19 @@ test("superseded close failures warn per PR and still try later PRs before conti
 test("optional branch lookup or leased deletion failures warn and cannot stop the release", () => {
   const cleanup = step("Clean up merged release branch");
   assert.ok(steps.indexOf(cleanup) > steps.indexOf(step("Merge release metadata through protected PR")));
+  assert.equal(cleanup.env?.RELEASE_PR_NUMBER, "${{ steps.release_pr.outputs.pr_number }}");
   for (const failure of ["lookup", "delete", "none", "absent"]) {
     const result = runReleaseStep(cleanup.name, `
       git() {
-        if [[ "$1" == ls-remote ]]; then
+        if [[ "$1" == rev-parse ]]; then
           if [[ "$TEST_FAILURE" == lookup ]]; then printf 'lookup denied' >&2; return 47; fi
-          if [[ "$TEST_FAILURE" != absent ]]; then printf 'remote-sha\\trefs/heads/release/2026.10.18'; fi
+          printf release-sha
         elif [[ "$1" == push ]]; then
-          [[ "$*" == 'push --force-with-lease=refs/heads/release/2026.10.18:remote-sha origin :refs/heads/release/2026.10.18' ]] || return 99
+          [[ "$*" == 'push --force-with-lease=refs/heads/release/2026.10.18:release-sha origin :refs/heads/release/2026.10.18' ]] || return 99
           if [[ "$TEST_FAILURE" == delete ]]; then printf 'delete denied' >&2; return 48; fi
         fi
       }
-    `, { TEST_FAILURE: failure });
+    `, { TEST_FAILURE: failure, RELEASE_PR_NUMBER: failure === "absent" ? "" : "145" });
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /release continues/);
     if (failure === "lookup" || failure === "delete") assert.match(result.stdout, new RegExp(`::warning::.*release/2026\\.10\\.18.*${failure} denied`));
@@ -336,4 +337,34 @@ test("publication still fails closed when the registry never confirms an atteste
   assert.equal(result.status, 1, result.stderr);
   assert.match(result.stdout, /Refusing to downgrade supply-chain attestations/);
   assert.doesNotMatch(result.stdout, /release continues/);
+});
+
+
+test("branch cleanup never deletes an unverified ref appearing during metadata resume", () => {
+  const result = runReleaseStep("Clean up merged release branch", `
+    git() {
+      if [[ "$1" == ls-remote ]]; then printf 'unrelated-sha\\trefs/heads/release/2026.10.18';
+      elif [[ "$1" == push ]]; then printf 'unverified ref deleted' >> "$GITHUB_OUTPUT"; fi
+    }
+  `, { RELEASE_PR_NUMBER: "" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.outputs, "", "an unverified ref must never be deleted");
+  assert.match(result.stdout, /release continues/);
+});
+
+test("branch cleanup keeps a ref updated after merge instead of adopting its new SHA", () => {
+  const result = runReleaseStep("Clean up merged release branch", `
+    git() {
+      if [[ "$1" == rev-parse ]]; then printf release-sha;
+      elif [[ "$1" == ls-remote ]]; then printf 'unrelated-sha\\trefs/heads/release/2026.10.18';
+      elif [[ "$1" == push ]]; then
+        if [[ "$*" == *':unrelated-sha '* ]]; then printf 'updated ref deleted' >> "$GITHUB_OUTPUT";
+        else printf 'stale info' >&2; return 47; fi
+      fi
+    }
+  `);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.outputs, "", "a new remote SHA must not be adopted as a cleanup lease");
+  assert.match(result.stdout, /::warning::.*stale info/);
+  assert.match(result.stdout, /release continues/);
 });

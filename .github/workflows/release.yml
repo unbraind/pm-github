@@ -529,24 +529,27 @@ jobs:
         shell: bash
         env:
           RELEASE_BRANCH: ${{ steps.decide.outputs.release_branch }}
+          RELEASE_PR_NUMBER: ${{ steps.release_pr.outputs.pr_number }}
         run: |
           set -euo pipefail
-          if remote_branch_sha="$(git ls-remote --heads origin "refs/heads/${RELEASE_BRANCH}" 2>&1)"; then
-            remote_branch_sha="${remote_branch_sha%%$'\t'*}"
-            if [[ -n "$remote_branch_sha" ]]; then
-              if ! cleanup_error="$(git push --force-with-lease="refs/heads/${RELEASE_BRANCH}:${remote_branch_sha}" \
+          # A metadata-only resume did not merge a PR and owns no cleanup ref.
+          if [[ -n "${RELEASE_PR_NUMBER:-}" ]]; then
+            # HEAD is still the prepared commit pushed by the merge step. Never
+            # adopt a newer remote SHA as permission to delete somebody's update.
+            if expected_sha="$(git rev-parse HEAD 2>&1)"; then
+              if ! cleanup_error="$(git push --force-with-lease="refs/heads/${RELEASE_BRANCH}:${expected_sha}" \
                 origin ":refs/heads/${RELEASE_BRANCH}" 2>&1)"; then
                 cleanup_error="${cleanup_error//$'\n'/ }"
                 cleanup_error="${cleanup_error//$'\r'/ }"
                 cleanup_error="${cleanup_error//%/%25}"
                 echo "::warning::Could not delete merged release branch ${RELEASE_BRANCH}: ${cleanup_error}"
               fi
+            else
+              expected_sha="${expected_sha//$'\n'/ }"
+              expected_sha="${expected_sha//$'\r'/ }"
+              expected_sha="${expected_sha//%/%25}"
+              echo "::warning::Could not inspect prepared commit for cleanup of ${RELEASE_BRANCH}: ${expected_sha}"
             fi
-          else
-            remote_branch_sha="${remote_branch_sha//$'\n'/ }"
-            remote_branch_sha="${remote_branch_sha//$'\r'/ }"
-            remote_branch_sha="${remote_branch_sha//%/%25}"
-            echo "::warning::Could not inspect merged release branch ${RELEASE_BRANCH} for cleanup: ${remote_branch_sha}"
           fi
 
       - name: Write release summary
