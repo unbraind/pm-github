@@ -217,6 +217,8 @@ function runReleaseStep(name: string, commands: string, extraEnv: NodeJS.Process
   try {
     const result: SpawnSyncReturns<string> = spawnSync("bash", ["-c", `${commands}\n${step(name).run}\nprintf 'release continues\n'`], {
       encoding: "utf8", cwd: root, env: { ...process.env, HOME: root, TMPDIR: root, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1",
+        NPM_CONFIG_USERCONFIG: join(root, ".npmrc"), npm_config_userconfig: join(root, ".npmrc"),
+        NPM_CONFIG_GLOBALCONFIG: join(root, "global.npmrc"), npm_config_globalconfig: join(root, "global.npmrc"),
         GITHUB_REPOSITORY: "example/package", GITHUB_OUTPUT: output,
         GITHUB_STEP_SUMMARY: extraEnv.TEST_SUMMARY_FAILURE ? join(root, "missing", "summary") : summary,
         RELEASE_BRANCH: "release/2026.10.18", RELEASE_PR_NUMBER: "145", RELEASE_BASE_SHA: "base-main",
