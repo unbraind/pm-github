@@ -95,20 +95,24 @@ jobs:
           if [[ -n "$latest_tag" ]]; then
             export RELEASE_LAST_SHA="$(git rev-list -n 1 "$latest_tag")"
           fi
-          RELEASE_EXISTING_PRS="$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --state open --limit 1000 \
-            --json number,headRefName,isCrossRepository,author)"
-          export RELEASE_EXISTING_PRS
+          release_prs_file="$(mktemp "${RUNNER_TEMP}/release-prs.XXXXXX")"
+          trap 'if ! rm -f -- "$release_prs_file"; then
+            echo "::warning::Could not remove release PR candidate file."
+          fi' EXIT
+          gh pr list --repo "$GITHUB_REPOSITORY" --base main --state open --limit 1000 \
+            --json number,headRefName,isCrossRepository,author > "$release_prs_file"
           node --input-type=module -e '
+          import { readFileSync } from "node:fs";
           import { decideDailyRelease } from "./scripts/daily-release-plan.ts";
           const e = process.env;
           const plan = decideDailyRelease({
-            existingPrs: JSON.parse(e.RELEASE_EXISTING_PRS),
+            existingPrs: JSON.parse(readFileSync(process.argv[1], "utf8")),
             mainSha: e.RELEASE_MAIN_SHA, today: e.RELEASE_TODAY,
             lastRelease: e.RELEASE_LAST_TAG ? { tag: e.RELEASE_LAST_TAG, sha: e.RELEASE_LAST_SHA } : null,
           });
           for (const [key, value] of Object.entries(plan)) console.log(key + "=" + value);
           console.log("latest_tag=" + e.RELEASE_LAST_TAG);
-          ' >> "$GITHUB_OUTPUT"
+          ' "$release_prs_file" >> "$GITHUB_OUTPUT"
 
       # Refuse non-main release runs BEFORE publishing. `github.ref` is the
       # authoritative workflow trigger ref: schedule -> refs/heads/main;

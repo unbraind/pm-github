@@ -1,7 +1,7 @@
 /** Daily release policy is independent of GitHub and the wall clock. */
 import assert from "node:assert/strict";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -84,11 +84,15 @@ function step(name: string): WorkflowStep & { run: string } {
   return found as WorkflowStep & { run: string };
 }
 
-/** Execute the complete decision step against bounded synthetic GitHub responses. */
-function runDecision(prs: DailyReleaseInput["existingPrs"], failedLookup = false): SpawnSyncReturns<string> {
+/** Execute the complete decision step against file-backed synthetic GitHub responses. */
+function runDecision(prs: DailyReleaseInput["existingPrs"], failedLookup = false, failedCleanup = false): SpawnSyncReturns<string> & { candidateFiles: string[] } {
   const root = mkdtempSync(join(tmpdir(), "pm-github-release-plan-"));
+  const fixture = join(root, "prs.json");
+  const runnerTemp = join(root, "runner");
+  writeFileSync(fixture, JSON.stringify(prs));
+  mkdirSync(runnerTemp);
   try {
-    return spawnSync("bash", ["-c", `
+    const result = spawnSync("bash", ["-c", `
       git() { if [[ "$1" == rev-parse ]]; then printf new-main; fi; }
       date() { printf 2026.10.18; }
       gh() {
@@ -98,12 +102,16 @@ function runDecision(prs: DailyReleaseInput["existingPrs"], failedLookup = false
           if [[ "$1" == --limit ]]; then limit="$2"; shift; fi
           shift
         done
-        node --input-type=module -e 'console.log(JSON.stringify(JSON.parse(process.env.TEST_PRS).slice(0, Number(process.argv[1]))))' "$limit"
+        node --input-type=module -e 'import { readFileSync } from "node:fs"; console.log(JSON.stringify(JSON.parse(readFileSync(process.env.TEST_PRS_FILE, "utf8")).slice(0, Number(process.argv[1]))))' "$limit"
       }
+      rm() { if [[ "$FAILED_CLEANUP" == true ]]; then printf 'cleanup denied' >&2; return 48; fi; command rm "$@"; }
       ${step("Decide release").run}
       cat "$GITHUB_OUTPUT"
-    `], { encoding: "utf8", env: { ...process.env, RELEASE_TIMEZONE: "UTC", GITHUB_REPOSITORY: "example/package",
-      GITHUB_OUTPUT: join(root, "outputs"), TEST_PRS: JSON.stringify(prs), FAILED_LOOKUP: String(failedLookup) } });
+    `], { encoding: "utf8", env: { ...process.env, HOME: root, TMPDIR: root, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1",
+      RELEASE_TIMEZONE: "UTC", GITHUB_REPOSITORY: "example/package", RUNNER_TEMP: runnerTemp,
+      GITHUB_OUTPUT: join(root, "outputs"), TEST_PRS_FILE: fixture,
+      FAILED_LOOKUP: String(failedLookup), FAILED_CLEANUP: String(failedCleanup) } });
+    return { ...result, candidateFiles: readdirSync(runnerTemp) };
   } finally { rmSync(root, { recursive: true, force: true }); }
 }
 
@@ -113,6 +121,30 @@ test("the complete workflow decision finds an eligible PR beyond the default fir
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /^pr_number=144$/m);
   assert.match(result.stdout, /^action=refresh$/m);
+});
+
+test("the complete workflow decision reads 1,000 PRs above 128 KiB through a file", () => {
+  const prs = [...Array.from({ length: 999 }, (_, index) => ({ ...workflowPr, number: index + 1000,
+    headRefName: `feature/${index}/${"x".repeat(100)}` })), workflowPr];
+  assert.ok(Buffer.byteLength(JSON.stringify(prs)) > 128 * 1024);
+  const result = runDecision(prs);
+  assert.equal(result.status, 0, result.stderr || String(result.error));
+  assert.match(result.stdout, /^pr_number=144$/m);
+  assert.match(result.stdout, /^action=refresh$/m);
+  assert.match(result.stdout, /^base_sha=new-main$/m);
+  assert.deepEqual(result.candidateFiles, [], "the candidate file is removed after planning");
+});
+
+test("candidate-file cleanup failure warns without changing planning or lookup exit status", () => {
+  for (const failedLookup of [false, true]) {
+    const result = runDecision([workflowPr], failedLookup, true);
+    assert.equal(result.status, failedLookup ? 47 : 0, result.stderr);
+    assert.match(result.stdout, /::warning::Could not remove release PR candidate file/);
+    assert.match(result.stderr, /cleanup denied/);
+    if (!failedLookup) assert.match(result.stdout, /^pr_number=144$/m);
+    else assert.doesNotMatch(result.stdout, /^should_release=/m);
+    assert.equal(result.candidateFiles.length, 1);
+  }
 });
 
 test("newest branch date wins independently of input order and PR creation order", () => {
@@ -175,7 +207,7 @@ test("workflow rebuilds before preparation and runs the canonical generator befo
   assert.equal(refresh.env?.RELEASE_PR_NUMBER, "${{ steps.decide.outputs.pr_number }}");
   assert.equal(steps.filter(candidate => candidate.run?.includes("gh pr list")).length, 1);
   assert.match(decision.run, /--json number,headRefName,isCrossRepository,author/);
-  assert.doesNotMatch(decision.run, /export RELEASE_EXISTING_PRS=/);
+  assert.doesNotMatch(decision.run, /\bRELEASE_EXISTING_PRS\b/);
   assert.ok(steps.indexOf(step("Close superseded release PRs")) > steps.indexOf(refresh));
 });
 
@@ -183,6 +215,7 @@ test("a failed GitHub candidate lookup aborts instead of exporting an empty succ
   const result = runDecision([], true);
   assert.equal(result.status, 47);
   assert.equal(result.stdout, "");
+  assert.deepEqual(result.candidateFiles, [], "the candidate file is removed after a failed lookup");
 });
 
 test("the push and cleanup boundary refuses an existing ref without a selected workflow PR", () => {
