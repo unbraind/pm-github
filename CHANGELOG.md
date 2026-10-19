@@ -9,6 +9,7 @@
 ### Fixed
 
 - Require explicit delivery attribution before merged-PR closeout ([pm-github-uqjf](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-uqjf.toon))
+- The daily release regenerates the changelog with a different status filter than release:check, so an open changelog-unreleased item delivered since the last tag fails the release ([pm-github-l1ot](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-l1ot.toon))
 - Release timeout must report current workflow approval state ([pm-github-b145](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-b145.toon))
 - Preserve legacy GitHub ownership across copied provider examples ([pm-github-b143](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-b143.toon))
 - Reject malformed effective-rule discriminators before closeout ([pm-github-b141](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-b141.toon))
