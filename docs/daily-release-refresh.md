@@ -145,3 +145,23 @@ The tests parse the workflow with the YAML parser already bundled in the pinned 
 With all tests retained, removing only the increased lookup limit fails the position-31 regression. Removing only sorting fails the newest-date regression. Removing only superseded output or the shell close loop independently fails the eligible-only close regression. Each control exits 1 with ERR_ASSERTION; restored focused decision/workflow/publication tests pass 30/30. Completed full-gate and final-head CI receipts are recorded in the [PM history](../.agents/pm/history/pm-github-l1ot.jsonl) and follow-up PR.
 
 At follow-up code head a782879c6d65ad5e71883ded2160ca07993e6843, npm run release:check and bun run release:check each exited 0 with 913/913 tests and zero failures, cancellations or skips. Both measured exact 100/100/100/100 across all 15 authored modules: 10535/10535 lines and statements, 277/277 functions and 3225/3225 branches, with zero skipped coverage. All other release-check stages passed with unchanged pins, scope and budgets. Native bun test test/daily-release-plan.test.ts passed 13/13. The final receipt changes only tracker evidence and documentation; final-head CI evidence is recorded in the follow-up PR.
+
+## Review round 1: cleanup cannot block publication
+
+Thread PRRT_kwDOTbN4pM6t1WSO identified superseded-PR cleanup stopping the job before the selected metadata PR merged. Cleanup now follows the successful protected merge. Each failed close emits one warning containing the PR number and captured error, then attempts later candidates and continues the release. Error text is flattened and percent-escaped for a single [workflow warning](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands#setting-a-warning-message).
+
+The sweep covered all 23 authored steps:
+
+| Steps or nested operation | Result |
+| --- | --- |
+| Checkout; Refresh release base; Setup Node.js; Use an npm that supports trusted publishing; Setup Bun; Install dependencies | Required execution environment and current source; remain fail-closed. |
+| Decide release; Check release ref; Verify npm will accept this workflow's OIDC identity | Daily eligibility, ownership, trigger and identity protections remain fail-closed. Credential-file removal remains mandatory. |
+| Update release version; Generate changelog and release notes; Run release checks; Commit release files | Required artifacts and gates remain fail-closed. Summary flags were removed from generation and the release:notes script, so an optional summary write cannot invalidate otherwise valid artifacts. |
+| Merge release metadata through protected PR | Core branch write, protection checks, authoritative merge and merged SHA output remain fail-closed. PR title/body refresh and diagnostic-file removal now warn on failure. Existing optional bot-thread resolution and workflow-approval attempts were already guarded; required merge approval is still enforced by GitHub. |
+| Close superseded release PRs | Runs after the protected merge; each failure warns and continues. |
+| Clean up merged release branch | Optional deletion moved out of both the normal merge and metadata-resume paths. Lookup and leased deletion failures warn. A failed lookup never supplies a deletion lease. |
+| Write release summary | Separate optional step; write failure warns without affecting the release. |
+| Verify merged release; Publish npm package; Push release tag | Exact merged source, clean artifacts, provenance, registry confirmation and tag identity remain fail-closed. |
+| Verify bun install of published package; Create GitHub release; Fail the job on bun verification failure | Existing policy remains: Bun mirror failure cannot prevent GitHub release creation after successful publication and tagging, but the final gate still reports failed Bun verification. GitHub release creation itself remains a required delivery operation. |
+
+All seven existing identity, merged-artifact, publication, tag, Bun-verification, GitHub-release and final Bun-failure step definitions were compared structurally with d2abfe6 and are unchanged. All 20 shell scripts pass bash syntax validation. Tests execute complete named steps against synthetic command transports: first close fails and a later close succeeds; branch lookup/deletion, title/body edit, diagnostic cleanup and summary writes can fail; the verified merged SHA still reaches the next step; a registry that never confirms an attested artifact still causes publication failure. Restored focused suites pass 36/36 and the native Bun decision suite passes 19/19. Independent runtime and configuration revert controls are recorded in the PM history; completed full gates and final-head CI are recorded after execution.

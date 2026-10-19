@@ -1,9 +1,9 @@
 /** Daily release policy is independent of GitHub and the wall clock. */
 import assert from "node:assert/strict";
 import { spawnSync, type SpawnSyncReturns } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
+import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { decideDailyRelease, type DailyReleaseInput } from "../scripts/daily-release-plan.ts";
@@ -70,7 +70,7 @@ test("an unchanged release or a publication already dated today skips, even afte
 });
 
 /** Workflow fields exercised by the shell and configuration regressions. */
-interface WorkflowStep { name: string; run?: string; env?: Record<string, string>; if?: string }
+interface WorkflowStep { name: string; run?: string; env?: Record<string, string>; if?: string; "continue-on-error"?: boolean }
 /** Resolve the YAML parser already bundled with the pinned SDK. */
 const { parse }: { parse: (source: string) => { jobs: { release: { steps: WorkflowStep[] } } } } =
   createRequire(createRequire(import.meta.url).resolve("@unbrained/pm-cli/package.json"))("yaml");
@@ -176,7 +176,7 @@ test("workflow rebuilds before preparation and runs the canonical generator befo
   assert.equal(steps.filter(candidate => candidate.run?.includes("gh pr list")).length, 1);
   assert.match(decision.run, /--json number,headRefName,isCrossRepository,author/);
   assert.doesNotMatch(decision.run, /export RELEASE_EXISTING_PRS=/);
-  assert.ok(steps.indexOf(step("Close superseded release PRs")) > steps.indexOf(step("Run release checks")));
+  assert.ok(steps.indexOf(step("Close superseded release PRs")) > steps.indexOf(refresh));
 });
 
 test("a failed GitHub candidate lookup aborts instead of exporting an empty success", () => {
@@ -204,4 +204,134 @@ test("the push and cleanup boundary refuses an existing ref without a selected w
       if (status === 1) assert.match(result.stdout, /Refusing to overwrite/);
     }
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+/** Execute a complete named step with isolated files and synthetic command transports. */
+function runReleaseStep(name: string, commands: string, extraEnv: NodeJS.ProcessEnv = {}): SpawnSyncReturns<string> & { outputs: string; summary: string } {
+  const root = mkdtempSync(join(tmpdir(), "pm-github-release-cleanup-"));
+  const output = join(root, "outputs");
+  const summary = join(root, "summary");
+  writeFileSync(join(root, "package.json"), JSON.stringify({ name: "example-package" }));
+  writeFileSync(join(root, "CHANGELOG.md"), "Canonical changelog\n");
+  writeFileSync(join(root, "RELEASE_NOTES.md"), "Release notes\n");
+  try {
+    const result: SpawnSyncReturns<string> = spawnSync("bash", ["-c", `${commands}\n${step(name).run}\nprintf 'release continues\n'`], {
+      encoding: "utf8", cwd: root, env: { ...process.env, HOME: root, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1",
+        GITHUB_REPOSITORY: "example/package", GITHUB_OUTPUT: output,
+        GITHUB_STEP_SUMMARY: extraEnv.TEST_SUMMARY_FAILURE ? join(root, "missing", "summary") : summary,
+        RELEASE_BRANCH: "release/2026.10.18", RELEASE_PR_NUMBER: "145", RELEASE_BASE_SHA: "base-main",
+        RELEASE_TAG: "v2026.10.19", NPM_VERSION: "2026.10.19", MERGED_SHA: "merged-main", ...extraEnv },
+    });
+    return { ...result, outputs: existsSync(output) ? readFileSync(output, "utf8") : "",
+      summary: existsSync(summary) ? readFileSync(summary, "utf8") : "" };
+  } finally { rmSync(root, { recursive: true, force: true }); }
+}
+
+/** GitHub and Git command responses for a verified merge, including optional failures. */
+const mergedReleaseCommands = `
+  git() {
+    case "$1" in
+      rev-parse) if [[ "$2" == origin/main ]]; then printf base-main; else printf release-commit; fi ;;
+      ls-remote) printf remote-sha ;;
+    esac
+  }
+  gh() {
+    case "$1 $2" in
+      "pr edit") printf 'metadata edit denied' >&2; return 47 ;;
+      "pr view") printf '{"merge_state":"CLEAN","unsettled":[],"failing":[]}' ;;
+      "api graphql") return 0 ;;
+      "api --method") printf '{"sha":"merged-main"}' ;;
+      *) printf 'Unexpected GitHub command' >&2; return 99 ;;
+    esac
+  }
+  rm() { printf 'diagnostic cleanup denied' >&2; return 48; }
+`;
+
+test("superseded close failures warn per PR and still try later PRs before continuing the release", () => {
+  const result = runReleaseStep("Close superseded release PRs", `
+    gh() {
+      if [[ "$3" == 144 ]]; then printf 'close denied\\nsecond line 50%% unavailable\\r' >&2; return 47; fi
+      printf 'closed PR #%s\\n' "$3"
+    }
+  `, { SUPERSEDED_PR_NUMBERS: "144 143" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /::warning::Could not close superseded release PR #144: close denied second line 50%25 unavailable/);
+  assert.equal((result.stdout.match(/::warning::/g) ?? []).length, 1);
+  assert.match(result.stdout, /closed PR #143/);
+  assert.match(result.stdout, /release continues/);
+});
+
+test("optional branch lookup or leased deletion failures warn and cannot stop the release", () => {
+  const cleanup = step("Clean up merged release branch");
+  assert.ok(steps.indexOf(cleanup) > steps.indexOf(step("Merge release metadata through protected PR")));
+  for (const failure of ["lookup", "delete", "none", "absent"]) {
+    const result = runReleaseStep(cleanup.name, `
+      git() {
+        if [[ "$1" == ls-remote ]]; then
+          if [[ "$TEST_FAILURE" == lookup ]]; then printf 'lookup denied' >&2; return 47; fi
+          if [[ "$TEST_FAILURE" != absent ]]; then printf 'remote-sha\\trefs/heads/release/2026.10.18'; fi
+        elif [[ "$1" == push ]]; then
+          [[ "$*" == 'push --force-with-lease=refs/heads/release/2026.10.18:remote-sha origin :refs/heads/release/2026.10.18' ]] || return 99
+          if [[ "$TEST_FAILURE" == delete ]]; then printf 'delete denied' >&2; return 48; fi
+        fi
+      }
+    `, { TEST_FAILURE: failure });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /release continues/);
+    if (failure === "lookup" || failure === "delete") assert.match(result.stdout, new RegExp(`::warning::.*release/2026\\.10\\.18.*${failure} denied`));
+    else assert.doesNotMatch(result.stdout, /::warning::/);
+  }
+});
+
+test("metadata edit and diagnostic cleanup failures preserve the verified merged output", () => {
+  const result = runReleaseStep("Merge release metadata through protected PR", mergedReleaseCommands);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /::warning::Could not refresh title\/body of release PR #145: metadata edit denied/);
+  assert.match(result.stdout, /::warning::Could not remove release merge diagnostic files: diagnostic cleanup denied/);
+  assert.match(result.stdout, /release continues/);
+  assert.equal(result.outputs, "merged_sha=merged-main\npr_number=145\n");
+});
+
+test("resuming existing main metadata does not perform branch cleanup before publishing", () => {
+  const result = runReleaseStep("Merge release metadata through protected PR", `
+    git() {
+      if [[ "$1" == rev-parse ]]; then printf base-main;
+      elif [[ "$1" == ls-remote ]]; then printf remote-sha;
+      elif [[ "$1" == push ]]; then printf 'unexpected branch deletion' >&2; return 47; fi
+    }
+  `);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.outputs, "merged_sha=base-main\npr_number=\n");
+  assert.doesNotMatch(result.stderr, /unexpected branch deletion/);
+});
+
+test("summary failure only warns and artifact generation has no implicit summary writes", () => {
+  const generation = step("Generate changelog and release notes");
+  const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { scripts: Record<string, string> };
+  assert.doesNotMatch(generation.run, /--github-step-summary/);
+  assert.doesNotMatch(manifest.scripts["release:notes"]!, /--github-step-summary/);
+  assert.doesNotMatch(step("Merge release metadata through protected PR").run, /GITHUB_STEP_SUMMARY/);
+  for (const failure of ["", "true"]) {
+    const result = runReleaseStep("Write release summary", "", { TEST_SUMMARY_FAILURE: failure });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /release continues/);
+    if (failure) assert.match(result.stdout, /::warning::Could not write release summary: .*/);
+    else assert.equal(result.summary, "Release metadata at merged-main.\n\nCanonical changelog\nRelease notes\n");
+  }
+});
+
+test("publication still fails closed when the registry never confirms an attested publish", () => {
+  const publish = step("Publish npm package");
+  assert.notEqual(publish["continue-on-error"], true);
+  const result = runReleaseStep(publish.name, `
+    npm() {
+      if [[ "$1" == --version ]]; then printf 11.19.0;
+      elif [[ "$1" == config ]]; then return 0;
+      else printf 'registry unavailable' >&2; return 47; fi
+    }
+    sleep() { :; }
+  `);
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stdout, /Refusing to downgrade supply-chain attestations/);
+  assert.doesNotMatch(result.stdout, /release continues/);
 });
