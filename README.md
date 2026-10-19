@@ -39,15 +39,17 @@ Only `https://github.com/owner/repo/blob/main/.agents/pm/<folder>/<id>.toon`
 links in PR bodies are recognized. Percent-encoded names and nested SDK tracker
 folders are supported; malformed encodings and traversal segments are ignored. Repository comparisons ignore case. Links to
 other repositories, unknown ids, closed/canceled items and `--skip` ids produce
-explicit skip rows. Bare ids and `pm:` trailers are not supported. If several
-selected PRs reference one item, the lowest PR number supplies its evidence and
-later references are skipped.
+explicit skip rows. Bare mentions and `pm:` trailers are not delivery evidence. Use a whole-line
+`Closes <item-id>` or `pm-github: <item-id>` declaration, a closing keyword before
+the canonical item link, or an item field `github_pr`, `pr_url` or
+`pull_request_url` containing the exact PR URL. Multiple merged PRs explicitly
+claiming one item are reported as `ambiguous_delivery`; none closes it.
 
 **A mention is not delivery.** PR bodies routinely link follow-ups, epics and
 related work for context, so a link alone never closes an item. An item is
 closed only when:
 
-- it is `in_progress` (claimed work), **or** its link is preceded on the same
+- its delivery is explicitly declared; a canonical link may be preceded on the same
   line by a GitHub-style closing keyword: `Closes`, `Fixes`, `Resolves` or
   `Delivers` (and their tense forms), for example `- Closes [pm-x](…/pm-x.toon)`;
 - it is not an `Epic`; epics close when their children are done;

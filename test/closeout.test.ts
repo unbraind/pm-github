@@ -18,7 +18,10 @@ const repo = "fixture/project";
 const head = "a".repeat(40);
 const merge = "b".repeat(40);
 const mergedAt = "2026-10-13T12:30:00Z";
-const link = (id: string, repository = repo) => `https://github.com/${repository}/blob/main/.agents/pm/tasks/${id}.toon`;
+const bareLink = (id: string, repository = repo) => `https://github.com/${repository}/blob/main/.agents/pm/tasks/${id}.toon`;
+
+/** Explicit delivery declarations used by all positive closeout fixtures. */
+const link = (id: string, repository = repo) => `Closes ${bareLink(id, repository)}`;
 
 /** Complete synthetic merged PR; prose is never trusted as closure evidence. */
 function pull(body: string | null, overrides: Record<string, unknown> = {}) {
@@ -84,25 +87,25 @@ function closeout(root: string, options: Record<string, unknown> = { pr: "42" })
 }
 
 test("extraction accepts only canonical tracker links and deduplicates references", () => {
-  assert.deepEqual(extractCloseoutItems([link("pm-1"), link("pm%2D1"), link("pm-1", "FIXTURE/PROJECT"), link("pm-1", "other/repo"),
-    "pm: pm-2", link("pm-3").replace("blob/main", "blob/feature"), link("pm-4") + ".bak", "https://github.com/fixture/project/issues/1"].join("\n")),
+  assert.deepEqual(extractCloseoutItems([bareLink("pm-1"), bareLink("pm%2D1"), bareLink("pm-1", "FIXTURE/PROJECT"), bareLink("pm-1", "other/repo"),
+    "pm: pm-2", bareLink("pm-3").replace("blob/main", "blob/feature"), bareLink("pm-4") + ".bak", "https://github.com/fixture/project/issues/1"].join("\n")),
   [{ repo, item: "pm-1", declared: false }, { repo: "other/repo", item: "pm-1", declared: false }]);
   // Only a closing keyword before the link on the same line declares delivery; a later declaring line upgrades a mention.
-  assert.deepEqual(extractCloseoutItems([`- Closes ${link("pm-5")}`, `- [pm-6](${link("pm-6")}): closed later`, `See ${link("pm-7")}`, `Fixes [pm-7](${link("pm-7")})`,
-    `Prefix ${link("pm-8")}`].join("\n")).map(ref => [ref.item, ref.declared]),
+  assert.deepEqual(extractCloseoutItems([`- Closes ${bareLink("pm-5")}`, `- [pm-6](${bareLink("pm-6")}): closed later`, `See ${bareLink("pm-7")}`, `Fixes [pm-7](${bareLink("pm-7")})`,
+    `Prefix ${bareLink("pm-8")}`].join("\n")).map(ref => [ref.item, ref.declared]),
   [["pm-5", true], ["pm-6", false], ["pm-7", true], ["pm-8", false]]);
   // The keyword must directly precede its link: prose in between, as in these review-reported lines, declares nothing.
   for (const line of ["Unrelated to the fix in ", "Not fixed here; see ", "Previously closed work: ", "Closes (see notes) ", "Closes [a](not a url) and ", "text]("]) {
     assert.equal(declaresDelivery(line), false, line);
   }
-  for (const line of ["Closes ", "- Closes: ", "**Fixes** [pm-x](", "Delivers [a](https://x/a.toon) and [b](", `Resolves ${link("pm-1")}, `, "_Delivered_ "]) {
+  for (const line of ["Closes ", "- Closes: ", "**Fixes** [pm-x](", "Delivers [a](https://x/a.toon) and [b](", `Resolves ${bareLink("pm-1")}, `, "_Delivered_ "]) {
     assert.equal(declaresDelivery(line), true, line);
   }
   for (const folder of [".", "..", "%2e%2e", "%2Fescape", "%5Cescape", "%00", "bad%ZZ"]) {
     assert.deepEqual(extractCloseoutItems(`https://github.com/${repo}/blob/main/.agents/pm/${folder}/pm-1.toon`), []);
   }
-  assert.deepEqual(extractCloseoutItems(link("pm-%2Fescape")), []);
-  assert.deepEqual(extractCloseoutItems(link("pm-%ZZ")), []);
+  assert.deepEqual(extractCloseoutItems(bareLink("pm-%2Fescape")), []);
+  assert.deepEqual(extractCloseoutItems(bareLink("pm-%ZZ")), []);
 });
 
 test("dry-run plans same-repo, foreign, unknown, terminal and excluded items without writes", async () => tracker(async (root, ids) => {
@@ -113,6 +116,7 @@ test("dry-run plans same-repo, foreign, unknown, terminal and excluded items wit
     const report = await closeout(root, { pr: ["42", "42"], skip: [ids[3], ids[3]] });
     assert.equal(report.dry_run, true);
     assert.equal(report.closed, 0);
+    assert.equal(compactCloseoutReport(report).plan[0]!.action, "close");
     assert.deepEqual(report.plan.map(row => row.action), ["close", "skip", "skip", "skip", "skip", "skip"]);
     assert.match(report.plan[1]!.reason, /another repository/);
     assert.match(report.plan[2]!.reason, /does not exist/);
@@ -237,12 +241,12 @@ test("public apply reports partial results as CommandError exit 1 after remainin
   } finally { await unlock(); }
 }));
 
-test("one item referenced by multiple selected PRs is closed once", async () => tracker(async (root, ids) => {
+test("multiple explicit delivery claims are refused before writes", async () => tracker(async (root, ids) => {
   await withMockGithub(fixture(link(ids[0]!)), async () => {
     const report = await closeout(root, { pr: ["43", "42"], apply: true });
-    assert.equal(report.closed, 1);
+    assert.equal(report.closed, 0);
     assert.deepEqual(report.plan.map(row => row.pr), [42, 43]);
-    assert.match(report.plan[1]!.reason, /already selected/);
+    assert.ok(report.plan.every(row => row.code === "ambiguous_delivery" && row.action === "skip"));
   });
 }));
 
@@ -456,8 +460,8 @@ test("public command registration reuses repo resolution and shared transport", 
     assert.equal((result.result as { plan: { action: string }[] }).plan[0]!.action, "close");
     const compact = await harness.runCommand({ command: "github closeout", pmRoot: root,
       global: { json: false }, options: { pr: ["42", "43", "44"] } });
-    assert.equal((compact.result as { plan: object[] }).plan.length, 1);
-    assert.deepEqual((compact.result as { skipped: object }).skipped, { duplicate_selection: 2 });
+    assert.equal((compact.result as { plan: object[] }).plan.length, 3);
+    assert.deepEqual((compact.result as { skipped: object }).skipped, {});
     const full = await harness.runCommand({ command: "github closeout", pmRoot: root,
       global: { json: false }, options: { pr: ["42", "43", "44"], full: true } });
     assert.equal((full.result as { plan: object[] }).plan.length, 3);
@@ -510,19 +514,19 @@ test("packed CLI preserves repeatable selectors, TOON/JSON shape and no-op apply
     assert.equal(preview.code, 0, preview.stderr);
     const report = decode(preview.stdout) as { dry_run: boolean; plan: { action: string }[] };
     assert.equal(report.dry_run, true);
-    assert.equal(report.plan.length, 2);
-    assert.deepEqual((report as unknown as { skipped: object }).skipped, { explicit_skip: 4, duplicate_selection: 2 });
+    assert.equal(report.plan.length, 4);
+    assert.deepEqual((report as unknown as { skipped: object }).skipped, { explicit_skip: 4 });
     const full = await call([...flags, "--full"]);
     assert.equal(full.code, 0, full.stderr);
     assert.equal((decode(full.stdout) as { plan: object[] }).plan.length, 8);
     const json = await call([...flags, "--json"]);
     assert.equal(json.code, 0, json.stderr);
     assert.equal((JSON.parse(json.stdout) as { plan: object[] }).plan.length, 8);
-    assert.equal(report.plan.filter(row => row.action === "close").length, 2);
+    assert.equal(report.plan.filter(row => row.action === "close").length, 0);
     assert.equal(snapshot(root), before);
     const applied = await call([...flags, "--apply", "--json"]);
     assert.equal(applied.code, 0, applied.stderr);
-    assert.equal((JSON.parse(applied.stdout) as { closed: number }).closed, 2);
+    assert.equal((JSON.parse(applied.stdout) as { closed: number }).closed, 0);
     const after = snapshot(root);
     const repeat = await call([...flags, "--apply", "--json"]);
     assert.equal(repeat.code, 0, repeat.stderr);
@@ -598,7 +602,7 @@ test("custom SDK folders with dots, encoded spaces and nested paths close throug
     const created = await create({ type: type!, title: `Custom delivery ${type}`, author: "fixture", acceptanceCriteria: "Verified delivery" }, { pmRoot: root, noExtensions: true });
     await update(created.item.id, { status: "in_progress" }, { pmRoot: root, noExtensions: true });
     const url = `https://github.com/${repo}/blob/main/.agents/pm/${folder!.split("/").map(encodeURIComponent).join("/")}/${encodeURIComponent(created.item.id).replaceAll("-", "%2D")}.toon`;
-    await withMockGithub(fixture(url), async () => {
+    await withMockGithub(fixture(`Closes ${url}`), async () => {
       assert.equal((await closeout(root, { pr: "42", apply: true })).closed, 1);
       assert.equal((await get(created.item.id, {}, { pmRoot: root, noExtensions: true })).item.status, "closed");
     });
@@ -664,8 +668,8 @@ test("a mention is not delivery: open follow-ups, epics and parents with active 
   const epic = (await create({ title: "Umbrella", type: "Epic", author: "fixture" }, sdk)).item.id;
   await update(epic, { status: "in_progress" }, sdk);
   await update(ids[1]!, { parent: ids[0]! }, sdk);
-  const body = [`Delivers [parent](${link(ids[0]!)}) and [child](${link(ids[1]!)})`, `Follow-up: ${link(followUp)} (not closed by this PR)`,
-    `Closes ${link(declared)}`, `Part of ${link(epic)}`].join("\n");
+  const body = [`Delivers [parent](${bareLink(ids[0]!)}) and [child](${bareLink(ids[1]!)})`, `Follow-up: ${bareLink(followUp)} (not closed by this PR)`,
+    `Closes ${bareLink(declared)}`, `Part of ${bareLink(epic)}`].join("\n");
   await withMockGithub(fixture(body), async () => {
     const report = await closeout(root, { pr: "42" });
     const rows = new Map(report.plan.map(row => [row.item, row]));
@@ -673,7 +677,7 @@ test("a mention is not delivery: open follow-ups, epics and parents with active 
     assert.match(rows.get(ids[0]!)!.reason, /1 non-terminal child/);
     assert.equal(rows.get(ids[1]!)!.action, "close");
     assert.equal(rows.get(followUp)!.action, "skip");
-    assert.match(rows.get(followUp)!.reason, /open, not in progress; a mention is not delivery/);
+    assert.match(rows.get(followUp)!.reason, /A mention is not delivery/);
     assert.equal(rows.get(declared)!.action, "close");
     assert.equal(rows.get(epic)!.action, "skip");
     assert.match(rows.get(epic)!.reason, /Epics close when their children are done/);
