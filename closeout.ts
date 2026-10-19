@@ -402,12 +402,19 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
     if (mergeEvidence(pr)) gate = await checkCloseoutHead(api, repo, pr, declared);
     checks.push(gate);
     const refs = extractCloseoutItems(pr.body ?? "");
+    // Scan declarations once per PR, retaining case-insensitive IDs and optional punctuation.
+    const declarations = new Set<string>();
+    for (const match of (pr.body ?? "").matchAll(/^(?:[-*][ \t]+)?([a-z]+|pm-github:)[ \t]+(\S+)[ \t]*$/gim)) {
+      const keyword = match[1]!.toLowerCase();
+      if (!CLOSING_KEYWORDS.has(keyword) && keyword !== "pm-github:") continue;
+      const id = match[2]!.toLowerCase();
+      declarations.add(id);
+      if (/[.!]$/.test(id)) declarations.add(id.slice(0, -1));
+    }
     for (const item of items.values()) {
       // Only canonical delivery metadata or a whole-line trailer/closing declaration is authoritative.
       const linked = [item.github_pr, item.pr_url, item.pull_request_url].includes(pr.html_url);
-      const id = item.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const declaration = new RegExp(`^(?:[-*][ \\t]+)?(?:${[...CLOSING_KEYWORDS].join("|")}|pm-github:)[ \\t]+${id}[.!]?[ \\t]*$`, "im").test(pr.body ?? "");
-      if (linked || declaration) {
+      if (linked || declarations.has(item.id.toLowerCase())) {
         const ref = refs.find(ref => ref.item === item.id && ref.repo.toLowerCase() === repo.toLowerCase());
         if (ref) ref.declared = true;
         else refs.push({ item: item.id, repo, declared: true });

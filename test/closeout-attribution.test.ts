@@ -89,3 +89,44 @@ test("two explicit merged delivery claims remain ambiguous before any close", as
   assert.ok(report.plan.every(row => row.action === "skip" && row.code === "ambiguous_delivery"));
   assert.equal(item.status, "in_progress");
 });
+
+test("many items and PRs preserve declaration boundaries, casing, punctuation and ambiguity", async () => {
+  const root = mkdtempSync(join(tmpdir(), "closeout-many-declarations-"));
+  try {
+    const init = spawnSync(join(import.meta.dirname, "../node_modules/.bin/pm"), ["--pm-path", root, "init", "fixture"], { cwd: root, encoding: "utf8" });
+    assert.equal(init.status, 0, init.stderr);
+    const sdk = { pmRoot: root, noExtensions: true };
+    const ids: string[] = [];
+    for (let i = 0; i < 40; i++) ids.push((await create({ title: `Delivery candidate ${i}`, type: "Issue", author: "fixture" }, sdk)).item.id);
+    const verbs = ["close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves", "resolved", "deliver", "delivers", "delivered"];
+    const expected: string[] = [];
+    const bodies = verbs.map((verb, i) => {
+      const number = i + 1;
+      expected.push(`${number}:${ids[i * 2]}`, `${number}:${ids[i * 2 + 1]}`);
+      return [`- ${verb.toUpperCase()}\t${ids[i * 2]!.toUpperCase()}${i % 2 ? "." : "!"}\t`,
+        `pm-github:\t${ids[i * 2 + 1]}`, `Closes ${ids[i * 2]}`,
+        `Closes\n${ids[26]}`, `Reports ${ids[27]}`, `Closes ${ids[28]}!!`,
+        `See https://github.com/${repo}/blob/main/.agents/pm/issues/${ids[25]}.toon`,
+        ...(i < 2 ? [`Delivers ${ids[24]}`] : []),
+      ].join("\r\n");
+    });
+    const api: CloseoutApi = { base: "https://api.github.com", next: () => undefined, get: async endpoint => {
+      const n = Number(endpoint.split("/").at(-1));
+      const value = endpoint.includes("/pulls/") ? { number: n, body: bodies[n - 1], merged: true,
+        merged_at: "2026-10-08T01:19:51Z", merge_commit_sha: "b".repeat(40), html_url: url(n),
+        head: { sha: head }, base: { ref: "main", repo: { full_name: repo } } }
+        : endpoint.includes("/protection/") ? { contexts: ["CI"], checks: [] }
+        : endpoint.includes("/check-runs") ? { total_count: 1, check_runs: [{ name: "CI", head_sha: head, status: "completed", conclusion: "success", app: { id: 7 } }] } : [];
+      return { body: JSON.stringify(value) };
+    } };
+    const report = await runCloseout(root, repo, { pr: verbs.map((_, i) => String(i + 1)), "dry-run": true }, api);
+    assert.equal(report.closed, 0);
+    assert.equal(report.failed, 0);
+    assert.equal(report.checks.length, 12);
+    assert.equal(report.plan.length, 38);
+    assert.deepEqual(report.plan.filter(row => row.action === "close").map(row => `${row.pr}:${row.item}`).sort(), expected.sort());
+    assert.deepEqual(report.plan.filter(row => row.code === "ambiguous_delivery").map(row => [row.pr, row.item]), [[1, ids[24]], [2, ids[24]]]);
+    assert.deepEqual(report.plan.filter(row => row.code === "not_delivery").map(row => [row.pr, row.item]), verbs.map((_, i) => [i + 1, ids[25]]));
+    for (const id of ids) assert.equal((await get(id, {}, sdk)).item.status, "open");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
