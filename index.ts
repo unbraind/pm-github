@@ -24,6 +24,10 @@ import type {
   SearchProviderQueryContext,
 } from "@unbrained/pm-cli/sdk/authoring";
 import { CloseoutUsageError, compactCloseoutReport, runCloseout } from "./closeout.ts";
+import {
+  buildImportFidelity, fetchImportTimeline, matchImportedIssue, persistImportFidelity, readImportReleases, selectImportContextIndex,
+  type ImportFidelity,
+} from "./import-fidelity.ts";
 import http from "node:http";
 import https from "node:https";
 import crypto from "node:crypto";
@@ -40,6 +44,9 @@ import {
   listAllItemMetadata as sdkListAllItemMetadata,
   normalizeItemId as sdkNormalizeItemId,
   readSettings as sdkReadSettings,
+  resolvePmRoot as sdkResolvePmRoot,
+  getHistoryPath as sdkGetHistoryPath,
+  readHistorySnapshot as sdkReadHistorySnapshot,
   type BulkItemMutation,
   type CommentsCommandOptions,
   type CommentsResult,
@@ -102,7 +109,7 @@ export interface GhIssue {
   /** GitHub lifecycle state; mapped to a pm status by {@link mapState}. */
   state: "open" | "closed";
   /** Why a closed issue was closed; `not_planned` maps to `canceled`, not `closed`. */
-  state_reason?: "completed" | "not_planned" | "reopened" | null;
+  state_reason?: "completed" | "not_planned" | "duplicate" | "reopened" | null;
   /** Labels on the issue, imported verbatim as pm tags (before any `--label-map`). */
   labels: Array<{ name: string }>;
   /** Author login, surfaced as a `github_author:` tag when present. */
@@ -212,6 +219,8 @@ type ReadSettings = (pmRoot: string) => Promise<{ id_prefix?: string }>;
 export interface AtomicImportOptions {
   /** Author identity stamped onto the transaction's mutations (default `pm-github`). */
   atomicAuthor?: string;
+  /** SDK transaction observer; explicit failure injection still exercises real rollback. */
+  onTransition?: CommitItemMutationsOptions["onTransition"];
   /** SDK bulk-mutation primitive that applies and journals the transaction. */
   commitItemMutations?: CommitItemMutations;
   /** SDK id normalizer that derives each item's stable external-key id. */
@@ -227,6 +236,7 @@ export interface ImportRunDependencies {
     opts: ImportOptions,
     token?: string,
   ) => Promise<GhIssue[]>;
+  fetchIssueTimeline?: typeof fetchImportTimeline;
   fetchIssueComments?: (
     issue: GhIssue,
     repo: string,
@@ -633,7 +643,7 @@ export function parseNextLink(linkHeader?: string): string | undefined {
 // Map a GitHub issue/PR state (+ optional stateReason) onto a pm status,
 // preserving `not_planned` closures as `canceled` rather than `closed`.
 export function mapState(state: string, stateReason?: string | null): string {
-  if (state === "closed" && stateReason === "not_planned") return "canceled";
+  if (state === "closed" && (stateReason === "not_planned" || stateReason === "duplicate")) return "canceled";
   return state === "closed" ? "closed" : "open";
 }
 
@@ -851,6 +861,8 @@ export function authorTag(issue: GhIssue): string | undefined {
  * depending on every SDK field.
  */
 export interface PmItem {
+  /** Full proven-complete metadata, including provider links and source lifecycle. */
+  [key: string]: unknown;
   /** Stable item id (absent for items not yet created). */
   id?: string;
   /** One-line title. */
@@ -1097,6 +1109,7 @@ export function decodeCompletePmItems(parsed: unknown): PmItem[] {
     }
     ids.add(item.id);
     items.push({
+      ...item,
       id: item.id,
       title,
       status,
@@ -1295,8 +1308,14 @@ export interface PreparedGithubImport {
   milestone?: string;
   comments: GhComment[];
   syncAnnotations: boolean;
-  /** Source completion timestamp (GitHub `closed_at`), forwarded as `--completed-at` when the item is closed. */
+  /** Source completion timestamp; full issue plans finalize it together with source creation. */
   closedAt?: string;
+  /** Source dates, closure evidence and tag-date attribution in the verified plan. */
+  fidelity?: ImportFidelity;
+  /** Existing external owner receives a link without replacing its provider context. */
+  linkOnly?: boolean;
+  /** Auditable identity and lifecycle conflict decision. */
+  identity?: { via: string; conflict?: { local: string; github: string; rule: string } };
   match?: PmItem;
 }
 
@@ -1364,11 +1383,13 @@ async function resolveAtomicSdkFunctions(opts: AtomicImportOptions): Promise<{
  * Derive an order-independent transaction id from the desired import state and
  * exact ordered mutation plan. Content or target changes produce a fresh
  * transaction; a reordered retry of the same plan resumes the durable journal.
+ * External history revisions distinguish a local edit from a retry of import-owned writes.
  */
 export function deriveAtomicTransactionId(
   repo: string,
   entries: readonly PreparedGithubImport[],
   mutations: readonly BulkItemMutation[],
+  contextVersions: readonly string[] = [],
 ): string {
   const canonical = [...entries]
     .sort((a, b) => a.issueNumber - b.issueNumber)
@@ -1382,8 +1403,10 @@ export function deriveAtomicTransactionId(
       tags: [...entry.tags].sort(),
       assignee: entry.assignee ?? null,
       milestone: entry.milestone ?? null,
+      fidelity: entry.fidelity ?? null,
+      linkOnly: entry.linkOnly ?? false,
     }));
-  const digest = crypto
+  const payload = crypto
     .createHash("sha256")
     .update(repo.toLowerCase())
     .update("\x1f")
@@ -1392,10 +1415,9 @@ export function deriveAtomicTransactionId(
     // Recovery requires the exact ordered step plan. Include targets and
     // options so a changed id_prefix or provenance match gets a fresh journal
     // instead of colliding with an incompatible prior attempt.
-    .update(JSON.stringify(mutations))
-    .digest("hex")
-    .slice(0, 16);
-  return `${ATOMIC_IMPORT_PREFIX}${digest}`;
+    .update(JSON.stringify(mutations));
+  if (contextVersions.length > 0) payload.update("\x1f").update(JSON.stringify([...contextVersions].sort()));
+  return `${ATOMIC_IMPORT_PREFIX}${payload.digest("hex").slice(0, 16)}`;
 }
 
 /** Stable create id keyed by the external GitHub issue, never by fetch order. */
@@ -1420,6 +1442,9 @@ export function buildAtomicImportMutations(
   idPrefix: string,
   normalizeItemId: (input: string, prefix: string) => string,
 ): { itemId: string; mutations: BulkItemMutation[] } {
+  if (entry.linkOnly && entry.match?.id) {
+    return { itemId: entry.match.id, mutations: [{ op: "update", id: entry.match.id, options: { addTags: entry.tags } }] };
+  }
   const sharedOptions: Record<string, unknown> = {
     title: entry.title,
     type: entry.itemType,
@@ -1428,8 +1453,15 @@ export function buildAtomicImportMutations(
     tags: entry.tags.join(","),
     ...(entry.assignee ? { assignee: entry.assignee } : {}),
     ...(entry.milestone ? { sprint: entry.milestone } : {}),
+    ...(entry.status === "canceled" ? { closeReason: entry.fidelity?.github_close_reason ?? `GitHub issue #${entry.issueNumber} closed` } : {}),
   };
 
+  // Explicit terminal reconciliation also handles canceled -> completed. The
+  // supported force option permits that source-authoritative repeat closure;
+  // finalization restores the real dates before the transaction commits.
+  const statusOptions = entry.status === "closed"
+    ? entry.fidelity ? { status: "closed", closeReason: entry.fidelity.github_close_reason, force: true } : {}
+    : { status: entry.status };
   const managedItemId = deriveAtomicItemId(
     repo,
     entry.issueNumber,
@@ -1448,21 +1480,21 @@ export function buildAtomicImportMutations(
     const mutations: BulkItemMutation[] = [{
       op: "create",
       id: managedItemId,
-      options: { ...sharedOptions, status: createStatus },
+      options: { ...sharedOptions, status: createStatus, message: `pm-github import create ${repo.toLowerCase()}#${entry.issueNumber}` },
     }, {
       op: "update",
       id: managedItemId,
       options: {
         ...sharedOptions,
-        ...(entry.status !== "closed" ? { status: entry.status } : {}),
+        ...statusOptions,
       },
     }];
-    if (entry.status === "closed") {
+    if (entry.status === "closed" && !entry.fidelity) {
       mutations.push({
         op: "close",
         id: managedItemId,
         reason: `GitHub issue #${entry.issueNumber} closed`,
-        // Preserve the source's real completion time instead of the import time.
+        // Legacy callers can supply completion directly; full plans finalize both lifecycle dates.
         ...(entry.closedAt ? { options: { completedAt: entry.closedAt } } : {}),
       });
     }
@@ -1473,27 +1505,38 @@ export function buildAtomicImportMutations(
   }
 
   const itemId = entry.match.id;
-  const updateOptions: Record<string, unknown> = { ...sharedOptions };
-  // close has a dedicated mutation so its reason is preserved. Every other
-  // transition (open/reopen/canceled) is safely reversible as part of update.
-  if (entry.status !== "closed") {
-    updateOptions.status = entry.status;
-  }
+  const updateOptions: Record<string, unknown> = { ...sharedOptions, ...statusOptions };
   const mutations: BulkItemMutation[] = [{
     op: "update",
     id: itemId,
     options: updateOptions,
   }];
-  if (entry.status === "closed") {
+  if (entry.status === "closed" && !entry.fidelity) {
     mutations.push({
       op: "close",
       id: itemId,
       reason: `GitHub issue #${entry.issueNumber} closed`,
-      // Preserve the source's real completion time instead of the import time.
+      // Legacy callers can supply completion directly; full plans finalize both lifecycle dates.
       ...(entry.closedAt ? { options: { completedAt: entry.closedAt } } : {}),
     });
   }
   return { itemId, mutations };
+}
+
+/**
+ * Bind atomic plans to the latest external edit or different lifecycle generation.
+ * The importer's desired-state and compensation writes leave retries stable;
+ * local edits and later state cycles invalidate completed journals.
+ */
+async function importContextVersions(pmRoot: string, entries: readonly PreparedGithubImport[]): Promise<string[]> {
+  const versions: string[] = [];
+  for (const entry of entries) {
+    if (!entry.fidelity || !entry.match?.id) continue;
+    const snapshot = await sdkReadHistorySnapshot(sdkGetHistoryPath(pmRoot, entry.match.id), entry.match.id);
+    const context = snapshot.entries[selectImportContextIndex(snapshot.entries, entry.status)];
+    if (context) versions.push(`${entry.match.id}:${crypto.createHash("sha256").update(JSON.stringify(context)).digest("hex")}`);
+  }
+  return versions;
 }
 
 /** Commit a complete issue-import batch under one crash-resumable transaction. */
@@ -1510,6 +1553,7 @@ export async function importGithubAtomic(
   recoveredItems?: number;
   itemIds: Map<number, string>;
 }> {
+  pmRoot = sdkResolvePmRoot(process.cwd(), pmRoot);
   const {
     commitItemMutations: commit,
     normalizeItemId,
@@ -1535,8 +1579,15 @@ export async function importGithubAtomic(
     itemIds.set(entry.issueNumber, planned.itemId);
     mutations.push(...planned.mutations);
   }
-  const transactionId = deriveAtomicTransactionId(repo, entries, mutations);
+  const transactionId = deriveAtomicTransactionId(repo, entries, mutations, await importContextVersions(pmRoot, entries));
 
+  /** Finalize before the SDK commits, and repair source metadata on recovered journals. */
+  const finalize = async (): Promise<void> => {
+    for (const entry of entries) {
+      if (entry.fidelity) await persistImportFidelity(pmRoot, itemIds.get(entry.issueNumber)!, entry.fidelity, Boolean(entry.linkOnly));
+    }
+  };
+  let committed = false;
   try {
     const result = await commit({
       pmRoot,
@@ -1548,7 +1599,13 @@ export async function importGithubAtomic(
       // restores every UPDATE and CLOSE step (covered by the mixed rollback
       // integration test below this implementation).
       createCompensation: "delete",
+      onTransition: async context => {
+        if (context.transition === "committing") await finalize();
+        await opts.onTransition?.(context);
+      },
     });
+    committed = true;
+    await finalize();
     // A recovered journal may include work applied by the interrupted process
     // as well as steps resumed now. The SDK intentionally returns the durable
     // final results, not a per-invocation delta, so create/update counts cannot
@@ -1564,6 +1621,7 @@ export async function importGithubAtomic(
     };
   } catch (err: unknown) {
     const msg = errorMessage(err);
+    if (committed) throw new CommandError(`Atomic GitHub import has a committed journal but source metadata could not be finalized. Retry transaction ${transactionId}; nothing may be pushed. Underlying error: ${msg}`);
     if (err instanceof AggregateError || /compensation failed/i.test(msg)) {
       throw new CommandError(
         `Atomic GitHub import failed and compensation was incomplete. The tracker may contain partially applied state; retry the same import to resume transaction ${transactionId}, then inspect its durable journal if recovery still fails. Underlying error: ${msg}`,
@@ -2799,10 +2857,18 @@ async function prepareGithubImport(
   token: string | undefined,
   match: PmItem | undefined,
   fetchIssueComments: ImportRunDependencies["fetchIssueComments"] = fetchComments,
+  fidelityContext: { items: PmItem[]; releases: ReturnType<typeof readImportReleases>; timeline: typeof fetchImportTimeline },
 ): Promise<PreparedGithubImport | undefined> {
   const title = issue.title.trim();
   if (!title) return undefined;
 
+  const identity = matchImportedIssue(fidelityContext.items, issue, match);
+  match = identity.item;
+  const timeline = await fidelityContext.timeline(issue, repo, token);
+  const fidelity = buildImportFidelity(issue, fidelityContext.releases, timeline);
+  const targetStatus = mapState(issue.state, issue.state_reason);
+  const conflict = match?.status && match.status !== targetStatus && (["closed", "canceled"].includes(match.status) || issue.state === "closed")
+    ? { local: match.status, github: issue.state, rule: identity.linkOnly ? "preserve-provider-owner" : "github-source-wins" } : undefined;
   const kind = issue.pull_request ? "PR" : "issue";
   const labels = issue.labels.map((label) => label.name).filter(Boolean);
   const tag = provenanceTag(repo, issue.number);
@@ -2827,20 +2893,22 @@ async function prepareGithubImport(
     issueNumber: issue.number,
     title,
     itemType: opts.itemType,
-    status: mapState(issue.state, issue.state_reason),
+    status: identity.linkOnly ? match!.status! : targetStatus,
     description:
       `GH ${kind} #${issue.number}: ${issue.html_url}` +
       (author ? ` · author @${author}` : "") +
       (issue.state_reason ? ` · state reason ${issue.state_reason}` : "") +
-      (issue.created_at ? ` · created ${issue.created_at}` : "") +
-      (issue.updated_at ? ` · updated ${issue.updated_at}` : ""),
+      ` · created ${issue.created_at} · updated ${issue.updated_at}`,
     body: writeCommentsToBody ? composeBody(issue, comments) : (issue.body || ""),
-    tags: [...labels, tag, ...(ghAuthorTag ? [ghAuthorTag] : [])],
+    tags: [...new Set([...(identity.linkOnly ? match!.tags! : []), ...labels, tag, ...(ghAuthorTag ? [ghAuthorTag] : [])])],
     assignee: issue.assignee?.login,
     milestone: issue.milestone?.title,
     comments,
     syncAnnotations,
     closedAt: issue.closed_at ?? undefined,
+    fidelity,
+    linkOnly: identity.linkOnly,
+    identity: { via: identity.via, ...(conflict ? { conflict } : {}) },
     match,
   };
 }
@@ -3138,8 +3206,16 @@ export async function runImport(
   // reported "would import N, skip 0" where the real run performs updates for
   // already-linked issues. A preview that overstates creates reads as "this will
   // duplicate my whole tracker" and is the one thing --dry-run exists to rule out.
-  const existingItems = (dependencies.readItems ?? readPmItems)(pmRoot);
+  /** Read the complete raw corpus in-process, retaining all provider metadata and bodies. */
+  const readImportItems = async (): Promise<PmItem[]> => {
+    if (dependencies.readItems) return dependencies.readItems(pmRoot);
+    const corpus = certifyCompleteListResult(await listAllComplete({ includeBody: true }, { pmRoot, cwd: pmRoot, noExtensions: true }));
+    return decodeCompletePmItems(corpus);
+  };
+  const existingItems = await readImportItems();
   const existing = indexByProvenance(existingItems);
+  const fidelityContext = { items: existingItems, releases: readImportReleases(pmRoot),
+    timeline: dependencies.fetchIssueTimeline ?? (dependencies.fetchIssues ? async () => [] : fetchImportTimeline) };
 
   let imported = 0;
   let updated = 0;
@@ -3169,6 +3245,7 @@ export async function runImport(
         token,
         existing.get(`${repo.toLowerCase()}#${issue.number}`),
         dependencies.fetchIssueComments,
+        fidelityContext,
       );
       if (!entry) {
         skippedNumbers.push(issue.number);
@@ -3190,7 +3267,7 @@ export async function runImport(
     if (opts.gate && !opts.dryRun) {
       const preview = runCommandTrackerGate({ pmRoot, plannedItems: planned.map(entry => ({
         itemId: entry.match?.id ?? `github-issue-${entry.issueNumber}`,
-        fields: { title: entry.title, description: entry.description, body: entry.body, tags: entry.tags,
+        fields: { ...entry.fidelity, title: entry.title, description: entry.description, body: entry.body, tags: entry.tags,
           assignee: entry.assignee, sprint: entry.milestone,
           comments: entry.syncAnnotations ? entry.comments.map(comment => ({
             author: comment.user?.login, text: comment.body, created_at: comment.created_at,
@@ -3204,7 +3281,21 @@ export async function runImport(
     );
   }
 
-  const gatePlanFields = opts.gate ? { gate: { completeness: gateCompleteness, idempotency: gateIdempotency, scan: "post-write" } } : {};
+  // Preview output omits unscanned PR-title quotes and private provider close text.
+  const fidelityPlan = () => gatePlan!.map(entry => {
+    const source = entry.fidelity!;
+    const reason = source.github_close_reason.split(" (", 1)[0]!;
+    return { issue: entry.issueNumber, item: entry.match?.id,
+      action: entry.linkOnly ? "link" : entry.match?.id ? "update" : "create", status: entry.status,
+      ...source, github_close_reason: reason,
+      created_at: entry.linkOnly ? entry.match!.created_at : source.github_created_at,
+      updated_at_policy: "sdk-mutation-clock; source in github_updated_at",
+      closed_at: entry.linkOnly ? entry.match!.closed_at : source.github_closed_at,
+      close_reason: entry.linkOnly ? "preserved-provider-owner" : reason,
+      release: entry.linkOnly ? "preserved-provider-owner" : source.github_release,
+      identity: entry.identity };
+  });
+  const gatePlanFields = opts.gate ? { plan: fidelityPlan(), gate: { completeness: gateCompleteness, idempotency: gateIdempotency, scan: "post-write" } } : {};
 
   if (opts.atomic) {
     // The gated pipeline already prepared every entry (and counted its skips)
@@ -3259,7 +3350,7 @@ export async function runImport(
     }
 
     const result = await (dependencies.commitAtomic ?? importGithubAtomic)(pmRoot, repo, prepared);
-    if (opts.gate) verifyImportedProvenance((dependencies.readItems ?? readPmItems)(pmRoot), prepared, repo);
+    if (opts.gate) verifyImportedProvenance(await readImportItems(), prepared, repo);
     // Planned native comments are part of the verified plan: a contended lock,
     // a refused add, or a committed entry whose created id is missing from the
     // post-commit routing map all leave planned comments unwritten, so they are
@@ -3308,6 +3399,7 @@ export async function runImport(
       atomic: true,
       ...depLinkResultFields(atomicDepLink),
       ...fetchFields,
+      ...(opts.gate ? { plan: fidelityPlan() } : {}),
       ...(gateReceipt ? { gate: gateReceipt } : {}),
     };
   }
@@ -3325,6 +3417,7 @@ export async function runImport(
           token,
           existing.get(`${repo.toLowerCase()}#${issue.number}`),
           dependencies.fetchIssueComments,
+          fidelityContext,
         );
     if (!prepared) {
       // A gated run counted its skips during the verified plan phase; only the
@@ -3345,7 +3438,6 @@ export async function runImport(
       tags,
       comments,
       syncAnnotations,
-      closedAt,
     } = prepared;
 
     /**
@@ -3354,14 +3446,12 @@ export async function runImport(
      * Two paths below close an item for the same reason — reconciling an
      * already-matched item whose upstream issue is now closed, and closing an
      * item that was just created `open` because pm-cli 2026.8.3 refuses a
-     * terminal `create --status closed`. Both must carry identical provenance
-     * (the reason) and identical completion evidence (GitHub's own `closed_at`,
-     * when it recorded one), so the argv is built once here rather than
-     * duplicated at each site where the two could silently drift apart.
+     * terminal `create --status closed`. Both carry the same source reason.
+     * Source completion is applied with source creation during finalization,
+     * avoiding an intermediate completion date before the SDK creation date.
      */
     const githubCloseArgs = (id: string): string[] => {
-      const args = ["--path", pmRoot, "close", id, "--reason", `GitHub issue #${issue.number} closed`];
-      if (closedAt) args.push("--completed-at", closedAt);
+      const args = ["--path", pmRoot, "close", id, "--reason", prepared.fidelity!.github_close_reason];
       return args;
     };
 
@@ -3374,6 +3464,14 @@ export async function runImport(
       continue;
     }
 
+    if (prepared.linkOnly) {
+      const ownerId = match!.id!;
+      const linked = pmRun(["--path", pmRoot, "update", ownerId, "--add-tags", tags.join(",")]);
+      if (!linked.ok) throw new CommandError(`Could not link GitHub issue #${issue.number} to its existing owner.`);
+      await persistImportFidelity(pmRoot, ownerId, prepared.fidelity!, true);
+      updated++;
+      continue;
+    }
     if (match?.id) {
       // Idempotent update — never duplicate. Status transitions go through the
       // proper command (close requires a reason; reopen via update --status).
@@ -3394,16 +3492,20 @@ export async function runImport(
         continue;
       }
       // Reconcile status separately.
+      if (status === "canceled" && match.status !== "canceled") {
+        const cancel = pmRun(["--path", pmRoot, "update", match.id, "--status", "canceled", "--close-reason", prepared.fidelity!.github_close_reason]);
+        if (!cancel.ok) throw new CommandError(`Could not cancel GitHub issue #${issue.number}.`);
+      }
       if (status === "closed" && match.status !== "closed") {
         // Close through `pm close` so the reason is real provenance; pass the
         // source completion time as --completed-at when GitHub recorded one.
-        const close = pmRun(githubCloseArgs(match.id));
+        const close = pmRun([...githubCloseArgs(match.id), ...(match.status === "canceled" ? ["--force"] : [])]);
         if (!close.ok) {
           console.error(`#${issue.number}: close reconciliation failed — ${close.stderr}`);
           skipped++;
           continue;
         }
-      } else if (status === "open" && match.status === "closed") {
+      } else if (status === "open" && (match.status === "closed" || match.status === "canceled")) {
         const reopen = pmRun(["--path", pmRoot, "update", match.id, "--status", "open", "--message", `GitHub issue #${issue.number} reopened`]);
         if (!reopen.ok) {
           console.error(`#${issue.number}: reopen reconciliation failed — ${reopen.stderr}`);
@@ -3414,6 +3516,7 @@ export async function runImport(
       if (syncAnnotations) {
         commentWriteFailures += (await syncGithubCommentsToAnnotations(match.id, comments, pmRoot, issue.number)).failed;
       }
+      await persistImportFidelity(pmRoot, match.id, prepared.fidelity!, false);
       updated++;
       continue;
     }
@@ -3434,18 +3537,19 @@ export async function runImport(
       "--tags", tags.join(","),
       "--message", `Imported from GitHub #${issue.number}`,
     ];
+    if (status === "canceled") createArgs.push("--close-reason", prepared.fidelity!.github_close_reason);
     if (assignee) createArgs.push("--assignee", assignee);
     if (milestone) createArgs.push("--sprint", milestone);
     // --json lets a following close (or annotations sync) address the freshly
     // created item by id without re-scanning the workspace.
-    if (mustClose || syncAnnotations) createArgs.push("--json");
+    createArgs.push("--json");
     const created = pmRun(createArgs);
     if (!created.ok) {
       console.error(`#${issue.number}: create failed — ${created.stderr}`);
       skipped++;
       continue;
     }
-    const createdId = (mustClose || syncAnnotations) ? parseCreatedItemId(created.stdout) : undefined;
+    const createdId = parseCreatedItemId(created.stdout);
     if (mustClose) {
       if (createdId) {
         const close = pmRun(githubCloseArgs(createdId));
@@ -3475,6 +3579,8 @@ export async function runImport(
         commentWriteFailures += comments.length;
       }
     }
+    if (!createdId) throw new CommandError(`Could not finalize GitHub issue #${issue.number}: created id missing.`);
+    await persistImportFidelity(pmRoot, createdId, prepared.fidelity!, false);
     imported++;
   }
 
@@ -3518,9 +3624,9 @@ export async function runImport(
   reportDepLink(depLink);
   // Gated pipeline, phase 2 — the writes are on disk but nothing is committed or
   // pushed; scan the proposed tracker change now and fail closed.
-  if (opts.gate) verifyImportedProvenance((dependencies.readItems ?? readPmItems)(pmRoot), gatePlan!, repo);
+  if (opts.gate) verifyImportedProvenance(await readImportItems(), gatePlan!, repo);
   const gateReceipt = opts.gate ? gateImportWrites(pmRoot) : undefined;
-  return { imported, updated, skipped, ...fetchFields, ...depLinkResultFields(depLink), ...(gateReceipt ? { gate: gateReceipt } : {}) };
+  return { imported, updated, skipped, ...fetchFields, ...depLinkResultFields(depLink), ...(opts.gate ? { plan: fidelityPlan() } : {}), ...(gateReceipt ? { gate: gateReceipt } : {}) };
 }
 
 /**
@@ -5400,7 +5506,8 @@ interface GraphqlProjectFieldsData {
 // `errors` array, so we surface those explicitly. The combined user+org queries
 // below intentionally return a partial error for the wrong owner type while the
 // right one still resolves; we only throw when there is NO usable data.
-async function githubGraphQL<T>(token: string | undefined, query: string, variables: Record<string, unknown>): Promise<T> {
+/** Execute a typed GraphQL request for internal import closure evidence. @internal */
+export async function githubGraphQL<T>(token: string | undefined, query: string, variables: Record<string, unknown>): Promise<T> {
   return (await githubGraphQLResponse<T>(token, query, variables)).data!;
 }
 
@@ -6350,6 +6457,8 @@ export default defineExtension({
       { name: "github_author", type: "string", optional: true },
       { name: "github_created_at", type: "string", optional: true },
       { name: "github_updated_at", type: "string", optional: true },
+      { name: "github_link_only", type: "boolean", optional: true },
+      ...["github_closed_at", "github_state_reason", "github_close_reason", "github_release"].map(name => ({ name, type: "string" as const, optional: true })),
     ]);
 
     // -----------------------------------------------------------------------

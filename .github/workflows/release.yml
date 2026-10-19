@@ -37,6 +37,13 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      - name: Refresh release base
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main --force
+          git checkout --detach origin/main
+
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
@@ -74,54 +81,34 @@ jobs:
 
       - name: Decide release
         id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           git fetch --force --tags
-          latest_tag="$(git tag --sort=-creatordate | head -n 1 || true)"
-          if [[ -n "$latest_tag" ]] && git diff --quiet "$latest_tag"..HEAD -- .; then
-            echo "should_release=false" >> "$GITHUB_OUTPUT"
-            echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
-            echo "No changes since $latest_tag; skipping release." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+          latest_tag="$(git tag --sort=-version:refname | head -n 1 || true)"
+          export RELEASE_TODAY="$(TZ="$RELEASE_TIMEZONE" date +%Y.%m.%d)"
+          export RELEASE_MAIN_SHA="$(git rev-parse HEAD)"
+          export RELEASE_LAST_TAG="$latest_tag"
+          export RELEASE_LAST_SHA=""
+          if [[ -n "$latest_tag" ]]; then
+            export RELEASE_LAST_SHA="$(git rev-list -n 1 "$latest_tag")"
           fi
-
-          release_date="$(TZ="$RELEASE_TIMEZONE" date +%Y.%m.%d)"
-          base_tag="v${release_date}"
-          max_suffix=-1
-          while IFS= read -r existing_tag; do
-            if [[ "$existing_tag" == "$base_tag" ]]; then
-              (( max_suffix < 0 )) && max_suffix=0
-              continue
-            fi
-            if [[ "$existing_tag" == "$base_tag-"* ]]; then
-              suffix="${existing_tag#"$base_tag-"}"
-              if [[ "$suffix" =~ ^[0-9]+$ ]] && (( suffix > max_suffix )); then
-                max_suffix="$suffix"
-              fi
-            fi
-          done < <(git tag -l "${base_tag}*")
-
-          if (( max_suffix >= 0 )); then
-            tag="${base_tag}-$((max_suffix + 1))"
-          else
-            tag="$base_tag"
-          fi
-
-          version_core="${tag#v}"
-          year="${version_core%%.*}"
-          version_tail="${version_core#*.}"
-          month="${version_tail%%.*}"
-          day_and_suffix="${version_tail#*.}"
-          day="${day_and_suffix%%-*}"
-          suffix="${day_and_suffix#"$day"}"
-          npm_version="$((10#$year)).$((10#$month)).$((10#$day))${suffix}"
-
-          echo "should_release=true" >> "$GITHUB_OUTPUT"
-          echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "npm_version=$npm_version" >> "$GITHUB_OUTPUT"
-          echo "base_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          RELEASE_EXISTING_PRS="$(gh pr list --repo "$GITHUB_REPOSITORY" --base main --state open \
+            --json number,headRefName,isCrossRepository,author)"
+          export RELEASE_EXISTING_PRS
+          node --input-type=module -e '
+          import { decideDailyRelease } from "./scripts/daily-release-plan.ts";
+          const e = process.env;
+          const plan = decideDailyRelease({
+            existingPrs: JSON.parse(e.RELEASE_EXISTING_PRS),
+            mainSha: e.RELEASE_MAIN_SHA, today: e.RELEASE_TODAY,
+            lastRelease: e.RELEASE_LAST_TAG ? { tag: e.RELEASE_LAST_TAG, sha: e.RELEASE_LAST_SHA } : null,
+          });
+          for (const [key, value] of Object.entries(plan)) console.log(key + "=" + value);
+          console.log("latest_tag=" + e.RELEASE_LAST_TAG);
+          ' >> "$GITHUB_OUTPUT"
 
       # Refuse non-main release runs BEFORE publishing. `github.ref` is the
       # authoritative workflow trigger ref: schedule -> refs/heads/main;
@@ -262,9 +249,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npx pm-changelog --pm-root .agents/pm --mode replace --output CHANGELOG.md --all-release-tags --release-version-from-package --date-from-version --item-url-base https://github.com/unbraind/pm-github/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --pm-arg=--output-budget --pm-arg=unbounded --pm-arg=--output-limit --pm-arg=unbounded --github-step-summary
-          npx pm-changelog --pm-root .agents/pm --mode replace --output CHANGELOG.md --all-release-tags --release-version-from-package --date-from-version --item-url-base https://github.com/unbraind/pm-github/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --pm-arg=--output-budget --pm-arg=unbounded --pm-arg=--output-limit --pm-arg=unbounded --check
-          npx pm-changelog --pm-root .agents/pm --stdout --since-previous-tag --until-release-tag --release-version-from-package --date-from-version --item-url-base https://github.com/unbraind/pm-github/blob/main/.agents/pm --respect-item-release --pm-bin ./node_modules/.bin/pm --pm-arg=--output-budget --pm-arg=unbounded --pm-arg=--output-limit --pm-arg=unbounded > RELEASE_NOTES.md
+          npm run changelog:full -- --github-step-summary
+          npm run changelog:check
+          npm run --silent release:notes > RELEASE_NOTES.md
 
       - name: Run release checks
         if: steps.decide.outputs.should_release == 'true'
@@ -299,6 +286,8 @@ jobs:
           RELEASE_BASE_SHA: ${{ steps.decide.outputs.base_sha }}
           RELEASE_TAG: ${{ steps.decide.outputs.tag }}
           NPM_VERSION: ${{ steps.decide.outputs.npm_version }}
+          RELEASE_BRANCH: ${{ steps.decide.outputs.release_branch }}
+          RELEASE_PR_NUMBER: ${{ steps.decide.outputs.pr_number }}
         run: |
           set -euo pipefail
           git fetch origin main --force
@@ -308,12 +297,19 @@ jobs:
             exit 1
           fi
 
-          release_branch="release/${RELEASE_TAG#v}"
+          release_branch="$RELEASE_BRANCH"
+          pr_number="$RELEASE_PR_NUMBER"
+          remote_branch_sha="$(git ls-remote --heads origin "refs/heads/${release_branch}" | cut -f1)"
+          if [[ -z "$pr_number" && -n "$remote_branch_sha" ]]; then
+            echo "::error::Refusing to overwrite a release branch without a verified workflow PR."
+            exit 1
+          fi
           release_commit="$(git rev-parse HEAD)"
           if [[ "$release_commit" == "$current_main_sha" ]]; then
             echo "Release metadata is already present on main; resuming the publish/tag transaction."
-            if git ls-remote --exit-code --heads origin "refs/heads/${release_branch}" > /dev/null 2>&1; then
-              git push origin --delete "$release_branch"
+            if [[ -n "$remote_branch_sha" ]]; then
+              git push --force-with-lease="refs/heads/${release_branch}:${remote_branch_sha}" \
+                origin ":refs/heads/${release_branch}"
             fi
             {
               echo "merged_sha=$current_main_sha"
@@ -322,22 +318,9 @@ jobs:
             exit 0
           fi
 
-          remote_branch_sha="$(git ls-remote --heads origin "refs/heads/${release_branch}" | cut -f1)"
-          if [[ -n "$remote_branch_sha" ]]; then
-            git push \
-              --force-with-lease="refs/heads/${release_branch}:${remote_branch_sha}" \
-              origin "HEAD:refs/heads/${release_branch}"
-          else
-            git push origin "HEAD:refs/heads/${release_branch}"
-          fi
-
-          pr_number="$(gh pr list \
-            --repo "$GITHUB_REPOSITORY" \
-            --base main \
-            --head "$release_branch" \
-            --state open \
-            --json number \
-            --jq '.[0].number // empty')"
+          git push \
+            --force-with-lease="refs/heads/${release_branch}:${remote_branch_sha}" \
+            origin "HEAD:refs/heads/${release_branch}"
           if [[ -z "$pr_number" ]]; then
             pr_url="$(gh pr create \
               --repo "$GITHUB_REPOSITORY" \
@@ -346,6 +329,10 @@ jobs:
               --title "Release pm-github ${RELEASE_TAG}" \
               --body "Automated daily release metadata for \`${RELEASE_TAG}\`. The release gate passed before this PR was created; npm publication and tagging remain blocked until this protected PR is merged.")"
             pr_number="${pr_url##*/}"
+          else
+            gh pr edit "$pr_number" --repo "$GITHUB_REPOSITORY" \
+              --title "Release pm-github ${RELEASE_TAG}" \
+              --body "Automated daily release metadata for \`${RELEASE_TAG}\`, rebuilt from current main. The release gate passed before refresh; publication and tagging wait for the protected PR."
           fi
 
           owner="${GITHUB_REPOSITORY%/*}"
@@ -462,10 +449,16 @@ jobs:
               # minutes after the release had already given up. Try to approve it -
               # the token often may not, which is harmless - and always surface the
               # run so the wait is diagnosable.
-              pending_runs="$(gh api \
+              awaiting_approval=unknown
+              if pending_runs="$(gh api \
                 "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${release_commit}&per_page=100" \
                 --jq '.workflow_runs[]? | select(.conclusion=="action_required" or .status=="waiting") | .id' \
-                2>/dev/null || true)"
+                2>/dev/null)"; then
+                awaiting_approval=0
+              else
+                pending_runs=""
+                echo "::warning::Could not read current workflow approval state; retrying without assuming approval is required."
+              fi
               if [[ -n "$pending_runs" ]]; then
                 while IFS= read -r run_id; do
                   [[ -z "$run_id" ]] && continue
@@ -481,8 +474,10 @@ jobs:
             fi
 
             if (( SECONDS >= deadline )); then
-              if (( awaiting_approval == 1 )); then
+              if [[ "$awaiting_approval" == 1 ]]; then
                 echo "::error::Release PR #${pr_number} did not merge within 30 minutes because its CI run is awaiting workflow approval (last state: ${merge_state}). Approve the run linked above once; this repository requires approval for a contributor that has no merged PR yet. Nothing was published or tagged."
+              elif [[ "$awaiting_approval" == unknown ]]; then
+                echo "::error::Release PR #${pr_number} did not merge within 30 minutes; current workflow approval state is unavailable (last state: ${merge_state}; still settling: ${unsettled:-none}; failing: ${failing:-none}). Inspect workflow runs and required checks; nothing was published or tagged."
               else
                 echo "::error::Release PR #${pr_number} did not merge within 30 minutes (last state: ${merge_state}; still settling: ${unsettled:-none}; failing: ${failing:-none}). A required check failed or never reported, or a required review is missing; not merging or publishing."
               fi

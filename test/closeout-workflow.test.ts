@@ -129,6 +129,8 @@ case "$1 $2" in
       if [[ "$1" == --body-file ]]; then cp "$2" "$PR_BODY"; break; fi
       shift
     done ;;
+  "pr merge") [[ "\${AUTO_MERGE_DENIED:-false}" != true ]] || exit 1 ;;
+  "pr view") printf '{"state":"MERGED"}\\n' ;;
   "pr close") rm -f "$PR_STATE" ;;
   "workflow run") [[ "\${DISPATCH_DENIED:-false}" != true ]] || exit 1 ;;
   "run list") ;;
@@ -150,7 +152,7 @@ esac
     if (env.READ_DENIED === "true" || (env.CHECKS_DENIED === "true" && url.includes("/check-runs"))) { jsonResponse(res, 403, { message: "Resource not accessible by integration" }); return; }
     const sha = "a".repeat(40);
     if (url.includes("/pulls?")) jsonResponse(res, 200, env.NO_DELIVERY === "true" ? [] : [{ number: 42, merged_at: "2026-10-15T00:00:00Z", updated_at: "2026-10-15T00:00:00Z" }]);
-    else if (url.endsWith("/pulls/42")) jsonResponse(res, 200, { number: 42, body: env.NO_LINKS === "true" ? "Routine maintenance" : `https://github.com/${env.FOREIGN_LINK === "true" ? "other/project" : "acme/widgets"}/blob/main/.agents/pm/tasks/${id}.toon${env.SUMMARY_ROWS === "true" ? `\nhttps://github.com/other/project/blob/main/.agents/pm/tasks/${id}.toon` : ""}${env.SUMMARY_ITEM ? `\nhttps://github.com/acme/widgets/blob/main/.agents/pm/tasks/${env.SUMMARY_ITEM}.toon` : ""}`,
+    else if (url.endsWith("/pulls/42")) jsonResponse(res, 200, { number: 42, body: env.NO_LINKS === "true" ? "Routine maintenance" : `Closes https://github.com/${env.FOREIGN_LINK === "true" ? "other/project" : "acme/widgets"}/blob/main/.agents/pm/tasks/${id}.toon${env.SUMMARY_ROWS === "true" ? `\nhttps://github.com/other/project/blob/main/.agents/pm/tasks/${id}.toon` : ""}${env.SUMMARY_ITEM ? `\nhttps://github.com/acme/widgets/blob/main/.agents/pm/tasks/${env.SUMMARY_ITEM}.toon` : ""}`,
       merged: true, merged_at: "2026-10-15T00:00:00Z", merge_commit_sha: env.INCOMPLETE_MERGE === "true" ? null : "b".repeat(40), html_url: "https://github.com/acme/widgets/pull/42",
       head: { sha }, base: { ref: "trunk", repo: { full_name: "acme/widgets" } } });
     else if (url.includes("/protection/")) jsonResponse(res, 200, { contexts: ["CI"], checks: [] });
@@ -181,7 +183,7 @@ ${shell(name, source)}
 const setup = ["Require caller default branch", "Validate closeout inputs", "Validate npm project directory", "Prepare sync branch from default branch",
   "Install dependencies", "Resolve sync commit scope", "Install pinned pm-github extension", "Configure PM merge drivers", "Verify gate is available"];
 const finish = ["Close delivered tracker items", "Run caller post-closeout script", "Gate tracker and regenerated changelog", "Verify strict pm health",
-  "Commit gated closeout changes and open review PR", "Dispatch caller CI and report parked runs"];
+  "Validate publication credentials", "Commit gated closeout changes and open review PR", "Dispatch caller CI and report parked runs"];
 
 /** No remote bot ref is the publication invariant for every refused or no-op run. */
 function unpublished(git: (...args: string[]) => string): void {

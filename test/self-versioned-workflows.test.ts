@@ -69,6 +69,9 @@ for (const file of files) {
     { name: "matching legacy input", tags: `${workflowSha}\trefs/tags/v${version}`, input: version, expected: version },
     { name: "no match without input", tags: `${otherSha}\trefs/tags/v${version}`, error: /Pin a release SHA/ },
     { name: "tag object is not a commit match", tags: `${workflowSha}\trefs/tags/v${version}\n${otherSha}\trefs/tags/v${version}^{}`, error: /Pin a release SHA/ },
+    { name: "multiline fallback refused as a whole value", tags: "", input: "2027.1.2\ninvalid", error: /exact numeric version/ },
+    { name: "valid first line cannot hide a second version", tags: "", input: "2027.1.2\n2027.2.3", error: /exact numeric version/ },
+    { name: "tag key is data rather than executable text", tags: `${workflowSha}\trefs/tags/v$(touch injected)`, input: "2027.1.2", expected: "2027.1.2", warning: true },
     { name: "floating fallback refused", tags: "", input: "latest", error: /exact numeric version/ },
     { name: "malicious fallback refused safely", tags: "", input: "$(touch injected)\n::error::injected", error: /exact numeric version/ },
     { name: "remote failure cannot use fallback", tags: "", input: "2020.1.1", remoteStatus: "128", error: /Cannot read pm-github release tags/ },
@@ -124,4 +127,11 @@ test("release retains token behavior and never stamps or commits reusable workfl
   for (const step of ["Update release version", "Commit release files", "Verify merged release"]) {
     assert.doesNotMatch(shell(release, step), /pm-github-(?:sync|closeout)\.yml/);
   }
+});
+
+/** Keep the two independent version-discovery requirements explicit in caller documentation. */
+test("version discovery documents App-free lookup and no release-time stamping", () => {
+  const readme = readFileSync(join(root, "README.md"), "utf8").replace(/\s+/g, " ");
+  assert.match(readme, /Release version discovery needs no GitHub App, and no release-time workflow stamping is required\./);
+  assert.match(readme, /The release workflow keeps its existing token behavior\./);
 });

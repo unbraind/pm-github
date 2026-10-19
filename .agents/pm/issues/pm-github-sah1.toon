@@ -6,9 +6,11 @@ status: open
 priority: 2
 tags: []
 created_at: "2026-10-15T00:13:15.730Z"
-updated_at: "2026-10-15T00:13:15.730Z"
+updated_at: "2026-10-17T10:58:49.678Z"
 author: codex-agent
 acceptance_criteria: "Reproduce the readiness race with real child processes under coverage and make the probe deterministic without weakening the 500 ms deadline, 100 ms cleanup, 3 second assertion, or 45 second consumer acceptance budget.; Keep all source inventories, four coverage thresholds and SDK pins unchanged; pass isolated and full npm/Bun checks; demonstrate that the probe still detects a missing forced kill."
+comments[1]{created_at,author,text}:
+  "2026-10-17T10:58:49.678Z",codex-agent,"Related startup-sensitive probe found during PR 142 import-fidelity validation: test/blockers.test.ts marker extraction includes cold package/SDK imports in its 10-second child budget. It passed isolated in 9.8 seconds but timed out under coverage in 10.3 seconds, including with Node 26. The PR separates finite module startup from the unchanged 10-second parser deadline and adds a real stalled-operation forced-kill control. The original 500 ms acceptance-watchdog startup case remains tracked here; its existing budgets and helper are unchanged."
 files[2]{path,scope}:
   test/bounded-cli.test.ts,project
   test/helpers/bounded-cli.ts,project

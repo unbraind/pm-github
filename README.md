@@ -39,15 +39,17 @@ Only `https://github.com/owner/repo/blob/main/.agents/pm/<folder>/<id>.toon`
 links in PR bodies are recognized. Percent-encoded names and nested SDK tracker
 folders are supported; malformed encodings and traversal segments are ignored. Repository comparisons ignore case. Links to
 other repositories, unknown ids, closed/canceled items and `--skip` ids produce
-explicit skip rows. Bare ids and `pm:` trailers are not supported. If several
-selected PRs reference one item, the lowest PR number supplies its evidence and
-later references are skipped.
+explicit skip rows. Bare mentions and `pm:` trailers are not delivery evidence. Use a whole-line
+`Closes <item-id>` or `pm-github: <item-id>` declaration, a closing keyword before
+the canonical item link, or an item field `github_pr`, `pr_url` or
+`pull_request_url` containing the exact PR URL. Multiple merged PRs explicitly
+claiming one item are reported as `ambiguous_delivery`; none closes it.
 
 **A mention is not delivery.** PR bodies routinely link follow-ups, epics and
 related work for context, so a link alone never closes an item. An item is
 closed only when:
 
-- it is `in_progress` (claimed work), **or** its link is preceded on the same
+- its delivery is explicitly declared; a canonical link may be preceded on the same
   line by a GitHub-style closing keyword: `Closes`, `Fixes`, `Resolves` or
   `Delivers` (and their tense forms), for example `- Closes [pm-x](…/pm-x.toon)`;
 - it is not an `Epic`; epics close when their children are done;
@@ -478,8 +480,8 @@ The resolver uses public `git ls-remote --tags https://github.com/unbraind/pm-gi
 peeled `^{}` commit (never the tag object), strips `v`, and requires an exact
 numeric version `N.N.N` or `N.N.N-N`. It reads all matching refs in one request,
 without API pagination or new credentials. Lookup errors and multiple release
-versions on one commit fail closed. No GitHub App or release-time workflow
-stamping is required; the release workflow keeps its existing token behavior.
+versions on one commit fail closed. Release version discovery needs no GitHub App, and no release-time workflow
+stamping is required. The release workflow keeps its existing token behavior.
 
 Pin **release commit SHAs**, with their matching tag in a same-line comment
 (for example `uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@<40-character-release-sha> # v2026.10.16`).
@@ -592,15 +594,48 @@ The script must emit the root `CHANGELOG.md` and remain inside the publication s
 | Validation | Strict PM health; explicit item/history scope committed together |
 | Branch and PR | Explicit force-with-lease against the observed bot ref; push only bot branch; owned PR lookup excludes forks |
 | No-op | Zero closes or no tracker diff creates no remote branch or PR; caller-only drift unpublished; stale owned PR closed |
-| CI | Caller workflow dispatch after PR create/update; parked approval-required runs reported; no merge |
+| CI and landing | Dispatch caller checks after publication and branch refresh; request protected squash auto-merge in App mode; report parked approval-required runs |
 
-`ci-workflows` defaults to `ci.yml`; use whitespace-separated filenames for every
-required caller CI workflow. Each must support `workflow_dispatch` and produce
-its required checks on that event. Missing files are skipped with a notice,
-matching sync; empty disables dispatch. CI dispatch starts checks; it does not
-certify that they passed. Review and required-check enforcement remain with the
-caller's protected branch. A repository concurrency group serializes closeout
-runs, and the explicit lease rejects competing writers.
+`ci-workflows` defaults to `ci.yml codeql.yml`, covering the fleet's CI and
+CodeQL workflows without querying branch protection. An explicit list replaces
+that inventory (use `ci.yaml` or `codeql.yaml` when appropriate). Missing files
+emit a notice; existing files without a recognized `workflow_dispatch` trigger
+emit a warning naming the one-line repair. Standard block triggers and compact
+`on: workflow_dispatch` / `on: [pull_request, workflow_dispatch]` forms are
+supported. Each dispatched workflow must emit its required context names on
+that event. Zero dispatchable workflows fails; `""` deliberately disables both
+dispatch and automatic landing. Dispatch errors fail the run.
+
+GitHub does not evaluate `workflow_dispatch` job checks for PR branch rules,
+even when those checks pass on the head SHA. For unattended landing, configure
+`automation-app-client-id` and the optional `automation_app_private_key` secret.
+After the local gates, the pinned official App-token action mints a token for
+only the caller repository, with contents/pull-requests/actions write and
+checks/statuses read. Publication and refresh use that token, so native
+`pull_request` workflows run without the GITHUB_TOKEN approval prompt and
+provide eligible required checks. Manual head dispatch remains additional
+verification. Empty credentials retain GITHUB_TOKEN and emit a setup notice;
+partial or failed App credentials stop publication. The private key is passed
+only to the token action, after caller scripts have completed.
+
+In App mode, after dispatch the workflow requests `gh pr merge --auto --squash`
+with the expected head SHA. A repository that disallows auto-merge emits a notice.
+Without an App, maintainers approve native PR runs, wait for required checks and
+conversations, and merge with an authorized credential; the workflow does not arm
+auto-merge.
+GitHub enforces required checks and conversation resolution. The same run
+polls once per minute: when the PR is `BEHIND`, it requests a branch update
+against the expected head, then dispatches all selected workflows and, in App
+mode, requests auto-merge again when the new head appears. App mode stops within
+forty minutes, inside its token's one-hour lifetime; legacy mode has a two-hour bound. The
+existing daily schedules and separate sync/closeout concurrency groups remain.
+A base change after the monitor window waits for the next daily rebuild.
+Unresolved conversations continue to block landing.
+
+See [the caller audit and one-time setup](docs/bot-pr-automation.md) for the App
+credential mapping, CodeQL trigger changes and explicit CI overrides. GitHub
+documents [the token approval behavior](https://docs.github.com/en/actions/concepts/security/github_token)
+and [why manual job checks do not satisfy PR branch rules](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks).
 
 The caller template uses top-level `permissions: {}` and grants its
 `gated-closeout` job only `contents: write`, `pull-requests: write`, `checks: read`
@@ -643,7 +678,8 @@ Optional inputs:
 | --- | --- | --- |
 | `npm-project-dir` | `.` | Relative npm project directory for `npm ci --ignore-scripts`, the CLI `node_modules/.bin` PATH entry, and `post-import-script`. Must have `package.json`, contain no `..` segments, and resolve inside the workspace (including symlinks); invalid paths fail before caching/install. The tracker and publication scope stay at the repository root. |
 | `post-import-script` | `changelog:full` | Caller npm script name invoked with `npm run --if-present` after import and before the final scan. Override for a different package script, or set `""` to disable. Missing scripts are skipped. Raw shell commands are not accepted. Generated `CHANGELOG.md` is staged with the tracker. Changing any file outside the documented scope fails the run, whether staged, unstaged, or untracked. |
-| `ci-workflows` | `ci.yml` | Whitespace-separated filenames in the caller's `.github/workflows`, for example `ci.yml codeql.yml`. Missing files emit a notice and are skipped; set `""` to disable dispatch. Existing workflows must enable `workflow_dispatch`; dispatch errors fail the sync job. |
+| `automation-app-client-id` | `""` | Optional GitHub App client ID, paired with the `automation_app_private_key` workflow-call secret. Enables eligible native PR runs through a fresh repo-scoped token; absent credentials retain GITHUB_TOKEN with a notice. |
+| `ci-workflows` | `ci.yml codeql.yml` | Explicit whitespace-separated filename override in the caller's `.github/workflows`. Missing/non-dispatchable workflows are reported; zero dispatchable workflows fails. Empty disables dispatch and auto-merge. See the CI and landing contract above. |
 
 A fleet repo owns the schedule and calls it with a pinned release SHA (see [`docs/sync-workflow-caller.yml`](docs/sync-workflow-caller.yml)):
 
@@ -663,6 +699,10 @@ permissions:
 jobs:
   gated-sync:
     uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@RELEASE_COMMIT_SHA # vRELEASE_VERSION
+    with:
+      automation-app-client-id: ${{ vars.PM_GITHUB_APP_CLIENT_ID }}
+    secrets:
+      automation_app_private_key: ${{ secrets.PM_GITHUB_APP_PRIVATE_KEY }}
 ```
 
 Replace `RELEASE_COMMIT_SHA` with a reviewed release commit containing this change and `vRELEASE_VERSION` with its matching tag. Configure [Dependabot](#self-versioned-workflows-and-dependabot) to maintain future pins automatically. The selected npm project needs a committed npm lockfile (`package-lock.json` or `npm-shrinkwrap.json`) and `@unbrained/pm-cli` as a devDependency (the workflow's `npm ci` provides the CLI) and its pm tracker at `.agents/pm` committed on the caller's default branch. Under **Settings → Actions → General → Workflow permissions** it must allow read and write token permissions and enable **Allow GitHub Actions to create and approve pull requests** (an organization can disable this), or the run pushes the sync branch and then fails to open the review PR. The caller must grant `actions: write`; a reusable workflow cannot elevate its caller's permissions.
@@ -673,7 +713,16 @@ provides the CLI and post-import npm script; Git and pm tracker operations still
 run from the repository root. A script that regenerates the changelog must write
 the repository-root `CHANGELOG.md` to stay within the publication allowlist.
 
-Bot-created review PRs may have missing required checks or `pull_request` runs parked in `action_required`. After a successful push and PR creation/update, the reusable workflow uses the job's `GITHUB_TOKEN` to run `gh workflow run <file> --ref "$SYNC_BRANCH"` for each configured caller CI workflow. Explicit `workflow_dispatch` creates runs on the sync head, so callers must enable that trigger and ensure those runs produce their required check names (and do not restrict the required jobs to the `pull_request` event). It also lists `action_required` runs for the exact pushed SHA and prints their URLs as notices without failing because approval is needed. Missing workflows, disabled dispatch, or approval notices do not establish that required CI passed; inspect the dispatched checks. A no-change sync closes its stale own review PR and dispatches nothing. See GitHub's [GITHUB_TOKEN event rules](https://docs.github.com/en/actions/concepts/security/github_token) and [dispatch trigger and permission requirements](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event).
+Bot-created PRs using GITHUB_TOKEN may have `pull_request` runs parked in
+`action_required`. The optional App token makes publication and branch refresh
+start native eligible PR workflows automatically. Configured manual workflows
+are also dispatched on the bot head; these jobs are additional verification,
+because GitHub excludes manual job checks from PR branch-rule evaluation. Each
+manual workflow must support `workflow_dispatch` and produce its intended check
+names on that event. Parked-run notices include their URLs. A no-change sync
+closes its stale owned review PR and dispatches nothing. See GitHub's
+[token event rules](https://docs.github.com/en/actions/concepts/security/github_token)
+and [required-check eligibility](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks).
 
 ### Installed CLI timeout acceptance
 
@@ -732,3 +781,36 @@ itself lists each affected stream in its output; `pm history --verify <id>` spot
 content, so `reconcile` only re-greens the hash chain (no data loss) — see the authoritative
 [pm-cli merge-safety guide](https://github.com/unbraind/pm-cli/blob/main/docs/MERGE_SAFETY.md). The
 older blunt `pm history-repair --all` remains available as a lower-level primitive.
+
+## What an imported issue looks like
+
+An issue owned by the GitHub importer keeps GitHub's creation and closure dates in the native lifecycle fields used by momentum and cycle-time readers. The import records a new, append-only before/after history event at the time of synchronization; it does not rewrite old events. The public SDK's high-level create/update commands reserve these dates, so finalization uses its public item lock, serialization and history primitives.
+
+```yaml
+status: closed
+created_at: "2026-09-02T10:00:00Z"
+updated_at: "2026-10-16T12:00:00Z"
+closed_at: "2026-09-04T12:00:00Z"
+completed_at: "2026-09-04T12:00:00Z"
+close_reason: 'Closed on GitHub as completed on 2026-09-04T12:00:00Z; closing PR https://github.com/example/project/pull/8 ("Restore the parser")'
+release: v2026.9.5
+github_url: https://github.com/example/project/issues/7
+github_number: 7
+github_state: closed
+github_state_reason: completed
+github_created_at: "2026-09-02T10:00:00Z"
+github_updated_at: "2026-09-04T12:00:00Z"
+github_closed_at: "2026-09-04T12:00:00Z"
+github_release: v2026.9.5
+github_link_only: false
+```
+
+`completed` maps to `closed`; `not_planned` and `duplicate` map to `canceled`. An open or reopened issue maps to `open` and clears old closure evidence and import-assigned release attribution. A closure reason names the closing commit from the REST timeline or closing PR/commit identified by GraphQL `ClosedEvent`, when available. A `ConnectedEvent` supplies a quoted linked PR without claiming that the association caused the closure. Otherwise it says `Closed on GitHub as <reason> on <date>`. Closing a report alone does not establish that its described defect or privacy exposure was repaired.
+
+Release attribution uses the actual dates of locally available calendar tags, including annotated tag dates. A closed issue belongs to the first tag at or after its closure: before the first tag goes to that first release, between two tags goes to the second, and after the latest tag remains pending. Fetch the complete tag history before importing; the reusable sync workflow already does this. Regenerate with pm-changelog's `--respect-item-release` so a historical import stays in its declared release window.
+
+Before creating an item, import checks the complete tracker for its provenance tag, GitHub URLs in provenance or link metadata, and Linear/Jira/ADO links referenced by the GitHub issue body. A unique existing external owner receives the GitHub tag and source metadata; its title, body, provider identity, creation/completion dates and release remain intact. A persisted `github_link_only` marker preserves that ownership on subsequent syncs. Free-text descriptions and bodies do not declare GitHub ownership. Ambiguous matches refuse the import before writes with `--gate` or `--atomic`. A plain multi-issue import may write earlier issues before rejecting a later ambiguous match.
+
+With `--gate` and a nonempty filtered issue list, both preview and apply results include a `plan` with source dates, closure reason, release, target identity, link/create/update action and state-conflict decision. An empty filtered issue list returns without a `plan`, including with `--gate --dry-run`. GitHub wins lifecycle conflicts for GitHub-owned imports. A canceled item that GitHub later reports as completed uses the SDK's explicit repeat-closure transition with the source reason. A linked external owner keeps its local status, and the plan records `preserve-provider-owner`; `github_state` still records the source state. Atomic transaction identity includes the latest external edit or different lifecycle generation in history. Local state edits and repeated state cycles force reconciliation, while staging and compensation keep crash retries on the same journal. Finalization runs before the SDK commits and is compensated with the batch on failure. It is idempotent and runs again after a recovered atomic journal, so an interrupted finalization can be repaired by retrying the same import before the gate permits a push.
+
+SDK limitation: native `updated_at` remains the local mutation clock because the bulk SDK uses it to address rollback history. The GitHub update date is retained exactly in `github_updated_at`, and the gated plan discloses this policy. Backdating native `updated_at` safely requires an SDK import mutation whose version identity is independent of source time. Native creation, closure and completion dates still preserve GitHub lifetimes for momentum and cycle-time readers.

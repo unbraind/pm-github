@@ -1,0 +1,32 @@
+id: pm-github-7c95
+title: Keep reusable workflow operands out of executable positions in attestation scans
+description: "Dependabot PR 135 exposes unsupported Bash forms in the canonical strict attestation scanner: array element assignments, split compound tests and dynamic case patterns are misread as executables."
+type: Issue
+status: in_progress
+priority: 1
+tags: []
+created_at: "2026-10-17T09:29:26.509Z"
+updated_at: "2026-10-17T14:17:09.775Z"
+author: codex-agent
+acceptance_criteria: "Equivalent command-argument forms retain workflow safety and pass canonical attestation before and after the exact Dependabot toolchain diff, without pinning or filtering auditor findings."
+comments[7]{created_at,author,text}:
+  "2026-10-17T09:31:04.941Z",codex-agent,"PR 135 job 117228846323 fails this repository own workflows attestation test, not coverage self-tests. The newer canonical auditor reads Bash element assignments, multiline array data, multiline compound operands and dynamic case patterns as unresolved executable positions. Preserve the canonical auditor identity and findings: express dynamic values as arguments to declare, printf/mapfile and grep, keep compound tests on one line and use conditional path tests. No gate filter, exemption or dependency pin workaround."
+  "2026-10-17T09:37:40.162Z",codex-agent,"Exact Dependabot PR 135 diff applied temporarily over this branch, including its launcher refresh; npm ci installs pm-ops 2026.10.12. Fixed workflows produce zero unresolved findings with the unchanged canonical auditor. Release-tag safety is 42/42 and literal-scope tests are 4/4. Validate all tag text before associative-array indexing; reject multiline versions as whole values. Revert proof targets only workflow shell under the dependency overlay; dependency changes are not part of the final fix."
+  "2026-10-17T09:45:59.992Z",codex-agent,"Behavioural revert proof with the exact Dependabot overlay installed: restoring only the two reusable workflows to origin/main makes the repository attestation regression fail with 38 unresolved executable findings; restoring the fix passes 1/1 with zero skips. The unchanged canonical auditor is used throughout. The focused version/scope suites pass 42/42 and 4/4. Full npm and Bun CI-identity release gates are running with the overlay."
+  "2026-10-17T10:04:45.270Z",codex-agent,"The first full overlay gate attempt was stopped after two existing timing probes failed under shared-host contention: marker extraction exceeded its unchanged 10-second limit and the watchdog child missed readiness before its unchanged 500ms deadline (related existing item pm-github-sah1). The parallel bot-PR run passed both. Retrying the complete npm/Bun gates with CPU affinity limiting Node test-worker fan-out; no assertions, thresholds, sources or tests are removed or relaxed."
+  "2026-10-17T12:28:27.698Z",codex-agent,"Exact Dependabot overlay suite passed 764/764 with zero skips, but the unchanged 100% coverage gate correctly found its refreshed prepare launcher artifact-time branch unexercised (99.99% statements/lines, 99.96% branches). Add real Git pack/publish omission-path regressions: absent development tools must produce one notice and leave Git config/attributes unchanged. This property supports both canonical launcher generations without version pin assertions, exemptions, or threshold changes. Repeat complete npm and Bun gates after the test addition."
+  "2026-10-17T12:34:35.866Z",codex-agent,"Focused launcher suite passes 10/10 with zero skips and measures exactly 100% statements, branches, functions and lines under the complete Dependabot overlay. The two artifact omission properties also pass 2/2 against the original canonical launcher. Keep both canonical-copy identity and all integrity/install-failure checks; this closes the overlay coverage gap without a dependency/version workaround."
+  "2026-10-17T14:17:09.070Z",codex-agent,"Final verification PASS: exact complete Dependabot 135 diff (SHA-256 c72710900b72ae73365b959aaf184821d1d49417f64434509a0f120d31af3aea) applied byte-identically. npm run release:check and bun run release:check each exit 0 with isolated CI identity, 766/766 tests, zero failures/skips, all 13 authored modules at exact 100% statements/branches/functions/lines. Linked pm tests pass 46/46 workflow operands/tags plus 10/10 launcher cases. Reverting only original workflows under the overlay reproduces 38 canonical findings and fails 1/1; fixed passes 1/1. Temporary dependency/launcher changes are now restored, npm ci succeeds with original pins, and baseline-focused compatibility passes 64/64. No merge, release, or caller dispatch; PR 142 remains separate."
+files[6]{path,scope}:
+  .github/workflows/pm-github-closeout.yml,project
+  .github/workflows/pm-github-sync.yml,project
+  test/attestation-workflow-operands.test.ts,project
+  test/import-gate.test.ts,project
+  test/prepare-merge-driver.test.ts,project
+  test/self-versioned-workflows.test.ts,project
+tests[2]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test test/attestation-workflow-operands.test.ts test/self-versioned-workflows.test.ts,project,codex-agent,"2026-10-17T09:38:20.576Z",local_mutation,fix/reusable-shell-attestation-compatibility
+  node --test test/prepare-merge-driver.test.ts,project,codex-agent,"2026-10-17T12:34:27.650Z",local_mutation,fix/reusable-shell-attestation-compatibility
+docs[1]{path,scope}:
+  docs/attestation-workflow-operands.md,project
+body: ""
