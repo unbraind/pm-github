@@ -76,14 +76,19 @@ function providerProvenance(item: PmItem): string {
 export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, tagged?: PmItem): ImportMatch {
   const issueUrl = locators(issue.html_url)[0]!;
   const bodyUrls = new Set(locators(issue.body ?? ""));
+  /** Recognize leading native ownership declarations; later prose cannot transfer ownership. */
+  const declaredOwner = (item: PmItem) => copiedProviderMarkersOwnItem(item) && typeof item.description === "string" &&
+    locators(/^GitHub issue\s*:?\s+(https?:\/\/[^\s]+)\s*/i.exec(item.description)?.[1]).includes(issueUrl);
   const candidates = items.filter(item => item.id && (item.id === tagged?.id ||
+    declaredOwner(item) ||
     Object.entries(item).some(([key, value]) => /^(?:github_?url|provenance|external_?(?:links?|url)|links?)$/i.test(key) && locators(value).includes(issueUrl)) ||
     locators(providerProvenance(item)).some(url => bodyUrls.has(url))));
   if (candidates.length > 1) throw new CommandError(`GitHub issue #${issue.number} has multiple existing owners; import plan is not idempotent. No item was written for this issue.`);
   const item = candidates[0];
   const provider = item && (Boolean(providerProvenance(item)) || (copiedProviderMarkersOwnItem(item) && item.tags?.some(tag => /^(linear|jira|ado):/i.test(tag))));
-  return { item, linkOnly: Boolean(item && (provider || item.github_link_only === true)),
-    via: item ? (provider ? "provider-link" : item.id === tagged?.id ? "provenance-tag" : "github-url") : "new" };
+  const native = item && declaredOwner(item);
+  return { item, linkOnly: Boolean(item && (provider || native || item.github_link_only === true)),
+    via: item ? (provider ? "provider-link" : native ? "github-declaration" : item.id === tagged?.id ? "provenance-tag" : "github-url") : "new" };
 }
 
 /** Read calendar release tags from the selected tracker checkout, including annotated tag dates. */

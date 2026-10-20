@@ -1307,7 +1307,7 @@ for (const directory of [".", "tests/oracle"]) {
     fs.mkdirSync(project, { recursive: true });
     const manifest = JSON.stringify({ name: "sync-project", version: "1.0.0", scripts: {
       preinstall: "node -e 'process.exit(88)'",
-      "changelog:full": `node -e 'require("node:fs").writeFileSync(process.env.NPM_RECEIPT, process.cwd())'`,
+      "changelog:full": `node -e 'require("node:fs").writeFileSync(process.env.NPM_RECEIPT, process.cwd())' --`,
     } });
     const lock = JSON.stringify({ name: "sync-project", version: "1.0.0", lockfileVersion: 3, requires: true,
       packages: { "": { name: "sync-project", version: "1.0.0", hasInstallScript: true } } });
