@@ -20,7 +20,7 @@ export interface CloseoutRow {
 /** Stable decisions used by automation and compact skip counts. */
 export type CloseoutCode = "already_terminal" | "other_repository" | "duplicate_selection" | "explicit_skip"
   | "unknown_item" | "epic" | "active_children" | "not_delivery" | "close_failed"
-  | "ambiguous_delivery" | "head_checks_passed" | "head_checks_failed" | "head_evidence_unavailable" | "required_checks_unverified" | "incomplete_merge";
+  | "head_checks_passed" | "head_checks_failed" | "head_evidence_unavailable" | "required_checks_unverified" | "incomplete_merge";
 
 /** Which head-check policy was evaluated for one selected pull request. */
 interface CheckGate {
@@ -273,16 +273,19 @@ function declarationKey(id: string): string {
 }
 
 /**
- * Whether a closing keyword directly precedes a link, given the line text before the link.
+ * Whether a closing keyword or standalone structured item declaration identifies a link.
+ * @param prefix - Same-line text preceding the canonical link.
+ * @param suffix - Same-line text after the link, including a possible markdown closing parenthesis.
  *
  * Only earlier links (markdown or bare), commas and "and" may sit between the keyword and the link, so
  * `Delivers [a](…) and [b](…)` declares both while `Not fixed here; see <link>` declares nothing.
  * Scans backwards with plain string operations; no backtracking pattern touches PR text.
  */
-export function declaresDelivery(prefix: string): boolean {
+export function declaresDelivery(prefix: string, suffix = ""): boolean {
   let rest = prefix;
   // The link may be the target of a markdown label: `Closes [pm-x](`.
   if (rest.endsWith("](")) rest = rest.slice(0, Math.max(0, rest.lastIndexOf("[")));
+  if (/^(?:[-*][ \t]+)?PM item:[ \t]*$/i.test(rest.trimStart())) return /^\)?$/.test(suffix.trim());
   for (;;) {
     rest = rest.trimEnd();
     if (rest.endsWith(",")) { rest = rest.slice(0, -1); continue; }
@@ -317,7 +320,9 @@ export function extractCloseoutItems(body: string): { item: string; repo: string
     if (components.some(component => /^\.{1,2}$|[/\\\0]/.test(component))) return [];
     const item = components.at(-1)!;
     const key = `${match[1]!.toLowerCase()}/${item}`;
-    const declared = declaresDelivery(body.slice(body.lastIndexOf("\n", match.index) + 1, match.index));
+    const lineEnd = body.indexOf("\n", match.index);
+    const declared = declaresDelivery(body.slice(body.lastIndexOf("\n", match.index) + 1, match.index),
+      body.slice(match.index + match[0].length, lineEnd < 0 ? body.length : lineEnd));
     if (seen.has(key)) {
       // A later "Closes <link>" line still declares an item an earlier line only mentioned.
       if (declared) for (const entry of refs) if (entry.key === key) entry.declared = true;
@@ -403,8 +408,6 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
     const parent = (item as { parent?: unknown }).parent;
     if (typeof parent === "string" && !TERMINAL_STATUSES.includes(item.status)) activeChildren.set(parent, (activeChildren.get(parent) ?? 0) + 1);
   }
-  const selected = new Set<string>();
-  const candidates = new Map<string, Set<number>>();
   const plan: CloseoutRow[] = [];
   const checks: CheckGate[] = [];
   const closures: { row: CloseoutRow; reason: string; at: string; resolution: string; expectedResult: string; actualResult: string }[] = [];
@@ -416,28 +419,22 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
     const refs = extractCloseoutItems(pr.body ?? "");
     // Scan declarations once per PR, retaining case-insensitive IDs and optional punctuation.
     const declarations = new Set<string>();
-    for (const match of (pr.body ?? "").matchAll(/^(?:[-*][ \t]+)?([a-z]+|pm-github:)[ \t]+(\S+)[ \t]*$/gim)) {
+    for (const match of (pr.body ?? "").matchAll(/^(?:[-*][ \t]+)?([a-z]+|pm-github:|PM item:)[ \t]+(\S+)[ \t]*$/gim)) {
       const keyword = match[1]!.toLowerCase();
-      if (!CLOSING_KEYWORDS.has(keyword) && keyword !== "pm-github:") continue;
+      if (!CLOSING_KEYWORDS.has(keyword) && keyword !== "pm-github:" && keyword !== "pm item:") continue;
       const id = declarationKey(match[2]!);
       declarations.add(id);
       if (/[.!]$/.test(id)) declarations.add(id.slice(0, -1));
     }
     for (const item of items.values()) {
-      // Only canonical delivery metadata or a whole-line trailer/closing declaration is authoritative.
-      const linked = [item.github_pr, item.pr_url, item.pull_request_url].includes(pr.html_url);
-      if (linked || declarations.has(declarationKey(item.id))) {
+      // Delivery must be declared in this PR body, never inferred from tracker metadata.
+      if (declarations.has(declarationKey(item.id))) {
         const ref = refs.find(ref => ref.item === item.id && ref.repo.toLowerCase() === repo.toLowerCase());
         if (ref) ref.declared = true;
         else refs.push({ item: item.id, repo, declared: true });
       }
     }
     for (const ref of refs) {
-      if (ref.declared && pr.merged && ref.repo.toLowerCase() === repo.toLowerCase()) {
-        const choices = candidates.get(ref.item) ?? new Set<number>();
-        choices.add(number);
-        candidates.set(ref.item, choices);
-      }
       let reason: string;
       let code: CloseoutCode;
       if (ref.repo.toLowerCase() !== repo.toLowerCase()) { code = "other_repository"; reason = "Link points to another repository."; }
@@ -449,12 +446,10 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
       else if (activeChildren.has(ref.item)) { code = "active_children"; reason = `Item has ${activeChildren.get(ref.item)} non-terminal child item(s).`; }
       else if (!ref.declared) {
         code = "not_delivery";
-        reason = "A mention is not delivery, regardless of item status. Declare Closes, Fixes, Resolves or Delivers, link the item to this PR, or use a pm-github trailer.";
+        reason = "Mentioned, not delivered. A mention is not delivery. Declare Closes, Fixes, Resolves or Delivers, or use a structured PM item: or pm-github: declaration.";
       }
-      else if (selected.has(ref.item)) { code = "duplicate_selection"; reason = "Item already selected by another pull request."; }
       else {
         reason = gate.reason;
-        selected.add(ref.item);
         const row: CloseoutRow = { item: ref.item, pr: number, action: "close", code: gate.code, reason };
         const criteria = items.get(ref.item)!.acceptance_criteria;
         closures.push({ row, reason: closeReason(pr, gate.passed), at: pr.merged_at!,
@@ -469,13 +464,20 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
       plan.push({ item: ref.item, pr: number, action: "skip", code, reason });
     }
   }
-  // Resolve attribution across the complete selection before the first SDK write.
-  for (const row of plan) {
-    const claimants = candidates.get(row.item);
-    if (claimants && claimants.size > 1 && claimants.has(row.pr) && !["already_terminal", "other_repository", "unknown_item", "explicit_skip"].includes(row.code)) {
-      row.action = "skip";
-      row.code = "ambiguous_delivery";
-      row.reason = "Multiple merged PRs explicitly claim delivery; select the intended PR before closing.";
+  // Choose one complete, passing delivery before any SDK write. Merge chronology, not PR number,
+  // determines the winner; an equal timestamp uses the higher PR number for stable selection.
+  const deliveries = new Map<string, typeof closures[number]>();
+  for (const entry of closures) {
+    const previous = deliveries.get(entry.row.item);
+    if (!previous || Date.parse(entry.at) >= Date.parse(previous.at)) {
+      deliveries.set(entry.row.item, entry);
+    }
+  }
+  for (const entry of closures) {
+    if (deliveries.get(entry.row.item) !== entry) {
+      entry.row.action = "skip";
+      entry.row.code = "duplicate_selection";
+      entry.row.reason = "A later qualifying merged PR declares delivery for this item.";
     }
   }
   let closed = 0;
