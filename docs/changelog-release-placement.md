@@ -133,6 +133,16 @@ ready assertion (0/1); removing only forced SIGKILL stalls until an independent
 12-second guard rejects the test and cleans up both owned descendant processes.
 No deadline, cleanup budget, coverage threshold or dependency pin is relaxed.
 
+The subsequent readiness review replaces the probe's console log with
+`writeSync(1, 'ready\n')` before its CPU spin. A preloaded deferred console logger
+flushes normally for the clean-exit control but cannot flush during the spin,
+making the asynchronous-output hazard deterministic. Both Node and native Bun
+pass 2/2 watchdog tests. Restoring only `console.log('ready')` fails the selected
+regression (0/1) at its readiness assertion after the finite startup guard kills
+the child; the fixed source retains the same startup and operation budgets.
+The other marker probe waits for parent input before starting its operation,
+so its readiness output can flush before any CPU-bound work begins.
+
 ## Release gates
 
 At regex-hardening head `f2dcdbe6eade612288cd783208e5904270e44ab7`,
