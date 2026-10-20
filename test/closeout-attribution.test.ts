@@ -16,7 +16,7 @@ const head = "a".repeat(40);
 const recorded = [16, 19].map(n => JSON.parse(readFileSync(new URL(`./fixtures/closeout-attribution/pm-ado-${n}.json`, import.meta.url), "utf8")) as { number: number; body: string });
 
 /** Real SDK tracker plus complete HTTP-boundary evidence; neither SDK nor mutation is mocked. */
-async function scenario(linked: boolean, bodies?: string[], facts: Record<number, { at?: string; success?: boolean }> = {}) {
+async function scenario(linked: boolean, bodies?: string[], facts: Partial<Record<number, { at?: string; success?: boolean }>> = {}) {
   const root = mkdtempSync(join(tmpdir(), "closeout-attribution-"));
   try {
     const init = spawnSync(join(import.meta.dirname, "../node_modules/.bin/pm"), ["--pm-path", root, "init", "fixture"], { cwd: root, encoding: "utf8",
