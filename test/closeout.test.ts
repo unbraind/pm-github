@@ -459,8 +459,8 @@ test("public command registration reuses repo resolution and shared transport", 
     assert.equal((result.result as { plan: { action: string }[] }).plan[0]!.action, "close");
     const compact = await harness.runCommand({ command: "github closeout", pmRoot: root,
       global: { json: false }, options: { pr: ["42", "43", "44"] } });
-    assert.equal((compact.result as { plan: object[] }).plan.length, 3);
-    assert.deepEqual((compact.result as { skipped: object }).skipped, {});
+    assert.deepEqual((compact.result as { plan: { pr: number; action: string }[] }).plan.map(row => [row.pr, row.action]), [[44, "close"]]);
+    assert.deepEqual((compact.result as { skipped: object }).skipped, { duplicate_selection: 2 });
     const full = await harness.runCommand({ command: "github closeout", pmRoot: root,
       global: { json: false }, options: { pr: ["42", "43", "44"], full: true } });
     assert.equal((full.result as { plan: object[] }).plan.length, 3);
@@ -513,19 +513,19 @@ test("packed CLI preserves repeatable selectors, TOON/JSON shape and no-op apply
     assert.equal(preview.code, 0, preview.stderr);
     const report = decode(preview.stdout) as { dry_run: boolean; plan: { action: string }[] };
     assert.equal(report.dry_run, true);
-    assert.equal(report.plan.length, 4);
-    assert.deepEqual((report as unknown as { skipped: object }).skipped, { explicit_skip: 4 });
+    assert.equal(report.plan.length, 2);
+    assert.deepEqual((report as unknown as { skipped: object }).skipped, { explicit_skip: 4, duplicate_selection: 2 });
     const full = await call([...flags, "--full"]);
     assert.equal(full.code, 0, full.stderr);
     assert.equal((decode(full.stdout) as { plan: object[] }).plan.length, 8);
     const json = await call([...flags, "--json"]);
     assert.equal(json.code, 0, json.stderr);
     assert.equal((JSON.parse(json.stdout) as { plan: object[] }).plan.length, 8);
-    assert.equal(report.plan.filter(row => row.action === "close").length, 0);
+    assert.equal(report.plan.filter(row => row.action === "close").length, 2);
     assert.equal(snapshot(root), before);
     const applied = await call([...flags, "--apply", "--json"]);
     assert.equal(applied.code, 0, applied.stderr);
-    assert.equal((JSON.parse(applied.stdout) as { closed: number }).closed, 0);
+    assert.equal((JSON.parse(applied.stdout) as { closed: number }).closed, 2);
     const after = snapshot(root);
     const repeat = await call([...flags, "--apply", "--json"]);
     assert.equal(repeat.code, 0, repeat.stderr);

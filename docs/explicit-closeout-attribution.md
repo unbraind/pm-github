@@ -26,12 +26,14 @@ The complete selected PR set is evaluated before SDK writes. Only merged PRs wit
 2. Mention-only PRs leave the item in progress and append no close event, even when tracker PR URL metadata points at one.
 3. A closing keyword for a different ID sharing the item's prefix leaves the mentioned item open.
 4. Multiple declarations select the latest passing merge, including a lower-numbered PR merged later and a later PR with failing checks. Equal-time selection is deterministic.
-5. Same-line IDs, punctuation, tabs, multiline negatives, case rules, many-item planning and mention-only reporting remain covered.
+5. Same-line IDs, punctuation, tabs, multiline negatives, case rules, many-item planning and mention-only reporting remain covered. A standalone structured markdown link declares delivery; appended follow-up prose does not. A separate whole-line closing declaration can upgrade an earlier bare link.
 
 Function-only behavioral reversion restores `runCloseout` from `dc86e83`, the actual defective predecessor of the prior attribution fix, while retaining current helpers and tests. Each of the first three regressions fails an assertion with exit 1: the gap PR wins, mention-only closes, and the shared-prefix mention closes. Restoring the current implementation passes. No test-load failure is counted.
 
-A separate function-only reversion to origin/main's attribution implementation makes the latest-merge regression fail: competing delivery claims close zero items. A narrow prefix-broadening mutation in the current function also makes the shared-prefix regression fail directly. These controls distinguish the historical mention bug, the remaining selection bug and the exact-ID boundary.
+A separate function-only reversion to origin/main's attribution implementation makes the latest-merge regression fail: competing delivery claims close zero items. A narrow prefix-broadening mutation in the current function also makes the shared-prefix regression fail directly. Reverting only the structured-link helper to its first implementation also fails the follow-up-prose negative. These controls distinguish the historical mention bug, the remaining selection bug and the exact-ID boundary.
 
 ## Validation
+
+The complete focused closeout suite passes 99/99, zero failures, cancellations or skips. A focused c8 run measures exact 100/100/100/100 for closeout.ts without exclusions. The pm-linked attribution suite passes 9/9 and its compact control passes 1/1; existing project policy disables result storage, so comments preserve these results.
 
 Full npm and Bun release checks run with isolated git identity and unchanged source scope, dependency pins and four 100 percent thresholds. Completed gate counts and linked-test results are recorded in the tracker and PR. The item remains in progress for orchestrator verification; its claim is released at handoff. No pm-ado record or history is edited.

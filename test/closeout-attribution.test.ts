@@ -92,7 +92,8 @@ test("closing a different item that shares a prefix never delivers the mentioned
 
 test("closing item ids and pm-github trailers explicitly deliver without a canonical body link", async () => {
   for (const declaration of ["Closes pm-ado-5w3m", "- Fixes pm-ado-5w3m.", "pm-github: pm-ado-5w3m", "PM item: pm-ado-5w3m",
-    "PM item: [delivery](https://github.com/unbraind/pm-ado/blob/main/.agents/pm/issues/pm-ado-5w3m.toon)", "*\tFixes\tpm-ado-5w3m!\t",
+    "PM item: [delivery](https://github.com/unbraind/pm-ado/blob/main/.agents/pm/issues/pm-ado-5w3m.toon)",
+    "See https://github.com/unbraind/pm-ado/blob/main/.agents/pm/issues/pm-ado-5w3m.toon\nCloses pm-ado-5w3m", "*\tFixes\tpm-ado-5w3m!\t",
     "See https://github.com/unbraind/pm-ado/blob/main/.agents/pm/issues/unrelated.toon\nSee https://github.com/other/repo/blob/main/.agents/pm/issues/pm-ado-5w3m.toon\nCloses pm-ado-5w3m"]) {
     const { report } = await scenario(false, ["No delivery claim", declaration]);
     assert.equal(report.closed, 1);
