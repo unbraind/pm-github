@@ -273,17 +273,19 @@ function declarationKey(id: string): string {
 }
 
 /**
- * Whether a closing keyword directly precedes a link, given the line text before the link.
+ * Whether a closing keyword or standalone structured item declaration identifies a link.
+ * @param prefix - Same-line text preceding the canonical link.
+ * @param suffix - Same-line text after the link, including a possible markdown closing parenthesis.
  *
  * Only earlier links (markdown or bare), commas and "and" may sit between the keyword and the link, so
  * `Delivers [a](…) and [b](…)` declares both while `Not fixed here; see <link>` declares nothing.
  * Scans backwards with plain string operations; no backtracking pattern touches PR text.
  */
-export function declaresDelivery(prefix: string): boolean {
+export function declaresDelivery(prefix: string, suffix = ""): boolean {
   let rest = prefix;
   // The link may be the target of a markdown label: `Closes [pm-x](`.
   if (rest.endsWith("](")) rest = rest.slice(0, Math.max(0, rest.lastIndexOf("[")));
-  if (/^(?:[-*][ \t]+)?PM item:[ \t]*$/i.test(rest.trimStart())) return true;
+  if (/^(?:[-*][ \t]+)?PM item:[ \t]*$/i.test(rest.trimStart())) return /^\)?$/.test(suffix.trim());
   for (;;) {
     rest = rest.trimEnd();
     if (rest.endsWith(",")) { rest = rest.slice(0, -1); continue; }
@@ -318,7 +320,9 @@ export function extractCloseoutItems(body: string): { item: string; repo: string
     if (components.some(component => /^\.{1,2}$|[/\\\0]/.test(component))) return [];
     const item = components.at(-1)!;
     const key = `${match[1]!.toLowerCase()}/${item}`;
-    const declared = declaresDelivery(body.slice(body.lastIndexOf("\n", match.index) + 1, match.index));
+    const lineEnd = body.indexOf("\n", match.index);
+    const declared = declaresDelivery(body.slice(body.lastIndexOf("\n", match.index) + 1, match.index),
+      body.slice(match.index + match[0].length, lineEnd < 0 ? body.length : lineEnd));
     if (seen.has(key)) {
       // A later "Closes <link>" line still declares an item an earlier line only mentioned.
       if (declared) for (const entry of refs) if (entry.key === key) entry.declared = true;

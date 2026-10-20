@@ -1,16 +1,16 @@
 id: pm-github-uqjf
 title: Require explicit delivery attribution before merged-PR closeout
-description: "pm-ado issue 33 shows that PR 16 only reported the statement-coverage gap, yet closeout selected it before delivery PR 19 because the item was in progress and its canonical link appeared in the body. Require explicit delivery evidence and report ambiguous candidates without closing."
+description: "pm-ado issue 33 shows that PR 16 reported a statement-coverage gap while PR 19 delivered it using a structured PM item: declaration. Require PR-body delivery declarations, reject mentions and tracker PR URL metadata alone, and select the latest eligible merged declaration with consistent durable evidence."
 type: Issue
 status: in_progress
 priority: 1
 tags[1]: changelog-unreleased
 created_at: "2026-10-18T18:19:06.214Z"
-updated_at: "2026-10-20T14:15:44.467Z"
+updated_at: "2026-10-20T14:16:37.445Z"
 assignee: codex-agent
 claim_principal: codex-agent
 author: codex-agent
-comments[30]{created_at,author,text}:
+comments[31]{created_at,author,text}:
   "2026-10-18T18:21:36.252Z",codex-agent,"Root cause confirmed: in_progress bypasses delivery declarations, and ascending PR selection chooses the earlier gap-reporting PR. https://github.com/unbraind/pm-ado/issues/33 compares https://github.com/unbraind/pm-ado/pull/16 with https://github.com/unbraind/pm-ado/pull/19. Neither body declares closure, so both must be reported without closing unless a canonical item-to-PR link supplies delivery evidence. A separate fix/closeout-explicit-delivery PR will retain all prior history."
   "2026-10-18T18:27:43.386Z",codex-agent,"Implemented explicit delivery declarations (closing canonical links, whole-line closing item ids or pm-github trailers, and exact PR URL metadata). The full selection is resolved before SDK writes; competing merged delivery claims receive ambiguous_delivery. Added minimal public title/body/commit fixtures from real pm-ado PRs 16 and 19. The real bodies contain only mentions; both are now refused until delivery is explicitly linked. Updated previous positive fixtures to declare delivery instead of relying on status."
   "2026-10-18T18:30:07.355Z",codex-agent,"Function-only behavioral revert: restored the old in_progress bypass in runCloseout while retaining both real-shape regression tests. Both tests fail: the earlier gap-reporting PR is accepted and the explicit PR 19 selection loses provenance. Restoring explicit attribution makes the linked four-case suite pass, including ambiguous-claim refusal and whole-line declarations. The package pins, source inventory and 100 percent thresholds remain unchanged."
@@ -41,6 +41,7 @@ comments[30]{created_at,author,text}:
   "2026-10-20T14:13:47.034Z",codex-agent,"Implemented structured PM item: declarations and latest eligible merge selection before SDK writes. Tracker PR URL metadata alone no longer declares delivery. Real non-git scenarios use distinct revisions/check names and verify completed_at, resolution, actual_result, close_reason and the appended close patch. Historical function-only revert restores runCloseout from dc86e83: all three required regressions fail directly with ERR_ASSERTION, exit 1 (earlier gap wins; mention closes; prefix mention closes). Restoring origin/main functions separately fails the latest-selection regression; prefix-broadening mutation also fails directly. No test-load failure counts as proof. Typecheck, lint, docstrings and zero-duplication check pass."
   "2026-10-20T14:14:36.148Z",codex-agent,"All eight real-tracker attribution scenarios pass. The broader closeout run exposed only an existing assertion on the mention diagnostic; retained its phrase while adding Mentioned, not delivered. Linked tests initially refused commands inherited from a different branch; reviewed and acknowledged the existing commands for this clone, then reran without changing project trust or result-storage policies. Full npm and Bun gates will run sequentially with isolated git identity."
   "2026-10-20T14:15:44.467Z",codex-agent,"Linked pm test run passed both registered commands: attribution 8/8 and compact dry-run control 1/1, zero failures/skips/timeouts. Result storage is disabled by existing project policy; this comment is the durable receipt. The first full npm gate found a test-only TypeScript inference error in the per-PR fact table before coverage ran; corrected the annotation to Partial<Record<...>> and build:test passes. Full gates are being restarted on the corrected test source."
+  "2026-10-20T14:16:37.445Z",codex-agent,"Final boundary review restricts structured PM item: links to a standalone line (plain or markdown), so follow-up prose such as leaves the item open remains not_delivery. Added its real non-git regression. Reverting only declaresDelivery to the first implementation makes this new negative regression fail directly with ERR_ASSERTION, exit 1. The original three historical-function revert proofs and latest-selection proof remain valid."
 files[7]{path,scope}:
   closeout.ts,project
   README.md,project
