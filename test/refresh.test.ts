@@ -1,12 +1,16 @@
 /** Refresh acceptance uses actual initialized trackers and the real HTTP transport. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, mkdirSync, cpSync, copyFileSync, symlinkSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, mkdirSync, cpSync, copyFileSync, symlinkSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, delimiter } from "node:path";
 import { spawnSync } from "node:child_process";
 import { create, get, comments, listAllComplete, readHistorySnapshot, getHistoryPath, deleteItem, readSettings, normalizeItemId, commitImportedItem, getItemPath } from "@unbrained/pm-cli/sdk";
-import extension, { buildAtomicImportMutations, deriveAtomicItemId, importGithubAtomic, parseImportOptions, prepareGithubImport } from "../index.ts";
+import extension, {
+  buildAtomicImportMutations, deriveAtomicItemId, importGithubAtomic, listUnfinishedGithubImports,
+  parseImportOptions, prepareGithubImport, readGithubImportPlan, resumeGithubImport,
+  type GithubImportPlanRecord,
+} from "../index.ts";
 import { fetchImportTimeline } from "../import-fidelity.ts";
 import { runRefresh, selectRefreshTargets, refreshChanges } from "../refresh.ts";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
@@ -172,7 +176,7 @@ test("explicit fields select existing owners; mentions, wrong repos, malformed a
     { id: "wrong-fields", github_repo: "fixture/other", github_number: 8 },
     { id: "bad-fields", github_repo: "fixture/repo", github_number: "3" },
     { id: "text", github_number: 9, body: "https://github.com/fixture/repo/issues/9" }, {},
-  ], "fixture/repo").map(target => [target.id, target.number]), [["url", 2], ["fields", 3], ["pr", 4]]);
+  ], "fixture/repo").map(target => [target.id, target.number]), [["url", 2], ["fields", 3]]);
   for (const items of [
     [{ id: "a", tags: ["gh:fixture/repo#1", "gh:fixture/repo#2"] }],
     [{ id: "a", tags: ["gh:fixture/repo#1"] }, { id: "b", github_url: "https://github.com/fixture/repo/issues/1" }],
@@ -275,13 +279,17 @@ test("label pagination is complete and cursor or API failures abort before any i
   const issue = node();
   issue.author = null;
   issue.labels.pageInfo = { hasNextPage: true, endCursor: "page-1" };
-  for (const mode of ["complete", "missing-cursor", "repeated-cursor", "error"]) {
+  for (const mode of ["complete", "missing-cursor", "repeated-cursor", "error", "null-repository", "null-issue"]) {
     await withMockGithub((_request, response, body) => {
       const payload = JSON.parse(body) as { variables: { cursor?: string } };
       if (payload.variables.cursor) {
-        jsonResponse(response, 200, { data: { repository: { issue: { labels: {
-          nodes: [{ name: "second-page" }], pageInfo: { hasNextPage: mode === "repeated-cursor", endCursor: "page-1" },
-        } } } }, ...(mode === "error" ? { errors: [{ message: "denied" }] } : {}) });
+        // A repository or issue can disappear between requests (transfer or
+        // deletion); both must surface as a typed CommandError, not a TypeError.
+        const labels = { nodes: [{ name: "second-page" }], pageInfo: { hasNextPage: mode === "repeated-cursor", endCursor: "page-1" } };
+        const repository = mode === "null-repository" ? null
+          : mode === "null-issue" ? { issue: null }
+            : { issue: { labels } };
+        jsonResponse(response, 200, { data: { repository }, ...(mode === "error" ? { errors: [{ message: "denied" }] } : {}) });
       } else jsonResponse(response, 200, { data: { repository: { i1: { ...issue,
         labels: { ...issue.labels, pageInfo: { hasNextPage: true, endCursor: mode === "missing-cursor" ? null : "page-1" } },
       } } } });
@@ -342,3 +350,139 @@ test("field-linked GitHub and cross-provider owners refresh without replacing lo
     assert.equal((await listAllComplete({}, { pmRoot })).items.length, 2);
   });
 }));
+
+test("refresh preserves an existing release when GitHub has no release evidence", async () => tracker(async (_directory, pmRoot) => {
+  const settings = await readSettings(pmRoot);
+  const id = `${settings.id_prefix}release-owner`;
+  await commitImportedItem({ pmRoot, id, itemPath: getItemPath(pmRoot, "Task", id), settings,
+    document: { metadata: { id, title: "Release owner", description: "", type: "Task", status: "open", priority: 2,
+      tags: ["gh:fixture/repo#1"], created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", release: "v2026.9.1" }, body: "" },
+    author: "fixture", message: "Seed release fixture", conflictWarningPrefix: "fixture" });
+  await withMockGithub(transport({ i1: node() }), async () => {
+    const receipt = await runRefresh("fixture/repo", pmRoot, { atomic: true });
+    assert.equal(receipt.updated, 1);
+    assert.ok(!receipt.plan[0]!.changes.some(change => change.field === "release"),
+      "an open issue never has GitHub release evidence, so the local release is not a change");
+    assert.equal((await get(id, {}, { pmRoot })).item.release, "v2026.9.1");
+    const repeated = await runRefresh("fixture/repo", pmRoot, { atomic: true });
+    assert.equal(repeated.unchanged, 1);
+    assert.equal((await get(id, {}, { pmRoot })).item.release, "v2026.9.1");
+  });
+}));
+
+test("journal scan lists unfinished github-import transactions without changing tracker bytes", async () => tracker(async (_directory, pmRoot) => {
+  const journalDir = join(pmRoot, "transactions", "sdk");
+  const planDir = join(pmRoot, "transactions", "pm-github");
+  mkdirSync(journalDir, { recursive: true });
+  mkdirSync(planDir, { recursive: true });
+  const journal = (id: string, body: string) => writeFileSync(join(journalDir, `${id}.json`), body);
+  journal("github-import-0000000000000001", JSON.stringify({ transactionId: "github-import-0000000000000001", status: "applying",
+    stepIds: ["1-update-pm-a-0123456789ab", 7, "junk", "2-create-pm-b-ffffffffffff"] }));
+  journal("github-import-0000000000000002", JSON.stringify({ transactionId: "github-import-0000000000000002", status: "compensating", stepIds: [] }));
+  journal("github-import-0000000000000003", JSON.stringify({ transactionId: "github-import-0000000000000003", status: "committed" }));
+  journal("github-import-0000000000000006", JSON.stringify({ transactionId: "github-import-0000000000000006", status: "applying" }));
+  writeFileSync(join(journalDir, "unrelated.json"), "{}");
+  writeFileSync(join(journalDir, "github-import-notes.txt"), "");
+  writeFileSync(join(planDir, "github-import-0000000000000001.json"), "{}");
+  writeFileSync(join(planDir, "github-import-0000000000000003.json"), "{}");
+  writeFileSync(join(planDir, "github-import-0000000000000009.json"), "{}");
+  writeFileSync(join(planDir, "unrelated.json"), "{}");
+  const before = snapshot(pmRoot);
+  assert.deepEqual(await listUnfinishedGithubImports(pmRoot), [
+    { transactionId: "github-import-0000000000000001", status: "applying", itemIds: ["pm-a", "pm-b"] },
+    { transactionId: "github-import-0000000000000002", status: "compensating", itemIds: [] },
+    { transactionId: "github-import-0000000000000006", status: "applying", itemIds: [] },
+  ]);
+  assert.ok(existsSync(join(planDir, "github-import-0000000000000001.json")), "an unfinished journal keeps its replay plan");
+  assert.ok(existsSync(join(planDir, "github-import-0000000000000003.json")), "scanning never deletes plans");
+  assert.ok(existsSync(join(planDir, "github-import-0000000000000009.json")), "orphan plans remain untouched");
+  assert.deepEqual(snapshot(pmRoot), before);
+  for (const body of ["{ not json", "null", "7"]) {
+    journal("github-import-0000000000000004", body);
+    await assert.rejects(() => listUnfinishedGithubImports(pmRoot), /GitHub transaction github-import-0000000000000004.*unreadable/);
+  }
+  assert.ok(existsSync(join(planDir, "unrelated.json")));
+  assert.equal(await readGithubImportPlan(pmRoot, "../outside"), null);
+  assert.equal(await readGithubImportPlan(pmRoot, "github-import-0000000000000010"), null);
+}));
+
+test("an inaccessible journal directory cannot masquerade as an ordinary no-op", async () => tracker(async (_directory, pmRoot) => {
+  mkdirSync(join(pmRoot, "transactions"), { recursive: true });
+  writeFileSync(join(pmRoot, "transactions", "sdk"), "not a directory");
+  const before = snapshot(pmRoot);
+  await assert.rejects(() => runRefresh("fixture/repo", pmRoot, {}), /cannot inspect GitHub transaction journals/);
+  assert.deepEqual(snapshot(pmRoot), before);
+}));
+
+test("an unfinished journal with unknown targets fails closed before filtering", async () => tracker(async (_directory, pmRoot) => {
+  const journalDir = join(pmRoot, "transactions", "sdk");
+  mkdirSync(journalDir, { recursive: true });
+  const transactionId = "github-import-unknown-targets";
+  writeFileSync(join(journalDir, `${transactionId}.json`), JSON.stringify({ transactionId, status: "applying" }));
+  const before = snapshot(pmRoot);
+  await assert.rejects(() => runRefresh("fixture/repo", pmRoot, {}), new RegExp(`transaction ${transactionId}.*original plan is missing`));
+  assert.deepEqual(snapshot(pmRoot), before);
+}));
+
+test("resume refuses plan records without a usable transaction or linked target", async () => tracker(async (_directory, pmRoot) => {
+  await assert.rejects(() => resumeGithubImport(pmRoot, {} as GithubImportPlanRecord), /persisted plan is invalid/);
+  await assert.rejects(() => resumeGithubImport(pmRoot, { transactionId: "bad id!", repo: "fixture/repo", entries: [], mutations: [] }), /persisted plan is invalid/);
+  const base = { transactionId: "github-import-0000000000000007", repo: "fixture/repo", mutations: [] };
+  await assert.rejects(() => resumeGithubImport(pmRoot, { ...base, entries: [{}] } as unknown as GithubImportPlanRecord), /unlinked target/);
+  await assert.rejects(() => resumeGithubImport(pmRoot, { ...base, entries: [{ issueNumber: 1 }] } as unknown as GithubImportPlanRecord), /unlinked target/);
+}));
+
+for (const boundary of ["step_applied", "committing"]) {
+  test(`an interrupted atomic refresh is resumed from its persisted plan before the unchanged filter (${boundary})`, async () => tracker(async (_directory, pmRoot) => {
+    // A real child process dies after the first mutation or after finalization,
+    // preserving the durable journal and original complete plan for recovery.
+    const crash = spawnSync(process.execPath, [join(packageRoot, "test", "fixtures", "refresh-crash.ts"), pmRoot, boundary], { cwd: packageRoot, encoding: "utf8" });
+    assert.equal(crash.status, 9, crash.stderr);
+    const journalDir = join(pmRoot, "transactions", "sdk");
+    const planDir = join(pmRoot, "transactions", "pm-github");
+    const journalNames = readdirSync(journalDir);
+    assert.equal(journalNames.length, 1);
+    const transactionId = journalNames[0]!.slice(0, -".json".length);
+    assert.match(transactionId, /^github-import-[0-9a-f]{16}$/);
+    assert.equal(JSON.parse(readFileSync(join(journalDir, journalNames[0]!), "utf8")).status, "applying");
+    const planFile = join(planDir, `${transactionId}.json`);
+    const plan = readFileSync(planFile, "utf8");
+    const linked = (await listAllComplete({ includeBody: true }, { pmRoot, cwd: pmRoot, noExtensions: true })).items[0]!;
+    assert.equal(linked.title, "New upstream title");
+    assert.equal((await comments(linked.id, {}, { pmRoot })).comments.length, 1);
+    // An unfinished journal for an unselected item must neither block nor resume.
+    const unrelated = "github-import-ffffffffffffffff";
+    writeFileSync(join(journalDir, `${unrelated}.json`), JSON.stringify({ transactionId: unrelated, status: "applying", stepIds: ["1-update-pm-unrelated-0123456789ab"] }));
+    // The crashed process cannot release its writer lock; simulate lock TTL expiry.
+    rmSync(join(pmRoot, "locks"), { recursive: true, force: true });
+    await withMockGithub(transport({ i1: { ...node(1, "CLOSED", "COMPLETED"), title: "New upstream title" } }), async () => {
+      await assert.rejects(() => runRefresh("fixture/repo", pmRoot, { atomic: true, "dry-run": true }),
+        new RegExp(`GitHub transaction ${transactionId} is unfinished`));
+      rmSync(planFile);
+      await assert.rejects(() => runRefresh("fixture/repo", pmRoot, { atomic: true }),
+        new RegExp(`unfinished GitHub transaction ${transactionId}.*original plan is missing`));
+      writeFileSync(planFile, JSON.stringify({ ...JSON.parse(plan), transactionId: "github-import-wrong" }));
+      await assert.rejects(() => runRefresh("fixture/repo", pmRoot, { atomic: true }), /original plan is missing or mismatched/);
+      writeFileSync(planFile, plan);
+      const receipt = await runRefresh("fixture/repo", pmRoot, { atomic: true, limit: "1" });
+      assert.equal(JSON.parse(readFileSync(join(journalDir, `${transactionId}.json`), "utf8")).status, "committed");
+      assert.equal(receipt.resumed, 1);
+      assert.equal(receipt.updated, 0);
+      assert.equal(receipt.unchanged, 1);
+      assert.deepEqual(receipt.plan[0]!.changes, []);
+      assert.ok(!existsSync(planFile), "the replayed plan record is removed");
+      assert.equal((await comments(linked.id, {}, { pmRoot })).comments.length, 1, "resume does not duplicate the audit comment");
+      const completed = (await get(linked.id, {}, { pmRoot })).item;
+      assert.equal(completed.title, "New upstream title");
+      assert.equal(completed.status, "closed");
+      assert.equal(completed.closed_at, "2026-02-02T00:00:00Z");
+      const before = snapshot(pmRoot);
+      const again = await runRefresh("fixture/repo", pmRoot, { atomic: true });
+      assert.equal(again.resumed, 0);
+      assert.equal(again.unchanged, 1);
+      assert.deepEqual(snapshot(pmRoot), before);
+      assert.ok(existsSync(join(journalDir, `${unrelated}.json`)), "an unrelated journal is left to its own recovery");
+      assert.ok(!existsSync(join(planDir, `${unrelated}.json`)), "no plan is invented for the unrelated journal");
+    });
+  }));
+}

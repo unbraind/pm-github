@@ -200,7 +200,10 @@ export function importFidelityFields(fidelity: ImportFidelity, linkOnly: boolean
         closed_at: fidelity.github_closed_at || undefined,
         completed_at: fidelity.github_closed_at || undefined,
       } : {}),
-      release: fidelity.github_release || undefined,
+      // Assign release only when GitHub supplied one: an open issue or a
+      // closure without a matching calendar tag must preserve an existing
+      // release that users or tools set, instead of deleting it.
+      ...(fidelity.github_release ? { release: fidelity.github_release } : {}),
     } : {}),
   };
 }

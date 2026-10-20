@@ -32,6 +32,14 @@ A field-level sample from the copy, issue #450 (unchanged terminal status):
 | `close_reason` | absent | `Closed on GitHub as not_planned on 2026-08-22T18:43:12Z` |
 | `closed_at`, `completed_at` | absent | `2026-08-22T18:43:12Z` |
 
+## Interrupted transaction recovery
+
+An update transaction derives its mutation steps from the current item state, so a hard crash after the steps applied and source fields were finalized leaves the linked items already matching the source. A naive retry would then classify every target as unchanged and never touch the durable journal, which would stay in `applying` forever while the command reports `updated: 0` and exits 0. Re-deriving the plan after a partial apply also fingerprints a different transaction id, because both the changed-field set and the selected history context differ.
+
+Update transactions therefore persist their exact pre-commit plan — the derived transaction id, the prepared entries and the ordered mutations — beside the SDK journal in `transactions/pm-github/`, before the SDK writes anything. The next refresh scans `transactions/sdk/` for unfinished `github-import-*` journals whose step targets intersect the selected items and replays each journal from that persisted plan, which commits it without re-applying completed steps (no duplicated audit comment). Only then is the unchanged filter applied against the re-read committed state. A dry run refuses while such a journal is open, and a missing or unusable plan fails closed naming the transaction id; both leave the tracker untouched. The SDK journal itself never stores the mutation list, so the persisted plan is the only replay source.
+
+The command-level regressions spawn a real child process that dies at either `step_applied` or `committing`, removes the crashed writer lock to simulate TTL expiry, then re-runs the refresh: the replayed journal commits, the plan record is removed, the audit comment appears once, and the following refresh is an ordinary byte-stable no-op. Journal inspection is read-only, including orphan plans; unreadable journals and missing or mismatched plans fail closed.
+
 ## Comparison and writes
 
 Refresh compares timestamp instants, rather than timestamp spelling, and compares tags as sets. Its existing title preparation trims surrounding whitespace. Absent source metadata remains a real backfill. A later `github_updated_at` instant remains a real update.
@@ -68,3 +76,14 @@ A separate fresh-copy proof dispatched both applies through the built pinned CLI
 Both `npm run release:check` and `bun run release:check` exited 0 on the implementation source in commit `facc65b983d1a087a7e957f48864f65e18494b31`, with isolated HOME and Git identity configuration. Each passed 936/936 tests, zero failures, skips, cancellations or TODOs. Both coverage receipts measure all 16 authored modules at exact 100/100/100/100: 10,742/10,742 lines and statements, 286/286 functions and 3,371/3,371 branches, with zero skipped coverage. Thresholds, source inventory, dependency pins and duplication budgets are unchanged. Production audits, privacy, packing, changelog and publish-attestation checks also passed.
 
 The Bun validation directory matched all 112 source, test and configuration files byte-for-byte (combined SHA-256 `e779570b70b85cc26817d501ce7544595e259296c03b72ec989bccfb2ce0668a`). Later receipt changes are limited to this document and the append-only PM evidence. A fresh non-local clone with clean dependency installation passed strict PM health and validation for the implementation commit.
+
+
+## Review round 1 verification
+
+All four review findings are corrected: refresh preserves a native release when GitHub has no release evidence, issue selection excludes pull-request URLs, disappearing label-page connections raise `CommandError`, and unfinished refresh journals replay their saved complete plan before unchanged entries are filtered. Journal discovery is read-only; unreadable journals/directories, journals without recognizable targets, and missing or mismatched plans fail closed.
+
+The command-level recovery cases crash at both `step_applied` and `committing` with a status-changing issue. Both resume the original journal to `committed`, preserve one audit comment, and leave the following no-op refresh byte-stable. Five isolated revert controls produced seven intended assertion failures: release assignment (one), pull-link selection (one), label connection access (one), original `runRefresh` (both crash boundaries), and omitted original-plan replay (both boundaries, leaving the original journal `applying`). Each control rebuilt the package; production source was never reverted.
+
+Both final isolated-identity commands, `npm run release:check` and `bun run release:check`, exited 0 with 943/943 tests and zero failures, skips, cancellations or TODOs. Each measured all 16 authored modules at exact 100/100/100/100: 10,953/10,953 lines and statements, 296/296 functions, and 3,446/3,446 branches, with zero skipped coverage. Dependency pins, source inventory, thresholds and duplication budgets are unchanged. Audit, privacy, duplication, packing, changelog and publish-attestation checks passed; both pack receipts have shasum `c567e636c4f08c0023933110de75984843e9e206`.
+
+The PM-linked command `node --test test/refresh.test.ts test/import-fidelity.test.ts` passed 72/72 through `pm test pm-github-ullj --run --progress --only-index 2 --timeout 1200`. Its earlier 600-second run timed out without an assertion failure while both coverage gates were active. The independent final recovery selection passed 6/6. PM result tracking is disabled for this project, so explicit receipts are recorded in the item's comments. A clean validation clone matching the implementation passed strict PM health; the package worktree's ignored extension environment separately reported host version skew.

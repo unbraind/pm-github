@@ -228,7 +228,9 @@ checks.
 Use `refresh` when your tracker deliberately mirrors only a few issues from a busy
 repository. It selects existing `gh:owner/repo#N` tags or explicit `github_url`
 links (also `github_repo` with `github_number`), fetches those numbers in GraphQL
-batches of at most 100, and **never creates items**. Ordinary references in text
+batches of at most 100, and **never creates items**. Only `/issues/N` URLs are
+refreshable links: the batch query reads issue nodes, so a `/pull/N` URL is not
+selected. Ordinary references in text
 are not links. Conflicting identities or multiple owners fail before any write.
 
 ```sh
@@ -246,10 +248,13 @@ full. API retries and rate limits use the shared transport.
 
 Refresh reuses import's title, labels and source lifecycle mapping, including
 real closure/completion dates and reopening. Body, local item type, assignee and
-milestone are preserved. Existing cross-provider link-only owners retain their
+milestone are preserved. A `release` already present on the item is only replaced
+when GitHub supplies calendar-tag attribution for a closure; open issues and
+closures without a matching tag keep the existing release, so user- or tool-set
+attribution survives. Existing cross-provider link-only owners retain their
 native lifecycle and content, as on import. TOON (default) or `--json` returns a
 `plan` of `{id, number, changes: [{field, old, new}]}` plus `updated`, `unchanged`,
-`missing`, `filtered`, `selected` and `created: 0`. On dry-run, `updated` means
+`missing`, `filtered`, `selected`, `resumed` and `created: 0`. On dry-run, `updated` means
 would update; nothing is written. Missing rows carry a typed `reason` and remain
 unchanged: `not_found_or_inaccessible` (GitHub cannot distinguish deleted/hidden),
 `inaccessible`, `transferred`, `api_error`, `incomplete_response`, or `invalid_issue`.
@@ -257,7 +262,13 @@ A request-wide failure aborts before writes.
 
 Each changed item receives an audit comment. `--atomic` applies the batch in one
 SDK workspace writer transaction with rollback; otherwise each changed item gets
-its own transaction. Review the preview before publishing tracker changes and
+its own transaction. Every update transaction persists its exact plan beside the
+SDK journal before writing. If a run dies mid-transaction, the next refresh
+detects the unfinished journal for the selected items and replays that original
+plan — committing the journal without duplicating the audit comment — before
+unchanged items are skipped, and reports it in `resumed`. A preview
+(`--dry-run`) refuses while such a journal is open; a missing plan fails closed
+naming the transaction id instead of silently reporting a no-op. Review the preview before publishing tracker changes and
 apply the existing privacy gate to any proposed commit.
 
 For a weekly refresh, run this in a checkout with the extension installed, token

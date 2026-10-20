@@ -5,7 +5,8 @@ import { join, basename } from "node:path";
 import { listAllComplete, certifyCompleteListResult } from "@unbrained/pm-cli/sdk";
 import {
   CommandError, EXIT_CODE, decodeCompletePmItems, githubGraphQLResponse, importGithubAtomic,
-  parseImportOptions, parseProvenanceTag, prepareGithubImport, resolveGitHubToken,
+  listUnfinishedGithubImports, parseImportOptions, parseProvenanceTag, prepareGithubImport, readGithubImportPlan,
+  resolveGitHubToken, resumeGithubImport,
   type GhIssue, type PmItem, type PreparedGithubImport,
 } from "./index.ts";
 import { fetchImportTimeline, importFidelityFields, normalizeImportValue, readImportReleases } from "./import-fidelity.ts";
@@ -33,7 +34,10 @@ export function selectRefreshTargets(items: readonly PmItem[], repo: string): Re
       if (parsed?.repo === repo) numbers.add(parsed.number);
     }
     if (typeof item.github_url === "string") {
-      const url = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/(?:issues|pull)\/(\d+)\/?$/i.exec(item.github_url);
+      // Only /issues/ locators are refreshable: the batch query reads issue(...)
+      // nodes, so accepting /pull/ links would report every PR-linked item as
+      // missing on each run.
+      const url = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\/(\d+)\/?$/i.exec(item.github_url);
       if (url?.[1]!.toLowerCase() === repo) numbers.add(Number(url[2]));
     }
     if (typeof item.github_repo === "string" && item.github_repo.toLowerCase() === repo && typeof item.github_number === "number") numbers.add(item.github_number);
@@ -83,12 +87,15 @@ async function fetchRefreshBatch(repo: string, targets: readonly RefreshTarget[]
     while (page.hasNextPage) {
       if (!page.endCursor || cursors.has(page.endCursor)) throw new CommandError(`Refresh labels for issue #${target.number} have an invalid cursor.`);
       cursors.add(page.endCursor);
-      const next = await githubGraphQLResponse<{ repository: { issue: { labels: RefreshNode["labels"] } } }>(token,
+      const next = await githubGraphQLResponse<{ repository: { issue: { labels: RefreshNode["labels"] } | null } | null }>(token,
         `query($owner:String!,$name:String!,$number:Int!,$cursor:String!) { repository(owner:$owner,name:$name) { issue(number:$number) { labels(first:100,after:$cursor) { nodes { name } pageInfo { hasNextPage endCursor } } } } }`,
         { owner, name, number: target.number, cursor: page.endCursor });
-      if (next.errors?.length) throw new CommandError(`Refresh could not read every label for issue #${target.number}.`);
-      labels.push(...next.data!.repository.issue.labels.nodes);
-      page = next.data!.repository.issue.labels.pageInfo;
+      // A repository or issue can vanish between requests (transfer or delete);
+      // guard the connection so the host sees a CommandError, not a TypeError.
+      const connection = next.data?.repository?.issue?.labels ?? null;
+      if (next.errors?.length || connection === null) throw new CommandError(`Refresh could not read every label for issue #${target.number}.`);
+      labels.push(...connection.nodes);
+      page = connection.pageInfo;
     }
     results.push({ target, issue: {
       number: issue.number, title: issue.title, body: issue.body, state: issue.state.toLowerCase() as GhIssue["state"],
@@ -130,10 +137,41 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
   if (!repoArg || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repoArg)) throw new CommandError("Usage: pm github refresh <owner/repo> [--dry-run] [--since <date|relative>] [--limit N] [--atomic]", EXIT_CODE.USAGE);
   const repo = repoArg.toLowerCase();
   const opts = parseImportOptions(options);
-  const items = await readRefreshItems(pmRoot);
-  const all = selectRefreshTargets(items, repo);
-  const targets = opts.limit === undefined ? all : all.slice(0, opts.limit);
+  /** Selected targets bounded by the caller's --limit, in ascending order. */
+  const bounded = (candidates: readonly RefreshTarget[]): RefreshTarget[] =>
+    opts.limit === undefined ? [...candidates] : candidates.slice(0, opts.limit);
+  let items = await readRefreshItems(pmRoot);
+  let all = selectRefreshTargets(items, repo);
+  let targets = bounded(all);
   const token = resolveGitHubToken();
+  // Resume interrupted transactions for the selected targets BEFORE the
+  // unchanged filter: a crash after finalization leaves linked items already
+  // matching the source, so the pending journal would otherwise hide behind an
+  // ordinary no-op report and never commit.
+  const pending = (await listUnfinishedGithubImports(pmRoot))
+    .filter(journal => !journal.itemIds.length || journal.itemIds.some(id => targets.some(target => target.id === id)));
+  let resumed = 0;
+  if (pending.length) {
+    if (opts.dryRun) {
+      throw new CommandError(`Refresh cannot preview while GitHub transaction ${pending.map(journal => journal.transactionId).join(", ")} is unfinished for selected linked items. Re-run without --dry-run to complete it.`);
+    }
+    for (const journal of pending) {
+      const record = await readGithubImportPlan(pmRoot, journal.transactionId);
+      if (!record || record.transactionId !== journal.transactionId) {
+        throw new CommandError(
+          `Refresh found unfinished GitHub transaction ${journal.transactionId} (status ${journal.status}) for selected linked items, but its original plan is missing or mismatched. The durable journal at .agents/pm/transactions/sdk/${journal.transactionId}.json must be resolved manually; nothing was refreshed.`,
+          EXIT_CODE.GENERIC_FAILURE,
+        );
+      }
+      await resumeGithubImport(pmRoot, record);
+      resumed++;
+    }
+    // The replay finalized the interrupted targets; re-read so this run
+    // compares the committed state instead of the pre-replay snapshot.
+    items = await readRefreshItems(pmRoot);
+    all = selectRefreshTargets(items, repo);
+    targets = bounded(all);
+  }
   const plan: RefreshEntry[] = [];
   const prepared: PreparedGithubImport[] = [];
   let unchanged = 0;
@@ -161,5 +199,5 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
     else for (const entry of prepared) await importGithubAtomic(pmRoot, repo, [entry], { updateOnly: true });
   }
   return { repo, dryRun: opts.dryRun, atomic: opts.atomic, selected: targets.length, filtered,
-    unchanged, updated: prepared.length, missing, created: 0, plan };
+    unchanged, updated: prepared.length, missing, created: 0, resumed, plan };
 }
