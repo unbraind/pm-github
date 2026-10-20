@@ -43,9 +43,10 @@ explicit skip rows. A whole-line `Closes <item-id>` or `pm-github: <item-id>`
 declaration, a closing keyword before the canonical item link, or a structured
 `PM item: <item-id-or-canonical-link>` line declares delivery. Spaces and tabs
 are allowed; declarations cannot span lines. Matching uses the complete item ID,
-so `Closes pm-x-extra` cannot deliver `pm-x`. Bare links, follow-up lists (`PM:`),
-and tracker PR URL fields alone are reported as `not_delivery` with the reason
-"Mentioned, not delivered".
+so `Closes pm-x-extra` cannot deliver `pm-x`. Undeclared canonical links in the
+PR body, including links in follow-up lists (`PM:`), can produce `not_delivery`
+rows for otherwise eligible items with the reason "Mentioned, not delivered".
+Tracker PR URL metadata with no body reference or declaration produces no row.
 
 When several merged PRs declare delivery, closeout selects the latest merge with
 complete merge facts and passing head checks. Equal merge times use the higher

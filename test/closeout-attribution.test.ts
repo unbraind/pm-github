@@ -74,6 +74,22 @@ test("mention only remains open even with tracker PR metadata", async () => {
   assert.ok(!history.includes('"op":"close"'));
 });
 
+test("tracker PR URL metadata without a body reference produces no row or close event", async () => {
+  const { report, item, history } = await scenario(true, ["No delivery claim", "No delivery claim"]);
+  assert.equal(report.closed, 0);
+  assert.deepEqual(report.plan, []);
+  assert.equal(item.status, "in_progress");
+  assert.ok(!history.includes('"op":"close"'));
+});
+
+for (const file of ["README.md", "docs/explicit-closeout-attribution.md"]) {
+  test(`${file} distinguishes body-reference reporting from tracker PR URL metadata`, () => {
+    const text = readFileSync(new URL(`../${file}`, import.meta.url), "utf8").replace(/\s+/g, " ");
+    assert.match(text, /(?:Undeclared canonical links in the PR body|Undeclared canonical body link).*?otherwise eligible item/);
+    assert.match(text, /Tracker PR URL metadata with no body reference or declaration(?: produces| \|) [Nn]o row/);
+  });
+}
+
 test("structured item lines with follow-up prose remain mentions", async () => {
   for (const suffix of [" leaves pm-ado-5w3m open", ") (follow-up gap tracked in this item)"]) {
     const { report, item } = await scenario(false, ["No delivery claim", `PM item: https://github.com/unbraind/pm-ado/blob/main/.agents/pm/issues/pm-ado-5w3m.toon${suffix}`]);

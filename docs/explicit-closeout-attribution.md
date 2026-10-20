@@ -8,8 +8,8 @@
 | Whole-line closing keyword plus exact item ID | Declares delivery |
 | Whole-line `PM item:` plus canonical link or exact ID | Declares delivery |
 | Whole-line `pm-github:` plus exact ID | Declares delivery |
-| Bare link, gap report, follow-up list, or `tracked in` reference | Mentioned, not delivered |
-| Tracker PR URL metadata without a body declaration | Mentioned, not delivered |
+| Undeclared canonical body link, including a gap report, follow-up list, or `tracked in` reference, for an otherwise eligible item | `not_delivery`: Mentioned, not delivered |
+| Tracker PR URL metadata with no body reference or declaration | No row |
 | Closing declaration for a longer ID with the same prefix | Does not deliver the shorter ID |
 | Several eligible declarations | Latest merge time wins; equal times use the higher PR number |
 | No eligible declaration | No closeout |
@@ -34,8 +34,16 @@ A separate function-only reversion to origin/main's attribution implementation m
 
 ## Validation
 
-The complete focused closeout suite passes 99/99, zero failures, cancellations or skips. A focused c8 run measures exact 100/100/100/100 for closeout.ts without exclusions. The pm-linked attribution suite passes 9/9 and its compact control passes 1/1; existing project policy disables result storage, so comments preserve these results.
+Before the review additions, the complete focused closeout suite passed 99/99, zero failures, cancellations or skips. A focused c8 run measured exact 100/100/100/100 for closeout.ts without exclusions. The pm-linked attribution suite passed 9/9 and its compact control passed 1/1; existing project policy disables result storage, so comments preserve these results.
 
-Both `npm run release:check` and `bun run release:check` completed with exit 0 at code/test head `d8683ff37db274b8fcf569baf97f1c230514a12d`, sequentially with isolated git identity. Each passed 960/960 tests with zero failures, cancellations or skips and exact 100/100/100/100 across all 16 authored modules. Both measured lines/statements 11037/11037, functions 299/299 and branches 3511/3511. All other release-check stages passed, including privacy, zero duplication, production audit, pack dry run, canonical changelog and publish-attestation verification. Source inventory, exclusions, dependency pins, thresholds and helper/test budgets remain unchanged. Final receipt changes contain tracker/documentation evidence; runtime source and tests remain identical to this gate head.
+Both `npm run release:check` and `bun run release:check` completed with exit 0 at code/test head `d8683ff37db274b8fcf569baf97f1c230514a12d`, sequentially with isolated git identity. Each passed 960/960 tests with zero failures, cancellations or skips and exact 100/100/100/100 across all 16 authored modules. Both measured lines/statements 11037/11037, functions 299/299 and branches 3511/3511. All other release-check stages passed, including privacy, zero duplication, production audit, pack dry run, canonical changelog and publish-attestation verification. Source inventory, exclusions, dependency pins, thresholds and helper/test budgets remain unchanged. These receipts precede the review regressions below.
+
+## Review reporting contract
+
+Thread `PRRT_kwDOTbN4pM6ub0vv` identified the metadata-only reporting error in this table and README. Candidate rows come from canonical body references or standalone declarations. Tracker PR URL metadata alone never creates a candidate; undeclared body references reach `not_delivery` only after the other eligibility checks pass. The documentation now states both conditions.
+
+The additional non-git SDK regression verifies metadata-only input produces an empty plan, leaves the item in progress and appends no close event. Two documentation contract checks cover both corrected locations. Restoring either document alone from `9c08fc2` makes its check fail with `ERR_ASSERTION` (exit 1). Restoring only `runCloseout` from the main implementation at review start makes the new SDK regression fail with `ERR_ASSERTION` (one closure instead of zero, exit 1). All reversions were restored. The full PR diff was reviewed for the same reporting-contract error; no additional runtime correction was needed.
+
+`pm test pm-github-uqjf --run --progress --timeout 600` passed attribution 12/12 and the compact control 1/1 with zero failures, cancellations or skips. The unchanged attribution suite passed in 276 seconds after the default 120-second linked timeout expired under host load. Both restored documentation contract checks also passed separately, 2/2.
 
 The item remains in progress for orchestrator verification; its claim is released at handoff. No pm-ado record or history is edited. No merge or package release is performed.
