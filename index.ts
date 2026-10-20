@@ -368,7 +368,9 @@ export function githubApiBase(): string {
   }
 
   // Strip a trailing slash so `${base}/repos/...` cannot produce `//repos/...`.
-  return raw.replace(/\/+$/, "");
+  let end = raw.length;
+  while (raw[end - 1] === "/") end--;
+  return raw.slice(0, end);
 }
 
 /**

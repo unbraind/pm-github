@@ -44,10 +44,17 @@ export interface ImportFidelity {
 /** Identity decision recorded before any import writes. */
 export interface ImportMatch { item?: PmItem; linkOnly: boolean; via: string }
 
+/** Trim exporter punctuation in one backwards pass. @internal Shared with parity tests. */
+export function trimLocatorPunctuation(locator: string): string {
+  let end = locator.length;
+  while (end > 0 && "),.;".includes(locator[end - 1]!)) end--;
+  return locator.slice(0, end);
+}
+
 /** Normalize only complete HTTP issue/provider locators, never substring identities. */
 function locators(value: unknown): string[] {
   const text = typeof value === "string" ? value : JSON.stringify(value) ?? "";
-  return [...text.matchAll(/https?:\/\/[^\s<>"'`]+/gi)].map(match => match[0]!.replace(/[),.;]+$/, "").replace(/\/$/, "").toLowerCase()
+  return [...text.matchAll(/https?:\/\/[^\s<>"'`]+/gi)].map(match => trimLocatorPunctuation(match[0]!).replace(/\/$/, "").toLowerCase()
     .replace(/^https?:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/]+)\/(?:issues|pull)\/(\d+)\/?(?:[?#].*)?$/, "https://github.com/$1/$2/issues/$3"));
 }
 
@@ -78,7 +85,7 @@ export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, tag
   const bodyUrls = new Set(locators(issue.body ?? ""));
   /** Recognize leading native ownership declarations; later prose cannot transfer ownership. */
   const declaredOwner = (item: PmItem) => copiedProviderMarkersOwnItem(item) && typeof item.description === "string" &&
-    locators(/^GitHub issue\s*:?\s+(https?:\/\/[^\s]+)\s*/i.exec(item.description)?.[1]).includes(issueUrl);
+    locators(/^GitHub issue(?:\s*:\s+|\s+)(https?:\/\/\S+)/i.exec(item.description)?.[1]).includes(issueUrl);
   const candidates = items.filter(item => item.id && (item.id === tagged?.id ||
     declaredOwner(item) ||
     Object.entries(item).some(([key, value]) => /^(?:github_?url|provenance|external_?(?:links?|url)|links?)$/i.test(key) && locators(value).includes(issueUrl)) ||
