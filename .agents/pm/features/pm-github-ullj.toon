@@ -6,9 +6,9 @@ status: in_progress
 priority: 2
 tags[3]: changelog-unreleased,github,refresh
 created_at: "2026-10-19T16:13:56.599Z"
-updated_at: "2026-10-20T00:43:03.377Z"
+updated_at: "2026-10-20T03:45:34.560Z"
 author: codex-agent
-comments[32]{created_at,author,text}:
+comments[39]{created_at,author,text}:
   "2026-10-19T16:14:11.328Z",codex-agent,"Plan: reuse prepareGithubImport, source lifecycle projection and importGithubAtomic. Refresh selects explicit tag or github_url identities before transport, batches at 100, and supplies a guarded update-only transaction mode with native audit comments. Real tracker tests fake only HTTP; live acceptance uses scratch copies only."
   "2026-10-19T16:20:35.265Z",codex-agent,"Implementation uses shared import preparation, shared source-metadata projection, and guarded SDK update transactions. Dry-run acceptance exposed that complete-list SDK reads populate runtime caches; preview reads now use disposable copies so the selected tracker is byte-identical. The pinned SDK exposes no cache-write suppression option; this SDK UX limitation will be reported in the final summary."
   "2026-10-19T16:28:14.213Z",codex-agent,"Live read-only acceptance used independent tracker copies and the built CLI with --dry-run --json. Repository unbraind/pm-cli: selected 42, updated 42, unchanged 0, missing 0, created 0; 5 entries include status changes. Repository unbraind/pm-csv: selected 1, updated 1, unchanged 0, missing 0, created 0; 1 includes a status change. These current copies differ from the incident estimate; source-metadata backfill accounts for many planned changes. No refresh writes were applied to either original tracker."
@@ -41,6 +41,13 @@ comments[32]{created_at,author,text}:
   "2026-10-20T00:04:36.836Z",codex-agent,"Final focused verification PASS: pm test pm-github-ullj --run --progress --only-index 2 --timeout 1200 exited 0; node --test test/refresh.test.ts test/import-fidelity.test.ts passed 72/72 tests, zero failures/skips/cancellations/TODOs (452 seconds). The independent final recovery selection passed 6/6, including both crash boundaries, unreadable journal-directory refusal and unknown-target refusal. A clean validation clone matching the implementation passes strict PM health; worktree-local health alone reported an ignored extension-host version skew. Both full release checks remain in progress."
   "2026-10-20T00:41:25.029Z",codex-agent,"Both final isolated-identity release runs completed the full test phase: npm and Bun each passed 943/943 tests, zero failures/skips/cancellations/TODOs. The full gate source was frozen and matching between validation copies; coverage aggregation and the remaining release checks are still pending. Thresholds, source inventory, dependency pins and duplication budgets remain unchanged."
   "2026-10-20T00:43:01.894Z",codex-agent,"Review round 1 final release gates PASS: npm run release:check and bun run release:check each exited 0 with 943/943 tests, zero failures/skips/cancellations/TODOs. Exact all-source coverage in both: 16 authored modules; 10953/10953 lines and statements, 296/296 functions, 3446/3446 branches, zero skipped coverage. Typecheck, build, docstrings, unchanged duplication/privacy gates, production audit, packing, changelog and attestation passed. Both package dry runs have shasum c567e636c4f08c0023933110de75984843e9e206. The 72/72 PM-linked acceptance and all five revert controls (seven intended failures) are documented in docs/refresh-idempotency.md. Releasing the claim and leaving the item in_progress for orchestrator verification; no thread replies/resolutions, merge or release publication."
+  "2026-10-20T02:46:57.548Z",codex-agent,"PR #154 review round: verified all six unresolved CodeRabbit threads (KU9M, KU9O, KU9S, KU9U, KU9X, KU9Z). Latest review has no Outside diff range findings. Plan: prevalidate every recovery plan and enforce repository scope, preserve canceled close reasons, remove terminal plans on failure, clarify recovery writes and remedies, add behavioral revert proofs, self-review and run unchanged full npm/Bun gates. Branch already contains origin/main."
+  "2026-10-20T02:49:54.609Z",codex-agent,"Self-review extended recovery validation to the SDK disposable semantic preview so a mismatched saved mutation payload is rejected before any selected journal writes. Terminal-plan failure cleanup is shared by fresh imports and replay. Regression scenarios cover two pending journals, malformed plans, overlapping repository links, configured journal paths/import retry guidance, recovery before request failure, canceled mutation reasons, and real SDK compensation for fresh and resumed attempts. Worktree strict health has only the pre-existing ignored-extension host version skew plus stale-item advisory; no pending merge receipts."
+  "2026-10-20T02:54:12.836Z",codex-agent,"Behavioral revert proofs PASS in disposable copies with rebuilds before every control. PR thread ids PRRT_kwDOTbN4pM6uKU9M: restore runRefresh -> 1 intended assertion failure; KU9O: restore buildAtomicImportMutations -> 1; KU9S: restore commitGithubImportTransaction -> 2 (fresh and resumed compensation); KU9X: remove repository guard -> 1; KU9Z: restore old recovery diagnostic -> 1; KU9U: restore unconditional README guarantee -> 1. Self-review control: remove SDK plan preview -> 1. Seven controls, eight intended assertion failures, no production source reverts. Commands: npm run build then node --test --test-name-pattern=<scenario> test/refresh.test.ts. PM-linked node --test test/refresh.test.ts passed 27/27, zero failures/skips/cancellations; four additional cleanup-error scenarios are being verified separately. Project policy disables automatic test result tracking, so receipts are recorded explicitly."
+  "2026-10-20T02:56:00.001Z",codex-agent,"Restored revert-control copy passed 7/7 selected regressions. Four real-SDK cleanup-error cases passed 4/4 after correcting the failure-injection fixture to target the existing Task document. Extended compensation checks preserve an unrelated real pending journal/plan. Full npm validation was restarted against the frozen corrected tests; independent Bun validation has identical source/test/config bytes across 146 tracked files. Thresholds, dependency pins and source inventory are unchanged."
+  "2026-10-20T02:57:07.114Z",codex-agent,"PM-linked cleanup command PASS: node --test --test-name-pattern=\"failure cleanup preserves\" test/refresh.test.ts ran through pm test --run --progress --only-index 3 --timeout 1200 and passed 4/4. Independent final terminal cleanup selection passed 2/2 while retaining an unrelated real pending transaction. Fresh non-local clone strict health with isolated HOME and Git identity passed (no failing findings); ordinary host health discovers a global extension version skew. Validation passed with existing advisory metadata warnings. No dependency pin or telemetry configuration changed."
+  "2026-10-20T03:07:11.790Z",codex-agent,"Native Bun acceptance PASS: bun test --timeout 600000 test/refresh.test.ts passed 31/31 with zero failures (Bun 1.3.5). Final compensation revert proof repeated against the extended tests: reverting only commitGithubImportTransaction produced 2 intended assertion failures; restoring it passed 2/2. PM history prefix is byte-identical to the prior head; all new records are append-only."
+  "2026-10-20T03:45:32.791Z",codex-agent,"Review round 2 full gates PASS: isolated-identity npm run release:check and bun run release:check each exited 0 with 954/954 tests and zero failures/skips/cancellations/TODOs. Both exact all-source receipts: 16 modules; 10987/10987 lines and statements, 297/297 functions, 3478/3478 branches, zero skipped. Pins, source inventory, thresholds and duplication budgets unchanged. Audit, privacy, duplication, packing, changelog and attestation all passed. Both pack shasums: 2ca3eadcc13976df612f3aa7b4f9b33933d162ab. Native Bun refresh suite 31/31; PM-linked refresh 27/27 plus cleanup 4/4. All six review findings fixed; seven revert controls produced eight intended assertion failures and restored controls passed 7/7. Full thread mapping and evidence are in docs/refresh-idempotency.md. Releasing claim and leaving in_progress for orchestrator verification; no thread reply/resolution, merge or release."
 files[6]:
   - path: import-fidelity.ts
     scope: project
@@ -55,9 +62,29 @@ files[6]:
     scope: project
   - path: test/refresh.test.ts
     scope: project
-tests[2]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
-  node --test test/refresh.test.ts,project,codex-agent,"2026-10-19T16:21:03.937Z",local_mutation,feat/refresh-linked-items
-  node --test test/refresh.test.ts test/import-fidelity.test.ts,project,pi-agent,"2026-10-19T22:38:21.235Z",local_mutation,feat/refresh-linked-items
+tests[3]:
+  - command: node --test test/refresh.test.ts
+    scope: project
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-19T16:21:03.937Z"
+      source_kind: local_mutation
+      source_ref: feat/refresh-linked-items
+  - command: node --test test/refresh.test.ts test/import-fidelity.test.ts
+    scope: project
+    provenance:
+      author: pi-agent
+      created_at: "2026-10-19T22:38:21.235Z"
+      source_kind: local_mutation
+      source_ref: feat/refresh-linked-items
+  - command: "node --test --test-name-pattern=\"failure cleanup preserves\" test/refresh.test.ts"
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-20T02:54:20.330Z"
+      source_kind: local_mutation
+      source_ref: feat/refresh-linked-items
 docs[2]{path,scope}:
   docs/refresh-idempotency.md,project
   README.md,project

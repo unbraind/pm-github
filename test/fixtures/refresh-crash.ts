@@ -10,9 +10,10 @@ import { create } from "@unbrained/pm-cli/sdk";
 
 const pmRoot = process.argv[2]!;
 const boundary = process.argv[3] ?? "committing";
-const linked = (await create({ title: "Stale", tags: "gh:fixture/repo#1" }, { pmRoot })).item;
-const issue = { number: 1, title: "New upstream title", body: null, state: "closed" as const, state_reason: "completed" as const, closed_at: "2026-02-02T00:00:00Z", labels: [{ name: "bug" }], user: { login: "fixture" }, assignee: null, milestone: null,
-  created_at: "2026-01-01T00:00:00Z", updated_at: "2026-02-03T00:00:00Z", html_url: "https://github.com/fixture/repo/issues/1" };
+const number = Number(process.argv[4] ?? "1");
+const linked = (await create({ title: "Stale", tags: `gh:fixture/repo#${number}` }, { pmRoot })).item;
+const issue = { number, title: "New upstream title", body: null, state: "closed" as const, state_reason: "completed" as const, closed_at: "2026-02-02T00:00:00Z", labels: [{ name: "bug" }], user: { login: "fixture" }, assignee: null, milestone: null,
+  created_at: "2026-01-01T00:00:00Z", updated_at: "2026-02-03T00:00:00Z", html_url: `https://github.com/fixture/repo/issues/${number}` };
 const entry = (await prepareGithubImport(issue, "fixture/repo", parseImportOptions({ atomic: true }), "fixture", linked, undefined,
   { items: [linked], releases: [], timeline: async () => [] }))!;
 console.log(`crash fixture: linked ${linked.id}, entering atomic refresh`);

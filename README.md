@@ -258,13 +258,16 @@ native lifecycle and content, as on import. TOON (default) or `--json` returns a
 would update; nothing is written. Missing rows carry a typed `reason` and remain
 unchanged: `not_found_or_inaccessible` (GitHub cannot distinguish deleted/hidden),
 `inaccessible`, `transferred`, `api_error`, `incomplete_response`, or `invalid_issue`.
-A request-wide failure aborts before writes.
+A request-wide failure aborts before new refresh writes. Recovery of unfinished
+transactions happens first and may already have committed earlier writes when
+a subsequent request fails.
 
 Each changed item receives an audit comment. `--atomic` applies the batch in one
 SDK workspace writer transaction with rollback; otherwise each changed item gets
 its own transaction. Every update transaction persists its exact plan beside the
 SDK journal before writing. If a run dies mid-transaction, the next refresh
-detects the unfinished journal for the selected items and replays that original
+detects unfinished journals for the selected items, validates every saved plan
+before any replay, and refuses recovery from another repository. It replays the original
 plan — committing the journal without duplicating the audit comment — before
 unchanged items are skipped, and reports it in `resumed`. A preview
 (`--dry-run`) refuses while such a journal is open; a missing plan fails closed

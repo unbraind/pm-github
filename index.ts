@@ -1517,6 +1517,7 @@ export function buildAtomicImportMutations(
     ...(updateOnly ? {
       ...(changed!.has("title") ? { title: entry.title } : {}),
       ...(changed!.has("tags") ? { tags: entry.tags.join(",") } : {}),
+      ...(changed!.has("status") && sharedOptions.closeReason !== undefined ? { closeReason: sharedOptions.closeReason } : {}),
     } : sharedOptions), ...(!changed || changed.has("status") ? statusOptions : {}), ...audit,
   };
   const mutations: BulkItemMutation[] = [{
@@ -1716,6 +1717,15 @@ async function commitGithubImportTransaction(config: {
       itemIds,
     };
   } catch (err: unknown) {
+    // Retain sensitive replay data only while the durable journal is resumable.
+    // Apply this to fresh commits and recovery attempts, preserving the original
+    // failure when journal inspection or cleanup itself is unavailable.
+    if (opts.updateOnly) {
+      const pending = await listUnfinishedGithubImports(pmRoot).catch(() => null);
+      if (pending && !pending.some(journal => journal.transactionId === transactionId)) {
+        await removeGithubImportPlan(pmRoot, transactionId).catch(() => {});
+      }
+    }
     const msg = errorMessage(err);
     const label = `${opts.updateOnly ? "Refresh" : "Atomic GitHub import"} transaction ${transactionId}`;
     if (committed) throw new CommandError(`${label} has a committed journal but source metadata could not be finalized. Retry transaction ${transactionId}; nothing may be pushed. Underlying error: ${msg}`);
@@ -1783,6 +1793,32 @@ export async function importGithubAtomic(
   return result;
 }
 
+/** Validate a persisted refresh plan without writing or opening an SDK transaction. */
+export function validateGithubImportPlan(record: GithubImportPlanRecord): Map<number, string> {
+  if (typeof record?.transactionId !== "string" || !/^[a-zA-Z0-9._-]+$/.test(record.transactionId) ||
+    typeof record.repo !== "string" || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(record.repo) ||
+    !Array.isArray(record.entries) || !record.entries.length || !Array.isArray(record.mutations) || !record.mutations.length) {
+    throw new CommandError(
+      `Refresh cannot replay unfinished GitHub transaction ${typeof record?.transactionId === "string" ? record.transactionId : "<unknown>"}: its persisted plan is invalid.`,
+      EXIT_CODE.GENERIC_FAILURE,
+    );
+  }
+  const itemIds = new Map<number, string>();
+  for (const entry of record.entries) {
+    if (typeof entry?.issueNumber !== "number" || typeof entry?.match?.id !== "string") {
+      throw new CommandError(
+        `Refresh cannot replay unfinished GitHub transaction ${record.transactionId}: its persisted plan has an unlinked target.`,
+        EXIT_CODE.GENERIC_FAILURE,
+      );
+    }
+    itemIds.set(entry.issueNumber, entry.match.id);
+  }
+  if (record.mutations.some(mutation => mutation?.op !== "update" || ![...itemIds.values()].includes(mutation.id))) {
+    throw new CommandError(`Refresh cannot replay unfinished GitHub transaction ${record.transactionId}: its persisted mutation targets are invalid.`);
+  }
+  return itemIds;
+}
+
 /**
  * Resume one interrupted github-import journal by replaying its persisted
  * original plan. The plan — never a re-derivation from current item state —
@@ -1797,24 +1833,8 @@ export async function resumeGithubImport(
   opts: AtomicImportOptions = {},
 ): Promise<GithubImportCommitResult> {
   pmRoot = sdkResolvePmRoot(process.cwd(), pmRoot);
-  if (typeof record?.transactionId !== "string" || !/^[a-zA-Z0-9._-]+$/.test(record.transactionId) ||
-    typeof record.repo !== "string" || !Array.isArray(record.entries) || !Array.isArray(record.mutations)) {
-    throw new CommandError(
-      `Refresh cannot replay unfinished GitHub transaction ${typeof record?.transactionId === "string" ? record.transactionId : "<unknown>"}: its persisted plan is invalid.`,
-      EXIT_CODE.GENERIC_FAILURE,
-    );
-  }
+  const itemIds = validateGithubImportPlan(record);
   const { commitItemMutations: commit } = await resolveAtomicSdkFunctions(opts);
-  const itemIds = new Map<number, string>();
-  for (const entry of record.entries) {
-    if (typeof entry?.issueNumber !== "number" || typeof entry?.match?.id !== "string") {
-      throw new CommandError(
-        `Refresh cannot replay unfinished GitHub transaction ${record.transactionId}: its persisted plan has an unlinked target.`,
-        EXIT_CODE.GENERIC_FAILURE,
-      );
-    }
-    itemIds.set(entry.issueNumber, entry.match.id);
-  }
   const result = await commitGithubImportTransaction({
     pmRoot, repo: record.repo, entries: record.entries, mutations: record.mutations,
     transactionId: record.transactionId, itemIds, opts: { ...opts, updateOnly: true }, commit,

@@ -2,11 +2,11 @@
 import { mkdtemp, cp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
-import { listAllComplete, certifyCompleteListResult } from "@unbrained/pm-cli/sdk";
+import { listAllComplete, certifyCompleteListResult, previewItemMutations } from "@unbrained/pm-cli/sdk";
 import {
   CommandError, EXIT_CODE, decodeCompletePmItems, githubGraphQLResponse, importGithubAtomic,
   listUnfinishedGithubImports, parseImportOptions, parseProvenanceTag, prepareGithubImport, readGithubImportPlan,
-  resolveGitHubToken, resumeGithubImport,
+  resolveGitHubToken, resumeGithubImport, validateGithubImportPlan,
   type GhIssue, type PmItem, type PreparedGithubImport,
 } from "./index.ts";
 import { fetchImportTimeline, importFidelityFields, normalizeImportValue, readImportReleases } from "./import-fidelity.ts";
@@ -155,14 +155,28 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
     if (opts.dryRun) {
       throw new CommandError(`Refresh cannot preview while GitHub transaction ${pending.map(journal => journal.transactionId).join(", ")} is unfinished for selected linked items. Re-run without --dry-run to complete it.`);
     }
+    // Validate the complete recovery set before the first transaction can write.
+    const records = [];
     for (const journal of pending) {
       const record = await readGithubImportPlan(pmRoot, journal.transactionId);
       if (!record || record.transactionId !== journal.transactionId) {
         throw new CommandError(
-          `Refresh found unfinished GitHub transaction ${journal.transactionId} (status ${journal.status}) for selected linked items, but its original plan is missing or mismatched. The durable journal at .agents/pm/transactions/sdk/${journal.transactionId}.json must be resolved manually; nothing was refreshed.`,
+          `Refresh found unfinished GitHub transaction ${journal.transactionId} (status ${journal.status}) for selected linked items, but its original plan is missing or mismatched. If it came from \`pm github import --atomic\`, re-run that import to resume it; otherwise resolve the durable journal at ${join(pmRoot, "transactions", "sdk", `${journal.transactionId}.json`)} manually; nothing was refreshed.`,
           EXIT_CODE.GENERIC_FAILURE,
         );
       }
+      validateGithubImportPlan(record);
+      if (record.repo.toLowerCase() !== repo) {
+        throw new CommandError(`Refresh cannot replay GitHub transaction ${journal.transactionId} for ${record.repo} while refreshing ${repo}. Re-run refresh for ${record.repo} first; nothing was refreshed.`);
+      }
+      try {
+        await previewItemMutations({ pmRoot, transactionId: record.transactionId, author: "pm-github", mutations: record.mutations });
+      } catch {
+        throw new CommandError(`Refresh cannot replay unfinished GitHub transaction ${journal.transactionId}: its persisted plan cannot resume the durable journal; nothing was refreshed.`);
+      }
+      records.push(record);
+    }
+    for (const record of records) {
       await resumeGithubImport(pmRoot, record);
       resumed++;
     }

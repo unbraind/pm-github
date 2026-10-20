@@ -1,15 +1,15 @@
 /** Refresh acceptance uses actual initialized trackers and the real HTTP transport. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, mkdirSync, cpSync, copyFileSync, symlinkSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, mkdirSync, cpSync, copyFileSync, symlinkSync, writeFileSync, existsSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, delimiter } from "node:path";
 import { spawnSync } from "node:child_process";
-import { create, get, comments, listAllComplete, readHistorySnapshot, getHistoryPath, deleteItem, readSettings, normalizeItemId, commitImportedItem, getItemPath } from "@unbrained/pm-cli/sdk";
+import { WorkspaceTransactionInterruptedError, create, update, get, comments, listAllComplete, readHistorySnapshot, getHistoryPath, deleteItem, readSettings, normalizeItemId, commitImportedItem, getItemPath } from "@unbrained/pm-cli/sdk";
 import extension, {
   buildAtomicImportMutations, deriveAtomicItemId, importGithubAtomic, listUnfinishedGithubImports,
   parseImportOptions, prepareGithubImport, readGithubImportPlan, resumeGithubImport,
-  type GithubImportPlanRecord,
+  validateGithubImportPlan, type GithubImportPlanRecord,
 } from "../index.ts";
 import { fetchImportTimeline } from "../import-fidelity.ts";
 import { runRefresh, selectRefreshTargets, refreshChanges } from "../refresh.ts";
@@ -427,7 +427,7 @@ test("an unfinished journal with unknown targets fails closed before filtering",
 test("resume refuses plan records without a usable transaction or linked target", async () => tracker(async (_directory, pmRoot) => {
   await assert.rejects(() => resumeGithubImport(pmRoot, {} as GithubImportPlanRecord), /persisted plan is invalid/);
   await assert.rejects(() => resumeGithubImport(pmRoot, { transactionId: "bad id!", repo: "fixture/repo", entries: [], mutations: [] }), /persisted plan is invalid/);
-  const base = { transactionId: "github-import-0000000000000007", repo: "fixture/repo", mutations: [] };
+  const base = { transactionId: "github-import-0000000000000007", repo: "fixture/repo", mutations: [{ op: "update", id: "fixture" }] };
   await assert.rejects(() => resumeGithubImport(pmRoot, { ...base, entries: [{}] } as unknown as GithubImportPlanRecord), /unlinked target/);
   await assert.rejects(() => resumeGithubImport(pmRoot, { ...base, entries: [{ issueNumber: 1 }] } as unknown as GithubImportPlanRecord), /unlinked target/);
 }));
@@ -484,5 +484,148 @@ for (const boundary of ["step_applied", "committing"]) {
       assert.ok(existsSync(join(journalDir, `${unrelated}.json`)), "an unrelated journal is left to its own recovery");
       assert.ok(!existsSync(join(planDir, `${unrelated}.json`)), "no plan is invented for the unrelated journal");
     });
+  }));
+}
+
+/** Leave a real SDK journal applying and return its complete original plan. */
+function interruptedPlan(pmRoot: string, number = 1): GithubImportPlanRecord {
+  const crash = spawnSync(process.execPath, [join(packageRoot, "test/fixtures/refresh-crash.ts"), pmRoot, "committing", String(number)], { cwd: packageRoot, encoding: "utf8" });
+  assert.equal(crash.status, 9, crash.stderr);
+  rmSync(join(pmRoot, "locks"), { recursive: true, force: true });
+  const plans = readdirSync(join(pmRoot, "transactions/pm-github")).map(file =>
+    JSON.parse(readFileSync(join(pmRoot, "transactions/pm-github", file), "utf8")) as GithubImportPlanRecord);
+  return plans.find(plan => plan.entries[0]!.issueNumber === number)!;
+}
+
+test("every recovery plan is validated before any journal writes", async () => tracker(async (_directory, pmRoot) => {
+  interruptedPlan(pmRoot);
+  interruptedPlan(pmRoot, 2);
+  const pending = await listUnfinishedGithubImports(pmRoot);
+  const last = pending[1]!;
+  const file = join(pmRoot, "transactions/pm-github", `${last.transactionId}.json`);
+  const original = readFileSync(file, "utf8");
+  const record = JSON.parse(original) as GithubImportPlanRecord;
+  for (const invalid of [null, {}, { ...record, repo: "invalid" }, { ...record, repo: null }, { ...record, entries: [] },
+    { ...record, entries: [{}] }, { ...record, mutations: [] }, { ...record, mutations: [null] },
+    { ...record, mutations: record.mutations.map(mutation => ({ ...mutation, options: { title: "Mismatched saved payload" } })) },
+    { ...record, mutations: [{ op: "update", id: "unlinked" }] }, { ...record, mutations: [{ op: "create", id: record.entries[0]!.match!.id }] }]) {
+    if (invalid === null) rmSync(file); else writeFileSync(file, JSON.stringify(invalid));
+    const before = snapshot(pmRoot);
+    await assert.rejects(() => runRefresh("fixture/repo", pmRoot, {}), error => {
+      assert.match(String(error), new RegExp(last.transactionId));
+      return true;
+    });
+    assert.deepEqual(snapshot(pmRoot), before, "the first valid journal must still be applying");
+    writeFileSync(file, original);
+  }
+  assert.throws(() => validateGithubImportPlan({ ...record, mutations: "invalid" } as unknown as GithubImportPlanRecord), /persisted plan is invalid/);
+  assert.throws(() => validateGithubImportPlan({ ...record, entries: "invalid" } as unknown as GithubImportPlanRecord), /persisted plan is invalid/);
+}));
+
+test("recovery refuses a different repository even when the selected item overlaps", async () => tracker(async (_directory, pmRoot) => {
+  const record = interruptedPlan(pmRoot);
+  const id = record.entries[0]!.match!.id!;
+  await update(id, { addTags: ["gh:fixture/other#1"] }, { pmRoot });
+  const before = snapshot(pmRoot);
+  await assert.rejects(() => runRefresh("fixture/other", pmRoot, {}), new RegExp(`${record.transactionId}.*fixture/repo.*fixture/other`));
+  assert.deepEqual(snapshot(pmRoot), before);
+}));
+
+test("missing recovery plan names the configured journal and atomic import retry", async () => tracker(async (_directory, pmRoot) => {
+  const record = interruptedPlan(pmRoot);
+  rmSync(join(pmRoot, "transactions/pm-github", `${record.transactionId}.json`));
+  const before = snapshot(pmRoot);
+  await assert.rejects(() => runRefresh("fixture/repo", pmRoot, {}), error => {
+    assert.match(String(error), /re-run that import to resume it/);
+    assert.ok(String(error).includes("pm github import --atomic"));
+    assert.ok(String(error).includes(join(pmRoot, "transactions", "sdk", `${record.transactionId}.json`)));
+    return true;
+  });
+  assert.deepEqual(snapshot(pmRoot), before);
+}));
+
+test("request failure after recovery preserves committed recovery writes as documented", async () => tracker(async (_directory, pmRoot) => {
+  const record = interruptedPlan(pmRoot);
+  await withMockGithub((_request, response) => jsonResponse(response, 401, { message: "unauthorized" }), async () => {
+    await assert.rejects(() => runRefresh("fixture/repo", pmRoot, {}), /401|unauthorized|authentication/i);
+  });
+  assert.equal((await listUnfinishedGithubImports(pmRoot)).length, 0);
+  assert.equal(JSON.parse(readFileSync(join(pmRoot, "transactions/sdk", `${record.transactionId}.json`), "utf8")).status, "committed");
+  assert.match(readFileSync(join(packageRoot, "README.md"), "utf8"), /Recovery of unfinished\s+transactions happens first and may already have committed earlier writes/);
+}));
+
+test("canceled update mutation carries the required reason only with a status change", async () => tracker(async (_directory, pmRoot) => {
+  const linked = (await create({ title: "Stale", tags: "gh:fixture/repo#1" }, { pmRoot })).item;
+  const entry = (await prepareGithubImport({ number: 1, title: "Stale", body: null, state: "closed", state_reason: "not_planned", closed_at: "2026-02-02T00:00:00Z", labels: [], assignee: null, milestone: null,
+    created_at: "2026-01-01T00:00:00Z", updated_at: "2026-02-03T00:00:00Z", html_url: "https://github.com/fixture/repo/issues/1" },
+  "fixture/repo", parseImportOptions({}), "fixture", linked, undefined, { items: [linked], releases: [], timeline: async () => [] }))!;
+  const prefix = (await readSettings(pmRoot)).id_prefix;
+  const mutation = buildAtomicImportMutations("fixture/repo", entry, prefix, normalizeItemId, true).mutations[0]!;
+  assert.equal(mutation.op, "update");
+  if (mutation.op === "update") {
+    assert.equal(mutation.options!.status, "canceled");
+    assert.equal(mutation.options!.closeReason, entry.fidelity!.github_close_reason);
+  }
+  await importGithubAtomic(pmRoot, "fixture/repo", [entry], { updateOnly: true });
+  assert.equal((await get(linked.id, {}, { pmRoot })).item.close_reason, entry.fidelity!.github_close_reason);
+}));
+
+for (const recover of [false, true]) {
+  test(`terminal failures remove replay plans after real SDK compensation (${recover})`, async () => tracker(async (_directory, pmRoot) => {
+    const record = interruptedPlan(pmRoot);
+    if (!recover) {
+      // Finish the interrupted attempt first, then change only upstream title.
+      await resumeGithubImport(pmRoot, record);
+      record.entries = record.entries.map(entry => ({ ...entry, title: "Changed again", match: { ...entry.match!, title: "New upstream title" } }));
+    }
+    const unrelated = interruptedPlan(pmRoot, 2);
+    const fail = { onTransition: (context: { transition: string }) => {
+      if (context.transition === "committing") throw new Error("terminal fixture failure");
+    } };
+    await assert.rejects(() => recover ? resumeGithubImport(pmRoot, record, fail)
+      : importGithubAtomic(pmRoot, record.repo, record.entries, { ...fail, updateOnly: true }), /terminal fixture failure/);
+    assert.deepEqual((await listUnfinishedGithubImports(pmRoot)).map(journal => journal.transactionId), [unrelated.transactionId]);
+    assert.deepEqual(readdirSync(join(pmRoot, "transactions/pm-github")), [`${unrelated.transactionId}.json`]);
+  }));
+}
+
+for (const failure of ["interrupted", "inspection", "cleanup", "finalize"]) {
+  test(`failure cleanup preserves resumability and the original error (${failure})`, async () => tracker(async (_directory, pmRoot) => {
+    const record = interruptedPlan(pmRoot);
+    const planFile = join(pmRoot, "transactions/pm-github", `${record.transactionId}.json`);
+    const sdkDir = join(pmRoot, "transactions/sdk");
+    await assert.rejects(() => resumeGithubImport(pmRoot, record, { onTransition: context => {
+      if (context.transition === "committing" && ["interrupted", "inspection"].includes(failure)) {
+        if (failure === "inspection") {
+          renameSync(sdkDir, `${sdkDir}-held`);
+          writeFileSync(sdkDir, "unavailable");
+        }
+        throw new WorkspaceTransactionInterruptedError("preserve original interruption");
+      }
+      if (context.transition === "committed") {
+        if (failure === "cleanup") {
+          rmSync(planFile);
+          mkdirSync(planFile);
+          writeFileSync(join(planFile, "held"), "unavailable");
+          throw new Error("preserve original committed error");
+        }
+        if (failure === "finalize") {
+          const entry = record.entries[0]!;
+          rmSync(getItemPath(pmRoot, String(entry.match!.type), entry.match!.id!));
+        }
+      }
+    } }), failure === "finalize" ? /committed journal.*could not be finalized/ : /preserve original/);
+    if (failure === "inspection") {
+      rmSync(sdkDir);
+      renameSync(`${sdkDir}-held`, sdkDir);
+    }
+    if (["interrupted", "inspection"].includes(failure)) {
+      assert.ok(existsSync(planFile), "a potentially resumable transaction keeps its plan");
+      assert.equal((await listUnfinishedGithubImports(pmRoot)).length, 1);
+      await resumeGithubImport(pmRoot, record);
+      assert.ok(!existsSync(planFile));
+    } else if (failure === "finalize") {
+      assert.ok(!existsSync(planFile), "a terminal journal cannot keep a sensitive orphan plan");
+    } else assert.ok(existsSync(join(planFile, "held")), "cleanup failure must not mask the transaction error");
   }));
 }
