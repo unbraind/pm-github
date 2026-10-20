@@ -39,11 +39,20 @@ Only `https://github.com/owner/repo/blob/main/.agents/pm/<folder>/<id>.toon`
 links in PR bodies are recognized. Percent-encoded names and nested SDK tracker
 folders are supported; malformed encodings and traversal segments are ignored. Repository comparisons ignore case. Links to
 other repositories, unknown ids, closed/canceled items and `--skip` ids produce
-explicit skip rows. Bare mentions and `pm:` trailers are not delivery evidence. Use a whole-line
-`Closes <item-id>` or `pm-github: <item-id>` declaration, a closing keyword before
-the canonical item link, or an item field `github_pr`, `pr_url` or
-`pull_request_url` containing the exact PR URL. Multiple merged PRs explicitly
-claiming one item are reported as `ambiguous_delivery`; none closes it.
+explicit skip rows. A whole-line `Closes <item-id>` or `pm-github: <item-id>`
+declaration, a closing keyword before the canonical item link, or a structured
+`PM item: <item-id-or-canonical-link>` line declares delivery. Spaces and tabs
+are allowed; declarations cannot span lines. Matching uses the complete item ID,
+so `Closes pm-x-extra` cannot deliver `pm-x`. Undeclared canonical links in the
+PR body, including links in follow-up lists (`PM:`), can produce `not_delivery`
+rows for otherwise eligible items with the reason "Mentioned, not delivered".
+Tracker PR URL metadata with no body reference or declaration produces no row.
+
+When several merged PRs declare delivery, closeout selects the latest merge with
+complete merge facts and passing head checks. Equal merge times use the higher
+PR number. Other qualifying claims receive `duplicate_selection`; mention-only
+PRs retain `not_delivery`. All completion fields and the appended close event use
+the selected PR's merge time, merge SHA, head SHA and check evidence.
 
 **A mention is not delivery.** PR bodies routinely link follow-ups, epics and
 related work for context, so a link alone never closes an item. An item is
@@ -133,6 +142,14 @@ terminal items and performs zero additional tracker writes. The command edits
 only the tracker; commit it with its history and regenerate the caller's
 changelog in a closeout PR. The [automated closeout workflow](#automated-closeout-workflow)
 performs that daily review-PR preparation for fleet repositories.
+
+## Without git
+
+With an explicit repository, GitHub import, export, refresh, sync, project commands,
+blocker checks and closeout work in a plain pm tracker without a git executable.
+They still require their normal GitHub access and credentials. Privacy scanning
+with `github gate --diff <file>` also works there. Reading a proposed tracker diff
+with `github gate` requires a git repository; otherwise pass an explicit diff.
 
 ## Revalidate GitHub blockers
 
