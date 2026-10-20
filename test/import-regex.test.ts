@@ -56,11 +56,14 @@ test("locator punctuation trim parity table", () => {
 test("ownership whitespace trigger: 200000 spaces finish under 50 ms", t => {
   const description = "GitHub issue" + " ".repeat(200_000);
   matchImportedIssue([{ id: "warmup", description: "GitHub issue " }], issue);
-  const start = performance.now();
-  const result = matchImportedIssue([{ id: "owner", description }], issue);
-  const elapsed = performance.now() - start;
-  t.diagnostic(`ownership 200000 spaces: ${elapsed.toFixed(3)} ms`);
-  assert.equal(result.item, undefined);
+  let elapsed = Infinity;
+  for (let trial = 0; trial < 3; trial++) {
+    const start = performance.now();
+    const result = matchImportedIssue([{ id: "owner", description }], issue);
+    elapsed = Math.min(elapsed, performance.now() - start);
+    assert.equal(result.item, undefined);
+  }
+  t.diagnostic(`ownership 200000 spaces (best of 3): ${elapsed.toFixed(3)} ms`);
   assert.ok(elapsed < 50, `ownership took ${elapsed.toFixed(3)} ms; limit 50 ms`);
 });
 
@@ -68,11 +71,14 @@ test("locator punctuation trigger: 200000 parentheses finish under 50 ms", t => 
   // A non-punctuation sentinel forces the old unanchored suffix regex to retry every start.
   const body = url + ")".repeat(200_000) + "x";
   trimLocatorPunctuation("warmup)");
-  const start = performance.now();
-  const result = matchImportedIssue([], { ...issue, body });
-  const elapsed = performance.now() - start;
-  t.diagnostic(`locator 200000 parentheses plus sentinel: ${elapsed.toFixed(3)} ms`);
-  assert.equal(result.item, undefined);
+  let elapsed = Infinity;
+  for (let trial = 0; trial < 3; trial++) {
+    const start = performance.now();
+    const result = matchImportedIssue([], { ...issue, body });
+    elapsed = Math.min(elapsed, performance.now() - start);
+    assert.equal(result.item, undefined);
+  }
+  t.diagnostic(`locator 200000 parentheses plus sentinel (best of 3): ${elapsed.toFixed(3)} ms`);
   assert.ok(elapsed < 50, `locator took ${elapsed.toFixed(3)} ms; limit 50 ms`);
   assert.equal(trimLocatorPunctuation(url + ")".repeat(200_000)), url);
 });
@@ -109,11 +115,14 @@ test("API-base slash trim parity and 20000-slash trigger", async t => {
   }
   const base = "https://api.example.test/" + "/".repeat(20_000) + "x";
   await withEnv({ PM_GITHUB_API_BASE: base }, async () => {
-    const start = performance.now();
-    const result = githubApiBase();
-    const elapsed = performance.now() - start;
-    t.diagnostic(`API base 20000 slashes plus sentinel: ${elapsed.toFixed(3)} ms`);
-    assert.equal(result, base);
+    let elapsed = Infinity;
+    for (let trial = 0; trial < 3; trial++) {
+      const start = performance.now();
+      const result = githubApiBase();
+      elapsed = Math.min(elapsed, performance.now() - start);
+      assert.equal(result, base);
+    }
+    t.diagnostic(`API base 20000 slashes plus sentinel (best of 3): ${elapsed.toFixed(3)} ms`);
     assert.ok(elapsed < 50, `API base took ${elapsed.toFixed(3)} ms; limit 50 ms`);
   });
 });

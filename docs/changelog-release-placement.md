@@ -143,6 +143,38 @@ the child; the fixed source retains the same startup and operation budgets.
 The other marker probe waits for parent input before starting its operation,
 so its readiness output can flush before any CPU-bound work begins.
 
+## Timing-sampling review after delivery selection merge
+
+Merged main `4ff22de` (PR #159) before completing this review. The sole conflict
+was the changelog; both release-placement and delivery-attribution entries were
+retained. Delivery selection, explicit declarations and non-git tracker behavior
+remain covered by `test/closeout-attribution.test.ts` and `test/closeout.test.ts`.
+
+The complete PR #158 thread/comment read found one unresolved thread,
+`PRRT_kwDOTbN4pM6uilD-`. Its single-sample timing finding was valid for ownership,
+locator and API-base guards. The latest CodeRabbit review had no Outside diff
+range findings. All three guards now use the fastest of three samples, matching
+the existing phone and key guards, while retaining result assertions on every
+trial and the unchanged 50 ms limits. The complete PR diff was checked for the
+same timing and regex defect classes; no additional instance was found.
+
+`test/import-regex-sampling.test.ts` starts a real Node test process with a clock
+preload confined to explicit measurements in the regex test file. A synthetic
+100 ms scheduler pause followed by 1 ms and 2 ms operations passes all three
+guards. Three 100 ms operations fail all three, preserving the performance
+boundary. The runner asserts the inner test counts and clears the inherited
+Node test context to prevent an empty recursive run from appearing successful.
+This harness also runs when the parent suite uses native Bun.
+
+Independent behavioral reverts restore only one original guard test at a time.
+For each of ownership, locator and API base,
+`node --test --test-name-pattern="one scheduler pause" test/import-regex-sampling.test.ts`
+fails 0/1 with the corresponding 100.000 ms versus 50 ms assertion (inner
+results: 2 pass, 1 fail). Fixed sampling controls pass 2/2, and the focused native
+Bun regex/sampling suites pass 9/9. All mutations were restored. Full current
+release receipts are recorded in the append-only PM item; the following section
+is the explicitly identified historical regex-hardening snapshot.
+
 ## Release gates
 
 At regex-hardening head `f2dcdbe6eade612288cd783208e5904270e44ab7`,
