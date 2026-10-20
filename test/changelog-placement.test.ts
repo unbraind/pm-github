@@ -15,6 +15,19 @@ const generator = join(source, "node_modules/pm-changelog/dist/cli.js");
 const repo = "fixture/project";
 const completed = "2026-10-15T12:00:00Z";
 
+test("placement report retains the final regex-hardening validation snapshot", () => {
+  const report = readFileSync(join(source, "docs/changelog-release-placement.md"), "utf8")
+    .split("## Release gates\n")[1]!.split("\n## ")[0]!;
+  assert.match(report, /f2dcdbe6eade612288cd783208e5904270e44ab7/);
+  for (const runtime of ["npm", "bun"]) {
+    assert.match(report, new RegExp(`\u0060${runtime} run release:check\u0060 (?:also )?passes 971/971 tests`));
+  }
+  for (const counter of ["11055/11055 lines", "11055/11055 statements", "302/302 functions", "3526/3526"]) {
+    assert.ok(report.includes(counter), `missing validated counter: ${counter}`);
+  }
+  assert.doesNotMatch(report, /964\/964|11040\/11040|300\/300|3520\/3520/);
+});
+
 /** Execute the production post-script block, preserving npm's argument forwarding. */
 function postScript(kind: string, root: string, script = "changelog:full") {
   const workflow = readFileSync(join(source, `.github/workflows/pm-github-${kind}.yml`), "utf8");
@@ -58,7 +71,7 @@ for (const kind of ["closeout", "sync"]) {
           custom: 'node -e "require(\'node:fs\').writeFileSync(\'custom.txt\', JSON.stringify(process.argv.slice(1)))"',
         } }));
         // The CLI's stdin mode avoids spawning an unrelated pm installation.
-        const item = await create({ title: "October delivery", type: "Issue" }, { pmRoot, noExtensions: true });
+        const item = await create({ title: kind === "closeout" ? "October delivery" : "Unrelated native item", type: "Issue" }, { pmRoot, noExtensions: true });
         assert.equal(spawnSync("git", ["add", ".agents/pm", "package.json"], { cwd: root, env }).status, 0);
         assert.equal(spawnSync("git", ["commit", "-qm", "September release"], { cwd: root, env }).status, 0);
         if (tagged) assert.equal(spawnSync("git", ["tag", "v2026.9.2"], { cwd: root, env }).status, 0);
@@ -69,7 +82,9 @@ for (const kind of ["closeout", "sync"]) {
           const issue: GhIssue = { number: 1, title: "October delivery", state: "closed", state_reason: "completed",
             created_at: "2026-08-01T00:00:00Z", updated_at: completed, closed_at: completed,
             html_url: `https://github.com/${repo}/issues/1`, body: null, labels: [], assignee: null, milestone: null };
-          await runImport(repo, pmRoot, parseImportOptions({ atomic: true }), { fetchIssues: async () => [issue], resolveToken: () => undefined });
+          const result = await runImport(repo, pmRoot, parseImportOptions({ atomic: true }), { fetchIssues: async () => [issue], resolveToken: () => undefined });
+          assert.ok("imported" in result);
+          assert.equal(result.imported, 1);
         }
         // Use the actual SDK corpus via the caller's real CLI, as fleet scripts do.
         const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { scripts: Record<string, string> };

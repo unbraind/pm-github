@@ -97,7 +97,7 @@ It covers both workflows with and without an actual old release tag, plus empty,
 missing and custom post scripts. The import regression covers plain and atomic
 native-owner reuse, local evidence preservation and repeated-import idempotency.
 
-Behavioral revert proof used separate copies of the final source snapshot:
+Original placement validation at `4b6637f` used separate source snapshots:
 reverting only the two workflow post-script steps makes both untagged-version
 placement tests fail their Unreleased assertion (0/2 pass). Reverting only
 `matchImportedIssue` makes both native-owner tests fail with identity `new`
@@ -114,7 +114,7 @@ guarded item format 2; the supported run-level timeout avoids changing pins.
 Automatic test-result tracking is disabled by existing project policy, so the
 result is recorded in the item's append-only comments.
 
-Strict health on both unchanged main and this change reports the same existing
+At that placement snapshot, strict health on main and the PR reports the same existing
 host-version mismatch (`2026.10.15` host versus `2026.10.19` extension) and seven
 stale in-progress items. Integrity and history-drift checks pass. Dependency
 currency remains with Dependabot; this work makes no clean-health claim.
@@ -135,14 +135,15 @@ No deadline, cleanup budget, coverage threshold or dependency pin is relaxed.
 
 ## Release gates
 
-Clean-HOME/Git-isolated `npm run release:check` passes 964/964 tests, with zero
+At regex-hardening head `f2dcdbe6eade612288cd783208e5904270e44ab7`,
+clean-HOME/Git-isolated `npm run release:check` passes 971/971 tests, with zero
 failures, cancellations or skips. Across all 16 authored modules, coverage is
-11040/11040 lines, 11040/11040 statements, 300/300 functions and 3520/3520
+11055/11055 lines, 11055/11055 statements, 302/302 functions and 3526/3526
 branches. Docstrings cover 176 declarations in 15 files; duplication is zero
 at the unchanged threshold. Production audit reports zero vulnerabilities;
 package dry-run, changelog check and publish-attestation checks pass.
 
-Clean-HOME/Git-isolated `bun run release:check` also passes 964/964 tests with
+At the same head, clean-HOME/Git-isolated `bun run release:check` also passes 971/971 tests with
 zero failures, cancellations or skips, and the identical four coverage counts.
 All remaining release checks pass under both entry points. Source and regression
 hashes are unchanged between runs. The refreshed review inventory still contains
