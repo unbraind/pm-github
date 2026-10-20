@@ -25,9 +25,10 @@ import type {
 } from "@unbrained/pm-cli/sdk/authoring";
 import { CloseoutUsageError, compactCloseoutReport, runCloseout } from "./closeout.ts";
 import {
-  buildImportFidelity, fetchImportTimeline, matchImportedIssue, persistImportFidelity, readImportReleases, selectImportContextIndex,
+  buildImportFidelity, fetchImportTimeline, importFidelityFields, matchImportedIssue, persistImportFidelity, readImportReleases, selectImportContextIndex, validateImportLifetime,
   type ImportFidelity,
 } from "./import-fidelity.ts";
+import { refreshChanges, runRefresh } from "./refresh.ts";
 import http from "node:http";
 import https from "node:https";
 import crypto from "node:crypto";
@@ -45,6 +46,7 @@ import {
   normalizeItemId as sdkNormalizeItemId,
   readSettings as sdkReadSettings,
   resolvePmRoot as sdkResolvePmRoot,
+  writeFileAtomic,
   getHistoryPath as sdkGetHistoryPath,
   readHistorySnapshot as sdkReadHistorySnapshot,
   type BulkItemMutation,
@@ -217,6 +219,8 @@ type ReadSettings = (pmRoot: string) => Promise<{ id_prefix?: string }>;
  * defaults; a test overrides only the ones it needs.
  */
 export interface AtomicImportOptions {
+  /** Refuse unmatched entries and emit updates only, including deterministic imported ids. */
+  updateOnly?: boolean;
   /** Author identity stamped onto the transaction's mutations (default `pm-github`). */
   atomicAuthor?: string;
   /** SDK transaction observer; explicit failure injection still exercises real rollback. */
@@ -1441,9 +1445,13 @@ export function buildAtomicImportMutations(
   entry: PreparedGithubImport,
   idPrefix: string,
   normalizeItemId: (input: string, prefix: string) => string,
+  updateOnly = false,
 ): { itemId: string; mutations: BulkItemMutation[] } {
+  if (updateOnly && !entry.match?.id) throw new CommandError("Refresh refuses an unlinked target; no item may be created.");
+  const changed = updateOnly ? new Set(refreshChanges(entry).map(change => change.field)) : undefined;
+  const audit = updateOnly ? { comment: [`Refreshed linked GitHub issue ${repo.toLowerCase()}#${entry.issueNumber}`] } : {};
   if (entry.linkOnly && entry.match?.id) {
-    return { itemId: entry.match.id, mutations: [{ op: "update", id: entry.match.id, options: { addTags: entry.tags } }] };
+    return { itemId: entry.match.id, mutations: [{ op: "update", id: entry.match.id, options: { ...(!changed || changed.has("tags") ? { addTags: entry.tags } : {}), ...audit } }] };
   }
   const sharedOptions: Record<string, unknown> = {
     title: entry.title,
@@ -1475,7 +1483,7 @@ export function buildAtomicImportMutations(
   // item, but commitItemMutations must still receive the original plan. The
   // create step treats an existing stable id as already applied; update then
   // makes later content-bearing transactions refresh the item normally.
-  if (!entry.match?.id || entry.match.id === managedItemId) {
+  if (!updateOnly && (!entry.match?.id || entry.match.id === managedItemId)) {
     const createStatus = entry.status === "closed" ? "open" : entry.status;
     const mutations: BulkItemMutation[] = [{
       op: "create",
@@ -1504,8 +1512,14 @@ export function buildAtomicImportMutations(
     };
   }
 
-  const itemId = entry.match.id;
-  const updateOptions: Record<string, unknown> = { ...sharedOptions, ...statusOptions };
+  const itemId = entry.match!.id!;
+  const updateOptions: Record<string, unknown> = {
+    ...(updateOnly ? {
+      ...(changed!.has("title") ? { title: entry.title } : {}),
+      ...(changed!.has("tags") ? { tags: entry.tags.join(",") } : {}),
+      ...(changed!.has("status") && sharedOptions.closeReason !== undefined ? { closeReason: sharedOptions.closeReason } : {}),
+    } : sharedOptions), ...(!changed || changed.has("status") ? statusOptions : {}), ...audit,
+  };
   const mutations: BulkItemMutation[] = [{
     op: "update",
     id: itemId,
@@ -1539,52 +1553,135 @@ async function importContextVersions(pmRoot: string, entries: readonly PreparedG
   return versions;
 }
 
-/** Commit a complete issue-import batch under one crash-resumable transaction. */
-export async function importGithubAtomic(
-  pmRoot: string,
-  repo: string,
-  entries: readonly PreparedGithubImport[],
-  opts: AtomicImportOptions = {},
-): Promise<{
+/** Durable outcome of one committed (or recovered) github-import transaction. */
+export interface GithubImportCommitResult {
+  /** Stable transaction identifier that owns the journal. */
   transactionId: string;
+  /** True when a durable journal was resumed instead of newly committed. */
   recovered: boolean;
+  /** New items created by a fresh (non-recovered) transaction. */
   imported: number;
+  /** Existing items updated by a fresh (non-recovered) transaction. */
   updated: number;
+  /** Entries covered by a recovered journal; present only when recovered. */
   recoveredItems?: number;
+  /** Post-commit routing map from GitHub issue number to pm item id. */
   itemIds: Map<number, string>;
-}> {
+}
+
+/** One durable github-import journal that still owes a commit or a finished compensation. */
+export interface UnfinishedGithubImport {
+  /** Stable transaction id; also the journal file name inside the tracker. */
+  transactionId: string;
+  /** Durable journal state the SDK reported when the tracker was scanned. */
+  status: "applying" | "compensating";
+  /** Mutation target item ids extracted from the journal's planned step ids. */
+  itemIds: string[];
+}
+
+/** The exact pre-commit transaction plan persisted beside the SDK journal. */
+export interface GithubImportPlanRecord {
+  /** Stable transaction id the plan belongs to. */
+  transactionId: string;
+  /** Lowercased repository the transaction planned to refresh. */
+  repo: string;
+  /** Original complete prepared entries, reused for finalization and reporting. */
+  entries: readonly PreparedGithubImport[];
+  /** Original ordered mutation steps; a resumed journal validates them verbatim. */
+  mutations: readonly BulkItemMutation[];
+}
+
+/** Durable SDK journals live per tracker under `transactions/sdk`. */
+function sdkJournalDir(pmRoot: string): string {
+  return path.join(pmRoot, "transactions", "sdk");
+}
+
+/** Persisted import plans live beside the SDK journals, under `transactions/pm-github`. */
+function importPlanDir(pmRoot: string): string {
+  return path.join(pmRoot, "transactions", "pm-github");
+}
+
+/** Journal fields the importer reasons about; unrelated fields stay ignored. */
+interface SdkTransactionJournal {
+  transactionId?: unknown;
+  status?: unknown;
+  stepIds?: unknown;
+}
+
+/** Extract the mutation target ids from journal step ids like `1-update-<item>-<hash>`. @internal */
+export function journalStepItemIds(stepIds: readonly unknown[]): string[] {
+  const ids = new Set<string>();
+  for (const step of stepIds) {
+    const id = typeof step === "string" ? /^\d+-(?:create|update|close|release)-(.+)-[0-9a-f]{12}$/.exec(step)?.[1] : undefined;
+    if (id !== undefined) ids.add(id);
+  }
+  return [...ids];
+}
+
+/** List pending github-import journals without changing plans or tracker bytes. */
+export async function listUnfinishedGithubImports(pmRoot: string): Promise<UnfinishedGithubImport[]> {
   pmRoot = sdkResolvePmRoot(process.cwd(), pmRoot);
-  const {
-    commitItemMutations: commit,
-    normalizeItemId,
-    readSettings,
-  } = await resolveAtomicSdkFunctions(opts);
+  const unfinished: UnfinishedGithubImport[] = [];
+  const journalNames = await fs.promises.readdir(sdkJournalDir(pmRoot)).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return [];
+    throw new CommandError("Refresh cannot inspect GitHub transaction journals.");
+  });
+  for (const name of journalNames) {
+    if (!name.startsWith(ATOMIC_IMPORT_PREFIX) || !name.endsWith(".json")) continue;
+    const transactionId = name.slice(0, -".json".length);
+    let journal: SdkTransactionJournal;
+    try {
+      journal = JSON.parse(await fs.promises.readFile(path.join(sdkJournalDir(pmRoot), name), "utf8")) as SdkTransactionJournal;
+      if (!journal || typeof journal !== "object") throw new Error("Invalid journal");
+    } catch {
+      throw new CommandError(`Refresh cannot inspect GitHub transaction ${transactionId}: its durable journal is unreadable.`);
+    }
+    if (journal.status === "applying" || journal.status === "compensating") {
+      unfinished.push({ transactionId, status: journal.status,
+        itemIds: journalStepItemIds(Array.isArray(journal.stepIds) ? journal.stepIds : []) });
+    }
+  }
+  return unfinished.sort((left, right) => left.transactionId.localeCompare(right.transactionId));
+}
 
-  let idPrefix = "pm-";
+/** Persist the exact pre-commit plan so an interrupted journal can be replayed verbatim. */
+async function persistGithubImportPlan(pmRoot: string, record: GithubImportPlanRecord): Promise<void> {
+  await fs.promises.mkdir(importPlanDir(pmRoot), { recursive: true });
+  await writeFileAtomic(path.join(importPlanDir(pmRoot), `${record.transactionId}.json`), `${JSON.stringify(record, null, 2)}\n`);
+}
+
+/** Read one persisted plan; null when the tracker holds no plan for that transaction. */
+export async function readGithubImportPlan(pmRoot: string, transactionId: string): Promise<GithubImportPlanRecord | null> {
+  if (!/^[a-zA-Z0-9._-]+$/.test(transactionId)) return null;
+  const file = path.join(importPlanDir(sdkResolvePmRoot(process.cwd(), pmRoot)), `${transactionId}.json`);
   try {
-    const settings = await readSettings(pmRoot);
-    if (settings?.id_prefix) idPrefix = String(settings.id_prefix);
+    return JSON.parse(await fs.promises.readFile(file, "utf8")) as GithubImportPlanRecord;
   } catch {
-    // Match normal import resilience: an unreadable optional setting falls
-    // back to the canonical prefix; the mutation still validates the tracker.
+    return null;
   }
+}
 
-  const mutations: BulkItemMutation[] = [];
-  const itemIds = new Map<number, string>();
-  // The transaction journal fingerprints the ordered step plan. Canonicalize
-  // by the stable GitHub issue number so a retry whose API page/order changed
-  // supplies the exact same plan as well as the same transaction id.
-  for (const entry of [...entries].sort((a, b) => a.issueNumber - b.issueNumber)) {
-    const planned = buildAtomicImportMutations(repo, entry, idPrefix, normalizeItemId);
-    itemIds.set(entry.issueNumber, planned.itemId);
-    mutations.push(...planned.mutations);
-  }
-  const transactionId = deriveAtomicTransactionId(repo, entries, mutations, await importContextVersions(pmRoot, entries));
+/** Remove a persisted plan once its journal reached a durable terminal state. */
+async function removeGithubImportPlan(pmRoot: string, transactionId: string): Promise<void> {
+  await fs.promises.rm(path.join(importPlanDir(pmRoot), `${transactionId}.json`), { force: true });
+}
 
+/** Finalize source metadata and commit one github-import transaction through the SDK. */
+async function commitGithubImportTransaction(config: {
+  pmRoot: string;
+  repo: string;
+  entries: readonly PreparedGithubImport[];
+  mutations: readonly BulkItemMutation[];
+  transactionId: string;
+  itemIds: Map<number, string>;
+  opts: AtomicImportOptions;
+  commit: CommitItemMutations;
+}): Promise<GithubImportCommitResult> {
+  const { pmRoot, entries, mutations, transactionId, itemIds, opts, commit } = config;
   /** Finalize before the SDK commits, and repair source metadata on recovered journals. */
   const finalize = async (): Promise<void> => {
     for (const entry of entries) {
-      if (entry.fidelity) await persistImportFidelity(pmRoot, itemIds.get(entry.issueNumber)!, entry.fidelity, Boolean(entry.linkOnly));
+      if (entry.fidelity) await persistImportFidelity(pmRoot, itemIds.get(entry.issueNumber)!, entry.fidelity, Boolean(entry.linkOnly), opts.updateOnly);
     }
   };
   let committed = false;
@@ -1620,25 +1717,170 @@ export async function importGithubAtomic(
       itemIds,
     };
   } catch (err: unknown) {
+    // Retain sensitive replay data only while the durable journal is resumable.
+    // Apply this to fresh commits and recovery attempts, preserving the original
+    // failure when journal inspection or cleanup itself is unavailable.
+    if (opts.updateOnly) {
+      const pending = await listUnfinishedGithubImports(pmRoot).catch(() => null);
+      if (pending && !pending.some(journal => journal.transactionId === transactionId)) {
+        await removeGithubImportPlan(pmRoot, transactionId).catch(() => {});
+      }
+    }
     const msg = errorMessage(err);
-    if (committed) throw new CommandError(`Atomic GitHub import has a committed journal but source metadata could not be finalized. Retry transaction ${transactionId}; nothing may be pushed. Underlying error: ${msg}`);
+    const label = `${opts.updateOnly ? "Refresh" : "Atomic GitHub import"} transaction ${transactionId}`;
+    if (committed) throw new CommandError(`${label} has a committed journal but source metadata could not be finalized. Retry transaction ${transactionId}; nothing may be pushed. Underlying error: ${msg}`);
     if (err instanceof AggregateError || /compensation failed/i.test(msg)) {
       throw new CommandError(
-        `Atomic GitHub import failed and compensation was incomplete. The tracker may contain partially applied state; retry the same import to resume transaction ${transactionId}, then inspect its durable journal if recovery still fails. Underlying error: ${msg}`,
+        `${label} failed and compensation was incomplete. The tracker may contain partially applied state; retry to resume transaction ${transactionId}, then inspect its durable journal if recovery still fails. Underlying error: ${msg}`,
         EXIT_CODE.GENERIC_FAILURE,
       );
     }
     if (err instanceof Error && err.name === "WorkspaceTransactionInterruptedError") {
       throw new CommandError(
-        `Atomic GitHub import was interrupted. Its durable journal is resumable; retry the same import to continue transaction ${transactionId}. Underlying error: ${msg}`,
+        `${label} was interrupted. Its durable journal is resumable; retry to continue transaction ${transactionId}. Underlying error: ${msg}`,
         EXIT_CODE.GENERIC_FAILURE,
       );
     }
     throw new CommandError(
-      `Atomic GitHub import failed after the SDK completed its normal compensation path; no new partial committed state is expected. Transaction id: ${transactionId}. Underlying error: ${msg}`,
+      `${label} failed after the SDK completed its normal compensation path; no new partial committed state is expected. Underlying error: ${msg}`,
       EXIT_CODE.GENERIC_FAILURE,
     );
   }
+}
+
+/** Commit a complete issue-import batch under one crash-resumable transaction. */
+export async function importGithubAtomic(
+  pmRoot: string,
+  repo: string,
+  entries: readonly PreparedGithubImport[],
+  opts: AtomicImportOptions = {},
+): Promise<GithubImportCommitResult> {
+  pmRoot = sdkResolvePmRoot(process.cwd(), pmRoot);
+  const {
+    commitItemMutations: commit,
+    normalizeItemId,
+    readSettings,
+  } = await resolveAtomicSdkFunctions(opts);
+
+  let idPrefix = "pm-";
+  try {
+    const settings = await readSettings(pmRoot);
+    if (settings?.id_prefix) idPrefix = String(settings.id_prefix);
+  } catch {
+    // Match normal import resilience: an unreadable optional setting falls
+    // back to the canonical prefix; the mutation still validates the tracker.
+  }
+
+  const mutations: BulkItemMutation[] = [];
+  const itemIds = new Map<number, string>();
+  // The transaction journal fingerprints the ordered step plan. Canonicalize
+  // by the stable GitHub issue number so a retry whose API page/order changed
+  // supplies the exact same plan as well as the same transaction id.
+  for (const entry of [...entries].sort((a, b) => a.issueNumber - b.issueNumber)) {
+    const planned = buildAtomicImportMutations(repo, entry, idPrefix, normalizeItemId, opts.updateOnly);
+    itemIds.set(entry.issueNumber, planned.itemId);
+    mutations.push(...planned.mutations);
+  }
+  const transactionId = deriveAtomicTransactionId(repo, entries, mutations, await importContextVersions(pmRoot, entries));
+  // Update-only transactions derive their steps from the CURRENT item state,
+  // so a retry after a partial apply would fingerprint a different plan and
+  // orphan the journal behind a fresh transaction id. Persist the exact plan
+  // before the SDK touches the tracker so an interrupted refresh can replay it.
+  if (opts.updateOnly) for (const entry of entries) validateGithubImportFidelity(entry, repo, `GitHub transaction ${transactionId}`);
+  const plan = opts.updateOnly ? { transactionId, repo: repo.toLowerCase(), entries, mutations } : undefined;
+  if (plan) await persistGithubImportPlan(pmRoot, plan);
+  const result = await commitGithubImportTransaction({ pmRoot, repo, entries, mutations, transactionId, itemIds, opts, commit });
+  if (plan) await removeGithubImportPlan(pmRoot, transactionId);
+  return result;
+}
+
+/** Validate every source-finalization input against its effective native lifecycle before writes. */
+export function validateGithubImportFidelity(entry: PreparedGithubImport, repo: string, context: string, items?: readonly PmItem[]): void {
+  // Finalization reads source metadata outside the SDK mutation preview.
+  // Validate its entire projection before ANY selected journal can commit.
+  const fidelity = entry.fidelity;
+  if (fidelity !== undefined) {
+    const fields = ["github_url", "github_number", "github_state", "github_state_reason", "github_created_at",
+      "github_updated_at", "github_closed_at", "github_close_reason", "github_release"];
+    if (!fidelity || typeof fidelity !== "object" || Array.isArray(fidelity) ||
+      Object.keys(fidelity).some(field => !fields.includes(field)) ||
+      typeof fidelity.github_url !== "string" ||
+      fidelity.github_url.toLowerCase() !== `https://github.com/${repo.toLowerCase()}/issues/${entry.issueNumber}` ||
+      fidelity.github_number !== entry.issueNumber ||
+      !["open", "closed"].includes(fidelity.github_state) ||
+      typeof fidelity.github_created_at !== "string" || typeof fidelity.github_updated_at !== "string" ||
+      [fidelity.github_closed_at, fidelity.github_close_reason, fidelity.github_release, fidelity.github_state_reason]
+        .some(value => value !== null && typeof value !== "string")) {
+      throw new CommandError(`${context}: its persisted fidelity is invalid.`);
+    }
+    try {
+      validateImportLifetime({ number: entry.issueNumber, created_at: fidelity.github_created_at,
+        updated_at: fidelity.github_updated_at, closed_at: fidelity.github_closed_at });
+    } catch {
+      throw new CommandError(`${context}: its persisted fidelity has an invalid source lifetime.`);
+    }
+    // Missing source closure dates preserve native completion metadata.
+    // Check the effective lifecycle from the current read-only snapshot too.
+    const current = items?.find(item => item.id === entry.match!.id) ?? entry.match;
+    const projected = { ...current, ...importFidelityFields(fidelity, Boolean(entry.linkOnly)) };
+    if (projected.closed_at && Date.parse(String(projected.closed_at)) < Date.parse(String(projected.created_at))) {
+      throw new CommandError(`${context}: its persisted fidelity conflicts with the native closure date.`);
+    }
+  }
+  if (entry.linkOnly !== undefined && typeof entry.linkOnly !== "boolean") {
+    throw new CommandError(`${context}: its persisted ownership is invalid.`);
+  }
+}
+
+/** Validate a persisted refresh plan without writing or opening an SDK transaction. */
+export function validateGithubImportPlan(record: GithubImportPlanRecord, items?: readonly PmItem[]): Map<number, string> {
+  if (typeof record?.transactionId !== "string" || !/^[a-zA-Z0-9._-]+$/.test(record.transactionId) ||
+    typeof record.repo !== "string" || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(record.repo) ||
+    !Array.isArray(record.entries) || !record.entries.length || !Array.isArray(record.mutations) || !record.mutations.length) {
+    throw new CommandError(
+      `Refresh cannot replay unfinished GitHub transaction ${typeof record?.transactionId === "string" ? record.transactionId : "<unknown>"}: its persisted plan is invalid.`,
+      EXIT_CODE.GENERIC_FAILURE,
+    );
+  }
+  const itemIds = new Map<number, string>();
+  for (const entry of record.entries) {
+    if (typeof entry?.issueNumber !== "number" || typeof entry?.match?.id !== "string") {
+      throw new CommandError(
+        `Refresh cannot replay unfinished GitHub transaction ${record.transactionId}: its persisted plan has an unlinked target.`,
+        EXIT_CODE.GENERIC_FAILURE,
+      );
+    }
+    validateGithubImportFidelity(entry, record.repo, `Refresh cannot replay unfinished GitHub transaction ${record.transactionId}`, items);
+    itemIds.set(entry.issueNumber, entry.match.id);
+  }
+  if (record.mutations.some(mutation => mutation?.op !== "update" || ![...itemIds.values()].includes(mutation.id))) {
+    throw new CommandError(`Refresh cannot replay unfinished GitHub transaction ${record.transactionId}: its persisted mutation targets are invalid.`);
+  }
+  return itemIds;
+}
+
+/**
+ * Resume one interrupted github-import journal by replaying its persisted
+ * original plan. The plan — never a re-derivation from current item state —
+ * supplies the exact ordered mutations and the transaction id, because a
+ * partial apply changes both the derived step set and the history context the
+ * id is fingerprinted from. When the recorded plan cannot be trusted, the
+ * caller fails closed instead of leaving the journal silently unfinished.
+ */
+export async function resumeGithubImport(
+  pmRoot: string,
+  record: GithubImportPlanRecord,
+  opts: AtomicImportOptions = {},
+): Promise<GithubImportCommitResult> {
+  pmRoot = sdkResolvePmRoot(process.cwd(), pmRoot);
+  const itemIds = validateGithubImportPlan(record);
+  const { commitItemMutations: commit } = await resolveAtomicSdkFunctions(opts);
+  const result = await commitGithubImportTransaction({
+    pmRoot, repo: record.repo, entries: record.entries, mutations: record.mutations,
+    transactionId: record.transactionId, itemIds, opts: { ...opts, updateOnly: true }, commit,
+  });
+  await removeGithubImportPlan(pmRoot, record.transactionId);
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -2850,7 +3092,7 @@ export async function linkImportedDependencies(
  * @param fetchIssueComments - Injectable comment fetcher (defaults to {@link fetchComments}).
  * @returns The prepared import entry, or `undefined` when the issue has no title.
  */
-async function prepareGithubImport(
+export async function prepareGithubImport(
   issue: GhIssue,
   repo: string,
   opts: ImportOptions,
@@ -5512,7 +5754,7 @@ export async function githubGraphQL<T>(token: string | undefined, query: string,
 }
 
 /** Shared GraphQL client retaining partial errors for reference-level classification. */
-async function githubGraphQLResponse<T>(
+export async function githubGraphQLResponse<T>(
   token: string | undefined,
   query: string,
   variables: Record<string, unknown>,
@@ -6335,7 +6577,7 @@ async function runProjectSync(ctx: CommandHandlerContext) {
 export function isMutatingGithubCommand(command: string, options: Record<string, unknown>): boolean {
   const cmd = (command || "").toLowerCase();
   const dryRun = optionEnabled(options, "dry-run", "dryRun");
-  if (cmd === "github sync") return !dryRun;
+  if (cmd === "github sync" || cmd === "github refresh") return !dryRun;
   // Export is dry-run by default; it only mutates with an explicit apply
   // (--apply / --no-dry-run / legacy --push) AND no --dry-run override.
   if (cmd === "github export") return exportWillApply(options);
@@ -6477,6 +6719,7 @@ export default defineExtension({
     api.registerPreflight({
       commands: [
         "github sync",
+        "github refresh",
         "github export",
         "github import",
         "gh-issues import",
@@ -6663,6 +6906,23 @@ export default defineExtension({
     });
 
     // -----------------------------------------------------------------------
+    // Refresh uses the import planner and its guarded update-only transaction path.
+    api.registerCommand({
+      name: "github refresh",
+      description: "Refresh existing linked items from GitHub without importing new issues.",
+      intent: "keep a selected GitHub mirror current",
+      arguments: [{ name: "owner/repo", required: true, description: "Linked GitHub repository" }],
+      flags: [
+        { long: "--dry-run", description: "Preview linked-item field changes without writing the tracker" },
+        { long: "--since", value_name: "date|relative", description: "Only apply issues updated since this date or relative duration" },
+        { long: "--limit", value_name: "N", description: "Select at most N linked issue numbers, in ascending order, before fetching" },
+        { long: "--atomic", description: "Commit all changed linked items in one workspace writer transaction; an interrupted transaction is replayed from its persisted plan on the next refresh before unchanged items are skipped" },
+      ],
+      async run(ctx: CommandHandlerContext) {
+        return runRefresh(ctx.args[0], ctx.pm_root, ctx.options);
+      },
+    });
+
     // command — legacy `pm gh-issues import <owner/repo>` (delegates to core)
     // -----------------------------------------------------------------------
     api.registerCommand({

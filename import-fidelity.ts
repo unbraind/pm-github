@@ -170,8 +170,8 @@ export function importCloseReason(issue: GhIssue, events: readonly unknown[]): s
   return connected ? `${base}; linked PR ${connected.url}` : base;
 }
 
-/** Validate source lifetimes and assign the earliest release tag at or after the closure. */
-export function buildImportFidelity(issue: GhIssue, releases: readonly ImportRelease[], timeline: readonly unknown[]): ImportFidelity {
+/** Validate source date ordering and return the parsed closure, when supplied. */
+export function validateImportLifetime(issue: Pick<GhIssue, "number" | "created_at" | "updated_at" | "closed_at">): number | undefined {
   const created = Date.parse(issue.created_at);
   const updated = Date.parse(issue.updated_at);
   const closed = issue.closed_at ? Date.parse(issue.closed_at) : undefined;
@@ -179,6 +179,12 @@ export function buildImportFidelity(issue: GhIssue, releases: readonly ImportRel
     (closed !== undefined && (!Number.isFinite(closed) || closed < created || closed > updated))) {
     throw new CommandError(`GitHub issue #${issue.number} has an invalid source lifetime; nothing may be imported.`);
   }
+  return closed;
+}
+
+/** Validate source lifetimes and assign the earliest release tag at or after the closure. */
+export function buildImportFidelity(issue: GhIssue, releases: readonly ImportRelease[], timeline: readonly unknown[]): ImportFidelity {
+  const closed = validateImportLifetime(issue);
   return {
     github_url: issue.html_url, github_number: issue.number, github_state: issue.state,
     github_state_reason: issue.state_reason ?? "unspecified",
@@ -189,13 +195,39 @@ export function buildImportFidelity(issue: GhIssue, releases: readonly ImportRel
   };
 }
 
+/** Project the import-owned metadata; undefined values remove stale native lifecycle fields. */
+export function importFidelityFields(fidelity: ImportFidelity, linkOnly: boolean): Record<string, unknown> {
+  return {
+    ...fidelity, github_link_only: linkOnly,
+    ...(!linkOnly ? {
+      created_at: fidelity.github_created_at,
+      close_reason: fidelity.github_state === "closed" ? fidelity.github_close_reason : undefined,
+      ...(fidelity.github_closed_at || fidelity.github_state === "open" ? {
+        closed_at: fidelity.github_closed_at || undefined,
+        completed_at: fidelity.github_closed_at || undefined,
+      } : {}),
+      // Assign release only when GitHub supplied one: an open issue or a
+      // closure without a matching calendar tag must preserve an existing
+      // release that users or tools set, instead of deleting it.
+      ...(fidelity.github_release ? { release: fidelity.github_release } : {}),
+    } : {}),
+  };
+}
+
+/** Compare source instants and tag sets without treating their serialized representation as a change. */
+export function normalizeImportValue(field: string, value: unknown): unknown {
+  if (field === "tags") return [...new Set(value as string[] ?? [])].sort();
+  if (/^(?:github_)?(?:created|updated|closed|completed)_at$/.test(field) && typeof value === "string" && Number.isFinite(Date.parse(value))) return Date.parse(value);
+  return value;
+}
+
 /**
  * Finalize source metadata through public SDK lock, serialization and append-only history primitives.
  * High-level create/update reserve native timestamps. This import adapter appends a real
  * before/after event instead of editing past history; retrying identical metadata is a no-op.
  * Cross-provider owners retain their creation/completion dates, content and release.
  */
-export async function persistImportFidelity(pmRoot: string, id: string, fidelity: ImportFidelity, linkOnly: boolean): Promise<void> {
+export async function persistImportFidelity(pmRoot: string, id: string, fidelity: ImportFidelity, linkOnly: boolean, normalizeFields = false): Promise<void> {
   pmRoot = resolvePmRoot(process.cwd(), pmRoot);
   const settings = await readSettings(pmRoot);
   id = normalizeItemId(id, settings.id_prefix);
@@ -206,21 +238,10 @@ export async function persistImportFidelity(pmRoot: string, id: string, fidelity
     if (!located) throw new CommandError(`Imported item ${id} is missing during lifecycle finalization.`);
     const { document, raw } = await readLocatedItem(located);
     const before = canonicalDocument(document);
-    Object.assign(document.metadata, fidelity);
-    document.metadata.github_link_only = linkOnly;
-    if (!linkOnly) {
-      document.metadata.created_at = fidelity.github_created_at;
-      if (fidelity.github_state === "closed") document.metadata.close_reason = fidelity.github_close_reason;
-      if (fidelity.github_closed_at) {
-        document.metadata.closed_at = fidelity.github_closed_at;
-        document.metadata.completed_at = fidelity.github_closed_at;
-      } else if (fidelity.github_state === "open") {
-        delete document.metadata.closed_at;
-        delete document.metadata.completed_at;
-        delete document.metadata.close_reason;
-      }
-      if (fidelity.github_release) document.metadata.release = fidelity.github_release;
-      else delete document.metadata.release;
+    for (const [field, value] of Object.entries(importFidelityFields(fidelity, linkOnly))) {
+      if (normalizeFields && JSON.stringify(normalizeImportValue(field, document.metadata[field])) === JSON.stringify(normalizeImportValue(field, value))) continue;
+      if (value === undefined) delete document.metadata[field];
+      else document.metadata[field] = value;
     }
     if (document.metadata.closed_at && Date.parse(document.metadata.closed_at) < Date.parse(document.metadata.created_at)) {
       throw new CommandError(`GitHub issue #${fidelity.github_number} needs a source closure date before its lifecycle can be imported safely.`);

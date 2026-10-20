@@ -165,7 +165,7 @@ for (const atomic of [false, true]) {
     assert.ok(imported.tags?.includes("gh:unbraind/pm-linear#134"));
   }));
 
-  test(`URL-only GitHub owner refreshes native lifecycle and release (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
+  test(`URL-only GitHub owner refreshes native lifecycle and preserves an unrelated release (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
     const issue = recorded("pm-csv-72");
     const owner = await identityItem(pmRoot, { github_url: issue.html_url, release: "stale-release" });
     const preview = await importing(pmRoot, issue, atomic, true);
@@ -178,7 +178,7 @@ for (const atomic of [false, true]) {
     assert.equal(actual.created_at, issue.created_at);
     assert.equal(actual.closed_at, issue.closed_at);
     assert.equal(actual.completed_at, issue.closed_at);
-    assert.equal(actual.release, undefined);
+    assert.equal(actual.release, "stale-release", "a closure without a matching calendar tag preserves the existing release");
     assert.equal(actual.github_link_only, false);
     assert.match(actual.close_reason!, /^Closed on GitHub/);
   }));

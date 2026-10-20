@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Refresh only already-linked GitHub items without importing new ones ([pm-github-ullj](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-ullj.toon))
+
 ### Fixed
 
 - The daily release regenerates the changelog with a different status filter than release:check, so an open changelog-unreleased item delivered since the last tag fails the release ([pm-github-l1ot](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-l1ot.toon))
