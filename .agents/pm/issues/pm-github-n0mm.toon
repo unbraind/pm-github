@@ -1,0 +1,15 @@
+id: pm-github-n0mm
+title: Track pm-changelog rendering closed historical incidents as Fixed
+description: Minimal repro and classification in docs/changelog-release-placement.md. A closed Issue with factual GitHub closure wording and no repair evidence is rendered under Fixed solely from its type. Source lifecycle and release placement can be correct while the generated wording still implies remediation. Follow up in pm-changelog; do not infer fixes or rewrite historical privacy data here.
+type: Issue
+status: open
+priority: 2
+tags[2]: follow-up,pm-changelog
+created_at: "2026-10-20T07:09:08.356Z"
+updated_at: "2026-10-20T08:25:53.898Z"
+author: codex-agent
+comments[1]{created_at,author,text}:
+  "2026-10-20T08:25:53.885Z",codex-agent,"Executed the documented stdin reproduction with pinned pm-changelog 2026.10.15: a closed Issue titled Historical workflow incident, with factual source lifecycle and no repair evidence, renders under Unreleased / Fixed. The same category persists in historical released sections in the consumer replays. This follow-up remains open for pm-changelog; no package code or source history is changed by this item."
+docs[1]{path,scope}:
+  docs/changelog-release-placement.md,project
+body: ""

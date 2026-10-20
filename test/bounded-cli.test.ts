@@ -12,11 +12,16 @@ test("the acceptance watchdog passes normal exits and force-kills a CPU spin ign
   const tracker = path.join(root, "state.toon");
   fs.writeFileSync(tracker, "id: fixture\ntitle: Durable data\n");
   const before = fs.readFileSync(tracker);
-  const normal = await boundedCli(process.execPath, ["-e", "console.log('clean')"], root, process.env);
+  // Model deferred console output deterministically: the normal child yields,
+  // but the stalled child must publish readiness before blocking its event loop.
+  const deferredConsole = path.join(root, "deferred-console.cjs");
+  fs.writeFileSync(deferredConsole, "console.log = (...args) => { setImmediate(() => process.stdout.write(args.join(' ') + '\\n')); };\n");
+  const preload = ["--require", deferredConsole, "-e"];
+  const normal = await boundedCli(process.execPath, [...preload, "console.log('clean')"], root, process.env);
   assert.equal(normal.code, 0);
   assert.equal(normal.timedOut, false);
   assert.match(normal.stdout, /clean/);
-  const stalled = await boundedCli(process.execPath, ["-e", "process.on('SIGTERM',()=>{}); console.log('ready'); while(true){}"], root, process.env, 500, 100);
+  const stalled = await boundedCli(process.execPath, [...preload, "process.on('SIGTERM',()=>{}); setTimeout(()=>{require('node:fs').writeSync(1, 'ready\\n'); while(true){}}, 750)"], root, process.env, 500, 100, "ready");
   assert.match(stalled.stdout, /ready/);
   assert.equal(stalled.timedOut, true);
   assert.equal(stalled.signal, "SIGKILL");

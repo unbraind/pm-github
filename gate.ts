@@ -195,7 +195,13 @@ const CREDENTIAL_RULES: readonly ContentRule[] = [
   { rule: "slack-token", pattern: /(?:xox[a-z]|xapp)-[A-Za-z0-9-]{10,}/g },
   { rule: "slack-webhook", pattern: /https:\/\/hooks\.slack\.com\/services\/T[A-Za-z0-9]+\/B[A-Za-z0-9]+\/[A-Za-z0-9]{24,}/g },
   { rule: "openai-legacy-key", pattern: /sk-[A-Za-z0-9]{48}/g },
-  { rule: "openai-api-key", pattern: /sk-[A-Za-z0-9_-]{20,}T3BlbkFJ[A-Za-z0-9_-]{20,}/g },
+  {
+    rule: "openai-api-key",
+    // Consume each candidate once: a missing marker must not retry at embedded sk- prefixes.
+    // The eight-character marker needs 20 payload characters on either side (48 total).
+    pattern: /sk-[A-Za-z0-9_-]{48,}/g,
+    confirm: matched => matched.slice("sk-".length + 20, -20).includes("T3BlbkFJ"),
+  },
   { rule: "openai-project-key", pattern: /sk-proj-[A-Za-z0-9_-]{20,}/g },
   { rule: "openai-service-account-key", pattern: /sk-svcacct-[A-Za-z0-9_-]{20,}/g },
   { rule: "anthropic-api-key", pattern: /sk-ant-[A-Za-z0-9_-]{20,}/g },
@@ -246,7 +252,7 @@ const PERSONAL_DATA_RULES: readonly ContentRule[] = [
   },
   {
     rule: "phone-number",
-    pattern: /\b(?:phone|telephone|tel|mobile)\b["']?\s*[:=]\s*["']?\s*\+?\d[\d \t().-]{5,}\d/gi,
+    pattern: /\b(?:phone|telephone|tel|mobile)\b["']?\s*[:=](?:\s*["']\s*|\s*)\+?\d[\d \t().-]{5,}\d/gi,
     // Contact labels distinguish unformatted numbers from issue/comment ids.
     confirm: (matched) => { const digits = matched.replace(/\D/g, "").length; return digits >= 7 && digits <= 15; },
   },

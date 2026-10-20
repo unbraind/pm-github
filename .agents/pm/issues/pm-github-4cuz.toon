@@ -1,0 +1,17 @@
+id: pm-github-4cuz
+title: Repeated dependency phrases rescan failed reference spans
+description: "Separate parser-level follow-up from PR 158 regex backtracking fixes. parseDependencyReferences in index.ts restarts a linear sticky reference scan at every dependency phrase. Synthetic body \"blocks.\" repeated 6000 times (42000 characters, no references) takes 1906.303 ms. Each individual regex attempt is linear, but repeated failed scans revisit the same suffix; this is outside the adjacent-overlapping-quantifier and end-anchored-trim patch. Preserve existing phrase and reference grammar while reusing failed-scan boundaries."
+type: Issue
+status: open
+priority: 2
+tags[2]: dependencies,performance
+created_at: "2026-10-20T10:51:54.669Z"
+updated_at: "2026-10-20T13:58:48.600Z"
+author: codex-agent
+estimated_minutes: 120
+acceptance_criteria: "Add adversarial repeated-phrase scaling coverage, preserve dependency reference values and ordering, and prevent suffix rescans from multiplying with phrase count."
+comments[1]{created_at,author,text}:
+  "2026-10-20T13:58:48.597Z",codex-agent,"Discovered during PR 158 regex review; tracked separately from pm-github-lfcf. Read-only synthetic reproduction: parseDependencyReferences(\"blocks.\".repeat(6000), \"fixture/project\") returns zero references after 1906.303 ms. Each sticky match is individually linear, but failed spans are rescanned at subsequent phrases. No parser algorithm change is included in the regex patch."
+files[1]{path,scope}:
+  index.ts,project
+body: ""

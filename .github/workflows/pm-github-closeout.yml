@@ -336,7 +336,12 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -n "${POST_CLOSEOUT_SCRIPT}" ]]; then
-            (cd "${NPM_PROJECT_PATH}" && npm run --if-present "${POST_CLOSEOUT_SCRIPT}")
+            changelog_args=()
+            # Tracker automation is not a release, even when package.json is untagged.
+            if [[ "${POST_CLOSEOUT_SCRIPT}" == "changelog:full" ]]; then
+              changelog_args=(-- --no-pending-release)
+            fi
+            (cd "${NPM_PROJECT_PATH}" && npm run --if-present "${POST_CLOSEOUT_SCRIPT}" "${changelog_args[@]}")
           fi
 
       # Check every changed path immediately after the caller script. Extension

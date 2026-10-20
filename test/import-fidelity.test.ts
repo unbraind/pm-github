@@ -182,6 +182,23 @@ for (const atomic of [false, true]) {
     assert.equal(actual.github_link_only, false);
     assert.match(actual.close_reason!, /^Closed on GitHub/);
   }));
+
+  test(`explicit native GitHub issue declaration reuses its owner without changing local delivery (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
+    const issue = recorded("pm-linear-134");
+    const owner = await identityItem(pmRoot, { description: `GitHub issue${atomic ? ":" : ""} ${issue.html_url}. Local delivery evidence.`, release: "2026.10.8" });
+    const preview = await importing(pmRoot, issue, atomic, true);
+    const plan = (preview.plan as Array<{ action: string; identity: { via: string } }>)[0]!;
+    assert.equal(plan.identity.via, "github-declaration");
+    assert.equal(plan.action, "link");
+    await importing(pmRoot, issue, atomic);
+    const actual = (await get(owner.id!, {}, { pmRoot })).item;
+    assert.equal((await listItems(pmRoot)).length, 1);
+    for (const key of ["title", "description", "status", "created_at", "closed_at", "completed_at", "release", "body"] as const) assert.deepEqual(actual[key], owner[key]);
+    assert.equal(actual.github_state, "closed");
+    assert.equal(actual.github_link_only, true);
+    await importing(pmRoot, issue, atomic);
+    assert.equal((await listItems(pmRoot)).length, 1);
+  }));
 }
 
 for (const mode of ["plain", "gate", "atomic"] as const) {
