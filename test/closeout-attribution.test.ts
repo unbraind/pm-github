@@ -3,10 +3,11 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { create, get, update, commitImportedItem, getItemPath, readSettings } from "@unbrained/pm-cli/sdk";
 import { runCloseout, type CloseoutApi } from "../closeout.ts";
+import { withEnv } from "./helpers/mock-github-server.ts";
 
 const repo = "unbraind/pm-ado";
 const url = (n: number) => `https://github.com/${repo}/pull/${n}`;
@@ -15,10 +16,11 @@ const head = "a".repeat(40);
 const recorded = [16, 19].map(n => JSON.parse(readFileSync(new URL(`./fixtures/closeout-attribution/pm-ado-${n}.json`, import.meta.url), "utf8")) as { number: number; body: string });
 
 /** Real SDK tracker plus complete HTTP-boundary evidence; neither SDK nor mutation is mocked. */
-async function scenario(linked: boolean, bodies?: string[]) {
+async function scenario(linked: boolean, bodies?: string[], facts: Record<number, { at?: string; success?: boolean }> = {}) {
   const root = mkdtempSync(join(tmpdir(), "closeout-attribution-"));
   try {
-    const init = spawnSync(join(import.meta.dirname, "../node_modules/.bin/pm"), ["--pm-path", root, "init", "fixture"], { cwd: root, encoding: "utf8" });
+    const init = spawnSync(join(import.meta.dirname, "../node_modules/.bin/pm"), ["--pm-path", root, "init", "fixture"], { cwd: root, encoding: "utf8",
+      env: { ...process.env, GIT_CEILING_DIRECTORIES: dirname(root) } });
     assert.equal(init.status, 0, init.stderr);
     const sdk = { pmRoot: root, noExtensions: true };
     const item = (await create({ title: "Enforce statement coverage", type: "Issue", author: "fixture" }, sdk)).item;
@@ -29,36 +31,58 @@ async function scenario(linked: boolean, bodies?: string[]) {
     }
     const api: CloseoutApi = { base: "https://api.github.com", next: () => undefined, get: async endpoint => {
       const n = Number(endpoint.split("/").at(-1));
+      const evidenceNumber = endpoint.includes("/commits/") ? Number.parseInt(endpoint.split("/commits/")[1]!.slice(0, 2), 16) - 64 : n;
+      const evidenceHead = (evidenceNumber + 64).toString(16).repeat(20);
       const value = endpoint.includes("/pulls/") ? { number: n, body: (bodies?.[[16, 19, 20].indexOf(n)] ?? recorded.find(p => p.number === n)!.body).replaceAll("pm-ado-5w3m", item.id),
-        merged: true, merged_at: n === 16 ? "2026-10-04T12:58:08Z" : "2026-10-08T01:19:51Z", merge_commit_sha: "b".repeat(40),
-        html_url: url(n), head: { sha: head }, base: { ref: "main", repo: { full_name: repo } } }
+        merged: true, merged_at: facts[n]?.at ?? (n === 16 ? "2026-10-04T12:58:08Z" : "2026-10-08T01:19:51Z"), merge_commit_sha: n.toString(16).repeat(20),
+        html_url: url(n), head: { sha: evidenceHead }, base: { ref: "main", repo: { full_name: repo } } }
         : endpoint.includes("/protection/") ? { contexts: ["CI"], checks: [] }
-        : endpoint.includes("/check-runs") ? { total_count: 1, check_runs: [{ name: "CI", head_sha: head, status: "completed", conclusion: "success", app: { id: 7 } }] } : [];
+        : endpoint.includes("/check-runs") ? { total_count: 2, check_runs: [{ name: "CI", head_sha: evidenceHead, status: "completed", conclusion: facts[evidenceNumber]?.success === false ? "failure" : "success", app: { id: 7 } },
+          { name: `Delivery ${evidenceNumber}`, head_sha: evidenceHead, status: "completed", conclusion: "success", app: { id: 7 } }] } : [];
       return { body: JSON.stringify(value) };
     } };
-    const report = await runCloseout(root, repo, { pr: bodies?.length === 3 ? ["16", "19", "20"] : ["16", "19"], apply: true }, api);
-    return { report, item: (await get(item.id, {}, sdk)).item };
+    const report = await withEnv({ PATH: root, GIT_CEILING_DIRECTORIES: dirname(root) }, () =>
+      runCloseout(root, repo, { pr: bodies?.length === 3 ? ["16", "19", "20"] : ["16", "19"], apply: true }, api));
+    return { report, item: (await get(item.id, {}, sdk)).item,
+      history: readFileSync(join(root, "history", `${item.id}.jsonl`), "utf8") };
   } finally { rmSync(root, { recursive: true, force: true }); }
 }
 
-test("real gap-reporting #16 and delivery #19 bare links never infer delivery from in-progress status", async () => {
-  const { report, item } = await scenario(false);
+test("earlier gap report and later structured PM item delivery select #19 with consistent durable evidence without git", async () => {
+  const { report, item, history } = await scenario(false);
+  assert.equal(report.closed, 1);
+  assert.deepEqual(report.plan.filter(row => row.code !== "unknown_item").map(row => [row.pr, row.action]), [[16, "skip"], [19, "close"]]);
+  assert.equal(item.completed_at, "2026-10-08T01:19:51.000Z");
+  assert.equal(item.resolution, `Delivered by ${url(19)} (merge 131313131313, head 535353535353)`);
+  assert.equal(item.actual_result, "Merged at 2026-10-08T01:19:51Z; required checks satisfied; successful head checks: CI, Delivery 19");
+  assert.equal(item.close_reason, JSON.stringify({ pr: 19, url: url(19), merge_commit_sha: (19).toString(16).repeat(20),
+    head_sha: (19 + 64).toString(16).repeat(20), merged_at: "2026-10-08T01:19:51Z", checks: ["CI", "Delivery 19"] }));
+  const closeEvent = history.trim().split("\n").map(line => JSON.parse(line) as { op: string; patch: { path: string; value: unknown }[] }).filter(event => event.op === "close");
+  assert.equal(closeEvent.length, 1);
+  for (const field of ["completed_at", "resolution", "actual_result", "close_reason"] as const) {
+    assert.equal(closeEvent[0]!.patch.find(patch => patch.path === `/metadata/${field}`)!.value, item[field]);
+  }
+});
+
+test("mention only remains open even with tracker PR metadata", async () => {
+  const mention = "Leaves pm-ado-5w3m open; follow-up gap tracked in https://github.com/unbraind/pm-ado/blob/main/.agents/pm/issues/pm-ado-5w3m.toon";
+  const { report, item, history } = await scenario(true, [mention, mention]);
   assert.equal(report.closed, 0);
-  assert.deepEqual(report.plan.filter(row => row.code !== "unknown_item").map(row => [row.pr, row.code]), [[16, "not_delivery"], [19, "not_delivery"]]);
+  assert.deepEqual(report.plan.map(row => row.code), ["not_delivery", "not_delivery"]);
+  assert.ok(report.plan.every(row => /mentioned, not delivered/i.test(row.reason)));
+  assert.equal(item.status, "in_progress");
+  assert.ok(!history.includes('"op":"close"'));
+});
+
+test("closing a different item that shares a prefix never delivers the mentioned item", async () => {
+  const { report, item } = await scenario(false, ["No delivery claim", "Closes pm-ado-5w3m-extra\nSee https://github.com/unbraind/pm-ado/blob/main/.agents/pm/issues/pm-ado-5w3m.toon"]);
+  assert.equal(report.closed, 0);
+  assert.equal(report.plan[0]!.code, "not_delivery");
   assert.equal(item.status, "in_progress");
 });
 
-test("the item's explicit PR link selects real delivery #19 and its merge chronology", async () => {
-  const { report, item } = await scenario(true);
-  assert.equal(report.closed, 1);
-  assert.ok(report.plan.some(row => row.pr === 16 && row.code === "not_delivery"));
-  assert.ok(report.plan.some(row => row.pr === 19 && row.action === "close"));
-  assert.equal(item.completed_at, "2026-10-08T01:19:51.000Z");
-  assert.match(item.resolution!, /pull\/19/);
-});
-
 test("closing item ids and pm-github trailers explicitly deliver without a canonical body link", async () => {
-  for (const declaration of ["Closes pm-ado-5w3m", "- Fixes pm-ado-5w3m.", "pm-github: pm-ado-5w3m", "*\tFixes\tpm-ado-5w3m!\t",
+  for (const declaration of ["Closes pm-ado-5w3m", "- Fixes pm-ado-5w3m.", "pm-github: pm-ado-5w3m", "PM item: pm-ado-5w3m", "*\tFixes\tpm-ado-5w3m!\t",
     "See https://github.com/unbraind/pm-ado/blob/main/.agents/pm/issues/unrelated.toon\nSee https://github.com/other/repo/blob/main/.agents/pm/issues/pm-ado-5w3m.toon\nCloses pm-ado-5w3m"]) {
     const { report } = await scenario(false, ["No delivery claim", declaration]);
     assert.equal(report.closed, 1);
@@ -75,22 +99,27 @@ test("multiline keywords and trailers never declare delivery", async () => {
   }
 });
 
-test("ambiguity applies to two claiming PRs while a third mention remains not_delivery", async () => {
+test("latest qualifying delivery wins while a third mention remains not_delivery", async () => {
   const mention = "See https://github.com/unbraind/pm-ado/blob/main/.agents/pm/issues/pm-ado-5w3m.toon";
   const { report, item } = await scenario(false, ["Closes pm-ado-5w3m", "pm-github: pm-ado-5w3m", mention]);
-  assert.equal(report.closed, 0);
-  assert.deepEqual(report.plan.map(row => [row.pr, row.code]), [[16, "ambiguous_delivery"], [19, "ambiguous_delivery"], [20, "not_delivery"]]);
-  assert.equal(item.status, "in_progress");
+  assert.equal(report.closed, 1);
+  assert.deepEqual(report.plan.map(row => [row.pr, row.code]), [[16, "duplicate_selection"], [19, "head_checks_passed"], [20, "not_delivery"]]);
+  assert.equal(item.status, "closed");
 });
 
-test("two explicit merged delivery claims remain ambiguous before any close", async () => {
-  const { report, item } = await scenario(false, ["Closes pm-ado-5w3m", "pm-github: pm-ado-5w3m"]);
-  assert.equal(report.closed, 0);
-  assert.ok(report.plan.every(row => row.action === "skip" && row.code === "ambiguous_delivery"));
-  assert.equal(item.status, "in_progress");
+test("merge time selects delivery independently of PR number and passing checks remain required", async () => {
+  for (const facts of [
+    { 16: { at: "2026-10-09T00:00:00Z" } },
+    { 19: { success: false } },
+  ]) {
+    const { report, item } = await scenario(false, ["Closes pm-ado-5w3m", "pm-github: pm-ado-5w3m"], facts);
+    assert.equal(report.closed, 1);
+    assert.equal(report.plan.find(row => row.action === "close")!.pr, 16);
+    assert.match(item.resolution!, /pull\/16/);
+  }
 });
 
-test("many items and PRs preserve declaration boundaries, casing, punctuation and ambiguity", async () => {
+test("many items and PRs preserve declaration boundaries, casing, punctuation and latest delivery", async () => {
   const root = mkdtempSync(join(tmpdir(), "closeout-many-declarations-"));
   try {
     const init = spawnSync(join(import.meta.dirname, "../node_modules/.bin/pm"), ["--pm-path", root, "init", "bulk"], { cwd: root, encoding: "utf8" });
@@ -126,8 +155,9 @@ test("many items and PRs preserve declaration boundaries, casing, punctuation an
     assert.equal(report.failed, 0);
     assert.equal(report.checks.length, 12);
     assert.equal(report.plan.length, 38);
+    expected.push(`2:${ids[24]}`);
     assert.deepEqual(report.plan.filter(row => row.action === "close").map(row => `${row.pr}:${row.item}`).sort(), expected.sort());
-    assert.deepEqual(report.plan.filter(row => row.code === "ambiguous_delivery").map(row => [row.pr, row.item]), [[1, ids[24]], [2, ids[24]]]);
+    assert.deepEqual(report.plan.filter(row => row.code === "duplicate_selection").map(row => [row.pr, row.item]), [[1, ids[24]]]);
     assert.deepEqual(report.plan.filter(row => row.code === "not_delivery").map(row => [row.pr, row.item]), verbs.map((_, i) => [i + 1, ids[25]]));
     for (const id of ids) assert.equal((await get(id, {}, sdk)).item.status, "open");
   } finally { rmSync(root, { recursive: true, force: true }); }

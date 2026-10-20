@@ -241,12 +241,11 @@ test("public apply reports partial results as CommandError exit 1 after remainin
   } finally { await unlock(); }
 }));
 
-test("multiple explicit delivery claims are refused before writes", async () => tracker(async (root, ids) => {
+test("equal merge times select the higher PR number before writes", async () => tracker(async (root, ids) => {
   await withMockGithub(fixture(link(ids[0]!)), async () => {
     const report = await closeout(root, { pr: ["43", "42"], apply: true });
-    assert.equal(report.closed, 0);
-    assert.deepEqual(report.plan.map(row => row.pr), [42, 43]);
-    assert.ok(report.plan.every(row => row.code === "ambiguous_delivery" && row.action === "skip"));
+    assert.equal(report.closed, 1);
+    assert.deepEqual(report.plan.map(row => [row.pr, row.action, row.code]), [[42, "skip", "duplicate_selection"], [43, "close", "head_checks_passed"]]);
   });
 }));
 
