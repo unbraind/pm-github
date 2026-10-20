@@ -170,8 +170,8 @@ export function importCloseReason(issue: GhIssue, events: readonly unknown[]): s
   return connected ? `${base}; linked PR ${connected.url}` : base;
 }
 
-/** Validate source lifetimes and assign the earliest release tag at or after the closure. */
-export function buildImportFidelity(issue: GhIssue, releases: readonly ImportRelease[], timeline: readonly unknown[]): ImportFidelity {
+/** Validate source date ordering and return the parsed closure, when supplied. */
+export function validateImportLifetime(issue: Pick<GhIssue, "number" | "created_at" | "updated_at" | "closed_at">): number | undefined {
   const created = Date.parse(issue.created_at);
   const updated = Date.parse(issue.updated_at);
   const closed = issue.closed_at ? Date.parse(issue.closed_at) : undefined;
@@ -179,6 +179,12 @@ export function buildImportFidelity(issue: GhIssue, releases: readonly ImportRel
     (closed !== undefined && (!Number.isFinite(closed) || closed < created || closed > updated))) {
     throw new CommandError(`GitHub issue #${issue.number} has an invalid source lifetime; nothing may be imported.`);
   }
+  return closed;
+}
+
+/** Validate source lifetimes and assign the earliest release tag at or after the closure. */
+export function buildImportFidelity(issue: GhIssue, releases: readonly ImportRelease[], timeline: readonly unknown[]): ImportFidelity {
+  const closed = validateImportLifetime(issue);
   return {
     github_url: issue.html_url, github_number: issue.number, github_state: issue.state,
     github_state_reason: issue.state_reason ?? "unspecified",

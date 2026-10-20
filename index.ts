@@ -25,7 +25,7 @@ import type {
 } from "@unbrained/pm-cli/sdk/authoring";
 import { CloseoutUsageError, compactCloseoutReport, runCloseout } from "./closeout.ts";
 import {
-  buildImportFidelity, fetchImportTimeline, matchImportedIssue, persistImportFidelity, readImportReleases, selectImportContextIndex,
+  buildImportFidelity, fetchImportTimeline, importFidelityFields, matchImportedIssue, persistImportFidelity, readImportReleases, selectImportContextIndex, validateImportLifetime,
   type ImportFidelity,
 } from "./import-fidelity.ts";
 import { refreshChanges, runRefresh } from "./refresh.ts";
@@ -1786,6 +1786,7 @@ export async function importGithubAtomic(
   // so a retry after a partial apply would fingerprint a different plan and
   // orphan the journal behind a fresh transaction id. Persist the exact plan
   // before the SDK touches the tracker so an interrupted refresh can replay it.
+  if (opts.updateOnly) for (const entry of entries) validateGithubImportFidelity(entry, repo, `GitHub transaction ${transactionId}`);
   const plan = opts.updateOnly ? { transactionId, repo: repo.toLowerCase(), entries, mutations } : undefined;
   if (plan) await persistGithubImportPlan(pmRoot, plan);
   const result = await commitGithubImportTransaction({ pmRoot, repo, entries, mutations, transactionId, itemIds, opts, commit });
@@ -1793,8 +1794,46 @@ export async function importGithubAtomic(
   return result;
 }
 
+/** Validate every source-finalization input against its effective native lifecycle before writes. */
+export function validateGithubImportFidelity(entry: PreparedGithubImport, repo: string, context: string, items?: readonly PmItem[]): void {
+  // Finalization reads source metadata outside the SDK mutation preview.
+  // Validate its entire projection before ANY selected journal can commit.
+  const fidelity = entry.fidelity;
+  if (fidelity !== undefined) {
+    const fields = ["github_url", "github_number", "github_state", "github_state_reason", "github_created_at",
+      "github_updated_at", "github_closed_at", "github_close_reason", "github_release"];
+    if (!fidelity || typeof fidelity !== "object" || Array.isArray(fidelity) ||
+      Object.keys(fidelity).some(field => !fields.includes(field)) ||
+      typeof fidelity.github_url !== "string" ||
+      fidelity.github_url.toLowerCase() !== `https://github.com/${repo.toLowerCase()}/issues/${entry.issueNumber}` ||
+      fidelity.github_number !== entry.issueNumber ||
+      !["open", "closed"].includes(fidelity.github_state) ||
+      typeof fidelity.github_created_at !== "string" || typeof fidelity.github_updated_at !== "string" ||
+      [fidelity.github_closed_at, fidelity.github_close_reason, fidelity.github_release, fidelity.github_state_reason]
+        .some(value => value !== null && typeof value !== "string")) {
+      throw new CommandError(`${context}: its persisted fidelity is invalid.`);
+    }
+    try {
+      validateImportLifetime({ number: entry.issueNumber, created_at: fidelity.github_created_at,
+        updated_at: fidelity.github_updated_at, closed_at: fidelity.github_closed_at });
+    } catch {
+      throw new CommandError(`${context}: its persisted fidelity has an invalid source lifetime.`);
+    }
+    // Missing source closure dates preserve native completion metadata.
+    // Check the effective lifecycle from the current read-only snapshot too.
+    const current = items?.find(item => item.id === entry.match!.id) ?? entry.match;
+    const projected = { ...current, ...importFidelityFields(fidelity, Boolean(entry.linkOnly)) };
+    if (projected.closed_at && Date.parse(String(projected.closed_at)) < Date.parse(String(projected.created_at))) {
+      throw new CommandError(`${context}: its persisted fidelity conflicts with the native closure date.`);
+    }
+  }
+  if (entry.linkOnly !== undefined && typeof entry.linkOnly !== "boolean") {
+    throw new CommandError(`${context}: its persisted ownership is invalid.`);
+  }
+}
+
 /** Validate a persisted refresh plan without writing or opening an SDK transaction. */
-export function validateGithubImportPlan(record: GithubImportPlanRecord): Map<number, string> {
+export function validateGithubImportPlan(record: GithubImportPlanRecord, items?: readonly PmItem[]): Map<number, string> {
   if (typeof record?.transactionId !== "string" || !/^[a-zA-Z0-9._-]+$/.test(record.transactionId) ||
     typeof record.repo !== "string" || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(record.repo) ||
     !Array.isArray(record.entries) || !record.entries.length || !Array.isArray(record.mutations) || !record.mutations.length) {
@@ -1811,6 +1850,7 @@ export function validateGithubImportPlan(record: GithubImportPlanRecord): Map<nu
         EXIT_CODE.GENERIC_FAILURE,
       );
     }
+    validateGithubImportFidelity(entry, record.repo, `Refresh cannot replay unfinished GitHub transaction ${record.transactionId}`, items);
     itemIds.set(entry.issueNumber, entry.match.id);
   }
   if (record.mutations.some(mutation => mutation?.op !== "update" || ![...itemIds.values()].includes(mutation.id))) {

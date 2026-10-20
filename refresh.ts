@@ -6,7 +6,7 @@ import { listAllComplete, certifyCompleteListResult, previewItemMutations } from
 import {
   CommandError, EXIT_CODE, decodeCompletePmItems, githubGraphQLResponse, importGithubAtomic,
   listUnfinishedGithubImports, parseImportOptions, parseProvenanceTag, prepareGithubImport, readGithubImportPlan,
-  resolveGitHubToken, resumeGithubImport, validateGithubImportPlan,
+  resolveGitHubToken, resumeGithubImport, validateGithubImportFidelity, validateGithubImportPlan,
   type GhIssue, type PmItem, type PreparedGithubImport,
 } from "./index.ts";
 import { fetchImportTimeline, importFidelityFields, normalizeImportValue, readImportReleases } from "./import-fidelity.ts";
@@ -165,7 +165,7 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
           EXIT_CODE.GENERIC_FAILURE,
         );
       }
-      validateGithubImportPlan(record);
+      validateGithubImportPlan(record, items);
       if (record.repo.toLowerCase() !== repo) {
         throw new CommandError(`Refresh cannot replay GitHub transaction ${journal.transactionId} for ${record.repo} while refreshing ${repo}. Re-run refresh for ${record.repo} first; nothing was refreshed.`);
       }
@@ -208,6 +208,8 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
       plan.push(row);
     }
   }
+  // Validate all finalization projections even when applying one item at a time.
+  for (const entry of prepared) validateGithubImportFidelity(entry, repo, `Refresh issue #${entry.issueNumber}`, items);
   if (!opts.dryRun && prepared.length) {
     if (opts.atomic) await importGithubAtomic(pmRoot, repo, prepared, { updateOnly: true });
     else for (const entry of prepared) await importGithubAtomic(pmRoot, repo, [entry], { updateOnly: true });

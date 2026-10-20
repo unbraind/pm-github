@@ -522,6 +522,85 @@ test("every recovery plan is validated before any journal writes", async () => t
   assert.throws(() => validateGithubImportPlan({ ...record, entries: "invalid" } as unknown as GithubImportPlanRecord), /persisted plan is invalid/);
 }));
 
+test("persisted fidelity in every recovery plan is validated before any journal writes", async () => tracker(async (_directory, pmRoot) => {
+  interruptedPlan(pmRoot);
+  interruptedPlan(pmRoot, 2);
+  const pending = await listUnfinishedGithubImports(pmRoot);
+  const last = pending[1]!;
+  const file = join(pmRoot, "transactions/pm-github", `${last.transactionId}.json`);
+  const record = JSON.parse(readFileSync(file, "utf8")) as GithubImportPlanRecord;
+  const entry = record.entries[0]!;
+  const fidelity = entry.fidelity!;
+  const corruptions: unknown[] = [
+    { ...fidelity, github_closed_at: "invalid-date" },
+    null, [], "invalid",
+    { ...fidelity, tags: 7 },
+    { ...fidelity, github_url: 7 },
+    { ...fidelity, github_url: "https://github.com/fixture/other/issues/2" },
+    { ...fidelity, github_number: 999 }, { ...fidelity, github_state: "unknown" },
+    ...["github_created_at", "github_updated_at", "github_closed_at", "github_close_reason", "github_release", "github_state_reason"]
+      .map(field => ({ ...fidelity, [field]: 7 })),
+    { ...fidelity, github_created_at: "invalid-date" },
+    { ...fidelity, github_updated_at: "invalid-date" },
+    { ...fidelity, github_updated_at: "2025-01-01T00:00:00Z" },
+    { ...fidelity, github_closed_at: "2025-01-01T00:00:00Z" },
+    { ...fidelity, github_closed_at: "2027-01-01T00:00:00Z" },
+    { ...fidelity, github_closed_at: "", github_created_at: "2026-02-02T12:00:00Z" },
+  ];
+  for (const invalid of [...corruptions.map(fidelity => ({ ...entry, fidelity })), { ...entry, linkOnly: "false" }]) {
+    writeFileSync(file, JSON.stringify({ ...record, entries: [invalid] }));
+    const before = snapshot(pmRoot);
+    await assert.rejects(() => runRefresh("fixture/repo", pmRoot, {}), new RegExp(last.transactionId));
+    assert.deepEqual(snapshot(pmRoot), before, "invalid finalization input must leave BOTH journals and every tracker byte untouched");
+  }
+}));
+
+for (const atomic of [false, true]) {
+  test(`fresh refresh validates every finalization projection before the first write (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
+    await create({ title: "Stale first", tags: "gh:fixture/repo#1" }, { pmRoot });
+    const local = (await create({ title: "Closed second", tags: "gh:fixture/repo#2", type: "Task" }, { pmRoot })).item;
+    await commitImportedItem({ pmRoot, id: local.id, itemPath: getItemPath(pmRoot, "Task", local.id), settings: await readSettings(pmRoot),
+      document: { metadata: { ...local, status: "closed", created_at: "2025-01-01T00:00:00Z",
+        closed_at: "2025-02-01T00:00:00Z", completed_at: "2025-02-01T00:00:00Z" }, body: "" },
+      author: "fixture", message: "Seed historical closure", conflictWarningPrefix: "fixture" });
+    const second = { ...node(2, "CLOSED", "COMPLETED"), closedAt: null } as unknown as ReturnType<typeof node>;
+    await withMockGithub(transport({ i1: node(), i2: second }), async () => {
+      const before = snapshot(pmRoot);
+      await assert.rejects(() => runRefresh("fixture/repo", pmRoot, { atomic }), /native closure date/);
+      assert.deepEqual(snapshot(pmRoot), before, "the first valid refresh must not write before the later native date conflict is found");
+    });
+  }));
+}
+
+test("persisted fidelity accepts empty and nullable source values and legacy entries", async () => tracker(async (_directory, pmRoot) => {
+  const record = interruptedPlan(pmRoot);
+  const entry = record.entries[0]!;
+  const expected = new Map([[entry.issueNumber, entry.match!.id!]]);
+  for (const value of ["", null]) {
+    const fidelity = { ...entry.fidelity!, github_closed_at: value, github_state_reason: value,
+      github_close_reason: value, github_release: value };
+    for (const state of ["open", "closed"]) {
+      const plan = { ...record, entries: [{ ...entry, fidelity: { ...fidelity, github_state: state } }] } as unknown as GithubImportPlanRecord;
+      assert.deepEqual(validateGithubImportPlan(plan), expected);
+    }
+  }
+  assert.deepEqual(validateGithubImportPlan({ ...record, entries: [{ ...entry, fidelity: undefined, linkOnly: undefined }] }), expected);
+  assert.deepEqual(validateGithubImportPlan({ ...record, repo: "Fixture/Repo", entries: [{ ...entry,
+    fidelity: { ...entry.fidelity!, github_url: `https://github.com/Fixture/Repo/issues/${entry.issueNumber}` } }] }), expected);
+  const open = { ...entry, fidelity: { ...entry.fidelity!, github_state: "open", github_closed_at: "" } };
+  assert.deepEqual(validateGithubImportPlan({ ...record, entries: [open] }, []), expected);
+  assert.deepEqual(validateGithubImportPlan({ ...record, entries: [{ ...entry, linkOnly: true }] }), expected);
+  const nullable = { ...record, entries: [{ ...entry, fidelity: { ...entry.fidelity!,
+    github_state_reason: null, github_close_reason: null, github_release: null } }] } as unknown as GithubImportPlanRecord;
+  // Replay real SDK state too: nullable non-date source values need no coercion.
+  await resumeGithubImport(pmRoot, nullable);
+  const item = (await get(entry.match!.id!, {}, { pmRoot })).item;
+  assert.equal(item.github_state_reason, null);
+  assert.equal(item.github_close_reason, null);
+  assert.equal(item.github_release, null);
+  assert.equal((await listUnfinishedGithubImports(pmRoot)).length, 0);
+}));
+
 test("recovery refuses a different repository even when the selected item overlaps", async () => tracker(async (_directory, pmRoot) => {
   const record = interruptedPlan(pmRoot);
   const id = record.entries[0]!.match!.id!;

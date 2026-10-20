@@ -6,9 +6,9 @@ status: in_progress
 priority: 2
 tags[3]: changelog-unreleased,github,refresh
 created_at: "2026-10-19T16:13:56.599Z"
-updated_at: "2026-10-20T03:45:34.560Z"
+updated_at: "2026-10-20T05:15:16.933Z"
 author: codex-agent
-comments[39]{created_at,author,text}:
+comments[47]{created_at,author,text}:
   "2026-10-19T16:14:11.328Z",codex-agent,"Plan: reuse prepareGithubImport, source lifecycle projection and importGithubAtomic. Refresh selects explicit tag or github_url identities before transport, batches at 100, and supplies a guarded update-only transaction mode with native audit comments. Real tracker tests fake only HTTP; live acceptance uses scratch copies only."
   "2026-10-19T16:20:35.265Z",codex-agent,"Implementation uses shared import preparation, shared source-metadata projection, and guarded SDK update transactions. Dry-run acceptance exposed that complete-list SDK reads populate runtime caches; preview reads now use disposable copies so the selected tracker is byte-identical. The pinned SDK exposes no cache-write suppression option; this SDK UX limitation will be reported in the final summary."
   "2026-10-19T16:28:14.213Z",codex-agent,"Live read-only acceptance used independent tracker copies and the built CLI with --dry-run --json. Repository unbraind/pm-cli: selected 42, updated 42, unchanged 0, missing 0, created 0; 5 entries include status changes. Repository unbraind/pm-csv: selected 1, updated 1, unchanged 0, missing 0, created 0; 1 includes a status change. These current copies differ from the incident estimate; source-metadata backfill accounts for many planned changes. No refresh writes were applied to either original tracker."
@@ -48,6 +48,14 @@ comments[39]{created_at,author,text}:
   "2026-10-20T02:57:07.114Z",codex-agent,"PM-linked cleanup command PASS: node --test --test-name-pattern=\"failure cleanup preserves\" test/refresh.test.ts ran through pm test --run --progress --only-index 3 --timeout 1200 and passed 4/4. Independent final terminal cleanup selection passed 2/2 while retaining an unrelated real pending transaction. Fresh non-local clone strict health with isolated HOME and Git identity passed (no failing findings); ordinary host health discovers a global extension version skew. Validation passed with existing advisory metadata warnings. No dependency pin or telemetry configuration changed."
   "2026-10-20T03:07:11.790Z",codex-agent,"Native Bun acceptance PASS: bun test --timeout 600000 test/refresh.test.ts passed 31/31 with zero failures (Bun 1.3.5). Final compensation revert proof repeated against the extended tests: reverting only commitGithubImportTransaction produced 2 intended assertion failures; restoring it passed 2/2. PM history prefix is byte-identical to the prior head; all new records are append-only."
   "2026-10-20T03:45:32.791Z",codex-agent,"Review round 2 full gates PASS: isolated-identity npm run release:check and bun run release:check each exited 0 with 954/954 tests and zero failures/skips/cancellations/TODOs. Both exact all-source receipts: 16 modules; 10987/10987 lines and statements, 297/297 functions, 3478/3478 branches, zero skipped. Pins, source inventory, thresholds and duplication budgets unchanged. Audit, privacy, duplication, packing, changelog and attestation all passed. Both pack shasums: 2ca3eadcc13976df612f3aa7b4f9b33933d162ab. Native Bun refresh suite 31/31; PM-linked refresh 27/27 plus cleanup 4/4. All six review findings fixed; seven revert controls produced eight intended assertion failures and restored controls passed 7/7. Full thread mapping and evidence are in docs/refresh-idempotency.md. Releasing claim and leaving in_progress for orchestrator verification; no thread reply/resolution, merge or release."
+  "2026-10-20T04:37:48.089Z",codex-agent,"Review round 3: fetched all review threads and all comments (no pagination remaining). One unresolved thread PRRT_kwDOTbN4pM6uMtSj is valid: persisted fidelity bypasses preflight. Latest substantive CodeRabbit review has no Outside diff range findings. Plan: validate every finalization input before replay, add real two-journal snapshot regressions and behavioral revert proof, preserve valid empty or nullable source values, then run unchanged npm and Bun release gates."
+  "2026-10-20T04:40:10.853Z",codex-agent,"Implemented fidelity/ownership preflight, including source identity, primitive types, date ordering and rejection of unexpected metadata keys. Shared source-lifetime validation with fresh imports. Positive tests accept empty/null source values and optional legacy fidelity; real SDK replay with nullable source metadata succeeds. PM-linked persisted-fidelity selection passed 2/2. First behavioral control (only validateGithubImportPlan reverted and rebuilt) failed 1/1: earlier recovery committed and invalid closure metadata reached finalization. Strengthened the regression to assert full snapshot equality before checking any diagnostic wording. Initial duplication check caught repeated date validation; extracted the shared validator without changing thresholds. PM test result persistence is disabled by existing policy; recording receipts here."
+  "2026-10-20T04:41:05.871Z",codex-agent,"Final snapshot revert proof: replacing only validateGithubImportPlan with the pre-fix function in a disposable copy, rebuilding with npm run build, then node --test --test-name-pattern=\"persisted fidelity in every\" test/refresh.test.ts exits 1 (0/1 pass). It fails the full tracker snapshot assertion because replay changes tracker state before rejecting the second plan. Self-review also retained case-insensitive GitHub repository URL matching with positive coverage. Restarting the npm gate after this compatibility improvement so both final receipts use identical source."
+  "2026-10-20T04:42:15.390Z",codex-agent,"Self-review found one further preflight case in the same defect class: a closed issue with an empty source closure retains the native closure date. Recovery now projects fidelity onto the current isolated item snapshot and rejects creation after that retained closure before any replay. Added this case to the two-journal byte-equality regression and positive cases for link-only owners, open lifecycle clearing and case-insensitive repositories. This second source change also required restarting release validation; interrupted attempts are not gate receipts."
+  "2026-10-20T04:45:14.250Z",codex-agent,"Completed preflight self-review across fresh and recovered refresh writes. Extracted shared fidelity/finalization validation and applied it to all prepared entries before either the atomic batch or sequential per-item writes, plus direct update-only atomic calls before plan persistence. Added atomic and sequential fresh-refresh regressions: a valid first item and a later retained-native-date conflict must leave every tracker byte unchanged. The ordinary import path is unchanged. Earlier gate attempts were deliberately stopped when this additional case was identified; only completed final gates will be reported."
+  "2026-10-20T04:47:01.536Z",codex-agent,"Final three behavioral revert controls on the complete source all rebuilt successfully with npm run build. (1) Restore only the pre-fix validateGithubImportPlan body, retaining its optional snapshot parameter for call compatibility: node --test --test-name-pattern=\"persisted fidelity in every\" test/refresh.test.ts exits 1, 0/1 pass, tracker-byte equality fails. (2) Remove only projected native-lifecycle validation: same command exits 1, 0/1 pass, same byte-equality assertion fails. (3) Remove only the all-entry runRefresh preflight: node --test --test-name-pattern=\"fresh refresh validates.*false\" test/refresh.test.ts exits 1, 0/1 pass, first-item no-write assertion fails. Restored functions rebuilt and node --test --test-name-pattern=\"persisted fidelity|fresh refresh validates\" test/refresh.test.ts passed 4/4. PM-linked persisted-fidelity and fresh-preflight selections each passed 2/2; source build and test typecheck pass."
+  "2026-10-20T04:54:41.963Z",codex-agent,"Native Bun acceptance on the complete source: env HOME=<isolated> GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 bun test --timeout 600000 test/refresh.test.ts passed 35/35, zero failures. Independent non-local clone copied all 436 tracked inputs byte-for-byte (combined SHA-256 8bc9841dccdc6b343f1e0ee79e25b7c3a01f026c0f8e9b5a9b05aa5304aa19de), installed pinned dependencies with npm ci, and passed isolated-home strict PM health and tracker validation. Ordinary worktree health retains the pre-existing global extension host-version skew; clean clone health has no gate-failing findings. Both unchanged full release commands are running; no full-gate success is claimed yet."
+  "2026-10-20T05:15:15.302Z",codex-agent,"Review round 3 complete: PRRT_kwDOTbN4pM6uMtSj fixed with shared fidelity preflight, current native lifecycle projection, and fresh all-entry preflight before the first write. Three isolated behavioral revert controls each failed 1/1 on intended byte-equality assertions; restored regressions passed 4/4. Both final env HOME=<isolated> GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 npm run release:check and bun run release:check exited 0: 958/958 tests each, zero failures/skips/cancellations/TODOs; exact 100/100/100/100 over 16 authored modules, 11035/11035 lines/statements, 299/299 functions, 3510/3510 branches, zero skipped coverage. Audit/privacy/duplication/pack/changelog/attestation passed at unchanged pins, inventory and budgets. Both dry-run packages have shasum 065699c7d14f076692c3970954f9f9fdd98579f3. Native Bun refresh passed 35/35; both PM-linked selections passed 2/2. Independent clone strict health/validation passed; pre-existing ordinary-host extension skew and disabled PM result persistence remain environment/policy limitations. Code/test/config inputs matched across all 146 files, SHA-256 1e9f29db520083769e5a010beeb9ab51469d9dd4647ebea0ea0ea09bc623fddc. Latest review has no Outside diff range findings; refreshed thread enumeration still has only the same unresolved thread. No thread replies/resolutions or merge. Releasing claim and leaving in_progress for orchestrator verification."
 files[6]:
   - path: import-fidelity.ts
     scope: project
@@ -62,7 +70,7 @@ files[6]:
     scope: project
   - path: test/refresh.test.ts
     scope: project
-tests[3]:
+tests[5]:
   - command: node --test test/refresh.test.ts
     scope: project
     provenance:
@@ -83,6 +91,22 @@ tests[3]:
     provenance:
       author: codex-agent
       created_at: "2026-10-20T02:54:20.330Z"
+      source_kind: local_mutation
+      source_ref: feat/refresh-linked-items
+  - command: "node --test --test-name-pattern=\"persisted fidelity\" test/refresh.test.ts"
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-20T04:39:30.182Z"
+      source_kind: local_mutation
+      source_ref: feat/refresh-linked-items
+  - command: "node --test --test-name-pattern=\"fresh refresh validates\" test/refresh.test.ts"
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-20T04:45:37.143Z"
       source_kind: local_mutation
       source_ref: feat/refresh-linked-items
 docs[2]{path,scope}:
