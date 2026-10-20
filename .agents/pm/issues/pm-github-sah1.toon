@@ -2,16 +2,23 @@ id: pm-github-sah1
 title: Stabilize the watchdog startup probe under concurrent coverage
 description: The existing acceptance-watchdog test can reach its 500 ms synthetic-child deadline before the child prints ready under concurrent coverage. A full package run failed the ready assertion while the isolated watchdog suite passed 2/2. This is separate from the delivered bounded-consumer watchdog work in pm-github-hptv and from closeout behavior.
 type: Issue
-status: open
+status: in_progress
 priority: 2
 tags: []
 created_at: "2026-10-15T00:13:15.730Z"
-updated_at: "2026-10-17T10:58:49.678Z"
+updated_at: "2026-10-20T09:19:58.899Z"
 author: codex-agent
 acceptance_criteria: "Reproduce the readiness race with real child processes under coverage and make the probe deterministic without weakening the 500 ms deadline, 100 ms cleanup, 3 second assertion, or 45 second consumer acceptance budget.; Keep all source inventories, four coverage thresholds and SDK pins unchanged; pass isolated and full npm/Bun checks; demonstrate that the probe still detects a missing forced kill."
-comments[1]{created_at,author,text}:
+comments[4]{created_at,author,text}:
   "2026-10-17T10:58:49.678Z",codex-agent,"Related startup-sensitive probe found during PR 142 import-fidelity validation: test/blockers.test.ts marker extraction includes cold package/SDK imports in its 10-second child budget. It passed isolated in 9.8 seconds but timed out under coverage in 10.3 seconds, including with Node 26. The PR separates finite module startup from the unchanged 10-second parser deadline and adds a real stalled-operation forced-kill control. The original 500 ms acceptance-watchdog startup case remains tracked here; its existing budgets and helper are unchanged."
+  "2026-10-20T07:34:45.230Z",codex-agent,"Full clean-HOME release validation for pm-github-lfcf hit the known ready-marker race. Plan: separate a finite startup phase for the synthetic probe from its unchanged 500 ms timed operation, 100 ms cleanup and 3-second assertion. Normal installed-consumer calls retain their original 45-second wall-clock deadline. Add deterministic delayed-readiness coverage and prove both the old helper and a missing forced kill are rejected; keep pins, inventories and quality thresholds unchanged."
+  "2026-10-20T07:37:02.775Z",codex-agent,"Fixed watchdog suite passes 2/2. The synthetic child deliberately delays readiness 750 ms, then keeps the original 500 ms operation deadline, 100 ms SIGKILL cleanup and less-than-3-second operation assertion. Optional startup is capped at 45 seconds; normal consumers keep their original total wall-clock budget. Function-only revert fails the ready assertion (0/1 selected test passes). Removing only forced SIGKILL stalls the selected test until an independent 12-second outer guard rejects it and kills its two owned descendant processes. No CPU spinner is left running; source thresholds/pins are unchanged."
+  "2026-10-20T09:19:55.544Z",codex-agent,"Final full npm and Bun release:check both pass 964/964 tests, 0 failures/cancellations/skips and all four 100-percent coverage dimensions at unchanged thresholds. The readiness probe passes under full coverage in both runs. Linked watchdog suite passed 1/1 commands and 2/2 tests; helper-only revert and independent missing-forced-kill control reject their mutations. Item remains in progress for orchestrator verification."
 files[2]{path,scope}:
   test/bounded-cli.test.ts,project
   test/helpers/bounded-cli.ts,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test test/bounded-cli.test.ts,project,codex-agent,"2026-10-20T07:36:31.179Z",local_mutation,fix/closeout-changelog-release-placement
+docs[1]{path,scope}:
+  docs/changelog-release-placement.md,project
 body: ""

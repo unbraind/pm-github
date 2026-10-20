@@ -16,7 +16,7 @@ test("the acceptance watchdog passes normal exits and force-kills a CPU spin ign
   assert.equal(normal.code, 0);
   assert.equal(normal.timedOut, false);
   assert.match(normal.stdout, /clean/);
-  const stalled = await boundedCli(process.execPath, ["-e", "process.on('SIGTERM',()=>{}); console.log('ready'); while(true){}"], root, process.env, 500, 100);
+  const stalled = await boundedCli(process.execPath, ["-e", "process.on('SIGTERM',()=>{}); setTimeout(()=>{console.log('ready'); while(true){}}, 750)"], root, process.env, 500, 100, "ready");
   assert.match(stalled.stdout, /ready/);
   assert.equal(stalled.timedOut, true);
   assert.equal(stalled.signal, "SIGKILL");
