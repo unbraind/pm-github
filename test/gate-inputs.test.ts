@@ -45,6 +45,50 @@ test("serialized escapes retain ordinary text and reject short phone lookalikes"
   assert.deepEqual(scanLineForRuleHits("escaped\\nline\\rreturn\\ttab"), []);
 });
 
+test("bare-root JavaScript regexes stay clean while paths alongside or inside regexes are refused", () => {
+  for (const method of ["test", "exec"]) {
+    const source = `const paused = /private paused = true;/g.${method}(source);`;
+    assert.deepEqual(scanLineForRuleHits(source), []);
+    assert.deepEqual(scanLineForRuleHits(JSON.stringify(source)), []);
+    assert.deepEqual(scanLineForRuleHits(source.replace("private ", "private   ")), []);
+    assert.deepEqual(scanLineForRuleHits(`/private paused = true;/.${method}(source)`), []);
+    assert.deepEqual(scanLineForRuleHits(`const re=/private paused = true;/.${method}(source)`), []);
+    const leak = "/" + "private/fixture/report";
+    assert.ok(scanLineForRuleHits(`${source} ${leak}`).some(hit => hit.matched === leak));
+    assert.ok(scanLineForRuleHits(`const path = ${leak}/.${method}(source);`).some(hit => hit.rule === "absolute-host-path"));
+  }
+  for (const text of ["read /" + "private now", "read /" + "private", "const paused = /private paused = true;",
+    'const path = "/' + 'home "; const re = /.test(source)',
+    "cd /" + "home ; /.test(source)", "`/" + "home `; /.test(source)"]) {
+    assert.ok(scanLineForRuleHits(text).some(hit => hit.rule === "absolute-host-path"));
+  }
+  // A malformed regex with long whitespace must still be refused. Keeping
+  // the first space fixed-width avoids overlapping whitespace quantifiers.
+  assert.ok(scanLineForRuleHits("const re = /private" + " ".repeat(100_000)).some(hit => hit.rule === "absolute-host-path"));
+});
+
+test("match evidence gives decoded-field offsets and safe excerpts in JSON and workflow text", t => {
+  const root = repository(t);
+  const leak = "/" + "home/fixture-private/report";
+  const token = "ghp_" + "D".repeat(36);
+  const report = runTrackerGate({ pmRoot: root, plannedItems: [{ itemId: "github-issue-219", fields: {
+    body: `See ${leak}`, title: token,
+  } }] });
+  const hit = report.findings.find(finding => finding.rule === "absolute-host-path")!;
+  assert.equal(hit.field, "body");
+  assert.equal(hit.item_id, "github-issue-219");
+  assert.equal(hit.match_offset, 4);
+  assert.equal(hit.excerpt, "/h***/…");
+  assert.equal(report.findings.find(finding => finding.rule === "github-token-classic")!.excerpt, "[redacted]");
+  const text = formatGateReport(report).join("\n");
+  assert.ok(text.includes("github-issue-219 · body · absolute-host-path · offset:4 · /h***/…"));
+  for (const surface of [JSON.stringify(report), text]) {
+    assert.ok(!surface.includes(leak));
+    assert.ok(!surface.includes("fixture-private"));
+    assert.ok(!surface.includes(token));
+  }
+});
+
 test("planned scans redact hostile item and field names in every report surface", t => {
   const root = repository(t);
   const token = "ghp_" + "A".repeat(36);

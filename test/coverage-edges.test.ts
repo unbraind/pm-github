@@ -64,7 +64,7 @@ test("optional provenance and dependency data produce complete deterministic pla
     assert.equal((mutations[0] as unknown as { options: { sprint: string } }).options.sprint, "Sprint");
   }
   assert.match(formatGateReport({ verdict: "fail", source: "git", scanned_files: 1, added_lines: 1, allowlisted: 0, allowlist_path: "",
-    findings: [{ item_id: "", field: "", rule: "email-address", hash: "a".repeat(64) }] }).join("\n"), /unknown field/);
+    findings: [{ item_id: "", field: "", rule: "email-address", hash: "a".repeat(64), match_offset: 0, excerpt: "[redacted]" }] }).join("\n"), /unknown field/);
 });
 
 test("search corpus falls back to the real complete tracker", async t => {

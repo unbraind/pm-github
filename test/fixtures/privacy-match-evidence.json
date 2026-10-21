@@ -1,0 +1,33 @@
+{
+  "issue": {
+    "number": 218,
+    "title": "Graph node dragging stops moving nodes after static worker layout change in #216",
+    "body": "Related PR: https://github.com/unbraind/pm-web/pull/216\n\n## Node dragging no longer moves graph nodes\n\nAt head `147ba5216fef33466344e8ff6f78e9419043ac60`, the graph's mouse and single-touch drag handlers change `fx/fy`, but the rendered `x/y` coordinates never follow them.\n\n- The PR initializes `paused = true`: [graph-canvas.ts:215](https://github.com/unbraind/pm-web/blob/147ba5216fef33466344e8ff6f78e9419043ac60/public/src/views/graph-canvas.ts#L210-L217)\n- [tick():912\u2013915](https://github.com/unbraind/pm-web/blob/147ba5216fef33466344e8ff6f78e9419043ac60/public/src/views/graph-canvas.ts#L912-L915) returns while paused. Neither `togglePhysics` nor `reheat` now clears that flag\n- [beginPointerDrag():1919\u20131925](https://github.com/unbraind/pm-web/blob/147ba5216fef33466344e8ff6f78e9419043ac60/public/src/views/graph-canvas.ts#L1919-L1925) cancels any settle worker, while [handleDragMove():1943\u20131948](https://github.com/unbraind/pm-web/blob/147ba5216fef33466344e8ff6f78e9419043ac60/public/src/views/graph-canvas.ts#L1943-L1948) changes only `fx/fy`\n- [endNodeDrag():1971\u20131973](https://github.com/unbraind/pm-web/blob/147ba5216fef33466344e8ff6f78e9419043ac60/public/src/views/graph-canvas.ts#L1971-L1973) then clears those target coordinates without applying them\n\nIndependent source-method reproduction used the exact base/head GraphCanvas class methods with a synthetic one-node fixture. Palette, hit-testing and coordinate transforms were stubbed; no browser, live project, server, or Core CLI was used. Starting at (10,20), dragging to (110,120), advancing one frame and releasing gives:\n\n| Source | During drag | After release |\n| --- | --- | --- |\n| Base `ef7ea8dad901c29af2612d97e5856d1f0671f53d` | (110,120) | (110,120) |\n| PR `147ba5216fef33466344e8ff6f78e9419043ac60` | (10,20) | (10,20) |\n\nThe following standalone method fixture can also run against each checkout after its normal frontend build. Run it as an ES module from the repository root; `paused` is read from that checkout's actual source initializer:\n\n```js\nimport { readFileSync } from 'node:fs';\nimport { GraphCanvas } from './public/src/views/graph-canvas.js';\n\nconst source = readFileSync('public/src/views/graph-canvas.ts', 'utf8');\nconst paused = /private paused = true;/.test(source);\nconst graph = Object.create(GraphCanvas.prototype);\nconst node = {\n  id: 'fixture', label: 'Fixture', type: 'task',\n  status: 'open', lane: 'item', degree: 0,\n  x: 10, y: 20, vx: 0, vy: 0, fx: null, fy: null\n};\nObject.assign(graph, {\n  nodes: [node], edges: [], particles: [], lastParticleSpawn: 0,\n  paused, alpha: 1, ALPHA_MIN: .001, ALPHA_DECAY: .020,\n  VEL_DECAY: .56, REPULSE: 2000, SPRING: .065,\n  REST_LEN: 140, LINK_DIST_FAC: 80, CENTER: .002,\n  settleWorker: null, settleTimer: null,\n  canvas: { style: {} }, filter: { colorMode: 'status' },\n  tagColorMap: new Map(),\n  toWorld: (x, y) => [x, y], hitTest: () => node\n});\ngraph.beginPointerDrag(10, 20, true);\ngraph.handleDragMove(110, 120, 100, 100, 3, true);\ngraph.tick(16);\nconsole.log('during', node.x, node.y, 'target', node.fx, node.fy);\ngraph.endNodeDrag();\nconsole.log('after', node.x, node.y);\n```\n\nExpected: direct manipulation should update the node and its incident edges while ambient physics remains static. A fix can apply pointer coordinates directly, or otherwise integrate the dragged node independently of the paused simulation, while retaining worker cancellation.\n\nAcceptance: cover mouse and single-touch drags in the static force layout, including dragging while a settle request is pending. Assert position changes during the gesture and remains at the release position; also preserve panning, click selection, keyboard navigation, and the off-main-thread settling fix. The source trace covers both handlers' shared helper, but actual browser event delivery and visual behavior were not rerun in this review.\n\n",
+    "state": "closed",
+    "labels": [],
+    "created_at": "2026-10-17T11:58:04Z",
+    "updated_at": "2026-10-18T11:23:16Z",
+    "html_url": "https://github.com/unbraind/pm-web/issues/218",
+    "assignee": null,
+    "milestone": null,
+    "comments": 2
+  },
+  "comments": [
+    {
+      "id": 6245314919,
+      "body": "Fixed in 3a061a9560faa0d84ffa1df16b5eeae7f804eb2c (`Fixes #218`).\n\nRegression: `round4-drag` in `scripts/brand-browser-round4.ts`, driven by the headless Playwright fixture harness. Real mouse and single-touch gestures move the rendered node during the gesture, retain the final position after release, and cancel pending worker settling. Panning, click selection and keyboard navigation remain available. Reverting only the x/y/velocity assignments reproduces the failure with actual browser input. The cancellable module worker remains in place; the 2,000-node settle check still yields input and cancels superseded work.\n\n[Revert proof](https://github.com/unbraind/pm-web/blob/pr-screenshots/brand/pm-web-triplicate/round4/revert-proofs.json) and [screenshots](https://github.com/unbraind/pm-web/tree/pr-screenshots/brand/pm-web-triplicate/round4).",
+      "created_at": "2026-10-18T03:44:34Z",
+      "user": {
+        "login": "octocat"
+      }
+    },
+    {
+      "id": 6248985722,
+      "body": "Reverified in `54e7983f505dacf327f1c75a41d5c6ca96e4e8b5`. The existing direct-drag fix passes `BRAND_REGRESSION_ONLY=round4-drag node scripts/brand-browser.ts` across 1440/768/390 in light/dark: real mouse and single-touch motion, release position, pending-settle cancellation, panning, click selection and keyboard navigation. The GraphCanvas implementation remains unchanged in this round; the consumed canvas bundle is byte-identical across the kit updates. [Six-group browser receipt](https://github.com/unbraind/pm-web/blob/pr-screenshots/brand/pm-web-triplicate/round6/issue-218-drag-report.json). The PR body retains `Fixes #218`; the issue remains open for orchestrator verification.",
+      "created_at": "2026-10-18T10:55:03Z",
+      "user": {
+        "login": "octocat"
+      }
+    }
+  ]
+}

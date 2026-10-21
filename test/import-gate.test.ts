@@ -242,6 +242,61 @@ async function runGatedImport(
   return result.result as Record<string, unknown>;
 }
 
+test("pm-web 218 public regex and deep GitHub URLs pass gated import in a real tracker", async () => {
+  // Read-only REST snapshot; public body/comment text is unchanged. Comment
+  // attribution uses a synthetic login instead of retaining provider identities.
+  const fixture = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "fixtures/privacy-match-evidence.json"), "utf8")) as {
+    issue: GhIssue; comments: GhComment[];
+  };
+  for (const atomic of [false, true]) {
+    const { root, base } = initSyncRepo();
+    try {
+      const result = await runImport("unbraind/pm-web", root, parseImportOptions({ gate: true, atomic, "with-comments": true }), {
+        resolveToken: () => undefined, fetchIssues: async () => [fixture.issue],
+        fetchIssueComments: async () => fixture.comments, fetchIssueTimeline: async () => [],
+      });
+      assert.equal("imported" in result ? result.imported : undefined, 1);
+      const items = fs.readdirSync(path.join(root, ".agents/pm/issues")).filter(file => file.endsWith(".toon"));
+      assert.equal(items.length, 1);
+      const published = fs.readFileSync(path.join(root, ".agents/pm/issues", items[0]!), "utf8");
+      assert.ok(published.includes("private paused = true;/.test(source)"));
+      assert.ok(published.includes("round4/revert-proofs.json"));
+    } finally { fs.rmSync(base, { recursive: true, force: true }); }
+  }
+});
+
+test("gated host path refusals identify the imported field and redact match evidence", async () => {
+  for (const field of ["title", "body", "comments", "labels"] as const) {
+    const { root, base, git } = initSyncRepo();
+    const leak = "/" + "home/private-fixture/work/report.txt";
+    const input = issue(219, "Public title", "Public body");
+    const malicious = { ...input, ...(field === "title" || field === "body" ? { [field]: leak } : {}),
+      labels: field === "labels" ? [{ name: leak }] : [] };
+    try {
+      for (const atomic of [false, true]) {
+        await assert.rejects(runImport("acme/widgets", root, parseImportOptions({ gate: true, atomic, "with-comments": true }), {
+          resolveToken: () => undefined, fetchIssues: async () => [malicious], fetchIssueTimeline: async () => [],
+          fetchIssueComments: async () => [{ id: 1, body: field === "comments" ? leak : "Public comment",
+            user: { login: "octocat" }, created_at: input.created_at }],
+        }), error => {
+          assert.ok(error instanceof CommandError);
+          const report = JSON.parse(error.message) as { findings: Array<{ rule: string; item_id: string; field: string; excerpt: string; match_offset: number }> };
+          const expectedField = field === "labels" ? "tags" : field === "comments" ? "body" : field;
+          const finding = report.findings.find(hit => hit.rule === "absolute-host-path" && hit.field === expectedField);
+          assert.ok(finding, error.message);
+          assert.equal(finding.item_id, "github-issue-219");
+          assert.equal(finding.excerpt, "/h***/…");
+          assert.ok(finding.match_offset >= 0);
+          assert.ok(!error.message.includes(leak));
+          assert.ok(!error.message.includes("private-fixture"));
+          return true;
+        });
+        assert.equal(git(["status", "--porcelain", "--", ".agents/pm"]).stdout.trim(), "");
+      }
+    } finally { fs.rmSync(base, { recursive: true, force: true }); }
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Plan verification — completeness and provenance idempotency, fail-closed
 // ---------------------------------------------------------------------------
@@ -1277,11 +1332,22 @@ test("gated comment imports reject malformed second HTTP pages before writing", 
 
 test("gated pre-write input errors carry the command exit code", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-preview-error-"));
+  const previousCeiling = process.env.GIT_CEILING_DIRECTORIES;
   try {
+    process.env.GIT_CEILING_DIRECTORIES = path.dirname(root);
+    const init = spawnSync(PM_BIN, ["--path", path.join(root, ".agents/pm"), "init", "fixture"], {
+      ...PM_SPAWN_OPTS, cwd: root, env: { ...PM_SPAWN_OPTS.env, GIT_CEILING_DIRECTORIES: path.dirname(root) },
+    });
+    assert.equal(init.status, 0, init.stderr);
     await assert.rejects(runImport("acme/widgets", root, parseImportOptions({ gate: true, atomic: true }), {
-      resolveToken: () => undefined, fetchIssues: async () => [issue(1, "Public", "Body")], readItems: () => [],
+      resolveToken: () => undefined, fetchIssues: async () => [issue(1, "Public", "Body")],
     }), error => error instanceof CommandError && error.exitCode === 1 && /not inside a Git work tree/.test(error.message));
-  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+    assert.deepEqual(fs.readdirSync(path.join(root, ".agents/pm/issues")), []);
+  } finally {
+    if (previousCeiling === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
+    else process.env.GIT_CEILING_DIRECTORIES = previousCeiling;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 /** Run the real directory validator and consume its environment file as Actions does. */

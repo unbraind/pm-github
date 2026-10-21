@@ -14,8 +14,8 @@
 //   * an unreadable input, a git failure, a malformed allowlist, or a scanner
 //     error fails the gate — a clean verdict can never be the result of the
 //     scanner not being able to read what it was asked to read;
-//   * findings name the rule, the item id, the item field, and a content hash —
-//     never the matched text — so gate logs cannot become the leak they exist
+//   * findings name the rule, item, field, offset, redacted excerpt and hash —
+//     never the full match — so gate logs cannot become the leak they exist
 //     to prevent;
 //   * reviewed false positives are suppressed through a content-addressed
 //     allowlist (sha256 of the matched content), not a pattern, so an entry can
@@ -43,7 +43,7 @@ import { resolvePmRoot } from "@unbrained/pm-cli/sdk";
  * Deliberately carries no matched text: the report is machine-readable and may
  * be echoed into CI logs, so it identifies WHAT fired (rule), WHERE (item id and
  * the item field that would publish it), and the content-addressed allowlist
- * key (hash) — nothing more.
+ * key (hash), offset and a strictly redacted excerpt.
  */
 export interface GateFinding {
   /** Stable rule identifier, safe to print (never contains matched content). */
@@ -54,6 +54,10 @@ export interface GateFinding {
   readonly field: string;
   /** sha256 hex digest of the matched content — the allowlist key. */
   readonly hash: string;
+  /** Character offset in the scanned field value or serialized added line. */
+  readonly match_offset: number;
+  /** Safe match shape: only a POSIX root initial, or a fixed redaction marker. */
+  readonly excerpt: string;
 }
 
 /** Verdict of one gate run: `fail` whenever any non-allowlisted finding exists. */
@@ -375,6 +379,27 @@ interface RuleHit {
 const UNICODE_ESCAPE = /\\u([0-9a-f]{4})/iy;
 
 /**
+ * Recognize a bare-root token inside an immediately invoked JavaScript regex.
+ *
+ * Require an expression boundary and a closing test/exec call without crossing
+ * quotes, escapes, newlines or another slash. Actual slash-separated paths
+ * remain findings, including paths inside regex source. Walk the lead-in once
+ * backwards instead of rescanning a whole prefix for every candidate.
+ *
+ * @param line - Decoded field or serialized tracker line.
+ * @param matched - Candidate absolute host path.
+ * @param index - Candidate offset in the decoded line.
+ * @returns Whether this candidate is recognizable regex source rather than a path.
+ */
+function isBareRootRegex(line: string, matched: string, index: number): boolean {
+  if (matched.slice(1).includes("/")) return false;
+  let before = index - 1;
+  while (before >= 0 && /[ \t]/.test(line[before]!)) before--;
+  return (before < 0 || "=(,:".includes(line[before]!)) &&
+    /^[ \t][^/"'`\\\r\n]*\/[dgimsuvy]*\.(?:test|exec)[ \t]*\(/.test(line.slice(index + matched.length));
+}
+
+/**
  * Scan one added line with every content rule.
  *
  * Rules are evaluated independently: one line can produce several hits (a
@@ -412,6 +437,7 @@ export function scanLineForRuleHits(line: string): RuleHit[] {
   for (const rule of [...CREDENTIAL_RULES, ...PERSONAL_DATA_RULES, ...HOST_PATH_RULES]) {
     rule.pattern.lastIndex = 0;
     for (let match = rule.pattern.exec(decoded); match; match = rule.pattern.exec(decoded)) {
+      if (rule.rule === "absolute-host-path" && isBareRootRegex(decoded, match[0], match.index)) continue;
       if (!rule.confirm || rule.confirm(match[0])) {
         const matched = rule.rule === "home-username" ? match[0].slice(match[0].indexOf("~")) : match[0];
         hits.push({ rule: rule.rule, matched, index: offsets[match.index]! });
@@ -913,6 +939,8 @@ function scanChangeFile(change: ChangeFile): Array<GateFinding & { matched: stri
           item_id: scanLineForRuleHits(itemId).length > 0 ? "" : itemId,
           field: scanLineForRuleHits(field).length > 0 ? "unknown" : field,
           hash: createHash("sha256").update(hit.matched).digest("hex"),
+          match_offset: hit.index,
+          excerpt: hit.rule === "absolute-host-path" ? `/${hit.matched[1]}***/…` : "[redacted]",
           matched: hit.matched,
         });
       }
@@ -993,7 +1021,8 @@ export function runTrackerGate(input: TrackerGateInput): GateReport {
         allowlisted++;
         continue;
       }
-      findings.push({ rule: raw.rule, item_id: raw.item_id, field: raw.field, hash: raw.hash });
+      findings.push({ rule: raw.rule, item_id: raw.item_id, field: raw.field, hash: raw.hash,
+        match_offset: raw.match_offset, excerpt: raw.excerpt });
     }
   }
   return {
@@ -1010,8 +1039,8 @@ export function runTrackerGate(input: TrackerGateInput): GateReport {
 /**
  * Render a gate report as human-readable lines.
  *
- * Every line names only the rule, item, field, and short hash prefix — the
- * matched content never appears, so gate output is safe to paste anywhere. The
+ * Every line names the rule, item, field, offset, redacted excerpt and short
+ * hash prefix. Full matches never appear, so gate output is safe to paste. The
  * same lines feed the command's stderr and the import failure message, so the
  * two surfaces cannot drift apart.
  *
@@ -1026,7 +1055,7 @@ export function formatGateReport(report: GateReport): string[] {
   for (const finding of report.findings) {
     lines.push(
       `  ${finding.item_id || "(no item)"} · ${finding.field || "(unknown field)"} · ` +
-        `${finding.rule} · sha256:${finding.hash.slice(0, 12)}…`,
+        `${finding.rule} · offset:${finding.match_offset} · ${finding.excerpt} · sha256:${finding.hash.slice(0, 12)}…`,
     );
   }
   return lines;
