@@ -59,7 +59,10 @@ bytes refuses with `delivery_conflict`. Delivery IDs are repository scoped.
 Receipts are retained indefinitely for deduplication; deleting them permits
 replay and should be an explicit operator retention decision.
 
-Writers share a token-owned tracker lock. Intake acknowledges after atomic
+Intake writers share a token-owned tracker lock. Reconciliation uses a separate
+processor lock so a slow provider read never blocks intake. It reads immutable,
+atomically published hints; deliveries arriving during a batch remain for the
+next reconciliation. Counts describe the selected snapshot. Intake acknowledges after atomic
 publication and file/directory flushes on a local POSIX filesystem. The lock
 uses host recovery for a dead writer; partial atomic-write temporary files are
 ignored. Retrying after a crash is safe. This filesystem inbox requires an

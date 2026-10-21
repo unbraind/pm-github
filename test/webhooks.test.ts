@@ -2,7 +2,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
-import { mkdtemp, rm, readdir, readFile, writeFile, mkdir, cp, symlink, open } from "node:fs/promises";
+import type { ServerResponse } from "node:http";
+import { mkdtemp, rm, readdir, readFile, writeFile, mkdir, cp, symlink, open, chmod } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { init, create, get } from "@unbrained/pm-cli/sdk";
@@ -157,6 +158,45 @@ test("missing provider state stays pending, limits drain batches, and API failur
     assert.equal((await reconcileGithubWebhooks(root, "fixture/repo", 1)).remaining, 1);
     assert.equal((await reconcileGithubWebhooks(root, "fixture/repo", 1)).remaining, 0);
   });
+}));
+
+test("slow provider reconciliation never blocks durable authenticated intake", async () => fixture(async root => {
+  await create({ title: "Linked", tags: "gh:fixture/repo#1" }, { cwd: root, pmRoot: root });
+  await acceptGithubWebhook(root, delivery("before-read"));
+  let signalRead: (response: ServerResponse) => void;
+  const reading = new Promise<ServerResponse>(resolve => { signalRead = resolve; });
+  let delayed = false;
+  await withMockGithub((_request, response, body) => {
+    if (!delayed && (JSON.parse(body) as { query: string }).query.includes("i1: issue")) {
+      delayed = true; signalRead(response); return;
+    }
+    jsonResponse(response, 200, { data: { repository: { i1: upstream("OPEN") } } });
+  }, async () => {
+    const reconciling = reconcileGithubWebhooks(root, "fixture/repo");
+    const response = await reading;
+    try {
+      // This must finish while the provider response is still withheld. Sharing
+      // the reconciliation lock makes it refuse after the five-second wait.
+      assert.equal((await acceptGithubWebhook(root, delivery("during-read"))).duplicate, false);
+    } finally {
+      jsonResponse(response, 200, { data: { repository: { i1: upstream("OPEN") } } });
+      await reconciling;
+    }
+    assert.equal((await reconcileGithubWebhooks(root, "fixture/repo")).selected, 1);
+  });
+}));
+
+test("provider previews do not copy durable inbox storage", async () => fixture(async root => {
+  await create({ title: "Linked", tags: "gh:fixture/repo#1" }, { cwd: root, pmRoot: root });
+  await acceptGithubWebhook(root, delivery());
+  const opaque = join(root, "github-webhooks", "opaque-receipt");
+  await writeFile(opaque, "Adapter-owned storage must never enter tracker previews");
+  await chmod(opaque, 0);
+  try {
+    await withMockGithub((_request, response) => jsonResponse(response, 200, { data: { repository: { i1: upstream("OPEN") } } }), async () => {
+      assert.equal((await reconcileGithubWebhooks(root, "fixture/repo")).reconciled, 1);
+    });
+  } finally { await chmod(opaque, 0o600); }
 }));
 
 test("corrupt receipts fail closed and native storage failures become typed refusals", async () => fixture(async root => {

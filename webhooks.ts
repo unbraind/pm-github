@@ -91,10 +91,10 @@ async function flush(file: string): Promise<void> {
   }
 }
 /** Serialize independent writers using the host's token-owned, crash-recoverable tracker lock. */
-async function locked<T>(pmRoot: string, repo: string, operation: (directory: string) => Promise<T>): Promise<T> {
+async function locked<T>(pmRoot: string, repo: string, operation: (directory: string) => Promise<T>, lockId = "github-webhooks"): Promise<T> {
   try {
     await readFile(join(pmRoot, "settings.json"), "utf8");
-    const release = await acquireLock(pmRoot, "github-webhooks", 300, "pm-github", false, false, 5000);
+    const release = await acquireLock(pmRoot, lockId, 300, "pm-github", false, false, 5000);
     try {
       const parent = join(pmRoot, "github-webhooks");
       await mkdir(parent, { recursive: true, mode: 0o700 });
@@ -179,5 +179,5 @@ export async function reconcileGithubWebhooks(pmRoot: string, repoArg: string, l
     }
     return { ok: true, repo, selected: records.length, remaining: selected.length - reconciled, reconciled, retry: records.length - reconciled, unlinked,
       proposals, recovery: `pm github refresh ${repo} --dry-run` };
-  });
+  }, "github-webhooks-reconcile");
 }

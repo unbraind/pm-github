@@ -125,7 +125,7 @@ async function readRefreshItems(pmRoot: string): Promise<PmItem[]> {
   const scratch = await mkdtemp(join(tmpdir(), "pm-github-refresh-read-"));
   try {
     const root = join(scratch, "pm");
-    await cp(pmRoot, root, { recursive: true, filter: source => !["runtime", "locks"].includes(basename(source)) });
+    await cp(pmRoot, root, { recursive: true, filter: source => !["runtime", "locks", "github-webhooks"].includes(basename(source)) });
     return decodeCompletePmItems(certifyCompleteListResult(await listAllComplete({ includeBody: true }, { pmRoot: root, cwd: root, noExtensions: true })));
   } finally {
     await rm(scratch, { recursive: true, force: true });
