@@ -2,13 +2,16 @@ id: pm-github-znig
 title: Let reusable workflows carry their own release version
 description: Resolve reusable sync and closeout package versions at runtime from the release tag on documented job.workflow_sha. Public git ls-remote handles lightweight and peeled annotated tags without new credentials. Exact legacy-input fallback is deprecated and only allowed when no release tag matches; otherwise fail closed or warn and use the tag version. Restore release.yml token behavior without stamping or GitHub App setup. Retain daily Dependabot SHA updates and caller templates without version input. No caller repins or release dispatch.
 type: Feature
-status: in_progress
+status: closed
 priority: 2
 tags: []
 created_at: "2026-10-16T12:47:09.319Z"
-updated_at: "2026-10-16T15:28:48.086Z"
+updated_at: "2026-10-21T19:01:09.325Z"
+closed_at: "2026-10-21T19:01:02.055Z"
+completed_at: "2026-10-21T19:01:02.055Z"
 author: codex-agent
 acceptance_criteria: "Real workflow bash contracts prove tag and peeled-tag matching, exact installs, no-match legacy fallback, fail-closed absent fallback, mismatch warnings and injection safety; npm and Bun release checks pass at unchanged thresholds; release stamping and app minting are removed."
+resolution: "Reverified main eebda9277e52 (unchanged since audit): [PR #139](https://github.com/unbraind/pm-github/pull/139) (6d9cc23) resolves reusable workflow release versions at runtime from job.workflow_sha and release tags. Retained evidence: test/import-gate.test.ts, test/self-versioned-workflows.test.ts."
 comments[11]{created_at,author,text}:
   "2026-10-16T12:47:21.478Z",codex-agent,"Design: release preparation stamps both reusable workflow input defaults and literal PM_GITHUB_VERSION job values from the prepared package version, before release checks and the metadata commit. The job always installs and verifies that literal exact version; REQUESTED_PM_GITHUB_VERSION carries the deprecated input only for a non-fatal mismatch warning. Both workflow paths join release commit and merged-state diff scopes. Contract tests execute real release/validation/install shell blocks with isolated files and command receipts. Caller docs use daily github-actions updates grouped as pm-toolchain, the existing auto-merge exemption for calendar-version major changes; commit prefix and labels do not authorize merging."
   "2026-10-16T12:52:56.211Z",codex-agent,"Found an operational requirement: stamping .github/workflows files requires Workflows write authorization, which GITHUB_TOKEN cannot grant. Added a SHA-pinned GitHub App token step with explicit repository permissions, checkout/release-PR authentication, and a missing-configuration refusal before version preparation. Tokens are minted and revoked automatically. Follow-up pm-github-ygye tracks the one-time app installation and configuration; no credential or release dispatch was changed. Sources: https://docs.github.com/en/rest/repos/contents#create-or-update-file-contents and https://docs.github.com/en/actions/tutorials/authenticate-with-github_token#granting-additional-permissions ."
@@ -35,4 +38,5 @@ docs[3]{path,scope}:
   docs/closeout-workflow-caller.yml,project
   docs/sync-workflow-caller.yml,project
   README.md,project
+close_reason: "Reverified main eebda9277e52 (unchanged since audit): [PR #139](https://github.com/unbraind/pm-github/pull/139) (6d9cc23) resolves reusable workflow release versions at runtime from job.workflow_sha and release tags. Retained evidence: test/import-gate.test.ts, test/self-versioned-workflows.test.ts."
 body: ""

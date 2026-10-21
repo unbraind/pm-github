@@ -2,12 +2,15 @@ id: pm-github-c093
 title: "Preserve imported GitHub lifetimes, closure evidence and release attribution while linking cross-provider items"
 description: "Repair the import root cause behind twelve Sourcery findings across six gated sync PRs. Preserve source timestamps through supported SDK metadata, map closure reasons and evidence, select tag-date release windows, report state conflicts, and link existing provider owners before creating items. Verify with recorded API fixtures and real temporary trackers at unchanged release gates."
 type: Feature
-status: in_progress
+status: closed
 priority: 2
 tags[4]: changelog-unreleased,fidelity,github,import
 created_at: "2026-10-16T22:29:39.865Z"
-updated_at: "2026-10-18T22:04:28.505Z"
+updated_at: "2026-10-21T18:58:21.454Z"
+closed_at: "2026-10-21T18:58:15.844Z"
+completed_at: "2026-10-21T18:58:15.844Z"
 author: codex-agent
+resolution: "Reverified main eebda9277e52 (unchanged since audit): [PR #142](https://github.com/unbraind/pm-github/pull/142) (ed0e3d6), with ownership correction #148 and native-owner reuse #158, preserves source lifecycle dates/reasons and provider ownership. Retained evidence: import-fidelity.ts, index.ts, test/atomic.test.ts."
 comments[40]{created_at,author,text}:
   "2026-10-16T22:30:04.918Z",codex-agent,"Read all twelve unresolved Sourcery threads and the changed tracker/changelog files in the six consumer sync PRs. Scope: fix import only; preserve append-only history and leave unrelated closeout work untouched. The pinned SDK exposes completedAt but reserves created_at, updated_at and closed_at; source timestamp metadata plus an explicit SDK-gap receipt is required unless a supported import path proves otherwise. No upstream SDK issue will be filed under the queue rules."
   "2026-10-16T22:35:10.689Z",codex-agent,"Found public SDK import primitives beyond high-level create/update: item locks, canonical document serialization, before/after history entries and appendHistoryEntry. Implementing an idempotent finalization event with real native dates and source metadata, without modifying any historical record. Existing provider owners receive provenance links only; their content, native lifecycle, release and export identity remain authoritative. Local Git calendar tag dates select the first release at or after source closure; later closures remain pending. GraphQL ClosedEvent closer provides actual closing PR attribution where REST commit_id is null."
@@ -90,4 +93,5 @@ tests[3]:
 docs[2]{path,scope}:
   docs/daily-release-refresh.md,project
   README.md,project
+close_reason: "Reverified main eebda9277e52 (unchanged since audit): [PR #142](https://github.com/unbraind/pm-github/pull/142) (ed0e3d6), with ownership correction #148 and native-owner reuse #158, preserves source lifecycle dates/reasons and provider ownership. Retained evidence: import-fidelity.ts, index.ts, test/atomic.test.ts."
 body: ""

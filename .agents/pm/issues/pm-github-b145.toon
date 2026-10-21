@@ -2,13 +2,16 @@ id: pm-github-b145
 title: Release timeout must report current workflow approval state
 description: "Fix GitHub issue #145: stale approval state and unavailable workflow-run reads misdiagnose release timeouts. Preserve protected merge and publication boundaries."
 type: Issue
-status: in_progress
+status: closed
 priority: 1
 tags[2]: changelog-unreleased,"gh:unbraind/pm-github#145"
 created_at: "2026-10-18T04:05:21.907Z"
-updated_at: "2026-10-18T10:42:39.792Z"
+updated_at: "2026-10-21T18:37:23.595Z"
+closed_at: "2026-10-21T18:37:17.927Z"
+completed_at: "2026-10-21T18:37:17.927Z"
 author: codex-agent
-comments[9]{created_at,author,text}:
+resolution: "Reverified main eebda9277e52 (unchanged since audit): [PR #148](https://github.com/unbraind/pm-github/pull/148) (dc86e83) refreshes approval/run state in timeout diagnostics and distinguishes unavailable run reads. Retained evidence: closeout.ts, import-fidelity.ts, test/closeout.test.ts."
+comments[10]{created_at,author,text}:
   "2026-10-18T04:05:29.333Z",codex-agent,"Round 1: issue read in full; searched existing tracker and no issue-specific import exists. Implement in fix/import-and-release-issues from origin/main; add behavioral revert proof and run unchanged npm and Bun release gates with isolated CI identity."
   "2026-10-18T04:08:58.091Z",codex-agent,"Implemented current-poll approval state with a separate unavailable state; successful empty reads clear old approval observations. Actual release-loop shell regressions cover pending-to-running timeout, still-pending timeout with run URL, API read failure, and subsequent verified merge. Reverting only release.yml with tests retained fails 2/4; restored shell passes 4/4. No live merge or publication was performed."
   "2026-10-18T04:21:53.302Z",codex-agent,Run the unchanged npm and Bun release gates on isolated GitHub runners using a temporary read-only validation workflow while local gates continue. Remove the workflow after collecting exact source-head receipts.
@@ -18,6 +21,7 @@ comments[9]{created_at,author,text}:
   "2026-10-18T06:59:08.205Z",codex-agent,"PR #148 integration validation: linked approval-state regressions pass 4/4. Exact npm and Bun release commands pass 836/836 each at 762285d94e90e645927b90e8032292c191772b49, zero failures/skips/cancellations/todos, all 14 authored modules at exact 100/100/100/100. Fresh-clone strict health passes. Gate receipts: https://github.com/unbraind/pm-github/actions/runs/39105101037 (npm job 117609117351, Bun job 117609117576). Remove the temporary validation workflow; final code, tests, scripts, docs and dependency pins remain identical. No unresolved review threads or substantive CodeRabbit review are present; absent review is not approval. Final-head CI will be recorded in the PR body. No merge or release performed."
   "2026-10-18T09:38:12.757Z",codex-agent,"PR #148 review round: merged current main (#146/#147). No new approval-state finding in the complete review or open issues. Original #145 fix and revert evidence retained; repeat linked regression and both complete release gates after the ownership fix."
   "2026-10-18T10:42:36.521Z",codex-agent,"PR #148 final review receipt: original current-approval-state diagnostic fix retained after merging #146/#147. Linked approval transition regressions PASS 4/4. Original production-only revert proof remains recorded. Exact isolated npm run release:check and bun run release:check both PASS: 893/893 tests, zero failures/skips/cancellations/todos, exact 100/100/100/100 coverage across 14 authored modules, unchanged thresholds. Hosted receipts: https://github.com/unbraind/pm-github/actions/runs/39119457879 (npm job 117651896197; Bun job 117651896368). Validation commit 059e4f0ed9308c9970ee4af6df941fcda8afe804 differs from source commit 0b6d7cb3eef2d056adecd4c44fa47817b177e6c3 only by a temporary validation workflow. Final-head CI will be reported in the PR. Claims released without closing items; orchestrator owns closure."
+  "2026-10-21T18:36:49.323Z",codex-agent,"Reverified main eebda9277e52 (unchanged since audit): [PR #148](https://github.com/unbraind/pm-github/pull/148) (dc86e83) refreshes approval/run state in timeout diagnostics and distinguishes unavailable run reads. Retained evidence: closeout.ts, import-fidelity.ts, test/closeout.test.ts."
 files[2]{path,scope}:
   .github/workflows/release.yml,project
   test/release-approval.test.ts,project
@@ -25,4 +29,5 @@ tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   node --test test/release-approval.test.ts,project,codex-agent,"2026-10-18T04:07:04.437Z",local_mutation,fix/import-and-release-issues
 docs[1]{path,scope}:
   README.md,project
+close_reason: "Reverified main eebda9277e52 (unchanged since audit): [PR #148](https://github.com/unbraind/pm-github/pull/148) (dc86e83) refreshes approval/run state in timeout diagnostics and distinguishes unavailable run reads. Retained evidence: closeout.ts, import-fidelity.ts, test/closeout.test.ts."
 body: ""

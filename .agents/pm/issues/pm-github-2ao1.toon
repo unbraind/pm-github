@@ -2,13 +2,16 @@ id: pm-github-2ao1
 title: PM CLI filtered native Bun tests falsely report an empty run
 description: "Pinned PM CLI/SDK 2026.10.4 recognizes the native Bun name filter but its positive execution receipt patterns omit Bun output. A real linked Bun 1.3.14 command executes two tests, reports 2 pass and Ran 2 tests, exits zero, then pm test changes the outcome to empty_run with missing_positive_execution_receipt. Track upstream parser compatibility separately from the package review fixes; do not patch the protected CLI here."
 type: Issue
-status: open
+status: closed
 priority: 2
 tags[3]: bun,testing,upstream
 created_at: "2026-10-06T14:30:31.652Z"
-updated_at: "2026-10-06T15:37:56.669Z"
+updated_at: "2026-10-21T19:03:20.180Z"
+closed_at: "2026-10-21T19:03:15.485Z"
+completed_at: "2026-10-21T19:03:15.485Z"
 author: codex-sol
 repro_steps: "Link bun test --timeout 600000 -t \"canonical changelog includes|historical fixture provenance reports\" ./test/generate-changelog.test.ts ./test/privacy-gate.test.ts; run the linked test with pm test --run --only-last --progress and compare Bun output with the final run_results row."
+resolution: "Reverified main eebda9277e52 (unchanged since audit): Installed official @unbrained/pm-cli CHANGELOG.md:266 records GH-1418 'Accept real Bun filtered-test execution receipts' in 2026.10.7. Current host/npm latest is 2026.10.21; the 2026.10.6 reproduction predates that published repair. Retained evidence: node_modules/@unbrained/pm-cli/CHANGELOG.md."
 expected_result: "A positive native Bun execution receipt is accepted, while zero-test filtered Bun runs remain refused."
 actual_result: Bun executes and passes two tests with exit zero; pm test reports empty_run after failing to recognize the positive receipt.
 comments[2]{created_at,author,text}:
@@ -19,4 +22,5 @@ files[2]{path,scope}:
   test/privacy-gate.test.ts,project
 docs[1]{path,scope}:
   README.md,project
+close_reason: "Reverified main eebda9277e52 (unchanged since audit): Installed official @unbrained/pm-cli CHANGELOG.md:266 records GH-1418 'Accept real Bun filtered-test execution receipts' in 2026.10.7. Current host/npm latest is 2026.10.21; the 2026.10.6 reproduction predates that published repair. Retained evidence: node_modules/@unbrained/pm-cli/CHANGELOG.md."
 body: ""

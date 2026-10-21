@@ -2,14 +2,17 @@ id: pm-github-8r7c
 title: Keep automated sync and closeout PRs current and dispatch caller checks
 description: "GITHUB_TOKEN PR workflows wait for approval; only ci.yml is dispatched, CodeQL is absent, no auto-merge is enabled, and daily release advances the protected base."
 type: Issue
-status: in_progress
+status: closed
 priority: 1
 tags: []
 created_at: "2026-10-17T09:26:43.864Z"
-updated_at: "2026-10-18T09:07:16.810Z"
+updated_at: "2026-10-21T18:42:21.166Z"
+closed_at: "2026-10-21T18:42:14.928Z"
+completed_at: "2026-10-21T18:42:14.928Z"
 author: codex-agent
 acceptance_criteria: Dispatch declared caller workflows on the proposal head; refresh behind proposals; request protected squash auto-merge; adversarial executable workflow regressions and npm/Bun release gates pass.
-comments[31]{created_at,author,text}:
+resolution: "Reverified main eebda9277e52 (unchanged since audit): [PR #146](https://github.com/unbraind/pm-github/pull/146) (a6eb158) refreshes automated proposal branches and dispatches eligible caller checks. Retained evidence: test/bot-pr-workflow.test.ts, test/closeout-workflow.test.ts, test/import-gate.test.ts."
+comments[32]{created_at,author,text}:
   "2026-10-17T09:27:20.424Z",codex-agent,"Live audit: all 24 caller CodeQL workflows lack workflow_dispatch. Required codeql is missing on pm-jev, pm-lint, pm-review and pm-swarm bot heads; dispatched CI checks succeed on heads despite parked pull_request runs. All closeout callers explicitly select ci.yml. Preserve override semantics and document one-time trigger/override setup. Refresh against the latest default branch, request protected squash auto-merge, and execute adversarial workflow tests. Keep import-fidelity PR 142 untouched."
   "2026-10-17T09:34:40.209Z",codex-agent,"Regression proof: replacing only both final dispatch/maintenance step bodies with origin/main makes the new bot PR suite fail; fixed suite passes 11/11. Tests perform a real default-branch advance and merge and require both CI and CodeQL to redispatch on the new SHA. Missing CodeQL dispatch is warned; zero dispatchable workflows fails; auto-merge denial is soft; unresolved conversations stay blocked. Maintenance is bounded to two hours, with the next daily run rebuilding afterward. Existing explicit ci.yml overrides require one-time removal or expansion alongside the CodeQL trigger."
   "2026-10-17T09:46:00.517Z",codex-agent,"Read-only follow-up audit: pm-ado PR 32 is also blocked by an unresolved changelog placement review (October delivery under the September package release), tracked separately as pm-github-lfcf. Required conversations are preserved. The new monitor uses the verified owned PR number so same-name fork branches cannot be selected for auto-merge."
@@ -41,6 +44,7 @@ comments[31]{created_at,author,text}:
   "2026-10-18T08:50:22.195Z",codex-agent,"Fresh git clone --no-local of 9fdc0fc583c02dba9a25bd9c1f362678f75e4760: npm ci succeeds; with a fresh HOME and global/system Git identity disabled, node_modules/.bin/pm health --strict-exit --require-merge-drivers exits 0. Integrity, append-only history drift, and installed merge drivers pass. Only advisory telemetry_queue_pending:1 and stale_in_progress_items:3 remain; no gate-failing finding. No merge was needed because origin/main is already an ancestor."
   "2026-10-18T08:53:38.237Z",codex-agent,"Shared-host load exceeded 23 runnable tasks for four available CPUs. The incomplete local npm gate was stopped after passing initial gates and progressing integration cases; it is not a passing gate receipt. Both exact release commands now run on hosted runners via a temporary validation branch, whose checkout explicitly selects source commit 9fdc0fc583c02dba9a25bd9c1f362678f75e4760. The validation-only workflow stays outside the PR source. npm and Bun use fresh HOME and disabled global/system Git identity, with unchanged gate thresholds. Full receipts will be recorded after completion."
   "2026-10-18T09:07:14.916Z",codex-agent,"Completed exact gates on source 9fdc0fc583c02dba9a25bd9c1f362678f75e4760 with fresh HOME and global/system Git identity disabled: npm run release:check passes 864/864 (https://github.com/unbraind/pm-github/actions/runs/39113186520/job/117633459391); bun run release:check passes 864/864 (https://github.com/unbraind/pm-github/actions/runs/39113186520/job/117633459200). Both report zero failures, cancellations, skips or todos and exact 100/100/100/100 coverage for all 14 authored modules. Typecheck, build, docstrings, lint, unchanged duplication/privacy gates, production audit, package dry run, changelog check and publish attestation pass. Only tracker receipt updates follow this validated source. Releasing this claim without closing the item; final-head CI is monitored after push, and the README review thread receives the pushed SHA and test evidence. No PM CLI/SDK defect was encountered; host SDK skew is avoided by CI identity isolation."
+  "2026-10-21T18:41:45.280Z",codex-agent,"Reverified main eebda9277e52 (unchanged since audit): [PR #146](https://github.com/unbraind/pm-github/pull/146) (a6eb158) refreshes automated proposal branches and dispatches eligible caller checks. Retained evidence: test/bot-pr-workflow.test.ts, test/closeout-workflow.test.ts, test/import-gate.test.ts."
 files[7]{path,scope}:
   .github/workflows/pm-github-closeout.yml,project
   .github/workflows/pm-github-sync.yml,project
@@ -58,4 +62,5 @@ tests[5]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
 docs[2]{path,scope}:
   docs/bot-pr-automation.md,project
   README.md,project
+close_reason: "Reverified main eebda9277e52 (unchanged since audit): [PR #146](https://github.com/unbraind/pm-github/pull/146) (a6eb158) refreshes automated proposal branches and dispatches eligible caller checks. Retained evidence: test/bot-pr-workflow.test.ts, test/closeout-workflow.test.ts, test/import-gate.test.ts."
 body: ""
