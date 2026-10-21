@@ -143,10 +143,31 @@ only the tracker; commit it with its history and regenerate the caller's
 changelog in a closeout PR. The [automated closeout workflow](#automated-closeout-workflow)
 performs that daily review-PR preparation for fleet repositories.
 
+## Authenticated webhook reconciliation
+
+`pm github webhook receive <owner/repo> --payload delivery.json --delivery <id>
+--event issues --signature <sha256=...>` accepts explicitly supplied deliveries.
+Set `PM_GITHUB_WEBHOOK_SECRET` through your secret manager. Exact payload bytes
+are authenticated before any write; a durable inbox deduplicates delivery IDs.
+
+`pm github webhook reconcile <owner/repo> --limit 20` reads current GitHub state
+for already-linked issues and returns compact proposals with lifecycle deltas.
+It never applies the event's lifecycle or changes items. Out-of-order events
+therefore cannot reopen a closed item. Output defaults to TOON; add `--json`
+for JSON. Signature and storage refusals include typed codes and remedies.
+
+Use `pm github refresh <owner/repo> --dry-run` to review full changes and
+`--atomic` to apply a fresh polling read. Polling remains the recovery route
+for missed deliveries or unavailable webhooks. Back up the ignored durable
+`github-webhooks` directory inside your tracker. See the
+[CLI and typed SDK example](docs/webhook-inbox.md) for deployment, crash recovery,
+retention and supported-event details.
+
 ## Without git
 
 With an explicit repository, GitHub import, export, refresh, sync, project commands,
-blocker checks and closeout work in a plain pm tracker without a git executable.
+blocker checks, closeout and webhook receive/reconcile work in a plain pm tracker
+without a git executable.
 They still require their normal GitHub access and credentials. Privacy scanning
 with `github gate --diff <file>` also works there. Reading a proposed tracker diff
 with `github gate` requires a git repository; otherwise pass an explicit diff.

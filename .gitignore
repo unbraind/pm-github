@@ -17,3 +17,6 @@ coverage/
 # one turns the health gate red; the journal has no value once the transaction
 # has landed. Deliberately outside any `pm-cli:` fence, which the CLI rewrites.
 .agents/pm/transactions/
+
+# Durable webhook inbox receipts are deployment data; back up separately.
+.agents/pm/github-webhooks/

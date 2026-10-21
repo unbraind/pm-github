@@ -61,44 +61,14 @@ jobs:
           # still exiting successfully.
           ./node_modules/.bin/pm health --strict-exit --require-merge-drivers
 
-      - name: Type check
-        run: npm run typecheck
-
-      - name: Build
-        run: npm run build
-
-      - name: Verify complete docstring coverage
-        run: npm run docstring
-
-      - name: ESLint source policy
-        run: npm run lint
-
-      - name: Complete source duplication gate
-        run: npm run duplication
-
-      # Fail-closed identity / secret / host-path audit over the local object
-      # store (pm-github-zqad). In CI this is evidence about refs and tags; the
-      # local release:check run additionally covers unreachable objects.
-      - name: Privacy gate (identities, secrets, host paths)
-        run: npm run privacy
-
-      - name: Test with coverage gate
-        run: npm run coverage
-
-      - name: Production dependency audit
-        run: npm run audit:prod
-
-      - name: Verify npm package contents
-        run: npm run pack:dry-run
-
-      - name: Verify generated changelog
-        run: npm run changelog:check
-
-      - name: Verify every publish invocation is attested
-        run: npm run verify:release-publish-attestation
+      - name: Complete npm release gate
+        run: npm run release:check
 
       - name: Verify Bun can install the package graph
         run: bun install --no-save
 
       - name: Verify native Bun extension behavior
         run: npm run test:bun
+
+      - name: Complete Bun release gate
+        run: bun run release:check
