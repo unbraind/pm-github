@@ -150,6 +150,9 @@ blocker checks and closeout work in a plain pm tracker without a git executable.
 They still require their normal GitHub access and credentials. Privacy scanning
 with `github gate --diff <file>` also works there. Reading a proposed tracker diff
 with `github gate` requires a git repository; otherwise pass an explicit diff.
+Gated imports (`github import --gate`, including the scheduled sync workflow)
+also require a git repository so the proposed publication can be checked. They
+refuse before writing when the tracker is outside one; plain imports still work.
 
 ## Revalidate GitHub blockers
 
@@ -540,7 +543,9 @@ Unreadable input, malformed or truncated diffs, binary input, invalid UTF-8, Git
 
 Rendered values are also scanned in memory before mutation, so a known finding cannot be written to disk. After mutation, the importer verifies that every planned provenance tag exists exactly once, then scans the tracker diff. A completed SDK journal cannot substitute for missing item files.
 
-The `gate` receipt reports the verdict, scanned file count, findings, and allowlisted count. With `--json`, successful reports go to stdout; failures use the host CLI's JSON error envelope on stderr, with the redacted gate report serialized in `detail` (`jq ' .detail | fromjson ' gate-error.json`). Unreadable inputs produce a nonzero JSON refusal.
+The `gate` receipt reports the verdict, scanned file count, findings, and allowlisted count. Each finding includes `match_offset` (the starting character offset of the hashed match within the scanned field value, or the serialized added line for tracker text) and `excerpt`. Host-path excerpts show only the root initial, such as `/h***/…`; other matches use `[redacted]`. Human-readable workflow diagnostics include the same evidence. Full paths and secrets never appear. Recognizable bare-root JavaScript regex literals immediately used with `.test()` or `.exec()` are distinguished from paths; quoted host paths and slash-separated host paths remain refused, including inside code and regex source. Ambiguous quote contexts remain refused. Whole JSON-serialized fields retain the same distinction after decoding; TOON wrappers are recognized only in tracker text.
+
+With `--json`, successful reports go to stdout; failures use the host CLI's JSON error envelope on stderr, with the redacted gate report serialized in `detail` (`jq ' .detail | fromjson ' gate-error.json`). Unreadable inputs produce a nonzero JSON refusal.
 
 ## Self-versioned workflows and Dependabot
 

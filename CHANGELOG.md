@@ -8,6 +8,7 @@
 
 ### Fixed
 
+- Explain privacy matches and distinguish bare-root regex literals during gated sync ([pm-github-xhtp](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-xhtp.toon))
 - Closeout changelog generation attributes new deliveries to an old package release ([pm-github-lfcf](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-lfcf.toon))
 - Require explicit delivery attribution before merged-PR closeout ([pm-github-uqjf](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-uqjf.toon))
 - The daily release regenerates the changelog with a different status filter than release:check, so an open changelog-unreleased item delivered since the last tag fails the release ([pm-github-l1ot](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-l1ot.toon))

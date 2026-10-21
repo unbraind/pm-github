@@ -14,8 +14,8 @@
 //   * an unreadable input, a git failure, a malformed allowlist, or a scanner
 //     error fails the gate — a clean verdict can never be the result of the
 //     scanner not being able to read what it was asked to read;
-//   * findings name the rule, the item id, the item field, and a content hash —
-//     never the matched text — so gate logs cannot become the leak they exist
+//   * findings name the rule, item, field, offset, redacted excerpt and hash —
+//     never the full match — so gate logs cannot become the leak they exist
 //     to prevent;
 //   * reviewed false positives are suppressed through a content-addressed
 //     allowlist (sha256 of the matched content), not a pattern, so an entry can
@@ -43,7 +43,7 @@ import { resolvePmRoot } from "@unbrained/pm-cli/sdk";
  * Deliberately carries no matched text: the report is machine-readable and may
  * be echoed into CI logs, so it identifies WHAT fired (rule), WHERE (item id and
  * the item field that would publish it), and the content-addressed allowlist
- * key (hash) — nothing more.
+ * key (hash), offset and a strictly redacted excerpt.
  */
 export interface GateFinding {
   /** Stable rule identifier, safe to print (never contains matched content). */
@@ -54,6 +54,10 @@ export interface GateFinding {
   readonly field: string;
   /** sha256 hex digest of the matched content — the allowlist key. */
   readonly hash: string;
+  /** Character offset in the scanned field value or serialized added line. */
+  readonly match_offset: number;
+  /** Safe match shape: only a POSIX root initial, or a fixed redaction marker. */
+  readonly excerpt: string;
 }
 
 /** Verdict of one gate run: `fail` whenever any non-allowlisted finding exists. */
@@ -311,7 +315,7 @@ const SECRET_IDENTIFIER_PAIRS: readonly string[] = ["api_key", "access_key", "pr
 
 /** Assignment shape for the high-entropy rule: `NAME = "value"` / `name: value`. */
 const HIGH_ENTROPY_ASSIGNMENT =
-  /(?:^|[^A-Za-z0-9_])([A-Za-z][A-Za-z0-9_-]{0,48})(?:\\?["'`])?\s*[:=]\s*(?:\\?["'`])?([A-Za-z0-9+/_=-]{20,256})(?:\\?["'`])?/g;
+  /(?:^|[^A-Za-z0-9_])([A-Za-z][A-Za-z0-9_-]{0,48})(?:\\?["'`])?\s*[:=]\s*(?:\\?["'`])?([A-Za-z0-9+/_=-]{20,256})(?:\\?["'`])?/dg;
 
 /**
  * Shannon entropy per character of a value.
@@ -374,6 +378,96 @@ interface RuleHit {
 /** Sticky `\uXXXX` matcher: reads at one offset without copying the line suffix. */
 const UNICODE_ESCAPE = /\\u([0-9a-f]{4})/iy;
 
+/** Complete Markdown code-fence marker at a known line start. */
+const CODE_FENCE = /```[A-Za-z0-9_-]*[ \t]*(?:\r?\n|$)/y;
+
+/**
+ * Locate a whole JSON string field's serialization quotes, including TOON scalars.
+ *
+ * Only a complete, valid string wrapper is ignored for code quote tracking;
+ * quotes within its decoded content still delimit strings in the source.
+ *
+ * @param line - Original field value or serialized tracker line.
+ * @param trackerLine - Whether a TOON scalar wrapper is meaningful here.
+ * @returns Outer quote offsets, or undefined for ordinary text.
+ */
+function serializedStringBounds(line: string, trackerLine: boolean): readonly [number, number] | undefined {
+  const start = line.indexOf('"');
+  if (start < 0 || !(trackerLine ? /^\s*(?:[a-z][a-z0-9_]*:\s*)?$/ : /^\s*$/).test(line.slice(0, start))) return undefined;
+  const end = line.trimEnd().length - 1;
+  try {
+    JSON.parse(line.slice(start, end + 1));
+    return [start, end];
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Mark string-literal content in one linear pass over decoded text.
+ *
+ * Escaped quotes cannot close a string. Ambiguous slashes retain both regex
+ * and division interpretations, including regex character classes. Markdown
+ * fences delimit code; single backticks are treated as template strings.
+ *
+ * @param line - Decoded source with serialization quotes blanked out.
+ * @returns Whether each character lies inside quoted source text.
+ */
+function quotedSourcePositions(line: string): boolean[] {
+  const quoted: boolean[] = [];
+  // A slash may be division or a regex opener. Retain both interpretations:
+  // quotes inside earlier regex source must not cancel a later real string.
+  let states = new Set([""]);
+  let escaped = false;
+  for (let index = 0; index < line.length; index++) {
+    const ch = line[index]!;
+    quoted[index] = states.has('"') || states.has("'") || states.has("`");
+    if (escaped) { escaped = false; continue; }
+    if (ch === "\\") { escaped = true; continue; }
+    if (ch === "`" && (index === 0 || line[index - 1] === "\n") && states.has("") && !states.has('"') && !states.has("'")) {
+      CODE_FENCE.lastIndex = index;
+      const fence = CODE_FENCE.exec(line);
+      if (fence) { index += fence[0].length - 1; states = new Set([""]); continue; }
+    }
+    if (!["/", "[", "]", "\n", '"', "'", "`"].includes(ch)) continue;
+    const next = new Set<string>();
+    for (const state of states) {
+      if (ch === "\n" && state !== "`") next.add("");
+      else if (state === "/") next.add(ch === "/" ? "" : ch === "[" ? "[" : state);
+      else if (state === "[") next.add(ch === "]" ? "/" : state);
+      else if (state === "") {
+        if (ch === "/") { next.add(""); next.add("/"); }
+        else next.add(['"', "'", "`"].includes(ch) ? ch : "");
+      } else next.add(ch === state ? "" : state);
+    }
+    states = next;
+  }
+  return quoted;
+}
+
+/**
+ * Recognize a bare-root token inside an immediately invoked JavaScript regex.
+ *
+ * Require an expression boundary and a closing test/exec call without crossing
+ * quotes, escapes, newlines or another slash. Actual slash-separated paths
+ * remain findings, including paths inside regex source. Walk the lead-in once
+ * backwards instead of rescanning a whole prefix for every candidate. Quoted
+ * source is excluded using a shared linear quote scan.
+ *
+ * @param line - Decoded field or serialized tracker line.
+ * @param matched - Candidate absolute host path.
+ * @param index - Candidate offset in the decoded line.
+ * @param quoted - Whether the candidate occurs inside quoted source.
+ * @returns Whether this candidate is recognizable regex source rather than a path.
+ */
+function isBareRootRegex(line: string, matched: string, index: number, quoted: boolean): boolean {
+  if (quoted || matched.slice(1).includes("/")) return false;
+  let before = index - 1;
+  while (before >= 0 && /[ \t]/.test(line[before]!)) before--;
+  return (before < 0 || "=(,:".includes(line[before]!)) &&
+    /^[ \t][^/"'`\\\r\n]*\/[dgimsuvy]*\.(?:test|exec)[ \t]*\(/.test(line.slice(index + matched.length));
+}
+
 /**
  * Scan one added line with every content rule.
  *
@@ -382,12 +476,14 @@ const UNICODE_ESCAPE = /\\u([0-9a-f]{4})/iy;
  * distinct reviewed rule. The high-entropy assignment rule is regex-scan +
  * predicate, so it is driven here rather than in the static table.
  *
- * @param line - The added line text (diff `+` already stripped).
+ * @param line - Decoded field value or added tracker line (diff `+` stripped).
+ * @param trackerLine - Whether the caller supplies serialized TOON tracker text.
  * @returns Every rule hit on the line, in evaluation order.
  */
-export function scanLineForRuleHits(line: string): RuleHit[] {
+export function scanLineForRuleHits(line: string, trackerLine = false): RuleHit[] {
   // Serialized tracker text may escape separators or provider prefixes. Map
   // decoded characters back to their original offsets for history attribution.
+  const serialized = serializedStringBounds(line, trackerLine);
   const offsets: number[] = [];
   let decoded = "";
   for (let index = 0; index < line.length; index++) {
@@ -399,6 +495,13 @@ export function scanLineForRuleHits(line: string): RuleHit[] {
       decoded += String.fromCharCode(Number.parseInt(unicode[1]!, 16));
       offsets.push(index);
       index += 5;
+    } else if (serialized && (index === serialized[0] || index === serialized[1])) {
+      decoded += " ";
+      offsets.push(index);
+    } else if (serialized && line[index] === "\\" && line[index + 1] === '"') {
+      decoded += '"';
+      offsets.push(index);
+      index++;
     } else if (line[index] === "\\" && /[\\/nrt]/.test(line[index + 1] ?? "")) {
       decoded += ({ n: "\n", r: "\r", t: "\t" } as Record<string, string>)[line[index + 1]!] ?? line[index + 1]!;
       offsets.push(index);
@@ -408,13 +511,19 @@ export function scanLineForRuleHits(line: string): RuleHit[] {
       offsets.push(index);
     }
   }
+  const quoted = quotedSourcePositions(decoded);
+  // Rule normalization can collapse backslash pairs in raw source. Keep its
+  // original quote state too, so that an escaped quote cannot become a closer.
+  const originalQuoted = serialized ? [] : quotedSourcePositions(line);
   const hits: RuleHit[] = [];
   for (const rule of [...CREDENTIAL_RULES, ...PERSONAL_DATA_RULES, ...HOST_PATH_RULES]) {
     rule.pattern.lastIndex = 0;
     for (let match = rule.pattern.exec(decoded); match; match = rule.pattern.exec(decoded)) {
+      if (rule.rule === "absolute-host-path" && isBareRootRegex(decoded, match[0], match.index, quoted[match.index]! || originalQuoted[offsets[match.index]!] === true)) continue;
       if (!rule.confirm || rule.confirm(match[0])) {
         const matched = rule.rule === "home-username" ? match[0].slice(match[0].indexOf("~")) : match[0];
-        hits.push({ rule: rule.rule, matched, index: offsets[match.index]! });
+        const start = match.index + match[0].length - matched.length;
+        hits.push({ rule: rule.rule, matched, index: offsets[start]! });
       }
     }
   }
@@ -422,7 +531,7 @@ export function scanLineForRuleHits(line: string): RuleHit[] {
   for (let match = HIGH_ENTROPY_ASSIGNMENT.exec(decoded); match; match = HIGH_ENTROPY_ASSIGNMENT.exec(decoded)) {
     const [identifier, value] = [match[1]!, match[2]!];
     if (isHighEntropySecretAssignment(identifier, value)) {
-      hits.push({ rule: "high-entropy-assignment", matched: value, index: offsets[match.index]! });
+      hits.push({ rule: "high-entropy-assignment", matched: value, index: offsets[match.indices![2]![0]]! });
     }
   }
   return hits;
@@ -902,7 +1011,7 @@ function scanChangeFile(change: ChangeFile): Array<GateFinding & { matched: stri
       }
     } else values.push({ text: line.text, field: line.field });
     for (const value of values) {
-      for (const hit of scanLineForRuleHits(value.text)) {
+      for (const hit of scanLineForRuleHits(value.text, change.filePath.endsWith(".toon") && line.field !== "file_path")) {
         const field = value.field;
         const itemId = change.itemId || itemIdForFile(change.filePath, line.text);
         const key = `${hit.rule}\0${itemId}\0${field}\0${hit.matched}`;
@@ -913,6 +1022,8 @@ function scanChangeFile(change: ChangeFile): Array<GateFinding & { matched: stri
           item_id: scanLineForRuleHits(itemId).length > 0 ? "" : itemId,
           field: scanLineForRuleHits(field).length > 0 ? "unknown" : field,
           hash: createHash("sha256").update(hit.matched).digest("hex"),
+          match_offset: hit.index,
+          excerpt: hit.rule === "absolute-host-path" ? `/${hit.matched[1]}***/…` : "[redacted]",
           matched: hit.matched,
         });
       }
@@ -993,7 +1104,8 @@ export function runTrackerGate(input: TrackerGateInput): GateReport {
         allowlisted++;
         continue;
       }
-      findings.push({ rule: raw.rule, item_id: raw.item_id, field: raw.field, hash: raw.hash });
+      findings.push({ rule: raw.rule, item_id: raw.item_id, field: raw.field, hash: raw.hash,
+        match_offset: raw.match_offset, excerpt: raw.excerpt });
     }
   }
   return {
@@ -1010,8 +1122,8 @@ export function runTrackerGate(input: TrackerGateInput): GateReport {
 /**
  * Render a gate report as human-readable lines.
  *
- * Every line names only the rule, item, field, and short hash prefix — the
- * matched content never appears, so gate output is safe to paste anywhere. The
+ * Every line names the rule, item, field, offset, redacted excerpt and short
+ * hash prefix. Full matches never appear, so gate output is safe to paste. The
  * same lines feed the command's stderr and the import failure message, so the
  * two surfaces cannot drift apart.
  *
@@ -1026,7 +1138,7 @@ export function formatGateReport(report: GateReport): string[] {
   for (const finding of report.findings) {
     lines.push(
       `  ${finding.item_id || "(no item)"} · ${finding.field || "(unknown field)"} · ` +
-        `${finding.rule} · sha256:${finding.hash.slice(0, 12)}…`,
+        `${finding.rule} · offset:${finding.match_offset} · ${finding.excerpt} · sha256:${finding.hash.slice(0, 12)}…`,
     );
   }
   return lines;
