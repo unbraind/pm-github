@@ -315,7 +315,7 @@ const SECRET_IDENTIFIER_PAIRS: readonly string[] = ["api_key", "access_key", "pr
 
 /** Assignment shape for the high-entropy rule: `NAME = "value"` / `name: value`. */
 const HIGH_ENTROPY_ASSIGNMENT =
-  /(?:^|[^A-Za-z0-9_])([A-Za-z][A-Za-z0-9_-]{0,48})(?:\\?["'`])?\s*[:=]\s*(?:\\?["'`])?([A-Za-z0-9+/_=-]{20,256})(?:\\?["'`])?/g;
+  /(?:^|[^A-Za-z0-9_])([A-Za-z][A-Za-z0-9_-]{0,48})(?:\\?["'`])?\s*[:=]\s*(?:\\?["'`])?([A-Za-z0-9+/_=-]{20,256})(?:\\?["'`])?/dg;
 
 /**
  * Shannon entropy per character of a value.
@@ -378,21 +378,90 @@ interface RuleHit {
 /** Sticky `\uXXXX` matcher: reads at one offset without copying the line suffix. */
 const UNICODE_ESCAPE = /\\u([0-9a-f]{4})/iy;
 
+/** Complete Markdown code-fence marker at a known line start. */
+const CODE_FENCE = /```[A-Za-z0-9_-]*[ \t]*(?:\r?\n|$)/y;
+
+/**
+ * Locate a whole JSON string field's serialization quotes, including TOON scalars.
+ *
+ * Only a complete, valid string wrapper is ignored for code quote tracking;
+ * quotes within its decoded content still delimit strings in the source.
+ *
+ * @param line - Original field value or serialized tracker line.
+ * @param trackerLine - Whether a TOON scalar wrapper is meaningful here.
+ * @returns Outer quote offsets, or undefined for ordinary text.
+ */
+function serializedStringBounds(line: string, trackerLine: boolean): readonly [number, number] | undefined {
+  const start = line.indexOf('"');
+  if (start < 0 || !(trackerLine ? /^\s*(?:[a-z][a-z0-9_]*:\s*)?$/ : /^\s*$/).test(line.slice(0, start))) return undefined;
+  const end = line.trimEnd().length - 1;
+  try {
+    JSON.parse(line.slice(start, end + 1));
+    return [start, end];
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Mark string-literal content in one linear pass over decoded text.
+ *
+ * Escaped quotes cannot close a string. Ambiguous slashes retain both regex
+ * and division interpretations, including regex character classes. Markdown
+ * fences delimit code; single backticks are treated as template strings.
+ *
+ * @param line - Decoded source with serialization quotes blanked out.
+ * @returns Whether each character lies inside quoted source text.
+ */
+function quotedSourcePositions(line: string): boolean[] {
+  const quoted: boolean[] = [];
+  // A slash may be division or a regex opener. Retain both interpretations:
+  // quotes inside earlier regex source must not cancel a later real string.
+  let states = new Set([""]);
+  let escaped = false;
+  for (let index = 0; index < line.length; index++) {
+    const ch = line[index]!;
+    quoted[index] = states.has('"') || states.has("'") || states.has("`");
+    if (escaped) { escaped = false; continue; }
+    if (ch === "\\") { escaped = true; continue; }
+    if (ch === "`" && (index === 0 || line[index - 1] === "\n") && states.has("") && !states.has('"') && !states.has("'")) {
+      CODE_FENCE.lastIndex = index;
+      const fence = CODE_FENCE.exec(line);
+      if (fence) { index += fence[0].length - 1; states = new Set([""]); continue; }
+    }
+    if (!["/", "[", "]", "\n", '"', "'", "`"].includes(ch)) continue;
+    const next = new Set<string>();
+    for (const state of states) {
+      if (ch === "\n" && state !== "`") next.add("");
+      else if (state === "/") next.add(ch === "/" ? "" : ch === "[" ? "[" : state);
+      else if (state === "[") next.add(ch === "]" ? "/" : state);
+      else if (state === "") {
+        if (ch === "/") { next.add(""); next.add("/"); }
+        else next.add(['"', "'", "`"].includes(ch) ? ch : "");
+      } else next.add(ch === state ? "" : state);
+    }
+    states = next;
+  }
+  return quoted;
+}
+
 /**
  * Recognize a bare-root token inside an immediately invoked JavaScript regex.
  *
  * Require an expression boundary and a closing test/exec call without crossing
  * quotes, escapes, newlines or another slash. Actual slash-separated paths
  * remain findings, including paths inside regex source. Walk the lead-in once
- * backwards instead of rescanning a whole prefix for every candidate.
+ * backwards instead of rescanning a whole prefix for every candidate. Quoted
+ * source is excluded using a shared linear quote scan.
  *
  * @param line - Decoded field or serialized tracker line.
  * @param matched - Candidate absolute host path.
  * @param index - Candidate offset in the decoded line.
+ * @param quoted - Whether the candidate occurs inside quoted source.
  * @returns Whether this candidate is recognizable regex source rather than a path.
  */
-function isBareRootRegex(line: string, matched: string, index: number): boolean {
-  if (matched.slice(1).includes("/")) return false;
+function isBareRootRegex(line: string, matched: string, index: number, quoted: boolean): boolean {
+  if (quoted || matched.slice(1).includes("/")) return false;
   let before = index - 1;
   while (before >= 0 && /[ \t]/.test(line[before]!)) before--;
   return (before < 0 || "=(,:".includes(line[before]!)) &&
@@ -407,12 +476,14 @@ function isBareRootRegex(line: string, matched: string, index: number): boolean 
  * distinct reviewed rule. The high-entropy assignment rule is regex-scan +
  * predicate, so it is driven here rather than in the static table.
  *
- * @param line - The added line text (diff `+` already stripped).
+ * @param line - Decoded field value or added tracker line (diff `+` stripped).
+ * @param trackerLine - Whether the caller supplies serialized TOON tracker text.
  * @returns Every rule hit on the line, in evaluation order.
  */
-export function scanLineForRuleHits(line: string): RuleHit[] {
+export function scanLineForRuleHits(line: string, trackerLine = false): RuleHit[] {
   // Serialized tracker text may escape separators or provider prefixes. Map
   // decoded characters back to their original offsets for history attribution.
+  const serialized = serializedStringBounds(line, trackerLine);
   const offsets: number[] = [];
   let decoded = "";
   for (let index = 0; index < line.length; index++) {
@@ -424,6 +495,13 @@ export function scanLineForRuleHits(line: string): RuleHit[] {
       decoded += String.fromCharCode(Number.parseInt(unicode[1]!, 16));
       offsets.push(index);
       index += 5;
+    } else if (serialized && (index === serialized[0] || index === serialized[1])) {
+      decoded += " ";
+      offsets.push(index);
+    } else if (serialized && line[index] === "\\" && line[index + 1] === '"') {
+      decoded += '"';
+      offsets.push(index);
+      index++;
     } else if (line[index] === "\\" && /[\\/nrt]/.test(line[index + 1] ?? "")) {
       decoded += ({ n: "\n", r: "\r", t: "\t" } as Record<string, string>)[line[index + 1]!] ?? line[index + 1]!;
       offsets.push(index);
@@ -433,14 +511,19 @@ export function scanLineForRuleHits(line: string): RuleHit[] {
       offsets.push(index);
     }
   }
+  const quoted = quotedSourcePositions(decoded);
+  // Rule normalization can collapse backslash pairs in raw source. Keep its
+  // original quote state too, so that an escaped quote cannot become a closer.
+  const originalQuoted = serialized ? [] : quotedSourcePositions(line);
   const hits: RuleHit[] = [];
   for (const rule of [...CREDENTIAL_RULES, ...PERSONAL_DATA_RULES, ...HOST_PATH_RULES]) {
     rule.pattern.lastIndex = 0;
     for (let match = rule.pattern.exec(decoded); match; match = rule.pattern.exec(decoded)) {
-      if (rule.rule === "absolute-host-path" && isBareRootRegex(decoded, match[0], match.index)) continue;
+      if (rule.rule === "absolute-host-path" && isBareRootRegex(decoded, match[0], match.index, quoted[match.index]! || originalQuoted[offsets[match.index]!] === true)) continue;
       if (!rule.confirm || rule.confirm(match[0])) {
         const matched = rule.rule === "home-username" ? match[0].slice(match[0].indexOf("~")) : match[0];
-        hits.push({ rule: rule.rule, matched, index: offsets[match.index]! });
+        const start = match.index + match[0].length - matched.length;
+        hits.push({ rule: rule.rule, matched, index: offsets[start]! });
       }
     }
   }
@@ -448,7 +531,7 @@ export function scanLineForRuleHits(line: string): RuleHit[] {
   for (let match = HIGH_ENTROPY_ASSIGNMENT.exec(decoded); match; match = HIGH_ENTROPY_ASSIGNMENT.exec(decoded)) {
     const [identifier, value] = [match[1]!, match[2]!];
     if (isHighEntropySecretAssignment(identifier, value)) {
-      hits.push({ rule: "high-entropy-assignment", matched: value, index: offsets[match.index]! });
+      hits.push({ rule: "high-entropy-assignment", matched: value, index: offsets[match.indices![2]![0]]! });
     }
   }
   return hits;
@@ -928,7 +1011,7 @@ function scanChangeFile(change: ChangeFile): Array<GateFinding & { matched: stri
       }
     } else values.push({ text: line.text, field: line.field });
     for (const value of values) {
-      for (const hit of scanLineForRuleHits(value.text)) {
+      for (const hit of scanLineForRuleHits(value.text, change.filePath.endsWith(".toon") && line.field !== "file_path")) {
         const field = value.field;
         const itemId = change.itemId || itemIdForFile(change.filePath, line.text);
         const key = `${hit.rule}\0${itemId}\0${field}\0${hit.matched}`;
