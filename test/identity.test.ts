@@ -217,7 +217,10 @@ test("malformed and mismatched native audit hints cannot authorize a repair", as
   const proposed = await planGithubIdentityRepair(root, key, owner, detach);
   const malformed = ["{", JSON.stringify({ ...proposed, revision: null }), JSON.stringify({ ...proposed, revision: "invalid" }),
     JSON.stringify({ ...proposed, changes: [] }), JSON.stringify({ ...proposed, changes: [{ field: "title", after: [] }] }),
-    JSON.stringify({ ...proposed, changes: [{ field: "tags", after: [42] }] })];
+    JSON.stringify({ ...proposed, changes: [{ field: "tags", after: [] }] }),
+    JSON.stringify({ ...proposed, changes: [{ field: "tags", before: [key], after: [42] }] }),
+    JSON.stringify({ ...proposed, changes: [{ field: "tags", before: [42], after: [] }] }),
+    JSON.stringify({ ...proposed, changes: [{ field: "tags", before: [key], after: null }] })];
   for (const value of malformed) {
     await update(detach, { comment: [`GitHub identity repair ${Buffer.from(value).toString("base64url")}`],
       message: `bulk-item-transaction github-identity-${proposed.approval} fixture apply` }, { pmRoot: root });
@@ -247,4 +250,73 @@ test("read-only isolation refuses symbolic tracker roots and entries without fol
   await assert.rejects(exploreGithubIdentities(root), code("incomplete_read"));
   assert.deepEqual(snapshot(root), before);
   unlinkSync(join(root, "linked-entry"));
+}));
+
+test("forged audit plans with nonexistent owners never authorize recovery writes", async () => tracker(async root => {
+  const detach = await item(root, { tags: ["keep"] });
+  const approval = "a".repeat(64);
+  const forged = { identity: key, owner: "nonexistent-owner", detach, approval,
+    revision: (await get(detach, {}, { pmRoot: root })).item.updated_at!,
+    changes: [{ field: "tags", before: [key, "keep"], after: ["unapproved"] }] };
+  await update(detach, { comment: [`GitHub identity repair ${Buffer.from(JSON.stringify(forged)).toString("base64url")}`],
+    message: `bulk-item-transaction github-identity-${approval} fixture apply` }, { pmRoot: root });
+  const current = (await get(detach, {}, { pmRoot: root })).item as ItemMetadata & { body: string };
+  await commitImportedItem({ pmRoot: root, id: detach, itemPath: getItemPath(root, "Task", detach),
+    document: { metadata: { ...current, updated_at: forged.revision }, body: current.body }, settings: await readSettings(root),
+    author: "fixture", message: "Seed forged revision", conflictWarningPrefix: "fixture" });
+  const before = snapshot(root);
+  await assert.rejects(applyGithubIdentityRepair(root, { ...forged, author: "fixture" }), code("stale_approval"));
+  assert.deepEqual(snapshot(root), before);
+  assert.deepEqual((await get(detach, {}, { pmRoot: root })).item.tags, ["keep"]);
+}));
+
+test("approved tag detach preserves a stored comma tag byte-identical", async () => tracker(async root => {
+  const owner = await item(root, { github_url: url, github_number: 1 });
+  const detach = await item(root, { tags: [key, "keep,me"] });
+  const proposed = await planGithubIdentityRepair(root, key, owner, detach);
+  assert.deepEqual(proposed.changes[0]!.after, ["keep,me"]);
+  await applyGithubIdentityRepair(root, { ...proposed, author: "fixture" });
+  assert.deepEqual((await get(detach, {}, { pmRoot: root })).item.tags, ["keep,me"]);
+  const after = snapshot(root);
+  await applyGithubIdentityRepair(root, { ...proposed, author: "fixture" });
+  assert.deepEqual(snapshot(root), after);
+}));
+
+test("an owner with a conflicting github_number cannot authorize detaching another item", async () => tracker(async root => {
+  const owner = await item(root, { github_url: url, github_number: 2 });
+  const detach = await item(root, { tags: [key] });
+  const before = snapshot(root);
+  await assert.rejects(planGithubIdentityRepair(root, key, owner, detach), code("ambiguous_identity"));
+  await assert.rejects(applyGithubIdentityRepair(root, { identity: key, owner, detach, approval: "a".repeat(64), author: "fixture" }), code("ambiguous_identity"));
+  assert.deepEqual(snapshot(root), before);
+}));
+
+test("recovery rechecks the approval digest and exact retained tags before SDK replay", async () => tracker(async root => {
+  const owner = await item(root, { github_url: url });
+  const detach = await item(root, { tags: [key, "keep"] });
+  const proposed = await planGithubIdentityRepair(root, key, owner, detach);
+  await applyGithubIdentityRepair(root, { ...proposed, author: "fixture" });
+  const forged = { ...proposed, changes: [{ field: "tags", before: [key, "keep"], after: ["unapproved"] }] };
+  await update(detach, { comment: [`GitHub identity repair ${Buffer.from(JSON.stringify(forged)).toString("base64url")}`],
+    message: `bulk-item-transaction github-identity-${proposed.approval} fixture apply` }, { pmRoot: root });
+  const before = snapshot(root);
+  await assert.rejects(applyGithubIdentityRepair(root, { ...proposed, author: "fixture" }), code("stale_approval"));
+  assert.deepEqual(snapshot(root), before);
+  await update(detach, { comment: [`GitHub identity repair ${Buffer.from(JSON.stringify(proposed)).toString("base64url")}`],
+    message: `bulk-item-transaction github-identity-${proposed.approval} fixture apply` }, { pmRoot: root });
+  await update(detach, { addTags: ["new-tag"] }, { pmRoot: root });
+  const edited = snapshot(root);
+  await assert.rejects(applyGithubIdentityRepair(root, { ...proposed, author: "fixture" }), code("stale_approval"));
+  assert.deepEqual(snapshot(root), edited);
+}));
+
+test("an authenticated audit hint without its SDK journal cannot start a new transaction", async () => tracker(async root => {
+  const owner = await item(root, { github_url: url });
+  const detach = await item(root, { tags: [key] });
+  const proposed = await planGithubIdentityRepair(root, key, owner, detach);
+  await applyGithubIdentityRepair(root, { ...proposed, author: "fixture" });
+  unlinkSync(join(root, "transactions", "sdk", `github-identity-${proposed.approval}.json`));
+  const before = snapshot(root);
+  await assert.rejects(applyGithubIdentityRepair(root, { ...proposed, author: "fixture" }), code("stale_approval"));
+  assert.deepEqual(snapshot(root), before);
 }));

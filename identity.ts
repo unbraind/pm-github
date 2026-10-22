@@ -1,7 +1,8 @@
 /** Offline identity diagnosis and explicitly approved, single-item provenance repairs. */
 import { createHash } from "node:crypto";
+import { join } from "node:path";
 import {
-  resolvePmRoot, createPmCliExpectedError,
+  resolvePmRoot, createPmCliExpectedError, pathExists,
   commitItemMutations, previewItemMutations, getHistoryPath, readHistorySnapshot,
   type BulkItemMutation, type CommitItemMutationsOptions, type ItemMetadata,
 } from "@unbrained/pm-cli/sdk";
@@ -92,6 +93,10 @@ function plan(items: IdentityItem[], key: string, owner: string, detach: string)
   const claims = edges.filter(edge => edge.identity === key && edge.strength === "claim");
   const owners = [...new Set(claims.filter(edge => ["github_url", "declaration"].includes(edge.source)).map(edge => edge.item))];
   const target = items.find(item => item.id === detach);
+  const ownerItem = items.find(item => item.id === owner);
+  if (ownerItem?.github_number !== undefined && String(ownerItem.github_number) !== key.split("#")[1]) {
+    refuse("ambiguous_identity", "The declared owner has a conflicting github_number. Reconcile its provider metadata before previewing another repair.");
+  }
   if (!key.startsWith("gh:") || owner === detach || owners.length !== 1 || owners[0] !== owner || !target ||
     nodes.find(node => node.id === owner)!.ownership === "mixed" ||
     claims.some(edge => edge.item !== owner && edge.item !== detach) ||
@@ -113,26 +118,35 @@ export async function planGithubIdentityRepair(pmRoot: string, key: string, owne
   await previewItemMutations(transaction(pmRoot, proposed, "pm-github"));
   return proposed;
 }
-/** Encode the exact approved mutation in its native audited comment for crash recovery. */
+/** Retain the scoped plan as an audit hint; recovery independently verifies its approval binding. */
 function repairAudit(proposed: IdentityRepairPlan): string {
   return `GitHub identity repair ${Buffer.from(JSON.stringify(proposed)).toString("base64url")}`;
 }
 /** Translate the narrow plan to a host-owned audited mutation and optimistic item guard. */
 function transaction(pmRoot: string, proposed: IdentityRepairPlan, author: string) {
-  const options = { tags: proposed.changes[0]!.after.join(","), comment: [repairAudit(proposed)] };
+  const options = { removeTags: proposed.changes[0]!.before.filter(tag => identity(tag) === proposed.identity), comment: [repairAudit(proposed)] };
   const mutations: BulkItemMutation[] = [{ op: "update", id: proposed.detach, options, match: { key: "updated_at", value: proposed.revision } }];
   return { pmRoot, author, transactionId: `github-identity-${proposed.approval}`, mutations };
 }
-/** Decode only a complete scoped tag plan from the immutable forward audit event. */
+/** Decode the tag-plan shape without treating audit text as permission to mutate. */
 function auditedPlan(encoded: string): IdentityRepairPlan {
   try {
     const value = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as IdentityRepairPlan;
     if (typeof value.revision !== "string" || !Number.isFinite(Date.parse(value.revision)) || value.changes.length !== 1 ||
-      value.changes[0]!.field !== "tags" || !value.changes[0]!.after.every(tag => typeof tag === "string")) throw new Error("invalid audit");
+      value.changes[0]!.field !== "tags" || !Array.isArray(value.changes[0]!.before) || !value.changes[0]!.before.every(tag => typeof tag === "string") ||
+      !Array.isArray(value.changes[0]!.after) || !value.changes[0]!.after.every(tag => typeof tag === "string")) throw new Error("invalid audit");
     return value;
   } catch { refuse("stale_approval", "The audit marker cannot reconstruct the approved tag mutation; inspect tracker history before retrying."); }
 }
-/** Apply an exact approved plan with a writer-lock recheck; replay uses immutable SDK audit evidence. */
+/** Reconstruct the approved pre-state and authenticate audit hints against the original graph digest. */
+function validateRecovery(items: IdentityItem[], target: IdentityItem, saved: IdentityRepairPlan): void {
+  try {
+    const restored = items.map(item => item.id === target.id ? { ...item, tags: saved.changes[0]!.before, updated_at: saved.revision } : item);
+    const approved = plan(restored, saved.identity, saved.owner, saved.detach);
+    if (digest(approved) !== digest(saved) || digest(target.tags) !== digest(approved.changes[0]!.after)) throw new Error("unbound audit");
+  } catch { refuse("stale_approval", "The audit hint does not match the approved graph and exact tag mutation. Inspect history and preview again; no recovery was applied."); }
+}
+/** Apply an exact approved plan with a writer-lock recheck; replay verifies approval before SDK recovery. */
 export async function applyGithubIdentityRepair(pmRoot: string, request: { identity: string; owner: string; detach: string; approval: string; author: string; onTransition?: CommitItemMutationsOptions["onTransition"] }): Promise<{ changed: boolean; transaction: string }> {
   if (!/^[a-f0-9]{64}$/.test(request.approval) || !request.author.trim()) refuse("invalid_options", "Supply the plan's full approval digest and a nonempty audit author.");
   pmRoot = resolvePmRoot(process.cwd(), pmRoot);
@@ -148,6 +162,8 @@ export async function applyGithubIdentityRepair(pmRoot: string, request: { ident
       const key = identity(request.identity);
       if (saved.identity !== key || saved.owner !== request.owner || saved.detach !== request.detach || saved.approval !== request.approval ||
         target.tags!.some(tag => identity(tag) === key) || (typeof target.external_ref === "string" && identity(target.external_ref) === key)) refuse("stale_approval", "The approved scope changed or its repaired claim was reintroduced; inspect and preview again.");
+      validateRecovery(items, target, saved);
+      if (!await pathExists(join(pmRoot, "transactions", "sdk", `${transactionId}.json`))) refuse("stale_approval", "The SDK transaction receipt is missing. Restore its verified journal before recovery; an item comment cannot authorize a new transaction.");
       await commitItemMutations(transaction(pmRoot, saved, marker!.author));
       return { changed: false, transaction: transactionId };
     }

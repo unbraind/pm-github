@@ -52,10 +52,12 @@ pm github identity --identity 'gh:example/project#7' \
 
 Preview validates the mutation through the SDK in a disposable tracker. Apply
 removes only the matching GitHub tag on the
-one selected duplicate. It preserves other tags, provider identities, content,
+one selected duplicate through the SDK tag-removal operation. Retained stored tags,
+including literal commas, are preserved byte-identical. It preserves provider identities, content,
 status, timestamps and release, except the SDK's normal mutation clock. It
 never edits GitHub or closes/deletes an item. A unique owner must independently
-declare the matching URL; tags alone cannot establish the rightful owner.
+declare the matching URL and have a consistent `github_number` when present;
+tags alone cannot establish the rightful owner.
 A duplicate with GitHub source metadata or explicit native source ownership, multiple independent owners, another
 conflicting claimant or mixed owner evidence refuses apply. Resolve provider
 ownership manually before asking for another plan.
@@ -64,8 +66,11 @@ Approval binds the exact request, graph and item revisions. Any intervening
 edit requires a fresh preview. Apply checks again under the SDK workspace
 writer lock. The SDK creates durable transaction receipts and append-only item
 history attributed to the supplied author (`PM_AUTHOR` for CLI use). Repeating
-a completed approval uses its immutable audit marker and changes no bytes.
-Ordinary SDK transaction recovery/compensation semantics remain authoritative.
+a completed approval reconstructs its pre-repair graph, verifies the approval
+digest and exact retained tags, and requires its SDK transaction journal before
+replay. Audit comments alone cannot authorize repairs or supply replacement tags.
+Unchanged replay changes no bytes. Ordinary SDK transaction
+recovery/compensation semantics remain authoritative.
 Keep tracker histories and transaction journals together during recovery.
 
 The pinned SDK does not expose an audited core `external_ref` clear operation.
