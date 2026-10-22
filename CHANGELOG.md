@@ -1,30 +1,46 @@
 # Changelog
 
-## 2026.10.21 - 2026-10-21
+## 2026.10.22 - 2026-10-22
 
 ### Added
 
 - Reconcile authenticated GitHub webhooks through a durable deduplicating inbox ([pm-github-webhook-inbox](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-webhook-inbox.toon))
+- Let reusable workflows carry their own release version ([pm-github-znig](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-znig.toon))
+- Preserve imported GitHub lifetimes, closure evidence and release attribution while linking cross-provider items ([pm-github-c093](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-c093.toon))
 - Refresh only already-linked GitHub items without importing new ones ([pm-github-ullj](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-ullj.toon))
 
 ### Fixed
 
+- A publish spelled through a package runner was invisible to the attestation gate, so an unattested one read as clean ([pm-github-5igz](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-5igz.toon))
+- PM CLI filtered native Bun tests falsely report an empty run ([pm-github-2ao1](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-2ao1.toon))
+- Track pm-changelog rendering closed historical incidents as Fixed ([pm-github-n0mm](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-n0mm.toon))
+- Stabilize the watchdog startup probe under concurrent coverage ([pm-github-sah1](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-sah1.toon))
 - Explain privacy matches and distinguish bare-root regex literals during gated sync ([pm-github-xhtp](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-xhtp.toon))
-- Closeout changelog generation attributes new deliveries to an old package release ([pm-github-lfcf](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-lfcf.toon))
-- Require explicit delivery attribution before merged-PR closeout ([pm-github-uqjf](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-uqjf.toon))
-- The daily release regenerates the changelog with a different status filter than release:check, so an open changelog-unreleased item delivered since the last tag fails the release ([pm-github-l1ot](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-l1ot.toon))
-
-## 2026.10.19 - 2026-10-19
-
-### Added
-
-- Preserve imported GitHub lifetimes, closure evidence and release attribution while linking cross-provider items ([pm-github-c093](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-c093.toon))
-
-### Fixed
-
-- Release timeout must report current workflow approval state ([pm-github-b145](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-b145.toon))
-- Preserve legacy GitHub ownership across copied provider examples ([pm-github-b143](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-b143.toon))
+- The changelog gate stamps an untagged version with the current date, so its verdict flips every midnight with no commit ([pm-github-m8vj](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-m8vj.toon))
+- Closeout workflow tests race the detached telemetry flush when removing their temporary global root ([pm-github-aplb](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-aplb.toon))
+- Keep reusable workflow operands out of executable positions in attestation scans ([pm-github-7c95](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-7c95.toon))
+- Keep automated sync and closeout PRs current and dispatch caller checks ([pm-github-8r7c](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-8r7c.toon))
 - Reject malformed effective-rule discriminators before closeout ([pm-github-b141](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-b141.toon))
+- Preserve legacy GitHub ownership across copied provider examples ([pm-github-b143](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-b143.toon))
+- Release timeout must report current workflow approval state ([pm-github-b145](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-b145.toon))
+- The daily release regenerates the changelog with a different status filter than release:check, so an open changelog-unreleased item delivered since the last tag fails the release ([pm-github-l1ot](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-l1ot.toon))
+- Require explicit delivery attribution before merged-PR closeout ([pm-github-uqjf](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-uqjf.toon))
+- Closeout changelog generation attributes new deliveries to an old package release ([pm-github-lfcf](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-lfcf.toon))
+- The release job authenticated with a stored npm token that expired, so publishing stopped while every other gate stayed green ([pm-github-m8u2](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-m8u2.toon))
+- A release run bumped and committed a new version every night while publishing was impossible, because the only externally-failable step runs last ([pm-github-yq1d](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-yq1d.toon))
+- The daily release cannot build a changelog once the tracker outgrows the default output budget ([pm-github-ypi5](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-ypi5.toon))
+
+### Security
+
+- Gate historical identities and host-path privacy across every Git object ([pm-github-zqad](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-zqad.toon))
+
+### Other
+
+- Enable GitHub CodeQL code scanning ([pm-github-sx18](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-sx18.toon))
+- Certify pm-github with PM CLI SDK 2026.9.26 ([pm-github-6vcq](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-6vcq.toon))
+- Certify pm-github on PM CLI/SDK 2026.10.4 and consolidate pending dependency updates ([pm-github-julo](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-julo.toon))
+- Audit copied fleet release workflows for canonical generation and one daily publication ([pm-github-sagl](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-sagl.toon))
+- Adopt the released gated sync caller in fleet repositories ([pm-github-aiok](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-aiok.toon))
 
 ## 2026.10.16 - 2026-10-16
 

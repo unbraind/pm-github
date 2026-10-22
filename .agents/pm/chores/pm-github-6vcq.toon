@@ -2,13 +2,16 @@ id: pm-github-6vcq
 title: Certify pm-github with PM CLI SDK 2026.9.26
 description: "Refresh the extension development SDK and release tools to current published PM CLI, pm-changelog, and pm-ops versions. Preserve the supported host compatibility floor unless a real API incompatibility requires a change. Verify the canonical merge-driver launcher, full release gate, and real GitHub issue import contract."
 type: Chore
-status: in_progress
+status: closed
 priority: 2
 tags: []
 created_at: "2026-09-26T16:33:06.566Z"
-updated_at: "2026-10-02T23:36:02.502Z"
+updated_at: "2026-10-21T19:04:08.971Z"
+closed_at: "2026-10-21T19:04:05.099Z"
+completed_at: "2026-10-21T19:04:05.099Z"
 author: codex
 acceptance_criteria: "Manifest and lockfile exact-pin the current developer SDK and release-tool versions; installed package readback matches; canonical pm-ops launcher is copied byte for byte; release:check, strict PM health, and a real issue-import dry run pass; source and hosted user data stay outside the public diff."
+resolution: "Reverified main eebda9277e52 (unchanged since audit): [PR #99](https://github.com/unbraind/pm-github/pull/99) (31072de) delivered the dated certification. Current package.json/lockfile have subsequent toolchain updates; historical certification is not a claim of current exact-head acceptance. Retained evidence: scripts/prepare-merge-driver.ts, test/prepare-merge-driver.test.ts."
 actual_result: "npm ci and npm run release:check PASS: 308/308 tests, zero skipped; configured lines/branches/functions 92.57/82.94/92.27 across two measured sources, retaining existing 88/79/89 floors. Typecheck/build/docstrings/privacy/production audit/pack/changelog/attestation pass; all-dependency audit zero; Bun install and strict CI health pass. Reviewed/acknowledged linked-test provenance; actual launcher run passes 7/7, correcting the preceding receipt count through appended history. pm validate retains existing advisory metadata/link findings. Exact 100 percent all-source coverage remains open in pm-github-9cjx. Historical issue-35 completion retained. Final-head CI and substantive review remain separate; item released in_progress, no closure or publication."
 comments[8]:
   - created_at: "2026-09-28T05:54:00.603Z"
@@ -51,4 +54,5 @@ tests[2]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,
   node --test test/prepare-merge-driver.test.ts,project,120,codex,"2026-09-26T16:55:15.403Z",local_mutation,chore/pm-github-sdk-2026-9-26
 docs[1]{path,scope}:
   README.md,project
+close_reason: "Reverified main eebda9277e52 (unchanged since audit): [PR #99](https://github.com/unbraind/pm-github/pull/99) (31072de) delivered the dated certification. Current package.json/lockfile have subsequent toolchain updates; historical certification is not a claim of current exact-head acceptance. Retained evidence: scripts/prepare-merge-driver.ts, test/prepare-merge-driver.test.ts."
 body: ""
