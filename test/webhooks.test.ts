@@ -6,7 +6,7 @@ import type { ServerResponse } from "node:http";
 import { mkdtemp, rm, readdir, readFile, writeFile, mkdir, cp, symlink, open, chmod } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
-import { init, create, get } from "@unbrained/pm-cli/sdk";
+import { init, create, get, acquireLock } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension, { acceptGithubWebhook, reconcileGithubWebhooks, WebhookRefusal, type GithubWebhookDelivery } from "../index.ts";
 import { runRefresh } from "../refresh.ts";
@@ -152,12 +152,90 @@ test("missing provider state stays pending, limits drain batches, and API failur
   await withMockGithub((_request, response) => jsonResponse(response, 401, { message: "unauthorized" }), async () => {
     await refused(() => reconcileGithubWebhooks(root, "fixture/repo"), "provider_unavailable");
   });
-  assert.deepEqual(await snapshot(root), before);
+  const after = await snapshot(root);
+  for (const [file, bytes] of Object.entries(before)) {
+    if (!file.endsWith("/cursor.json")) assert.equal(after[file], bytes, file);
+  }
   for (const limit of [0, -1, 101, NaN, 1.5]) await refused(() => reconcileGithubWebhooks(root, "fixture/repo", limit), "invalid_options");
   await withMockGithub((_request, response) => jsonResponse(response, 200, { data: { repository: { i1: upstream("OPEN") } } }), async () => {
     assert.equal((await reconcileGithubWebhooks(root, "fixture/repo", 1)).remaining, 1);
     assert.equal((await reconcileGithubWebhooks(root, "fixture/repo", 1)).remaining, 0);
   });
+}));
+
+test("retry batches rotate durably, wrap, and advance even when provider reads throw", async () => fixture(async root => {
+  const ids = ["retry-a", "retry-b", "ready-c"].sort((a, b) =>
+    createHash("sha256").update(a).digest("hex").localeCompare(createHash("sha256").update(b).digest("hex")));
+  for (let index = 0; index < ids.length; index++) {
+    await create({ title: "Linked", tags: `gh:fixture/repo#${index + 1}` }, { cwd: root, pmRoot: root });
+    await acceptGithubWebhook(root, delivery(ids[index]!, index + 1));
+  }
+  let unavailable = false;
+  const seen: number[] = [];
+  await withMockGithub((_request, response, body) => {
+    const query = (JSON.parse(body) as { query: string }).query;
+    const numbers = [...query.matchAll(/i(\d+): issue/g)].map(match => Number(match[1]));
+    seen.push(...numbers);
+    if (unavailable) { jsonResponse(response, 401, { message: "unauthorized" }); return; }
+    jsonResponse(response, 200, { data: { repository: Object.fromEntries(numbers.map(number =>
+      [`i${number}`, number === 3 ? { ...upstream("OPEN"), number: 3, url: "https://github.com/fixture/repo/issues/3" } : null])) } });
+  }, async () => {
+    assert.equal((await reconcileGithubWebhooks(root, "fixture/repo", 1)).retry, 1);
+    unavailable = true;
+    await refused(() => reconcileGithubWebhooks(root, "fixture/repo", 1), "provider_unavailable");
+    unavailable = false;
+    const ready = await reconcileGithubWebhooks(root, "fixture/repo", 1);
+    assert.equal(ready.reconciled, 1);
+    assert.equal(ready.remaining, 2);
+    assert.equal(ready.proposals[0]!.number, 3);
+    assert.equal((await reconcileGithubWebhooks(root, "fixture/repo", 1)).retry, 1);
+    assert.deepEqual(seen, [1, 2, 3, 1]);
+    // Wrap within a batch too; the acknowledged delivery stays excluded.
+    assert.equal((await reconcileGithubWebhooks(root, "fixture/repo", 2)).retry, 2);
+    assert.deepEqual(seen.slice(-2), [1, 2]);
+  });
+}));
+
+test("expired live processor locks cannot be stolen during delayed provider reads", async () => fixture(async root => {
+  await create({ title: "Linked", tags: "gh:fixture/repo#1" }, { cwd: root, pmRoot: root });
+  await acceptGithubWebhook(root, delivery("before-read"));
+  let signalRead: (response: ServerResponse) => void;
+  const reading = new Promise<ServerResponse>(resolve => { signalRead = resolve; });
+  let reads = 0;
+  await withMockGithub((_request, response) => {
+    reads++;
+    if (reads === 1) signalRead(response);
+    else jsonResponse(response, 200, { data: { repository: { i1: upstream("OPEN") } } });
+  }, async () => {
+    const reconciling = reconcileGithubWebhooks(root, "fixture/repo");
+    const response = await reading;
+    try {
+      const file = join(root, "locks/github-webhooks-reconcile.lock");
+      const lock = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
+      await writeFile(file, JSON.stringify({ ...lock, created_at: "2000-01-01T00:00:00.000Z" }));
+      await refused(() => reconcileGithubWebhooks(root, "fixture/repo"), "inbox_unavailable");
+      assert.equal(reads, 1);
+      assert.equal((JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>).token, lock.token);
+      assert.equal((await acceptGithubWebhook(root, delivery("during-read"))).duplicate, false);
+    } finally {
+      jsonResponse(response, 200, { data: { repository: { i1: upstream("OPEN") } } });
+      await reconciling;
+    }
+  });
+  const release = await acquireLock(root, "github-webhooks-reconcile", 300, "fixture");
+  await release();
+}));
+
+test("expired intake locks also require explicit recovery", async () => fixture(async root => {
+  const release = await acquireLock(root, "github-webhooks", 300, "fixture");
+  try {
+    const file = join(root, "locks/github-webhooks.lock");
+    const lock = JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>;
+    await writeFile(file, JSON.stringify({ ...lock, created_at: "2000-01-01T00:00:00.000Z" }));
+    await refused(() => acceptGithubWebhook(root, delivery()), "inbox_unavailable");
+    assert.equal((JSON.parse(await readFile(file, "utf8")) as Record<string, unknown>).token, lock.token);
+  } finally { await release(); }
+  assert.equal((await acceptGithubWebhook(root, delivery())).duplicate, false);
 }));
 
 test("slow provider reconciliation never blocks durable authenticated intake", async () => fixture(async root => {
@@ -211,6 +289,12 @@ test("corrupt receipts fail closed and native storage failures become typed refu
     await refused(() => acceptGithubWebhook(root, delivery()), "inbox_corrupt");
   }
   await writeFile(file, original);
+  const cursor = join(directory, "cursor.json");
+  for (const value of ["broken", "null", "{}", '{"after":"../../bad"}']) {
+    await writeFile(cursor, value);
+    await refused(() => reconcileGithubWebhooks(root, "fixture/repo"), "inbox_corrupt");
+  }
+  await rm(cursor);
   await rm(join(root, "github-webhooks"), { recursive: true });
   await writeFile(join(root, "github-webhooks"), "unavailable");
   await refused(() => acceptGithubWebhook(root, delivery()), "inbox_unavailable");

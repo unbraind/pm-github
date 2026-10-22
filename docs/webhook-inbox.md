@@ -64,8 +64,10 @@ processor lock so a slow provider read never blocks intake. It reads immutable,
 atomically published hints; deliveries arriving during a batch remain for the
 next reconciliation. Counts describe the selected snapshot. Intake acknowledges after atomic
 publication and file/directory flushes on a local POSIX filesystem. The lock
-uses host recovery for a dead writer; partial atomic-write temporary files are
-ignored. Retrying after a crash is safe. This filesystem inbox requires an
+never reclaims an existing writer lock based on age alone. If a worker crashes,
+inspect its lock and confirm the worker has stopped before explicitly recovering
+the stale lock through the host. Partial atomic-write temporary files are ignored.
+Retrying after lock recovery is safe. This filesystem inbox requires an
 initialized local tracker path; remote clients should invoke it at the owning
 filesystem service rather than invent a local path for a remote tracker.
 
@@ -76,7 +78,10 @@ reopening can produce an open proposal. Events never directly set statuses.
 Unknown owners are acknowledged as `unlinked`, without importing anything;
 later linking is recovered by polling. Missing/inaccessible provider state and
 provider failures retain pending deliveries. An unfinished import refuses
-preview until polling refresh recovers it.
+preview until polling refresh recovers it. A durable repository-scoped cursor
+rotates through pending deliveries, wrapping at the end. It advances before
+provider reads, including failed batches, so retrying hints cannot starve later
+deliveries. Retries remain pending and are revisited on subsequent passes.
 
 Each successful hint gets an atomic `.done.json` receipt containing a timestamp
 and its compact proposal. A crash after receipt publication but before response

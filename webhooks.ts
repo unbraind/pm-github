@@ -94,7 +94,8 @@ async function flush(file: string): Promise<void> {
 async function locked<T>(pmRoot: string, repo: string, operation: (directory: string) => Promise<T>, lockId = "github-webhooks"): Promise<T> {
   try {
     await readFile(join(pmRoot, "settings.json"), "utf8");
-    const release = await acquireLock(pmRoot, lockId, 300, "pm-github", false, false, 5000);
+    // Age alone cannot prove a worker is dead while it awaits provider or disk I/O.
+    const release = await acquireLock(pmRoot, lockId, 300, "pm-github", false, true, 5000);
     try {
       const parent = join(pmRoot, "github-webhooks");
       await mkdir(parent, { recursive: true, mode: 0o700 });
@@ -103,7 +104,7 @@ async function locked<T>(pmRoot: string, repo: string, operation: (directory: st
       return await operation(directory);
     } finally { await release(); }
   } catch (error) {
-    refusal(error, "inbox_unavailable", "Restore initialized writable local tracker storage, then retry; retain github-webhooks receipts.");
+    refusal(error, "inbox_unavailable", "Restore initialized writable local tracker storage; inspect stale locks and recover only after confirming their worker has stopped, then retry; retain github-webhooks receipts.");
   }
 }
 /** Authenticate exact bytes before parsing, locking, initializing storage or performing any write. */
@@ -154,11 +155,21 @@ export async function reconcileGithubWebhooks(pmRoot: string, repoArg: string, l
   const repo = repository(repoArg);
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new WebhookRefusal("invalid_options", "Use a delivery limit from 1 to 100 (default 20).");
   return locked(pmRoot, repo, async directory => {
-    const files = (await readdir(directory)).filter(file => /^[a-f0-9]{64}\.json$/.test(file)).sort();
     const names = new Set(await readdir(directory));
+    const files = [...names].filter(file => /^[a-f0-9]{64}\.json$/.test(file)).sort();
     const selected = files.filter(file => !names.has(file.replace(".json", ".done.json")));
-    const batch = selected.slice(0, limit);
+    let after = "";
+    if (names.has("cursor.json")) {
+      try {
+        const cursor = object(JSON.parse(await readFile(join(directory, "cursor.json"), "utf8")));
+        if (typeof cursor.after !== "string" || !/^[a-f0-9]{64}\.json$/.test(cursor.after)) throw new Error("invalid cursor");
+        after = cursor.after;
+      } catch { throw new WebhookRefusal("inbox_corrupt", "Restore the reconciliation cursor from backup; retain delivery receipts and poll with github refresh meanwhile."); }
+    }
+    const batch = [...selected.filter(file => file > after), ...selected.filter(file => file <= after)].slice(0, limit);
     const records = await Promise.all(batch.map(file => readRecord(join(directory, file), repo)));
+    // Advance even when a provider request throws, so retries cannot starve later hints.
+    if (batch.length) await persist(join(directory, "cursor.json"), { after: batch[batch.length - 1] });
     let preview: Awaited<ReturnType<typeof runRefresh>> | undefined;
     try { preview = records.length ? await runRefresh(repo, pmRoot, { "dry-run": true }, { numbers: records.map(record => record.number) }) : undefined; }
     catch (error) { refusal(error, "provider_unavailable", "Retry reconciliation after restoring GitHub access or completing unfinished imports with github refresh; pending deliveries are retained."); }
