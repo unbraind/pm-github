@@ -29,6 +29,9 @@ import {
   type ImportFidelity,
 } from "./import-fidelity.ts";
 import { refreshChanges, runRefresh } from "./refresh.ts";
+import { exploreGithubIdentities, planGithubIdentityRepair, applyGithubIdentityRepair } from "./identity.ts";
+export { exploreGithubIdentities, planGithubIdentityRepair, applyGithubIdentityRepair } from "./identity.ts";
+export type { IdentityRefusalCode, IdentityEdge, IdentityNode, IdentityReport, IdentityRepairPlan } from "./identity.ts";
 import { acceptGithubWebhook, reconcileGithubWebhooks, WebhookRefusal } from "./webhooks.ts";
 export { acceptGithubWebhook, reconcileGithubWebhooks, WebhookRefusal } from "./webhooks.ts";
 export type { GithubWebhookDelivery, WebhookProposal, WebhookReconciliation, WebhookRefusalCode } from "./webhooks.ts";
@@ -40,6 +43,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 import {
+  createPmCliExpectedError,
   comments as pmCommentsFn,
   commitItemMutations as sdkCommitItemMutations,
   isExternalDependencyReference,
@@ -6912,6 +6916,36 @@ export default defineExtension({
 
     // -----------------------------------------------------------------------
     // Refresh uses the import planner and its guarded update-only transaction path.
+    api.registerCommand({
+      name: "github identity",
+      description: "Explore exact identity collisions and copied mentions offline. Defaults to a bounded read-only graph; --owner and --detach preview one repair, --approve applies its exact digest.",
+      flags: [
+        { long: "--identity", value_name: "ref", description: "Exact gh:owner/repo#N or external_ref to inspect" },
+        { long: "--limit", value_name: "N", description: "Identity groups per page, 1..100 (default 20)" },
+        { long: "--offset", value_name: "N", description: "Zero-based identity page offset" },
+        { long: "--owner", value_name: "id", description: "Independently declared rightful owner" },
+        { long: "--detach", value_name: "id", description: "One duplicate whose GitHub tag may be removed" },
+        { long: "--approve", value_name: "digest", description: "Apply the exact reviewed preview digest" },
+      ],
+      async run(ctx: CommandHandlerContext) {
+        const options = ctx.options;
+        if (options.owner !== undefined || options.detach !== undefined || options.approve !== undefined) {
+          if (typeof options.identity !== "string" || typeof options.owner !== "string" || typeof options.detach !== "string" ||
+            (options.approve !== undefined && typeof options.approve !== "string")) {
+            throw createPmCliExpectedError("Supply --identity, --owner and --detach together; --approve requires the preview digest.", { context: { code: "invalid_options" } });
+          }
+          return options.approve === undefined
+            ? planGithubIdentityRepair(ctx.pm_root, options.identity, options.owner, options.detach)
+            : applyGithubIdentityRepair(ctx.pm_root, { identity: options.identity, owner: options.owner, detach: options.detach, approval: options.approve, author: process.env.PM_AUTHOR ?? "pm-github" });
+        }
+        return exploreGithubIdentities(ctx.pm_root, {
+          limit: options.limit === undefined ? undefined : Number(options.limit),
+          offset: options.offset === undefined ? undefined : Number(options.offset),
+          identity: typeof options.identity === "string" ? options.identity : undefined,
+        });
+      },
+    });
+
     api.registerCommand({
       name: "github refresh",
       description: "Refresh existing linked items from GitHub without importing new issues.",

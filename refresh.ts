@@ -1,5 +1,5 @@
 /** Refresh an explicit local GitHub mirror through the importer's existing mapping and transaction. */
-import { mkdtemp, cp, rm } from "node:fs/promises";
+import { mkdtemp, cp, rm, chmod, readdir, lstat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import { listAllComplete, certifyCompleteListResult, previewItemMutations } from "@unbrained/pm-cli/sdk";
@@ -120,12 +120,19 @@ export function refreshChanges(entry: PreparedGithubImport): RefreshChange[] {
   });
 }
 
-/** Isolate SDK-derived cache writes for previews and no-op applies, including runtime files. */
-async function readRefreshItems(pmRoot: string): Promise<PmItem[]> {
+/** Isolate SDK-derived cache writes for offline diagnostics, previews and no-op applies. @internal */
+export async function readRefreshItems(pmRoot: string): Promise<PmItem[]> {
   const scratch = await mkdtemp(join(tmpdir(), "pm-github-refresh-read-"));
   try {
+    if (!(await lstat(pmRoot)).isDirectory()) throw new CommandError("Offline tracker reads need an ordinary tracker directory; replace a linked root with a regular copy.");
     const root = join(scratch, "pm");
-    await cp(pmRoot, root, { recursive: true, filter: source => !["runtime", "locks", "github-webhooks"].includes(basename(source)) });
+    await cp(pmRoot, root, { recursive: true, filter: source => !["runtime", "locks", "github-webhooks", "extensions"].includes(basename(source)) });
+    // Source permissions are retained by cp; only the disposable copy may host SDK caches.
+    await chmod(root, 0o700);
+    for (const entry of await readdir(root, { recursive: true, withFileTypes: true })) {
+      if (!entry.isDirectory() && !entry.isFile()) throw new CommandError("Offline tracker reads refuse linked or special files; use an ordinary tracker copy.");
+      await chmod(join(entry.parentPath, entry.name), entry.isDirectory() ? 0o700 : 0o600);
+    }
     return decodeCompletePmItems(certifyCompleteListResult(await listAllComplete({ includeBody: true }, { pmRoot: root, cwd: root, noExtensions: true })));
   } finally {
     await rm(scratch, { recursive: true, force: true });
