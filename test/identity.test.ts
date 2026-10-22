@@ -147,6 +147,7 @@ test("registered command uses compact host TOON/JSON, read-only graph, repair pr
   const detach = await item(root, { tags: [key] });
   const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema", "hooks", "preflight", "search", "importers"] });
   const run = async (options: Record<string, unknown>) => (await harness.runCommand({ command: "github identity", pmRoot: root, args: [], options })).result;
+  assert.equal((await run({}) as { scanned: number }).scanned, 2);
   const report = await run({ limit: "1", offset: "0", identity: key }) as { collisions: number };
   assert.equal(report.collisions, 1);
   const proposed = await run({ identity: key, owner, detach }) as { approval: string };
