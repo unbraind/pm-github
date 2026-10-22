@@ -29,6 +29,9 @@ import {
   type ImportFidelity,
 } from "./import-fidelity.ts";
 import { refreshChanges, runRefresh } from "./refresh.ts";
+import { acceptGithubWebhook, reconcileGithubWebhooks, WebhookRefusal } from "./webhooks.ts";
+export { acceptGithubWebhook, reconcileGithubWebhooks, WebhookRefusal } from "./webhooks.ts";
+export type { GithubWebhookDelivery, WebhookProposal, WebhookReconciliation, WebhookRefusalCode } from "./webhooks.ts";
 import http from "node:http";
 import https from "node:https";
 import crypto from "node:crypto";
@@ -6922,6 +6925,40 @@ export default defineExtension({
       ],
       async run(ctx: CommandHandlerContext) {
         return runRefresh(ctx.args[0], ctx.pm_root, ctx.options);
+      },
+    });
+
+    api.registerCommand({
+      name: "github webhook receive",
+      description: "Verify and durably deduplicate an explicitly supplied issues webhook. Reads PM_GITHUB_WEBHOOK_SECRET; never stores payloads or changes items.",
+      arguments: [{ name: "owner/repo", required: true, description: "Expected repository boundary" }],
+      flags: [
+        { long: "--payload", value_name: "file", description: "File containing the exact original request body bytes" },
+        { long: "--delivery", value_name: "id", description: "Original X-GitHub-Delivery header" },
+        { long: "--event", value_name: "type", description: "Original X-GitHub-Event header (issues)" },
+        { long: "--signature", value_name: "sha256=...", description: "Original X-Hub-Signature-256 header" },
+      ],
+      async run(ctx: CommandHandlerContext) {
+        const { payload, delivery, event, signature } = ctx.options;
+        if (!ctx.args[0] || typeof payload !== "string" || typeof delivery !== "string" || typeof event !== "string" || typeof signature !== "string") {
+          throw new WebhookRefusal("invalid_options", "Supply owner/repo and --payload, --delivery, --event, --signature; set PM_GITHUB_WEBHOOK_SECRET securely.");
+        }
+        let bytes: Buffer;
+        try {
+          if (fs.statSync(payload).size > 25 * 1024 * 1024) throw new Error("oversized");
+          bytes = fs.readFileSync(payload);
+        } catch { throw new WebhookRefusal("invalid_event", "Supply a readable original payload file of at most 25 MiB."); }
+        return acceptGithubWebhook(ctx.pm_root, { repo: ctx.args[0], delivery, event, signature,
+          payload: bytes, secret: process.env.PM_GITHUB_WEBHOOK_SECRET ?? "" });
+      },
+    });
+    api.registerCommand({
+      name: "github webhook reconcile",
+      description: "Reconcile pending deliveries against current GitHub state into compact proposals, without changing items. Poll with github refresh for apply or recovery.",
+      arguments: [{ name: "owner/repo", required: true, description: "Expected repository boundary" }],
+      flags: [{ long: "--limit", value_name: "N", description: "Maximum deliveries per batch, 1 to 100 (default 20)" }],
+      async run(ctx: CommandHandlerContext) {
+        return reconcileGithubWebhooks(ctx.pm_root, ctx.args[0] ?? "", ctx.options.limit === undefined ? 20 : Number(ctx.options.limit));
       },
     });
 

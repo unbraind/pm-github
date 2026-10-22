@@ -125,7 +125,7 @@ async function readRefreshItems(pmRoot: string): Promise<PmItem[]> {
   const scratch = await mkdtemp(join(tmpdir(), "pm-github-refresh-read-"));
   try {
     const root = join(scratch, "pm");
-    await cp(pmRoot, root, { recursive: true, filter: source => !["runtime", "locks"].includes(basename(source)) });
+    await cp(pmRoot, root, { recursive: true, filter: source => !["runtime", "locks", "github-webhooks"].includes(basename(source)) });
     return decodeCompletePmItems(certifyCompleteListResult(await listAllComplete({ includeBody: true }, { pmRoot: root, cwd: root, noExtensions: true })));
   } finally {
     await rm(scratch, { recursive: true, force: true });
@@ -133,13 +133,13 @@ async function readRefreshItems(pmRoot: string): Promise<PmItem[]> {
 }
 
 /** Build a zero-create refresh plan, then commit changed existing targets with import transactions. */
-export async function runRefresh(repoArg: string | undefined, pmRoot: string, options: Record<string, unknown>) {
+export async function runRefresh(repoArg: string | undefined, pmRoot: string, options: Record<string, unknown>, scope?: { numbers: readonly number[] }) {
   if (!repoArg || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repoArg)) throw new CommandError("Usage: pm github refresh <owner/repo> [--dry-run] [--since <date|relative>] [--limit N] [--atomic]", EXIT_CODE.USAGE);
   const repo = repoArg.toLowerCase();
   const opts = parseImportOptions(options);
   /** Selected targets bounded by the caller's --limit, in ascending order. */
   const bounded = (candidates: readonly RefreshTarget[]): RefreshTarget[] =>
-    opts.limit === undefined ? [...candidates] : candidates.slice(0, opts.limit);
+    (opts.limit === undefined ? [...candidates] : candidates.slice(0, opts.limit)).filter(target => scope === undefined || scope.numbers.includes(target.number));
   let items = await readRefreshItems(pmRoot);
   let all = selectRefreshTargets(items, repo);
   let targets = bounded(all);
