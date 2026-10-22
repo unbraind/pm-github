@@ -168,7 +168,8 @@ retention and supported-event details.
 With an explicit repository, GitHub import, export, refresh, sync, project commands,
 blocker checks, closeout and webhook receive/reconcile work in a plain pm tracker
 without a git executable.
-They still require their normal GitHub access and credentials. Privacy scanning
+`pm github identity` also works there, entirely offline and without credentials.
+The provider commands still require their normal GitHub access and credentials. Privacy scanning
 with `github gate --diff <file>` also works there. Reading a proposed tracker diff
 with `github gate` requires a git repository; otherwise pass an explicit diff.
 Gated imports (`github import --gate`, including the scheduled sync workflow)
@@ -918,3 +919,17 @@ Before creating an item, import checks the complete tracker for its provenance t
 With `--gate` and a nonempty filtered issue list, both preview and apply results include a `plan` with source dates, closure reason, release, target identity, link/create/update action and state-conflict decision. An empty filtered issue list returns without a `plan`, including with `--gate --dry-run`. GitHub wins lifecycle conflicts for GitHub-owned imports. A canceled item that GitHub later reports as completed uses the SDK's explicit repeat-closure transition with the source reason. A linked external owner keeps its local status, and the plan records `preserve-provider-owner`; `github_state` still records the source state. Atomic transaction identity includes the latest external edit or different lifecycle generation in history. Local state edits and repeated state cycles force reconciliation, while staging and compensation keep crash retries on the same journal. Finalization runs before the SDK commits and is compensated with the batch on failure. It is idempotent and runs again after a recovered atomic journal, so an interrupted finalization can be repaired by retrying the same import before the gate permits a push.
 
 SDK limitation: native `updated_at` remains the local mutation clock because the bulk SDK uses it to address rollback history. The GitHub update date is retained exactly in `github_updated_at`, and the gated plan discloses this policy. Backdating native `updated_at` safely requires an SDK import mutation whose version identity is independent of source time. Native creation, closure and completion dates still preserve GitHub lifetimes for momentum and cycle-time readers.
+
+## Provider identity collisions
+
+Use `pm github identity --json` for a bounded offline graph of conflicting
+`external_ref`, GitHub provenance tags and native/provider ownership. Copied
+prose appears as a weaker mention; genuine provider links retain distinct
+ownership evidence. Inspect one group with
+`pm github identity --identity 'gh:example/project#7'`.
+
+Preview a narrowly scoped repair with `--identity`, `--owner` and `--detach`;
+apply only after reviewing its exact `--approve` digest. Ambiguous identities
+refuse with typed remedies. The SDK supplies complete reads, semantic preview,
+writer transactions, immutable audit history and idempotent replay. See the
+[worked example and SDK contracts](docs/identity-collisions.md).

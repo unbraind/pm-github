@@ -4,6 +4,7 @@
 
 ### Added
 
+- Explore provider identity collisions and approve scoped provenance repairs ([pm-github-identity-collisions](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-identity-collisions.toon))
 - Reconcile authenticated GitHub webhooks through a durable deduplicating inbox ([pm-github-webhook-inbox](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-webhook-inbox.toon))
 - Let reusable workflows carry their own release version ([pm-github-znig](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-znig.toon))
 - Preserve imported GitHub lifetimes, closure evidence and release attribution while linking cross-provider items ([pm-github-c093](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-c093.toon))
