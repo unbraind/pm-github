@@ -2,12 +2,15 @@ id: pm-github-ullj
 title: Refresh only already-linked GitHub items without importing new ones
 description: "Select explicit existing provenance, fetch linked issue numbers in GraphQL batches, reuse import lifecycle mapping, and apply audited update-only SDK transactions. Prove selection, zero creation, real lifecycle dates, missing reasons, dry-run immutability, and batch splitting."
 type: Feature
-status: in_progress
+status: closed
 priority: 2
 tags[3]: changelog-unreleased,github,refresh
 created_at: "2026-10-19T16:13:56.599Z"
-updated_at: "2026-10-20T05:15:16.933Z"
+updated_at: "2026-10-21T18:57:35.673Z"
+closed_at: "2026-10-21T18:57:32.566Z"
+completed_at: "2026-10-21T18:57:32.566Z"
 author: codex-agent
+resolution: "Reverified main eebda9277e52 (unchanged since audit): [PR #154](https://github.com/unbraind/pm-github/pull/154) (c651421) adds already-linked-only refresh, batch fetches and audited update-only mutations. Retained evidence: import-fidelity.ts, index.ts, refresh.ts."
 comments[47]{created_at,author,text}:
   "2026-10-19T16:14:11.328Z",codex-agent,"Plan: reuse prepareGithubImport, source lifecycle projection and importGithubAtomic. Refresh selects explicit tag or github_url identities before transport, batches at 100, and supplies a guarded update-only transaction mode with native audit comments. Real tracker tests fake only HTTP; live acceptance uses scratch copies only."
   "2026-10-19T16:20:35.265Z",codex-agent,"Implementation uses shared import preparation, shared source-metadata projection, and guarded SDK update transactions. Dry-run acceptance exposed that complete-list SDK reads populate runtime caches; preview reads now use disposable copies so the selected tracker is byte-identical. The pinned SDK exposes no cache-write suppression option; this SDK UX limitation will be reported in the final summary."
@@ -112,4 +115,5 @@ tests[5]:
 docs[2]{path,scope}:
   docs/refresh-idempotency.md,project
   README.md,project
+close_reason: "Reverified main eebda9277e52 (unchanged since audit): [PR #154](https://github.com/unbraind/pm-github/pull/154) (c651421) adds already-linked-only refresh, batch fetches and audited update-only mutations. Retained evidence: import-fidelity.ts, index.ts, refresh.ts."
 body: ""

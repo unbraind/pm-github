@@ -2,13 +2,16 @@ id: pm-github-b143
 title: Preserve legacy GitHub ownership across copied provider examples
 description: Fix GitHub issue #143 with real plain and atomic SDK import migration regressions; preserve authoritative external provider ownership.
 type: Issue
-status: in_progress
+status: closed
 priority: 1
 tags[2]: changelog-unreleased,"gh:unbraind/pm-github#143"
 created_at: "2026-10-18T04:05:23.678Z"
-updated_at: "2026-10-18T10:42:34.458Z"
+updated_at: "2026-10-21T18:39:13.824Z"
+closed_at: "2026-10-21T18:39:07.748Z"
+completed_at: "2026-10-21T18:39:07.748Z"
 author: codex-agent
-comments[11]{created_at,author,text}:
+resolution: "Reverified main eebda9277e52 (unchanged since audit): [PR #148](https://github.com/unbraind/pm-github/pull/148) (dc86e83) preserves authoritative legacy GitHub ownership across copied provider examples. Retained evidence: closeout.ts, import-fidelity.ts, test/closeout.test.ts."
+comments[12]{created_at,author,text}:
   "2026-10-18T04:05:33.037Z",codex-agent,"Round 1: issue read in full; searched existing tracker and no issue-specific import exists. Implement in fix/import-and-release-issues from origin/main; add behavioral revert proof and run unchanged npm and Bun release gates with isolated CI identity."
   "2026-10-18T04:09:03.582Z",codex-agent,"Legacy gh provenance now excludes copied body/label provider hints while explicit provider identities, descriptors and exporter description provenance stay authoritative. Baseline with new tests: 4/4 plain/atomic copied-body/label migrations fail. Each fixture checks native title/status/lifetime and GitHub ownership on retry; six external-owner controls preserve their owner."
   "2026-10-18T04:09:51.096Z",codex-agent,"Isolated revert proof: restore only import-fidelity.ts to origin/main with new tests unchanged; all 4/4 copied-body/label migration tests fail on stale native title. Restore the fix: combined real-tracker acceptance passes 23/23 (10 legacy ownership/control cases plus 13 closeout cases), zero skips."
@@ -20,6 +23,7 @@ comments[11]{created_at,author,text}:
   "2026-10-18T10:21:24.132Z",codex-agent,"Validation moved to isolated GitHub-hosted runners after shared-host contention made workflow acceptance cases take minutes each. Temporary validation branch commit 4790a23983261583055791ad951ed47211d69770 differs from PR source commit 0b6d7cb3eef2d056adecd4c44fa47817b177e6c3 only by its validation workflow; implementation/tests/tracker/dependency pins are identical. Exact isolated npm run release:check and bun run release:check are running at actions/runs/39118834540; strict tracker health passed in both jobs. Duplicate local full runs were stopped as incomplete, without observed failures; they are not passing gate evidence."
   "2026-10-18T10:29:47.237Z",codex-agent,"First hosted validation attempt exposed an error in the temporary validation workflow: the attestation auditor correctly rejects a matrix expression in command position. npm completed 893 tests with 892 passes and only the own-workflows attestation test failing; source coverage remained exactly 100/100/100/100. Replaced the temporary workflow command with literal npm and bun invocations and verified it with the canonical auditor locally. Validation head is now 059e4f0ed9308c9970ee4af6df941fcda8afe804; only the temporary workflow differs from source commit 0b6d7cb3eef2d056adecd4c44fa47817b177e6c3. No PR production code or tests changed. Superseded validation is not approval or passing gate evidence."
   "2026-10-18T10:42:32.509Z",codex-agent,"PR #148 final review receipt: CodeRabbit provider-only descriptor finding fixed in 0b6d7cb3eef2d056adecd4c44fa47817b177e6c3. Linked legacy ownership cases PASS 10/10 and provider-only cases PASS 2/2, preserving native fields/tags and one owner on retry. Reverting only the changed providerProvenance predicate makes both new tests fail; restoring it passes. Thread will receive sha/test reply after pushing and remain unresolved as requested. Exact isolated npm run release:check and bun run release:check both PASS: 893/893 tests, zero failures/skips/cancellations/todos, exact 100/100/100/100 coverage across 14 authored modules, unchanged thresholds. Hosted receipts: https://github.com/unbraind/pm-github/actions/runs/39119457879 (npm job 117651896197; Bun job 117651896368). Validation commit 059e4f0ed9308c9970ee4af6df941fcda8afe804 differs from source commit 0b6d7cb3eef2d056adecd4c44fa47817b177e6c3 only by a temporary validation workflow. Final-head CI will be reported in the PR. Claims released without closing items; orchestrator owns closure."
+  "2026-10-21T18:38:30.501Z",codex-agent,"Reverified main eebda9277e52 (unchanged since audit): [PR #148](https://github.com/unbraind/pm-github/pull/148) (dc86e83) preserves authoritative legacy GitHub ownership across copied provider examples. Retained evidence: closeout.ts, import-fidelity.ts, test/closeout.test.ts."
 files[2]{path,scope}:
   import-fidelity.ts,project
   test/import-fidelity.test.ts,project
@@ -28,4 +32,5 @@ tests[2]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   node --test --test-name-pattern='provider-only descriptor' test/import-fidelity.test.ts,project,codex-agent,"2026-10-18T09:38:04.909Z",local_mutation,fix/import-and-release-issues
 docs[1]{path,scope}:
   README.md,project
+close_reason: "Reverified main eebda9277e52 (unchanged since audit): [PR #148](https://github.com/unbraind/pm-github/pull/148) (dc86e83) preserves authoritative legacy GitHub ownership across copied provider examples. Retained evidence: closeout.ts, import-fidelity.ts, test/closeout.test.ts."
 body: ""

@@ -2,13 +2,16 @@ id: pm-github-julo
 title: Certify pm-github on PM CLI/SDK 2026.10.4 and consolidate pending dependency updates
 description: "Raise the exact development pin @unbrained/pm-cli to 2026.10.4 together with pm-ops 2026.10.4 (pm-changelog already at 2026.9.25); consolidate Dependabot #101 (pm-cli), #102 (@types/node), #103 (pm-ops) and #104 (codeql-action pinned SHA group 2892aa5); keep the canonical pm-ops merge-driver launcher byte-identical; certify with the full release gate plus isolated real-tracker dogfooding of the read-only GitHub surfaces via npm and Bun."
 type: Chore
-status: in_progress
+status: closed
 priority: 2
 tags[4]: cli,dependencies,release-readiness,sdk
 created_at: "2026-10-04T10:20:50.548Z"
-updated_at: "2026-10-18T04:13:47.598Z"
+updated_at: "2026-10-21T19:00:18.811Z"
+closed_at: "2026-10-21T19:00:15.092Z"
+completed_at: "2026-10-21T19:00:15.092Z"
 author: pi-glm
 acceptance_criteria: "npm run release:check passes (privacy, docstring, coverage gates intact); pm health with the repo-pinned 2026.10.4 binary is clean; packed tarball exercises validate/import/export-preview/sync-preview against a real repo read-only via npx @unbrained/pm-cli@2026.10.4 and bunx with zero GitHub mutation"
+resolution: "Reverified main eebda9277e52 (unchanged since audit): [PR #106](https://github.com/unbraind/pm-github/pull/106) (888b29f) delivered the dated certification. Current package.json/lockfile have subsequent toolchain updates; historical certification is not a claim of current exact-head acceptance. Retained evidence: scripts/prepare-merge-driver.ts, test/prepare-merge-driver.test.ts."
 actual_result: "Exact CLI/ops/changelog 2026.10.4 and development pins; canonical launcher unchanged; isolated lookup-loop suite 8/8. Clean npm ci and serialized release:check PASS 309/309, zero skips, unchanged coverage and privacy gate passed; both audit scopes 0, no open alerts. Packed own-tracker npx/bunx read-only commands pass (108 create + 1 update export preview, sync planned 1 / wouldSync 0 / skipped 1), no GitHub writes; scratch removed. Health exits 0 with stale_in_progress_items:2 advisory and no gate-failing findings, correcting the earlier zero-warning text. CodeRabbit and Greptile substantive reviews find no new actionable issues; other required reviews unavailable/pending. Leave item and PR open."
 comments[8]{created_at,author,text}:
   "2026-10-04T10:21:00.651Z",pi-glm,"Starting at 2daff95 (Release pm-github v2026.10.04). Plan: pm-cli 2026.9.26->2026.10.4, pm-ops 2026.9.28->2026.10.4, @types/node ->26.6.4 in range, codeql-action SHA group 1c5b6756->2892aa5 from #104; recopy canonical prepare-merge-driver.ts from pm-ops 2026.10.4; full release gate + read-only dogfood (validate/import/export dry-run/sync dry-run) + previews."
@@ -79,4 +82,5 @@ tests[6]:
       created_at: "2026-10-04T11:19:02.787Z"
       source_kind: local_mutation
       source_ref: chore/pm-github-pm-cli-2026-10-4
+close_reason: "Reverified main eebda9277e52 (unchanged since audit): [PR #106](https://github.com/unbraind/pm-github/pull/106) (888b29f) delivered the dated certification. Current package.json/lockfile have subsequent toolchain updates; historical certification is not a claim of current exact-head acceptance. Retained evidence: scripts/prepare-merge-driver.ts, test/prepare-merge-driver.test.ts."
 body: ""
