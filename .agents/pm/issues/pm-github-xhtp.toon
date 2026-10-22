@@ -2,14 +2,17 @@ id: pm-github-xhtp
 title: Explain privacy matches and distinguish bare-root regex literals during gated sync
 description: "Fix GitHub issue #160: the public pm-web issue 218 regex literal is classified as an absolute host root. Preserve path refusals in every imported field, provide safe match evidence, and verify no-git refusal."
 type: Issue
-status: in_progress
+status: closed
 priority: 2
 tags[2]: changelog-unreleased,"gh:unbraind/pm-github#160"
 created_at: "2026-10-21T04:40:30.603Z"
-updated_at: "2026-10-21T11:45:05.333Z"
+updated_at: "2026-10-21T18:51:53.756Z"
+closed_at: "2026-10-21T18:51:50.084Z"
+completed_at: "2026-10-21T18:51:50.084Z"
 author: codex-agent
 estimated_minutes: 240
 acceptance_criteria: "The public pm-web issue 218 text and comments import through ordinary and atomic gated modes.; Actual host paths in titles, bodies, comments and labels are refused before tracker mutation.; Refusals identify the item and published field with a safe excerpt and character offset.; A real plain tracker outside Git receives a clear refusal with no imported item writes.; Behavioral reverts fail the targeted regressions and npm and Bun release gates retain all original thresholds."
+resolution: "Reverified main eebda9277e52 (unchanged since audit): [PR #162](https://github.com/unbraind/pm-github/pull/162) (eebda92) distinguishes bare-root regex literals and returns redacted privacy-match diagnostics. Retained evidence: gate.ts, test/coverage-edges.test.ts, test/gate-inputs.test.ts."
 comments[20]{created_at,author,text}:
   "2026-10-21T04:41:06.116Z",codex-agent,"Read issue #160 and fetched pm-web issue 218 plus both public comments using read-only GitHub REST calls. The body regex literal produces one absolute-host-path match at body offset 2229; SHA-256 71708eb255bc230cd7c91dd26f7667a7b9386a2dc1f09756555c2c5c8bdc3c47 exactly matches the failed workflow receipt. The match is a bare root token inside JavaScript regex source, not an importer-added path or a GitHub URL. Plan: narrowly distinguish that regex syntax, add redacted match evidence to both report formats, and test real temporary tracker imports plus missing-repository refusal."
   "2026-10-21T04:44:12.762Z",codex-agent,"Implemented a narrow exception for bare root tokens followed by JavaScript regex source and test/exec invocation. Slash-separated paths remain scanned, including inside regex source. Reports now carry match_offset and a redacted excerpt; host paths reveal only the root initial and other findings use a fixed redaction marker. Read-only public fixture imports pass in ordinary and atomic modes; adversarial title/body/comment/label paths fail before any tracker mutation. Strengthened the existing no-git test to initialize a real plain tracker with a Git discovery ceiling."
@@ -42,4 +45,5 @@ tests[2]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   node --test test/gate-inputs.test.ts,project,codex-agent,"2026-10-21T04:43:55.363Z",local_mutation,fix/privacy-gate-match-evidence
 docs[1]{path,scope}:
   README.md,project
+close_reason: "Reverified main eebda9277e52 (unchanged since audit): [PR #162](https://github.com/unbraind/pm-github/pull/162) (eebda92) distinguishes bare-root regex literals and returns redacted privacy-match diagnostics. Retained evidence: gate.ts, test/coverage-edges.test.ts, test/gate-inputs.test.ts."
 body: ""

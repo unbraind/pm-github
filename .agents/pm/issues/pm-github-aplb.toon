@@ -2,13 +2,16 @@ id: pm-github-aplb
 title: Closeout workflow tests race the detached telemetry flush when removing their temporary global root
 description: "The 2026.10.16 release run 38867443956 failed in Run release checks: test/closeout-workflow.test.ts 'compact PR summary is privacy gated before the bot branch is published' threw ENOTEMPTY removing <tmp>/global/runtime/telemetry. The pm CLI's detached telemetry flush (upstream pm-cli#1423; follow-up #1484) can still write under PM_GLOBAL_PATH when the caller removes it. The same race hit PR #133 CI. import-gate.test.ts already retries its global-root removal (maxRetries 5, retryDelay 100); the closeout fixture did not."
 type: Issue
-status: in_progress
+status: closed
 priority: 1
 tags[4]: ci,fixed,flaky,tests
 created_at: "2026-10-16T07:43:14.293Z"
-updated_at: "2026-10-16T08:41:48.891Z"
+updated_at: "2026-10-21T18:49:17.645Z"
+closed_at: "2026-10-21T18:49:13.502Z"
+completed_at: "2026-10-21T18:49:13.502Z"
 author: claude-orchestrator
 acceptance_criteria: closeout-workflow.test.ts fixture removal retries like import-gate.test.ts; Release run succeeds
+resolution: "Reverified main eebda9277e52 (unchanged since audit): [PR #134](https://github.com/unbraind/pm-github/pull/134) (aa96490) retries synthetic fixture removal to tolerate detached flush completion; test/closeout-workflow.test.ts retains the regression. Retained evidence: test/closeout-workflow.test.ts, test/import-gate.test.ts."
 expected_result: Fixture teardown tolerates a concurrent detached flush write
 actual_result: Release run 38867443956 and PR #133 CI failed with ENOTEMPTY during fixture teardown
 comments[2]{created_at,author,text}:
@@ -16,4 +19,5 @@ comments[2]{created_at,author,text}:
   "2026-10-16T08:41:48.891Z",claude-orchestrator,"Review round 1 (CodeRabbit): finite rmSync retries cannot outlast a detached flush that may write up to the HTTP timeout later. Both disposable-global-root fixtures (closeout-workflow, import-gate) now set PM_TELEMETRY_INLINE_FLUSH=1 (documented test knob in pm docs/CONFIGURATION.md: flush inline instead of dispatching the detached worker; delivery unchanged). The retry stays as defensive cleanup. Local CI-like run: closeout-workflow 20/20; import-gate has 11 failures locally that reproduce on unchanged main in this host environment (baseline probe), so GitHub CI is the arbiter."
 files[1]{path,scope}:
   test/closeout-workflow.test.ts,project
+close_reason: "Reverified main eebda9277e52 (unchanged since audit): [PR #134](https://github.com/unbraind/pm-github/pull/134) (aa96490) retries synthetic fixture removal to tolerate detached flush completion; test/closeout-workflow.test.ts retains the regression. Retained evidence: test/closeout-workflow.test.ts, test/import-gate.test.ts."
 body: ""
