@@ -620,3 +620,17 @@ test("normalized allowlist fuzz rejects random repository, number, decoration an
   }
   t.diagnostic("seed 0x53ce71a9: 4096 encoded decoration samples, 12288 field cases");
 });
+
+test("issue-label URL tails keep the anchored tail grammar after the regex tail was replaced by linear trimming", () => {
+  for (const tail of ["", "/", ">", ">.", ")", ").", "> \t", "?q=1).", "#issuecomment-1)>"]) {
+    const local = { id: "local", body: `Issue: ${issue.html_url}${tail}` };
+    assert.equal(matchImportedIssue([local], issue).item, local, `tail ${JSON.stringify(tail)}`);
+  }
+  for (const tail of [" .", ">>", "x", ") x"]) {
+    assert.equal(matchImportedIssue([{ id: "local", body: `Issue: ${issue.html_url}${tail}` }], issue).item, undefined, `tail ${JSON.stringify(tail)}`);
+  }
+  const started = performance.now();
+  const hostile = { id: "hostile", body: `Issue: ${issue.html_url}${")".repeat(50_000)}x` };
+  assert.equal(matchImportedIssue([hostile], issue).item, undefined);
+  assert.ok(performance.now() - started < 1_000, "a long run of ')' must not backtrack polynomially");
+});

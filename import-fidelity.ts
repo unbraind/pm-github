@@ -182,7 +182,13 @@ function hasAnchoredCitationIntent(text: string, field: number, repo: string, nu
     if (field === 1 && /^(?:fix|fixes|fixed|close|closes|closed|resolve|resolves|resolved)[ \t]+$/i.test(prefix)) return true;
     if (field === 2 && /^(?:Issue|Tracks):[ \t]*<?$/i.test(prefix.slice(prefix.lastIndexOf("\n") + 1))) {
       const line = text.slice(reference.index).split("\n")[0]!;
-      if (/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/[1-9]\d*\/?(?:[?#][^\s<>]*)?>?[.)]*[ \t]*$/i.test(line)) return true;
+      // Trim the allowed tail (`>`, then `.`/`)`, then spaces/tabs) by hand: a regex tail that can also match the
+      // query's last characters backtracks polynomially on a run of `)`.
+      let end = line.length;
+      while (end > 0 && (line[end - 1] === " " || line[end - 1] === "\t")) end--;
+      while (end > 0 && (line[end - 1] === "." || line[end - 1] === ")")) end--;
+      if (end > 0 && line[end - 1] === ">") end--;
+      if (/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/[1-9]\d*\/?(?:[?#][^\s<>]*)?$/i.test(line.slice(0, end))) return true;
     }
   }
   return false;
