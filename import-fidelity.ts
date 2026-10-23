@@ -94,22 +94,28 @@ function citationReferences(text: string, repoHint: string): { key: string; inde
   return references;
 }
 
-/** Veto any raw non-target number, deliberately ignoring markup, repositories and token boundaries. */
-function hasOtherCitationNumber(texts: readonly string[], number: number): boolean {
+/** Require every raw reference to name the target repository and canonical number, ignoring markup. */
+function hasOtherCitationReference(texts: readonly string[], repo: string, number: number): boolean {
   const expected = String(number);
+  let found = false;
   for (const text of texts) {
-    for (const reference of text.matchAll(/(?:issues\/|pull\/|#)([0-9]+)/gi)) {
-      if (reference[1] !== expected) return true;
+    // Consume qualified forms before their embedded path/hash fallback. Bare hashes
+    // remain UNKNOWN: this projection carries no verified owning-repository context.
+    for (const reference of text.matchAll(/github\.com\/([\w.-]+\/[\w.-]+)\/(?:issues|pull)\/([0-9]+)|(?<![\w.-])([\w.-]+\/[\w.-]+)#([0-9]+)|(?:issues\/|pull\/|#)([0-9]+)/gi)) {
+      found = true;
+      const sourceRepo = reference[1] ?? reference[3];
+      const sourceNumber = reference[2] ?? reference[4] ?? reference[5];
+      if (sourceRepo?.toLowerCase() !== repo || sourceNumber !== expected) return true;
     }
   }
-  return false;
+  return !found;
 }
 
-/** Apply the raw-number veto before allowing strict single-issue ownership with explicit intent. */
+/** Apply the raw repository/number veto before strict single-issue ownership with explicit intent. */
 function citesIssue(item: PmItem, repo: string, number: number): "eligible" | CitationCandidate["reason"] | undefined {
   const target = `${repo}#${number}`;
   const texts = [item.title ?? "", item.description ?? "", item.body ?? ""];
-  const otherNumber = hasOtherCitationNumber(texts, number);
+  const otherReference = hasOtherCitationReference(texts, repo, number);
   const identities = new Set<string>();
   let intended = false;
   for (const [field, text] of texts.entries()) {
@@ -119,7 +125,7 @@ function citesIssue(item: PmItem, repo: string, number: number): "eligible" | Ci
     }
   }
   if (!identities.has(target)) return undefined;
-  return otherNumber || identities.size > 1 ? "multiple_issues" : intended ? "eligible" : "missing_intent";
+  return otherReference || identities.size > 1 ? "multiple_issues" : intended ? "eligible" : "missing_intent";
 }
 
 /** Trim configurable exporter punctuation in one backwards pass. @internal Shared with parity tests. */

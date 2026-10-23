@@ -178,6 +178,25 @@ for (const atomic of [false, true]) {
     assert.deepEqual((await get(local.id, {}, { pmRoot })).item, before);
     assert.equal((await items(pmRoot)).length, 2);
   }));
+
+  test(`${atomic ? "atomic" : "plain"} repository veto preserves the exact foreign same-number bold URL reproduction without git`, async () => tracker(async pmRoot => {
+    const local = (await create({ type: "Task", title: "Protected work", description: "Fixes acme/widgets#30 and **https://github.com/other/widgets/issues/30**",
+      status: "closed", closeReason: "Independent completed work", body: "Preserve local context", tags: "local" }, { pmRoot })).item;
+    const before = (await get(local.id, {}, { pmRoot })).item;
+    const opened = { ...issue, state: "open" as const, state_reason: "reopened" as const, closed_at: null };
+    const preview = (await importing(pmRoot, { atomic, gate: true, "dry-run": true }, [opened])).result;
+    assert.equal(preview.wouldAdopt, 0);
+    assert.equal(preview.wouldImport, 1);
+    assert.deepEqual(preview.citation_candidates, [{ issue: 30, id: local.id, reason: "multiple_issues" }]);
+    assert.deepEqual((await get(local.id, {}, { pmRoot })).item, before);
+    const landed = (await importing(pmRoot, { atomic }, [opened])).result;
+    assert.equal(landed.adopted, 0);
+    assert.equal(landed.imported, 1);
+    assert.deepEqual(landed.citation_candidates, preview.citation_candidates);
+    assert.deepEqual((await get(local.id, {}, { pmRoot })).item, before);
+    assert.equal((await items(pmRoot)).length, 2);
+  }));
+
 }
 
 test("raw exclusion rejects Markdown-wrapped second numbers across every prose field", () => {
@@ -241,7 +260,72 @@ test("raw exclusion deliberately over-counts unrelated substrings and trailing c
     }
   }
   for (const text of ["**issues/30**", "prefix#30suffix", "pull/30/anything", "https://foreign.example/path#30"]) {
-    assert.equal(matchImportedIssue([{ id: "local", description: `Fixes ${repo}#30 and ${text}` }], issue).via, "citation", text);
+    assert.equal(matchImportedIssue([{ id: "local", description: `Fixes ${repo}#30 and ${text}` }], issue).via, "new", text);
+  }
+});
+
+test("repository veto rejects foreign same-number issues and PRs in every property decoration", () => {
+  const wrappers = [["**", "**"], ["*", "*"], ["__", "__"], ["_", "_"], ["`", "`"], ["```text\n", "\n```"],
+    ["<", ">"], ["[reference](", ")"], ["![reference](", ")"], ["~~", "~~"], ["\\*", "\\*"], ["> ", "\n"]];
+  const references = ["https://github.com/other/widgets/issues/30", "https://github.com/other/widgets/pull/30",
+    "http://www.github.com/ACME/other/issues/30/?query=all#issuecomment-99", "other/widgets#30"];
+  for (const [left, right] of wrappers) for (const reference of references) {
+    for (const field of ["title", "description", "body"] as const) {
+      const local = { id: "local", title: "Local work", description: `Fixes ${repo}#30`, body: "" };
+      local[field] += ` and ${left}${reference}${right}`;
+      const result = matchImportedIssue([local], issue);
+      assert.equal(result.via, "new", `${field}: ${left}${reference}${right}`);
+      assert.deepEqual(result.citation_candidates, [{ id: "local", reason: "multiple_issues" }]);
+    }
+  }
+});
+
+test("repository veto fuzzes random repositories, numbers and nested Markdown decorations", t => {
+  let seed = 0x78b3e2d1;
+  /** Keep generated repository and decoration combinations reproducible across runtimes. */
+  const next = (bound: number): number => {
+    seed ^= seed << 13;
+    seed ^= seed >>> 17;
+    seed ^= seed << 5;
+    return (seed >>> 0) % bound;
+  };
+  const wrappers = [["**", "**"], ["*", "*"], ["__", "__"], ["_", "_"], ["`", "`"], ["```text\n", "\n```"],
+    ["<", ">"], ["[reference](", ")"], ["![reference](", ")"], ["~~", "~~"], ["\\*", "\\*"], ["> ", "\n"]];
+  const tails = ["", "/", ".", ")", "**tail", "suffix", "?query=all", "#issuecomment-99"];
+  for (let sample = 0; sample < 4096; sample++) {
+    const sourceRepo = next(2) === 0 ? repo : `owner-${next(10000)}/repo-${next(10000)}`;
+    const number = sourceRepo === repo ? 31 + next(10000) : next(2) === 0 ? 30 : 31 + next(10000);
+    const references = [`https://github.com/${sourceRepo}/issues/${number}`, `http://www.github.com/${sourceRepo}/pull/${number}`,
+      `${sourceRepo}#${number}`, `#${number}`, `issues/${number}`, `pull/${number}`];
+    let decorated = references[next(references.length)]!;
+    const depth = 1 + next(8);
+    for (let layer = 0; layer < depth; layer++) {
+      const [left, right] = wrappers[next(wrappers.length)]!;
+      decorated = left + decorated + right;
+    }
+    decorated += tails[next(tails.length)];
+    for (const field of ["title", "description", "body"] as const) {
+      const local = { id: "local", title: "Local work", description: `Fixes ${repo}#30`, body: "" };
+      local[field] += ` and ${decorated}`;
+      const result = matchImportedIssue([local], issue);
+      assert.equal(result.via, "new", `seed 0x78b3e2d1, sample ${sample}, ${sourceRepo}#${number}, ${field}: ${decorated}`);
+      assert.deepEqual(result.citation_candidates, [{ id: "local", reason: "multiple_issues" }]);
+    }
+  }
+  t.diagnostic("seed 0x78b3e2d1: 4096 repository/number/decoration samples, 12288 field cases");
+});
+
+test("repository veto refuses UNKNOWN references and retains qualified same-target controls", () => {
+  for (const reference of ["#30", "**#30**", "issues/30", "pull/30", "prefix#30suffix", "https://foreign.example/path#30",
+    "https://github.com/other/widgets/issues/30", "https://github.com/other/widgets/pull/30", "other/widgets#30",
+    "https://github.com//widgets/issues/30", "https://github.com/acme//issues/30"]) {
+    const result = matchImportedIssue([{ id: "local", description: `Fixes ${repo}#30 and ${reference}` }], issue);
+    assert.equal(result.via, "new", reference);
+    assert.deepEqual(result.citation_candidates, [{ id: "local", reason: "multiple_issues" }]);
+  }
+  for (const reference of [`${repo}#30`, "ACME/Widgets#30", `**https://github.com/${repo}/issues/30**`,
+    `https://github.com/${repo}/pull/30`, `http://www.github.com/${repo}/issues/30/?query=all#issuecomment-123`]) {
+    assert.equal(matchImportedIssue([{ id: "local", description: `Fixes ${repo}#30 and ${reference}` }], issue).via, "citation", reference);
   }
 });
 
@@ -267,10 +351,12 @@ test("every accepted second-reference shape disqualifies a fix item across every
   }
 });
 
-test("one parser deduplicates equivalent locators without granting ownership to bare numbers or PR links", () => {
+test("strict parsing deduplicates qualified locators without granting ownership to bare numbers or PR links", () => {
   const local = { id: "local", title: `Fixes ${repo}#30`, description: `Issue: ${issue.html_url}/?view=all#issuecomment-123`,
     body: `Same target #30 and ${issue.html_url}#issuecomment-456` };
-  assert.equal(matchImportedIssue([local], issue).item, local);
+  assert.equal(matchImportedIssue([local], issue).via, "new");
+  assert.deepEqual(matchImportedIssue([local], issue).citation_candidates, [{ id: "local", reason: "multiple_issues" }]);
+  assert.equal(matchImportedIssue([{ ...local, body: `Same target ${repo}#30 and ${issue.html_url}#issuecomment-456` }], issue).via, "citation");
   for (const text of ["#30", `https://github.com/${repo}/pull/30/`, `https://github.com/${repo}/issues/30/extra`,
     `${issue.html_url}.json`, "https://github.com/other/widgets/issues/30/", "https://other.test/acme/widgets/issues/30/", "https://["]) {
     assert.equal(matchImportedIssue([{ id: "local", title: `Fixes ${text}` }], issue).via, "new", text);

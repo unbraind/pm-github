@@ -380,14 +380,21 @@ eligible because their fix may already have landed.
 Citation adoption uses a conservative exclusion check followed by a strict
 positive ownership check:
 
-- **Exclusion:** scan the raw title, description and body for every substring
-  matching `issues/<digits>`, `pull/<digits>` or `#<digits>`. Every digit string
-  must equal the imported issue's canonical number. No Markdown is stripped,
-  no repository is required, and no trailing-character boundary is applied.
-  A non-target number vetoes adoption even inside emphasis, code spans, links,
-  angle brackets, malformed URLs or unrelated text. This deliberately
-  over-counts: refusing adoption can leave the usual duplicate import, while
-  missing a second reference could overwrite another item's content or status.
+- **Exclusion:** scan the raw title, description and body for repository-qualified
+  `github.com/owner/repo/issues/<digits>`, `github.com/owner/repo/pull/<digits>`
+  and `owner/repo#<digits>` references, plus unattributed `issues/<digits>`,
+  `pull/<digits>` and `#<digits>` substrings. Consume a qualified reference as
+  one reference, retaining its repository (case-insensitive) and canonical
+  number. Every reference must name the importing repository and target number;
+  any foreign repository, different number or UNKNOWN repository vetoes adoption.
+  No Markdown is stripped and no trailing-character boundary is applied, so
+  emphasis, code spans, links and angle brackets cannot hide another repository
+  even when its issue number is identical. Bare hashes are UNKNOWN: the item
+  projection has no verified owning-repository context, and the import argument
+  or another prose citation does not supply it. They cannot be assumed to name
+  the target. This deliberately over-counts: refusing adoption can leave the
+  usual duplicate import, while missing another reference could overwrite
+  another item's content or status.
 - **Positive ownership:** the strict parser must identify the imported issue's
   qualified reference and find no other repository/issue identity. The reference
   must appear in the title, or directly follow explicit intent:
@@ -400,7 +407,9 @@ positive ownership check:
 The strict parser still handles qualified shorthand, issue/PR URLs with trailing
 slashes, queries, fragments and punctuation. Bare numbers and PR links cannot
 establish issue ownership on their own. Repeated references to the same target
-are allowed. Passing the broad check alone never authorizes adoption.
+are allowed when repository-qualified. A PR link with the same repository and
+number counts as that same reference, while a foreign PR link vetoes adoption.
+Passing the broad check alone never authorizes adoption.
 
 | Existing item prose | Decision for issue 30 |
 | --- | --- |
@@ -415,6 +424,9 @@ are allowed. Passing the broad check alone never authorizes adoption.
 | Body: `Fixes acme/widgets#30 and https://github.com/acme/widgets/pull/31#issuecomment-123` | Incidental; `multiple_issues` |
 | Body: `Fixes acme/widgets#30 and **https://github.com/acme/widgets/issues/31**` | Incidental; `multiple_issues` |
 | Body: `Fixes acme/widgets#30`; unrelated code contains `prefix#31suffix` | Incidental; `multiple_issues` |
+| Body: `Fixes acme/widgets#30 and **https://github.com/other/widgets/issues/30**` | Incidental; foreign repository, `multiple_issues` |
+| Body: `Fixes acme/widgets#30 and **https://github.com/other/widgets/pull/30**` | Incidental; foreign repository, `multiple_issues` |
+| Body: `Fixes acme/widgets#30 and #30` | Incidental; UNKNOWN repository, `multiple_issues` |
 
 Incidental mentions never transfer ownership. The issue imports normally into
 its own item, leaving the incidental item's status, content and fields intact,

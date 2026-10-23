@@ -8,14 +8,16 @@ adopted; multiple eligible candidates refuse the batch before any writes and rep
 with candidate IDs and a tagging remedy. Status push, export and Projects
 matching retain their existing scope.
 
-Citation adoption now has a separate conservative exclusion check: every raw
-`issues/<digits>`, `pull/<digits>` and `#<digits>` substring across the three
-fields must use the imported issue's canonical number. Markup, foreign URLs,
-code spans and trailing characters never hide a number from that check.
-The strict parser and explicit intent still establish positive ownership;
-passing the raw veto alone is insufficient. Strict repository identities
-continue to disqualify references to another repository even with the same
-number. This intentionally prefers a normal create over taking another item.
+Citation adoption now has a separate conservative exclusion check. Every raw
+reference must carry the importing repository and canonical number. The scan
+collects GitHub issue/PR paths and qualified shorthand regardless of Markdown;
+unqualified `issues/<digits>`, `pull/<digits>` and `#<digits>` have UNKNOWN
+repository and veto adoption. The item projection carries no verified owning
+repository, so the import argument cannot assign bare hashes to this repository.
+Foreign references with the same number also veto adoption. The strict parser
+and explicit intent still establish positive ownership; passing the raw veto
+alone is insufficient. This intentionally prefers a normal create over taking
+another item.
 
 Incidental references carry `citation_candidates` hints with item IDs and
 `missing_intent` or `multiple_issues` reasons. They never hand status or fields
@@ -178,7 +180,8 @@ field: **192 fixed cases**. A deterministic xorshift generator with seed
 description and body: **12,288 property cases**. Another 36 cases require
 over-counting unrelated text, foreign/malformed URLs, trailing letters, zero,
 noncanonical spelling and very large digit strings. Four repeated-number
-controls remain eligible. The earlier 8,925-case shape matrix and all earlier
+controls were eligible under that historical number-only rule; the fourth
+review below changes them to UNKNOWN-repository refusals. The earlier 8,925-case shape matrix and all earlier
 regression inputs remain present. Three old foreign/malformed-URL expectations
 now require refusal because the raw policy intentionally counts their `#31`
 substrings; the encoded query case remains unchanged.
@@ -200,3 +203,54 @@ plans one update; the same five pm-context issues plan two creates and three
 updates, with three `missing_intent` hints and no adopts/skips. All **393/393
 original files** remain unchanged. Fresh release-gate and CodeQL evidence is
 linked from PR 169 at the final pushed head.
+
+## Repository-aware raw exclusion
+
+The fourth review reproduced a foreign reference hidden in bold with the same
+number as the target: `Fixes acme/widgets#30 and
+**https://github.com/other/widgets/issues/30**`. A number-only veto could not
+protect that item. Raw exclusion now retains each qualified reference's
+repository and canonical number. GitHub issue/PR URL substrings and qualified
+shorthand are consumed before their embedded fallback, so they are counted
+once. Every collected reference must equal the target repository and number;
+foreign repositories, other numbers and UNKNOWN repositories all veto adoption.
+The raw path/hash fallback is retained even for malformed or unrelated text.
+No Markdown normalization or trailing-character boundary is used.
+
+The item projection carries no verified owning repository. Bare hashes therefore
+remain UNKNOWN, even beside a qualified target citation. The import repository
+is not proof of the item's repository. Four historical number-only controls and
+the prior bare-hash deduplication input now require refusal; their inputs remain
+in the suite. Qualified repeated references, case-insensitive repository names
+and same-repository/same-number PR links remain allowed by exclusion, while the
+strict positive parser and explicit issue ownership intent remain necessary.
+
+New fixed coverage checks four foreign same-number issue/PR/shorthand references
+inside all twelve decoration pairs from the property test, in title,
+description and body: **144 cases**. A deterministic xorshift generator seeded
+with `0x78b3e2d1` creates **4,096 random repository/number/nested-decoration
+samples**, each checked in all three fields: **12,288 cases**. Every generated
+second reference has a foreign repository, another number or UNKNOWN attribution
+and must refuse adoption. The earlier shape/property matrices remain present.
+Plain and atomic no-git imports test the exact bold-foreign-URL reproduction
+against a closed local item and an open issue. Both preview a create and
+`multiple_issues` candidate hint, then create a separate item without reopening
+or changing the completed local item.
+
+Behavioral revert: restore only `hasOtherCitationNumber` and `citesIssue` from
+`aa86b21` in an isolated source copy, keeping current tests, strict parsing,
+receipts and real SDK persistence. Run
+`node --test --test-name-pattern='repository veto' test/cited-issue-adoption.test.ts`.
+The revert gives **5 failures, 0 passes, 0 skips, exit 1**. Fixed linked commands
+pass **35/35 adoption tests** and **8/8 regex/performance tests**. Typecheck,
+TypeScript builds, lint, docstrings and duplication checks pass locally; release
+gates on both npm and Bun are checked in CI at the final pushed head.
+
+Public replay with this rule still plans the pre-tag pm-review adopt into
+`pm-review-withdrawn-lineage`; its tagged snapshot plans one update. The same
+five pm-context issues still plan two creates and three updates, with no
+adopts/skips. The three candidate hints now report `multiple_issues` because raw
+UNKNOWN references veto before intent. All **393/393 original tracker files**
+retain their SHA-256 hashes. These are the saved main/pre-tag revisions listed
+above, replayed with live GitHub issue/timeline reads; no current-main claim is
+made for the replay. Exact-head CI run links and counts are in PR 169.
