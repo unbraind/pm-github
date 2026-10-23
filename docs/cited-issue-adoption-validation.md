@@ -8,6 +8,15 @@ adopted; multiple eligible candidates refuse the batch before any writes and rep
 with candidate IDs and a tagging remedy. Status push, export and Projects
 matching retain their existing scope.
 
+Citation adoption now has a separate conservative exclusion check: every raw
+`issues/<digits>`, `pull/<digits>` and `#<digits>` substring across the three
+fields must use the imported issue's canonical number. Markup, foreign URLs,
+code spans and trailing characters never hide a number from that check.
+The strict parser and explicit intent still establish positive ownership;
+passing the raw veto alone is insufficient. Strict repository identities
+continue to disqualify references to another repository even with the same
+number. This intentionally prefers a normal create over taking another item.
+
 Incidental references carry `citation_candidates` hints with item IDs and
 `missing_intent` or `multiple_issues` reasons. They never hand status or fields
 to the importer; the GitHub issue imports normally into its own item.
@@ -101,8 +110,9 @@ changed the package worktree or rebuilt a stale artifact: tests import live TS.
 | `node --test --test-name-pattern='roadmap never adopts' test/cited-issue-adoption.test.ts` | 2 failures, 0 passes, exit 1 | Both plain/atomic cases pass |
 
 `node --test test/cited-issue-adoption.test.ts test/import-regex.test.ts` passes
-28 tests with zero failures/skips. The PM-linked adoption command also passes
-21 tests. Typecheck, test typecheck, build, lint, docstrings and strict tracker
+38 tests with zero failures/skips. The PM-linked adoption command contains
+30 tests and the linked regex/performance command contains eight. Typecheck,
+test typecheck, build, lint, docstrings and strict tracker
 health pass locally. Full npm/Bun release-gate evidence is recorded in PR 169
 and the final handoff at the exact pushed head; thresholds remain unchanged.
 
@@ -110,14 +120,14 @@ and the final handoff at the exact pushed head; thresholds remain unchanged.
 
 The second review found that `Fixes acme/widgets#30 and
 https://github.com/acme/widgets/issues/31/` could still transfer ownership:
-the earlier counting regex skipped the trailing-slash URL. A shared parser now
-produces the identities and source positions used by both distinct-target
-counting and intent checks. It recognizes qualified shorthand, repository-hinted
+the earlier counting regex skipped the trailing-slash URL. A shared strict parser
+produces identities and source positions for positive ownership checks. It
+recognizes qualified shorthand, repository-hinted
 bare `#N`, issue and PR URLs, optional trailing slashes, query strings, comment
 fragments, prose punctuation and Markdown link boundaries. Foreign and malformed
-URLs are consumed as URL tokens so their interior hash text cannot masquerade
-as a separate reference. Bare numbers and PR URLs count toward additional
-targets but cannot establish issue ownership on their own.
+URLs are consumed as URL tokens during strict parsing. The independent raw
+exclusion deliberately counts their interior number substrings anyway. Bare
+numbers and PR URLs cannot establish issue ownership on their own.
 
 The property-style regression exercises 17 ownership forms against 35 second
 reference forms with five punctuation/Markdown wrappers in all three prose
@@ -135,8 +145,8 @@ The isolated behavioral revert restores only `citesIssue` from `cce11c4`, leavin
 the new parser, planner, receipts and real SDK persistence present. Running
 `node --test --test-name-pattern='every accepted second-reference|trailing-slash second reference' test/cited-issue-adoption.test.ts`
 then produces **3 failures, 0 passes, 0 skips, exit 1**. The fixed cases pass.
-The complete adoption/regex selection passes **33/33**; the linked adoption
-command contains **25 tests**. Fresh exact-head npm/Bun release evidence is
+The current adoption/regex selection contains **38 tests**; the linked adoption
+command contains **30 tests**. Fresh exact-head npm/Bun release evidence is
 recorded in PR 169 when CI completes, without changing coverage thresholds.
 
 CodeQL then identified quadratic backtracking in the new URL punctuation
@@ -150,3 +160,43 @@ test but restores the vulnerable regex call: the test then fails at
 **3,670.058 ms** (one failure, zero passes/skips, exit 1). These timings are local
 regression evidence, not a deployment benchmark. A fresh pushed head receives
 new release-gate and CodeQL evidence.
+
+## Raw exclusion review follow-up
+
+The third review showed that bold emphasis could hide a second URL from strict
+parsing. Exclusion now scans raw text separately: every `issues/<digits>`,
+`pull/<digits>` and `#<digits>` substring must equal the imported issue's
+canonical number. The scan has no markup or trailing-character boundaries and
+does not require a GitHub host or repository. Noncanonical digit spellings can
+also veto adoption conservatively. The strict parser and explicit intent remain
+the positive ownership check, with the existing repository-identity safeguard.
+
+Eight fixed decorations (bold, italic, underscore, code span, code fence, angle
+brackets, Markdown link and image link) wrap eight reference cores in every
+field: **192 fixed cases**. A deterministic xorshift generator with seed
+`0x6c8e9cf5` produces **4,096 nested decoration samples**, each checked in title,
+description and body: **12,288 property cases**. Another 36 cases require
+over-counting unrelated text, foreign/malformed URLs, trailing letters, zero,
+noncanonical spelling and very large digit strings. Four repeated-number
+controls remain eligible. The earlier 8,925-case shape matrix and all earlier
+regression inputs remain present. Three old foreign/malformed-URL expectations
+now require refusal because the raw policy intentionally counts their `#31`
+substrings; the encoded query case remains unchanged.
+
+Plain and atomic non-git tracker tests reproduce the exact bold-URL example.
+The gated preview plans one create, zero adopts and a `multiple_issues` hint.
+Actual imports preserve the entire original open item's SDK projection and
+create a separate issue item.
+
+The behavioral revert restores only `citesIssue` from `56580ec`, retaining the
+new raw scanner, strict parser, current tests, receipts and real SDK persistence.
+`node --test --test-name-pattern='raw exclusion' test/cited-issue-adoption.test.ts`
+then fails **5/5**, with zero passes/skips and exit 1. Fixed linked commands pass
+**30/30 adoption tests** and **8/8 regex/performance tests**.
+
+The saved public tracker snapshots were replayed with this raw exclusion and
+live GitHub reads: pm-review pre-tag still plans one adopt; its tagged snapshot
+plans one update; the same five pm-context issues plan two creates and three
+updates, with three `missing_intent` hints and no adopts/skips. All **393/393
+original files** remain unchanged. Fresh release-gate and CodeQL evidence is
+linked from PR 169 at the final pushed head.

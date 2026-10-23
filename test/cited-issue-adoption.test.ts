@@ -161,7 +161,89 @@ for (const atomic of [false, true]) {
     assert.deepEqual((await get(local.id, {}, { pmRoot })).item, before);
     assert.equal((await items(pmRoot)).length, 2);
   }));
+
+  test(`${atomic ? "atomic" : "plain"} raw exclusion preserves an item with a bold second URL without git`, async () => tracker(async pmRoot => {
+    const local = (await create({ type: "Task", title: "Protected roadmap", description: `Fixes ${repo}#30 and **https://github.com/${repo}/issues/31**`,
+      body: "Keep all roadmap context", status: "open", tags: "local" }, { pmRoot })).item;
+    const before = (await get(local.id, {}, { pmRoot })).item;
+    const preview = (await importing(pmRoot, { atomic, gate: true, "dry-run": true })).result;
+    assert.equal(preview.wouldImport, 1);
+    assert.equal(preview.wouldAdopt, 0);
+    assert.deepEqual(preview.citation_candidates, [{ issue: 30, id: local.id, reason: "multiple_issues" }]);
+    assert.equal((preview.plan as { action: string }[])[0]!.action, "create");
+    const landed = (await importing(pmRoot, { atomic })).result;
+    assert.equal(landed.imported, 1);
+    assert.equal(landed.adopted, 0);
+    assert.deepEqual(landed.citation_candidates, preview.citation_candidates);
+    assert.deepEqual((await get(local.id, {}, { pmRoot })).item, before);
+    assert.equal((await items(pmRoot)).length, 2);
+  }));
 }
+
+test("raw exclusion rejects Markdown-wrapped second numbers across every prose field", () => {
+  const wrappers = [["**", "**"], ["*", "*"], ["_", "_"], ["`", "`"], ["```text\n", "\n```"], ["<", ">"], ["[reference](", ")"], ["![reference](", ")"]];
+  const references = [`https://github.com/${repo}/issues/31`, `https://github.com/${repo}/pull/31`, `${repo}#31`, "#31",
+    "issues/31suffix", "pull/31suffix", "prefix#31suffix", "https://foreign.example/anything#31"];
+  for (const [left, right] of wrappers) for (const reference of references) {
+    for (const field of ["title", "description", "body"] as const) {
+      const local = { id: "local", title: "Local work", description: `Fixes ${repo}#30`, body: "" };
+      local[field] += ` and ${left}${reference}${right}`;
+      const result = matchImportedIssue([local], issue);
+      assert.equal(result.via, "new", `${field}: ${left}${reference}${right}`);
+      assert.deepEqual(result.citation_candidates, [{ id: "local", reason: "multiple_issues" }]);
+    }
+  }
+});
+
+test("raw exclusion property rejects second numbers wrapped in seeded random Markdown decorations", t => {
+  let seed = 0x6c8e9cf5;
+  /** Reproduce the same generated decoration stream on every supported runtime. */
+  const next = (bound: number): number => {
+    seed ^= seed << 13;
+    seed ^= seed >>> 17;
+    seed ^= seed << 5;
+    return (seed >>> 0) % bound;
+  };
+  const wrappers = [["**", "**"], ["*", "*"], ["__", "__"], ["_", "_"], ["`", "`"], ["```text\n", "\n```"],
+    ["<", ">"], ["[reference](", ")"], ["![reference](", ")"], ["~~", "~~"], ["\\*", "\\*"], ["> ", "\n"]];
+  const tails = ["", "next", ".", ")", "**tail", "_suffix", "/extra", "?query=anything"];
+  for (let sample = 0; sample < 4096; sample++) {
+    const number = 31 + next(10000);
+    const references = [`https://github.com/${repo}/issues/${number}`, `https://github.com/${repo}/pull/${number}`, `${repo}#${number}`,
+      `#${number}`, `issues/${number}tail`, `pull/${number}tail`, `prefix#${number}tail`, `https://foreign.example/path#${number}`];
+    let decorated = references[next(references.length)]!;
+    const depth = 1 + next(8);
+    for (let layer = 0; layer < depth; layer++) {
+      const [left, right] = wrappers[next(wrappers.length)]!;
+      decorated = left + decorated + right;
+    }
+    decorated += tails[next(tails.length)];
+    for (const field of ["title", "description", "body"] as const) {
+      const local = { id: "local", title: "Local work", description: `Fixes ${repo}#30`, body: "" };
+      local[field] += ` and ${decorated}`;
+      const result = matchImportedIssue([local], issue);
+      assert.equal(result.via, "new", `seed 0x6c8e9cf5, sample ${sample}, ${field}: ${decorated}`);
+      assert.deepEqual(result.citation_candidates, [{ id: "local", reason: "multiple_issues" }]);
+    }
+  }
+  t.diagnostic("seed 0x6c8e9cf5: 4096 generated decorations, 12288 field cases");
+});
+
+test("raw exclusion deliberately over-counts unrelated substrings and trailing characters", () => {
+  for (const text of ["issues/31letters", "pull/31/anything", "#31letters", "prefix#31suffix", "nestedissues/31tail", "ISSUES/31tail",
+    "notgithub/pull/31anything", "https://foreign.example/path#31", "https://[bad#31", "#0", "#030", "#999999999999999999999999999999999999"]) {
+    for (const field of ["title", "description", "body"] as const) {
+      const local = { id: "local", title: "Local work", description: `Fixes ${repo}#30`, body: "" };
+      local[field] += ` and ${text}`;
+      const result = matchImportedIssue([local], issue);
+      assert.equal(result.via, "new", `${field}: ${text}`);
+      assert.deepEqual(result.citation_candidates, [{ id: "local", reason: "multiple_issues" }]);
+    }
+  }
+  for (const text of ["**issues/30**", "prefix#30suffix", "pull/30/anything", "https://foreign.example/path#30"]) {
+    assert.equal(matchImportedIssue([{ id: "local", description: `Fixes ${repo}#30 and ${text}` }], issue).via, "citation", text);
+  }
+});
 
 test("every accepted second-reference shape disqualifies a fix item across every prose field", () => {
   const suffixes = ["", "/", "#issuecomment-123", "/#issuecomment-123", "?view=all", "/?view=all", "?view=all#issuecomment-123", "/?view=all#issuecomment-123"];
@@ -193,9 +275,12 @@ test("one parser deduplicates equivalent locators without granting ownership to 
     `${issue.html_url}.json`, "https://github.com/other/widgets/issues/30/", "https://other.test/acme/widgets/issues/30/", "https://["]) {
     assert.equal(matchImportedIssue([{ id: "local", title: `Fixes ${text}` }], issue).via, "new", text);
   }
-  for (const embedded of ["https://other.test/path#31", "https://other.test/acme/widgets#31", "https://github.com/search?q=other/widgets%2331", "https://[bad#31"]) {
-    assert.equal(matchImportedIssue([{ id: "local", description: `Fixes ${repo}#30 and ${embedded}` }], issue).via, "citation", embedded);
+  for (const embedded of ["https://other.test/path#31", "https://other.test/acme/widgets#31", "https://[bad#31"]) {
+    const result = matchImportedIssue([{ id: "local", description: `Fixes ${repo}#30 and ${embedded}` }], issue);
+    assert.equal(result.via, "new", embedded);
+    assert.deepEqual(result.citation_candidates, [{ id: "local", reason: "multiple_issues" }]);
   }
+  assert.equal(matchImportedIssue([{ id: "local", description: `Fixes ${repo}#30 and https://github.com/search?q=other/widgets%2331` }], issue).via, "citation");
 });
 
 test("citation matching accepts exact qualified references across prose fields and trailing punctuation", () => {

@@ -72,7 +72,7 @@ export class AmbiguousCitationError extends Error {
   }
 }
 
-/** Parse issue/PR identities once, resolving bare numbers only for conservative counting. */
+/** Parse strict issue/PR identities and source positions for positive ownership checks. */
 function citationReferences(text: string, repoHint: string): { key: string; index: number; ownsIssue: boolean }[] {
   const references: { key: string; index: number; ownsIssue: boolean }[] = [];
   const tokens = text.matchAll(/(?<![\w./#-])(?:https?:\/\/[^\s<>"'`\])}]+|(?:[\w.-]+\/[\w.-]+)?#[1-9]\d*(?![\w/=&%-]|\.\w))/gi);
@@ -94,19 +94,32 @@ function citationReferences(text: string, repoHint: string): { key: string; inde
   return references;
 }
 
-/** Require one distinct target across all prose fields and a qualified issue reference with explicit intent. */
+/** Veto any raw non-target number, deliberately ignoring markup, repositories and token boundaries. */
+function hasOtherCitationNumber(texts: readonly string[], number: number): boolean {
+  const expected = String(number);
+  for (const text of texts) {
+    for (const reference of text.matchAll(/(?:issues\/|pull\/|#)([0-9]+)/gi)) {
+      if (reference[1] !== expected) return true;
+    }
+  }
+  return false;
+}
+
+/** Apply the raw-number veto before allowing strict single-issue ownership with explicit intent. */
 function citesIssue(item: PmItem, repo: string, number: number): "eligible" | CitationCandidate["reason"] | undefined {
   const target = `${repo}#${number}`;
+  const texts = [item.title ?? "", item.description ?? "", item.body ?? ""];
+  const otherNumber = hasOtherCitationNumber(texts, number);
   const identities = new Set<string>();
   let intended = false;
-  for (const [field, text] of [item.title ?? "", item.description ?? "", item.body ?? ""].entries()) {
+  for (const [field, text] of texts.entries()) {
     for (const reference of citationReferences(text, repo)) {
       identities.add(reference.key);
       if (reference.key === target && reference.ownsIssue && (field === 0 || /(?:\b(?:fix|fixes|fixed|close|closes|closed|resolve|resolves|resolved)\b[\s:([<`*_]*|\b(?:issue|tracks)\s*:[\s([<`*_]*|\bgh\s+issue\b[\s:([<`*_]*)$/i.test(text.slice(0, reference.index)))) intended = true;
     }
   }
   if (!identities.has(target)) return undefined;
-  return identities.size > 1 ? "multiple_issues" : intended ? "eligible" : "missing_intent";
+  return otherNumber || identities.size > 1 ? "multiple_issues" : intended ? "eligible" : "missing_intent";
 }
 
 /** Trim configurable exporter punctuation in one backwards pass. @internal Shared with parity tests. */

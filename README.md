@@ -372,27 +372,35 @@ Each imported item records GitHub provenance: the `gh:owner/repo#N` idempotency 
 Before creating an issue item, import looks for an existing item citing exactly
 `https://github.com/owner/repo/issues/N` or `owner/repo#N` in its title,
 description or body. Trailing punctuation such as `.` and `)` is accepted;
-bare `#N`, another repository and longer issue numbers never match. Existing
+bare `#N`, another repository and longer issue numbers never establish ownership. Existing
 tag/URL/provider ownership matching takes precedence. Items with an established
 `gh:` issue tag are excluded from this fallback. Closed and canceled items remain
 eligible because their fix may already have landed.
 
-Adoption requires **both** of these ownership signals:
+Citation adoption uses a conservative exclusion check followed by a strict
+positive ownership check:
 
-- The combined title, description and body cite exactly one distinct GitHub
-  issue or PR, counting references to every repository. One parser handles
-  `owner/repo#N`, issue and `/pull/N` URLs, optional trailing `/`, query strings,
-  fragments such as `#issuecomment-123`, and trailing prose punctuation.
-  Bare `#N` uses the imported repository as a hint when counting additional
-  targets, but cannot establish ownership on its own; neither can a PR URL.
-  Repeated URLs and shorthand for the same identity count once. A second
-  issue or PR disqualifies the item even when only one issue is selected.
-- The target reference appears in the title, or directly follows explicit intent:
+- **Exclusion:** scan the raw title, description and body for every substring
+  matching `issues/<digits>`, `pull/<digits>` or `#<digits>`. Every digit string
+  must equal the imported issue's canonical number. No Markdown is stripped,
+  no repository is required, and no trailing-character boundary is applied.
+  A non-target number vetoes adoption even inside emphasis, code spans, links,
+  angle brackets, malformed URLs or unrelated text. This deliberately
+  over-counts: refusing adoption can leave the usual duplicate import, while
+  missing a second reference could overwrite another item's content or status.
+- **Positive ownership:** the strict parser must identify the imported issue's
+  qualified reference and find no other repository/issue identity. The reference
+  must appear in the title, or directly follow explicit intent:
   `fix`/`fixes`/`fixed`, `close`/`closes`/`closed`,
   `resolve`/`resolves`/`resolved`, `Issue:`, `Tracks:` or `GH issue`.
   Keywords and labels ignore case; punctuation and opening Markdown delimiters
   around the reference are accepted. The closing words follow
   [GitHub's supported keyword list](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue).
+
+The strict parser still handles qualified shorthand, issue/PR URLs with trailing
+slashes, queries, fragments and punctuation. Bare numbers and PR links cannot
+establish issue ownership on their own. Repeated references to the same target
+are allowed. Passing the broad check alone never authorizes adoption.
 
 | Existing item prose | Decision for issue 30 |
 | --- | --- |
@@ -405,6 +413,8 @@ Adoption requires **both** of these ownership signals:
 | Body: `Fixes acme/widgets#30 and https://github.com/acme/widgets/issues/31/` | Incidental; `multiple_issues` |
 | Body: `Fixes acme/widgets#30 and #31` (importing `acme/widgets`) | Incidental; `multiple_issues` |
 | Body: `Fixes acme/widgets#30 and https://github.com/acme/widgets/pull/31#issuecomment-123` | Incidental; `multiple_issues` |
+| Body: `Fixes acme/widgets#30 and **https://github.com/acme/widgets/issues/31**` | Incidental; `multiple_issues` |
+| Body: `Fixes acme/widgets#30`; unrelated code contains `prefix#31suffix` | Incidental; `multiple_issues` |
 
 Incidental mentions never transfer ownership. The issue imports normally into
 its own item, leaving the incidental item's status, content and fields intact,
