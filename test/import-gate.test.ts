@@ -19,6 +19,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { create, get } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness, type ExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 
 import extension, {
@@ -1701,4 +1702,39 @@ test("dispatch handles disabled, invalid, failed, and unpublished caller workflo
       if (expected !== 23) assert.ok(!fs.existsSync(env.REVIEW_ACTIONS! + ".dispatch"));
     }
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
+
+for (const adoptCited of [undefined, "false", "true"]) {
+  test(`reusable workflow explicit opt-in ${adoptCited ?? "unset"} governs preview import and repeat`, async () => {
+    const { root, base, git } = initSyncRepo();
+    try {
+      const env = await prepareWorkflowFixture(root, base);
+      const pmRoot = path.join(root, ".agents/pm");
+      const local = (await create({ type: "Issue", title: "Local completed fix", body: "Issue: https://github.com/acme/widgets/issues/1",
+        status: "closed", closeReason: "Completed locally" }, { pmRoot })).item;
+      const before = (await get(local.id, {}, { pmRoot })).item;
+      assert.equal(git(["add", ".agents/pm"]).status, 0);
+      assert.equal(git(["commit", "-qm", "local issue context"]).status, 0);
+      const handle = githubHandler([issue(1, "Upstream issue", "Public issue context")]);
+      await withMockGithub(handle, async () => {
+        const result = await executeWorkflow(workflowShell(["Resolve sync commit scope", "Preview GitHub to pm plan",
+          "Gated GitHub to pm import", "Verify repeat import is a no-op"]), root,
+        { ...env, ADOPT_CITED: adoptCited, PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE });
+        assert.equal(result.code, 0, result.stdout + result.stderr);
+        assert.match(result.stderr, adoptCited === "true" ? /#1 adopt:/ : /#1 import:/);
+        const actual = (await get(local.id, {}, { pmRoot })).item;
+        if (adoptCited === "true") assert.equal(actual.github_url, "https://github.com/acme/widgets/issues/1");
+        else assert.deepEqual(actual, before);
+        const files = fs.readdirSync(path.join(pmRoot, "issues")).filter(file => file.endsWith(".toon"));
+        assert.equal(files.length, adoptCited === "true" ? 1 : 2);
+      });
+    } finally { fs.rmSync(base, { recursive: true, force: true }); }
+  });
+}
+
+test("reusable workflow adoption input defaults false and the example retains that default", () => {
+  assert.match(workflow, /adopt-cited:\n        description: [^\n]+\n        type: boolean\n        required: false\n        default: false/);
+  assert.match(workflow, /ADOPT_CITED: \$\{\{ inputs.adopt-cited \}\}/);
+  assert.match(callerExample, /adopt-cited: false/);
 });

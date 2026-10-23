@@ -254,7 +254,7 @@ test("built package dispatch advertises and honors selectors and limits through 
     assert.equal(help.code, 0, help.stderr);
     assert.match(help.stdout, /--issue/);
     assert.match(help.stdout, /--limit/);
-    assert.match(help.stdout, /--no-adopt-cited/);
+    assert.match(help.stdout, /--adopt-cited/);
     const selected = await call(["unbraind/pm-web", "--issue", "189", "--dry-run", "--json"]);
     assert.equal(selected.code, 0, selected.stderr);
     assert.equal((JSON.parse(selected.stdout) as { wouldImport: number }).wouldImport, 1);
@@ -264,13 +264,14 @@ test("built package dispatch advertises and honors selectors and limits through 
     assert.equal(server.requests.length, 2);
     assert.equal(server.requests[0]!.url, "/repos/unbraind/pm-web/issues/189");
     assert.deepEqual(readPmItems(pmRoot), []);
-    await create({ type: "Task", title: "Fix unbraind/pm-web#189" }, { pmRoot });
-    const adopted = await call(["unbraind/pm-web", "--issue", "189", "--dry-run", "--json"]);
+    await create({ type: "Task", title: "Local issue fix", body: "Issue: https://github.com/unbraind/pm-web/issues/189" }, { pmRoot });
+    const adopted = await call(["unbraind/pm-web", "--issue", "189", "--dry-run", "--adopt-cited", "--json"]);
     assert.equal(adopted.code, 0, adopted.stderr);
     assert.equal((JSON.parse(adopted.stdout) as { wouldAdopt: number }).wouldAdopt, 1);
-    const optedOut = await call(["unbraind/pm-web", "--issue", "189", "--dry-run", "--no-adopt-cited", "--json"]);
+    const optedOut = await call(["unbraind/pm-web", "--issue", "189", "--dry-run", "--json"]);
     assert.equal(optedOut.code, 0, optedOut.stderr);
     assert.equal((JSON.parse(optedOut.stdout) as { wouldImport: number }).wouldImport, 1);
+    assert.equal((JSON.parse(optedOut.stdout) as { citation_candidates: { reason: string }[] }).citation_candidates[0]!.reason, "adoption_disabled");
     assert.equal(readPmItems(pmRoot).length, 1);
   });
 }));

@@ -288,7 +288,7 @@ test("citation opt-out excludes prose while retaining structured identity matchi
   const references = ["one", "two"].map(id => ({ id, description: `Blocked by ${issue.html_url}#issuecomment-1`,
     body: issue.html_url, source_description: issue.html_url, unrelated_url: issue.html_url }));
   assert.doesNotThrow(() => matchImportedIssue(references, issue, undefined, false));
-  assert.deepEqual(matchImportedIssue(references, issue, undefined, false), { item: undefined, linkOnly: false, via: "new" });
+  assert.deepEqual(matchImportedIssue(references, issue, undefined, false), { item: undefined, linkOnly: false, via: "new", citation_candidates: [{ id: "one", reason: "missing_intent" }, { id: "two", reason: "missing_intent" }] });
   const owner = { id: "owner", github_url: issue.html_url };
   assert.equal(matchImportedIssue([...references, owner], issue).item, owner);
   assert.throws(() => matchImportedIssue([owner, { ...owner, id: "competitor" }], issue), /multiple existing owners/);

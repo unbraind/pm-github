@@ -175,8 +175,8 @@ const COMMENTS_MODES: readonly CommentsMode[] = ["body", "annotations", "both"];
  * of the import path consumes a typed shape rather than re-parsing strings.
  */
 export interface ImportOptions {
-  /** Disable fallback adoption when citations are references rather than ownership evidence. */
-  noAdoptCited?: boolean;
+  /** Explicitly enable conservative citation adoption; default imports only report candidates. */
+  adoptCited?: boolean;
   /** Explicit comma-separated issue numbers or same-repository references. */
   issue?: string;
   /** Positive cap on list-mode issues, ordered by latest update. */
@@ -2736,7 +2736,7 @@ export function parseImportOptions(options: Record<string, unknown>): ImportOpti
     atomic: optionEnabled(options, "atomic"),
     linkDeps: optionEnabled(options, "link-deps", "linkDeps"),
     gate: optionEnabled(options, "gate"),
-    noAdoptCited: optionEnabled(options, "no-adopt-cited", "noAdoptCited"),
+    adoptCited: optionEnabled(options, "adopt-cited", "adoptCited"),
   };
 }
 
@@ -3118,7 +3118,7 @@ export async function prepareGithubImport(
   const title = issue.title.trim();
   if (!title) return undefined;
 
-  const identity = matchImportedIssue(fidelityContext.items, issue, match, !opts.noAdoptCited);
+  const identity = matchImportedIssue(fidelityContext.items, issue, match, opts.adoptCited === true);
   match = identity.item;
   const timeline = await fidelityContext.timeline(issue, repo, token);
   const fidelity = buildImportFidelity(issue, fidelityContext.releases, timeline);
@@ -6628,7 +6628,7 @@ export function isMutatingGithubCommand(command: string, options: Record<string,
 // ---------------------------------------------------------------------------
 
 const IMPORT_FLAGS = [
-  { long: "--no-adopt-cited", description: "Require explicit provenance instead of adopting one untagged item with single-issue fix/track intent. Incidental or multi-issue citations are hints only; multiple eligible owners refuse import until one is tagged" },
+  { long: "--adopt-cited", description: "Opt in to normalized, anchored citation adoption (default: off). Tag items gh:owner/repo#N when creating them; default imports only report citation candidates" },
   { long: "--issue", value_name: "N[,N...]", description: "Fetch exactly these issue numbers, #N, or same-repo owner/repo#N references; conflicts with --state/--all/--labels/--since/--assignee/--milestone/--limit. Missing numbers fail before writes (reported by --dry-run); PRs require --include-prs" },
   { long: "--limit", value_name: "n", description: "Positive list-mode issue cap, newest-updated first; reports limit and truncated when more exist (one extra matching issue is fetched to check). Invalid with --issue" },
   { long: "--all", description: "Include closed issues (shorthand for --state all)" },

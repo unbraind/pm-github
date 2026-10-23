@@ -36,7 +36,8 @@ test("ownership declaration parity with citation adoption disabled: colon, white
       old === url ? "github-declaration" : "new", JSON.stringify(description));
   }
   const citing = matchImportedIssue([{ id: "citing", description: `GitHub issue:${url}` }], issue);
-  assert.equal(citing.via, "citation");
+  assert.equal(citing.via, "new");
+  assert.deepEqual(citing.citation_candidates, [{ id: "citing", reason: "missing_intent" }]);
   assert.equal(citing.linkOnly, false);
 });
 

@@ -7,8 +7,11 @@ import { delimiter, join } from "node:path";
 import test from "node:test";
 import { create, get, listAllComplete, certifyCompleteListResult } from "@unbrained/pm-cli/sdk";
 import { parseImportOptions, prepareGithubImport, runImport, verifyImportIdempotency, type GhIssue, type PreparedGithubImport } from "../index.ts";
-import { AmbiguousCitationError, matchImportedIssue } from "../import-fidelity.ts";
+import { AmbiguousCitationError, matchImportedIssue as resolveImportedIssue } from "../import-fidelity.ts";
 import { captureStderr, withEnv } from "./helpers/mock-github-server.ts";
+
+/** Existing adoption regressions opt in explicitly; default-off cases call the production matcher directly. */
+const matchImportedIssue: typeof resolveImportedIssue = (items, issue, tagged, adoptCited = true) => resolveImportedIssue(items, issue, tagged, adoptCited);
 
 const root = join(import.meta.dirname, "..");
 const cli = join(root, "node_modules/.bin/pm");
@@ -38,7 +41,7 @@ async function tracker(run: (pmRoot: string) => Promise<void>, git = false): Pro
 
 /** Import injected REST data through the real planner and SDK or CLI mutation path. */
 async function importing(pmRoot: string, options: Record<string, unknown>, issues = [issue]) {
-  return captureStderr(async () => await runImport(repo, pmRoot, parseImportOptions(options), {
+  return captureStderr(async () => await runImport(repo, pmRoot, parseImportOptions({ adoptCited: true, ...options }), {
     resolveToken: () => undefined, fetchIssues: async () => issues,
   }) as Record<string, unknown>);
 }
@@ -53,7 +56,7 @@ async function items(pmRoot: string) {
 for (const atomic of [false, true]) {
   test(`${atomic ? "atomic" : "plain"} citation adopts a terminal item without git, then re-import updates one item`, async () => tracker(async pmRoot => {
     const existing = (await create({ type: "Task", title: "Local fix", description: `Fixed (${issue.html_url}).`,
-      body: `Fix for ${repo}#30`, tags: "local", status: atomic ? "canceled" : "closed", closeReason: "Landed locally" }, { pmRoot })).item;
+      body: `Issue: ${issue.html_url}\n\nFix for ${repo}#30`, tags: "local", status: atomic ? "canceled" : "closed", closeReason: "Landed locally" }, { pmRoot })).item;
     const before = await items(pmRoot);
     const preview = await importing(pmRoot, { atomic, "dry-run": true });
     assert.equal(preview.result.wouldImport, 0);
@@ -81,7 +84,7 @@ for (const atomic of [false, true]) {
 
   test(`${atomic ? "atomic" : "plain"} ambiguity lists both candidates and refuses the entire batch before writes`, async () => tracker(async pmRoot => {
     const first = (await create({ type: "Task", title: `Fix ${repo}#30` }, { pmRoot })).item;
-    const second = (await create({ type: "Task", title: "Other fix", body: `Issue: (${issue.html_url})` }, { pmRoot })).item;
+    const second = (await create({ type: "Task", title: "Other fix", body: `Issue: (${issue.html_url})\n\nIssue: ${issue.html_url}` }, { pmRoot })).item;
     const before = await items(pmRoot);
     const batch = [{ ...issue, number: 31, html_url: issue.html_url.replace("/30", "/31") }, issue];
     const preview = await importing(pmRoot, { atomic, gate: true, "dry-run": true }, batch);
@@ -325,7 +328,7 @@ test("repository veto refuses UNKNOWN references and retains qualified same-targ
   }
   for (const reference of [`${repo}#30`, "ACME/Widgets#30", `**https://github.com/${repo}/issues/30**`,
     `https://github.com/${repo}/pull/30`, `http://www.github.com/${repo}/issues/30/?query=all#issuecomment-123`]) {
-    assert.equal(matchImportedIssue([{ id: "local", description: `Fixes ${repo}#30 and ${reference}` }], issue).via, "citation", reference);
+    assert.equal(matchImportedIssue([{ id: "local", description: `Fixes ${repo}#30 and ${reference}` }], issue).via, reference.includes("/pull/") ? "new" : "citation", reference);
   }
 });
 
@@ -337,7 +340,7 @@ test("every accepted second-reference shape disqualifies a fix item across every
   ]))];
   for (const first of firstShapes) {
     for (const field of ["title", "description", "body"] as const) {
-      assert.equal(matchImportedIssue([{ id: "local", [field]: `Fixes ${first}` }], issue).via, "citation", `${field}: ${first}`);
+      assert.equal(matchImportedIssue([{ id: "local", [field]: `Fixes ${first}` }], issue).via, field === "body" ? "new" : "citation", `${field}: ${first}`);
       for (const second of secondShapes) {
         for (const text of [second, `${second}.`, `(${second})`, `[reference](${second}).`, `[reference](${second})next`]) {
           const local = { id: "local", title: "Local work", description: `Fixes ${first}`, body: "" };
@@ -366,7 +369,7 @@ test("strict parsing deduplicates qualified locators without granting ownership 
     assert.equal(result.via, "new", embedded);
     assert.deepEqual(result.citation_candidates, [{ id: "local", reason: "multiple_issues" }]);
   }
-  assert.equal(matchImportedIssue([{ id: "local", description: `Fixes ${repo}#30 and https://github.com/search?q=other/widgets%2331` }], issue).via, "citation");
+  assert.equal(matchImportedIssue([{ id: "local", description: `Fixes ${repo}#30 and https://github.com/search?q=other/widgets%2331` }], issue).via, "new");
 });
 
 test("citation matching accepts exact qualified references across prose fields and trailing punctuation", () => {
@@ -374,7 +377,7 @@ test("citation matching accepts exact qualified references across prose fields a
     for (const citation of [issue.html_url, `${issue.html_url}.`, `(${issue.html_url})`, `${issue.html_url}?`,
       `Issue:${issue.html_url}`, `${repo}#30`, `Tracks:${repo}#30`, `${repo}#30?`, `ACME/Widgets#30;`]) {
       const local = { id: "local", [field]: `Fixed ${citation}` };
-      assert.equal(matchImportedIssue([local], issue).item, local, `${field}: ${citation}`);
+      assert.equal(matchImportedIssue([local], issue).item, field === "body" || (field === "description" && (/^(?:Issue:|Tracks:)/.test(citation) || citation.startsWith("("))) ? undefined : local, `${field}: ${citation}`);
     }
   }
   assert.equal(matchImportedIssue([{ id: "local", tags: ["gh:invalid"], title: `${repo}#30` }], issue).via, "citation");
@@ -392,7 +395,7 @@ test("bare numbers, other repos, longer identities, URL paths and different issu
 });
 
 test("tagged and URL-linked owners take precedence over even multiple prose citations", () => {
-  const citing = ["first", "second"].map(id => ({ id, body: `Fixes ${issue.html_url}` }));
+  const citing = ["first", "second"].map(id => ({ id, body: `Fixes ${issue.html_url}\n\nIssue: ${issue.html_url}` }));
   const tagged = { id: "tagged", tags: [`gh:${repo}#30`] };
   assert.equal(matchImportedIssue([...citing, tagged], issue, tagged).item, tagged);
   const linked = { id: "linked", github_url: issue.html_url };
@@ -402,9 +405,9 @@ test("tagged and URL-linked owners take precedence over even multiple prose cita
 
 test("opt-out preserves create semantics for reference-only prose", async () => tracker(async pmRoot => {
   await create({ type: "Task", title: `References ${repo}#30` }, { pmRoot });
-  assert.equal(parseImportOptions({}).noAdoptCited, false);
-  assert.equal(parseImportOptions({ noAdoptCited: true }).noAdoptCited, true);
-  const preview = await importing(pmRoot, { "dry-run": true, "no-adopt-cited": true });
+  assert.equal(parseImportOptions({}).adoptCited, false);
+  assert.equal(parseImportOptions({ adoptCited: true }).adoptCited, true);
+  const preview = await importing(pmRoot, { "dry-run": true, adoptCited: false });
   assert.equal(preview.result.wouldImport, 1);
   assert.equal(preview.result.wouldAdopt, 0);
 }));
@@ -432,7 +435,7 @@ test("batch plans both issues normally instead of transferring a roadmap", async
 test("only explicit closing keywords, issue labels or a title reference establish citation intent", () => {
   for (const reference of [issue.html_url, `${repo}#30`]) {
     for (const prefix of ["Fix", "fixes", "FIXED:", "Close", "Closes", "Closed", "Resolve", "Resolves", "Resolved", "Issue:", "Tracks:", "GH issue", "GH issue:"]) {
-      for (const field of ["description", "body"]) assert.equal(matchImportedIssue([{ id: "local", [field]: `${prefix} (${reference})` }], issue).via, "citation", `${field}: ${prefix}`);
+      for (const field of ["description", "body"]) assert.equal(matchImportedIssue([{ id: "local", [field]: `${prefix} (${reference})` }], issue).via, "new", `${field}: ${prefix}`);
     }
     assert.equal(matchImportedIssue([{ id: "local", title: `Work for ${reference}`, body: "Related context" }], issue).via, "citation");
     for (const prefix of ["Related:", "See", "References:", "Fix for", "Tracks", "Tracking:", "PrefixFixes"]) {
@@ -466,7 +469,7 @@ test("incidental hints do not create ambiguity and remain visible alongside elig
   assert.equal(preview.wouldAdopt, 1);
   assert.equal((preview.plan as { item: string }[])[0]!.item, eligible.id);
   assert.deepEqual(preview.citation_candidates, [{ issue: 30, id: related.id, reason: "missing_intent" }]);
-  await create({ type: "Task", title: "Another owner", body: `Tracks: ${repo}#30` }, { pmRoot });
+  await create({ type: "Task", title: "Another owner", body: `Tracks: ${repo}#30\n\nIssue: ${issue.html_url}` }, { pmRoot });
   const refused = (await importing(pmRoot, { "dry-run": true })).result;
   assert.equal(refused.blocked, true);
   assert.deepEqual(refused.citation_candidates, preview.citation_candidates);
@@ -475,7 +478,7 @@ test("incidental hints do not create ambiguity and remain visible alongside elig
 }));
 
 test("a citation without a local tag array still receives the issue provenance tag", async () => {
-  const entry = await prepareGithubImport(issue, repo, parseImportOptions({}), undefined, undefined, undefined,
+  const entry = await prepareGithubImport(issue, repo, parseImportOptions({ adoptCited: true }), undefined, undefined, undefined,
     { items: [{ id: "local", title: `${repo}#30` }], releases: [], timeline: async () => [] });
   assert.ok(entry!.tags.includes(`gh:${repo}#30`));
 });
@@ -483,4 +486,137 @@ test("a citation without a local tag array still receives the issue provenance t
 test("idempotency requires the provenance tag on an adopt too", () => {
   const entry = { issueNumber: 30, tags: [], identity: { via: "citation" }, match: { id: "local" } } as unknown as PreparedGithubImport;
   assert.throws(() => verifyImportIdempotency([], [entry], repo), /without a provenance tag/);
+});
+
+for (const atomic of [false, true]) for (const adoptCited of [false, true]) {
+  test(`${atomic ? "atomic" : "plain"} explicit opt-in ${adoptCited} controls the pm-review Issue label in a non-git tracker`, async () => tracker(async pmRoot => {
+    const local = (await create({ type: "Task", title: "Completed local fix", body: `Issue: ${issue.html_url}`,
+      status: "closed", closeReason: "Already landed", tags: "local" }, { pmRoot })).item;
+    const before = (await get(local.id, {}, { pmRoot })).item;
+    const preview = (await importing(pmRoot, { atomic, adoptCited, gate: true, "dry-run": true })).result;
+    assert.equal(preview.wouldAdopt, adoptCited ? 1 : 0);
+    assert.equal(preview.wouldImport, adoptCited ? 0 : 1);
+    assert.deepEqual((await get(local.id, {}, { pmRoot })).item, before);
+    const result = (await importing(pmRoot, { atomic, adoptCited })).result;
+    assert.equal(result.adopted, adoptCited ? 1 : 0);
+    assert.equal(result.imported, adoptCited ? 0 : 1);
+    assert.equal((await items(pmRoot)).length, adoptCited ? 1 : 2);
+    if (!adoptCited) {
+      assert.deepEqual(preview.citation_candidates, [{ issue: 30, id: local.id, reason: "adoption_disabled" }]);
+      assert.deepEqual(result.citation_candidates, preview.citation_candidates);
+      assert.deepEqual((await get(local.id, {}, { pmRoot })).item, before);
+    }
+  }));
+}
+
+test("explicit opt-in defaults off in SDK options and reports competing eligible candidates without refusing", () => {
+  assert.equal(parseImportOptions({}).adoptCited, false);
+  assert.equal(parseImportOptions({ "adopt-cited": true }).adoptCited, true);
+  assert.equal(parseImportOptions({ adoptCited: true }).adoptCited, true);
+  const owners = [{ id: "a", description: `Fixes ${repo}#30` }, { id: "b", body: `Issue: ${issue.html_url}` }];
+  const result = resolveImportedIssue(owners, issue);
+  assert.equal(result.via, "new");
+  assert.deepEqual(result.citation_candidates, owners.map(owner => ({ id: owner.id, reason: "adoption_disabled" })));
+  assert.throws(() => resolveImportedIssue(owners, issue, undefined, true), AmbiguousCitationError);
+});
+
+test("normalized allowlist refuses all five review rounds with explicit opt-in", () => {
+  const cases = [
+    { description: `Related: ${repo}#30`, reason: "missing_intent" },
+    { description: `Fixes ${repo}#30 and ${repo}#31`, reason: "multiple_issues" },
+    ...["https://github.com/acme/widgets/issues/31/", "**https://github.com/acme/widgets/issues/31**",
+      "**https://github.com/other/widgets/issues/30**", "[other](https://github.com/other/widgets/issues&sol;31)",
+      "[other](https://github.com/other/widgets/issues%2F31)", "issues%2F31"].map(other => ({ description: `Fixes ${repo}#30 and ${other}`, reason: "multiple_issues" })),
+  ];
+  for (const { description, reason } of cases) {
+    for (const enabled of [false, true]) {
+      const result = resolveImportedIssue([{ id: "local", status: "closed", description }], issue, undefined, enabled);
+      assert.equal(result.via, "new", description);
+      assert.deepEqual(result.citation_candidates, [{ id: "local", reason }], description);
+    }
+  }
+});
+
+test("normalized allowlist accepts only anchored description, body URL label and title forms", () => {
+  for (const keyword of ["Fix", "Fixes", "Fixed", "Close", "Closes", "Closed", "Resolve", "Resolves", "Resolved"]) {
+    for (const reference of [`${repo}#30`, issue.html_url]) {
+      assert.equal(matchImportedIssue([{ id: "local", description: `${keyword} ${reference} . Additional context` }], issue).via, "citation");
+      for (const description of [`Context: ${keyword} ${reference}`, `${keyword}: ${reference}`]) {
+        assert.equal(matchImportedIssue([{ id: "local", description }], issue).via, "new", description);
+      }
+      assert.equal(matchImportedIssue([{ id: "local", body: `${keyword} ${reference}` }], issue).via, "new");
+    }
+  }
+  for (const label of ["Issue:", "Tracks:"]) {
+    assert.equal(matchImportedIssue([{ id: "local", body: `${label} ${issue.html_url}` }], issue).via, "citation");
+    assert.equal(matchImportedIssue([{ id: "local", body: `${label} <${issue.html_url}>` }], issue).via, "citation");
+    for (const body of [`${label} ${repo}#30`, `Context ${label} ${issue.html_url}`, `${label} ${issue.html_url} additional text`]) {
+      assert.equal(matchImportedIssue([{ id: "local", body }], issue).via, "new", body);
+    }
+  }
+});
+
+test("normalized allowlist decodes named/numeric entities, percent layers, Unicode and Markdown destinations", () => {
+  const references = [issue.html_url.replaceAll("/", "&sol;"), issue.html_url.replaceAll("/", "&#47;"),
+    issue.html_url.replaceAll("/", "&#x2f;"), encodeURIComponent(issue.html_url), encodeURIComponent(encodeURIComponent(issue.html_url)),
+    issue.html_url.replaceAll("/", "&amp;sol;"), issue.html_url.replace("github", "git\u200bh\u202eub"),
+    [...issue.html_url].map(char => String.fromCharCode(char.charCodeAt(0) + 0xfee0)).join(""),
+    issue.html_url.replace("issues/", "issues%FF%2F"), `[target](${issue.html_url})`, `[target](<${issue.html_url}>)`];
+  for (const reference of references) {
+    const result = matchImportedIssue([{ id: "local", body: `Issue: ${reference}` }], issue);
+    assert.equal(result.via, reference.includes("%FF") ? "new" : "citation", reference);
+  }
+  for (const body of [`Issue: [target][issue]\n\n[issue]: ${issue.html_url}`, `Issue: [issue][]\n\n[issue]: <${issue.html_url}>`,
+    `Issue: [issue]\n\n[issue]: ${issue.html_url}`, `Issue: ${issue.html_url}\n\n[unused] text`, `Issue: ${issue.html_url}\r\n\r\nContext`, `Issue:\n${issue.html_url}`]) {
+    assert.equal(matchImportedIssue([{ id: "local", body }], issue).via, "citation", body);
+  }
+  for (const other of ["https://github.com/other/widgets/issues/3\n1", "https://github.com/other/\nwidgets/issues/30",
+    "https://github.com/other/widgets/issues&#x2f;31", "[other/widgets#31](https://github.com/acme/widgets/issues/30)",
+    "https://github.com/acme/widgets/pull/30", "https://github.com/acme/widgets", "https://github.com/other/widgets/issues%FF%2F31"]) {
+    const result = matchImportedIssue([{ id: "local", description: `Fixes ${repo}#30`, body: other }], issue);
+    assert.equal(result.via, "new", other);
+    assert.deepEqual(result.citation_candidates, [{ id: "local", reason: "multiple_issues" }]);
+  }
+  const deeplyEncoded = "&" + "amp;".repeat(12) + "sol;31";
+  const result = matchImportedIssue([{ id: "local", description: `Fixes ${repo}#30`, body: `issues${deeplyEncoded}` }], issue);
+  assert.equal(result.via, "new");
+  assert.deepEqual(result.citation_candidates, [{ id: "local", reason: "normalization_limit" }]);
+});
+
+test("normalized allowlist fuzz rejects random repository, number, decoration and encoding second references", t => {
+  let seed = 0x53ce71a9;
+  /** Reproduce encoded, decorated second-reference samples on Node and Bun. */
+  const next = (bound: number): number => {
+    seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;
+    return (seed >>> 0) % bound;
+  };
+  const encoders = [(value: string) => value, (value: string) => value.replaceAll("/", "&sol;"),
+    (value: string) => value.replaceAll("/", "&#47;"), (value: string) => value.replaceAll("/", "&#x2f;"),
+    (value: string) => encodeURIComponent(value), (value: string) => value.replaceAll("/", "%2F"),
+    (value: string) => [...value].map(char => `&#${char.codePointAt(0)!};`).join(""),
+    (value: string) => [...value].join("\u200b\u202e"), (value: string) => value.replace("/issues/", "/issues/\n")];
+  const wrappers = [["**", "**"], ["*", "*"], ["__", "__"], ["_", "_"], ["`", "`"], ["```text\n", "\n```"],
+    ["<", ">"], ["[reference](", ")"], ["![reference](", ")"], ["~~", "~~"], ["\\*", "\\*"], ["> ", "\n"]];
+  for (let sample = 0; sample < 4096; sample++) {
+    const sourceRepo = next(2) ? repo : `owner-${next(10000)}/repo-${next(10000)}`;
+    const number = sourceRepo === repo ? 31 + next(10000) : next(2) ? 30 : 31 + next(10000);
+    const references = [`https://github.com/${sourceRepo}/issues/${number}`, `https://github.com/${sourceRepo}/pull/${number}`,
+      `${sourceRepo}#${number}`, `#${number}`, `issues/${number}`, `pull/${number}`];
+    let other = references[next(references.length)]!;
+    const layers = 1 + next(3);
+    for (let layer = 0; layer < layers; layer++) other = encoders[next(encoders.length)]!(other);
+    const depth = 1 + next(5);
+    for (let layer = 0; layer < depth; layer++) {
+      const [left, right] = wrappers[next(wrappers.length)]!;
+      other = left + other + right;
+    }
+    for (const field of ["title", "description", "body"] as const) {
+      const local = { id: "local", title: "Local fix", description: `Fixes ${repo}#30`, body: "" };
+      local[field] += ` and ${other}`;
+      const result = matchImportedIssue([local], issue);
+      assert.equal(result.via, "new", `seed 0x53ce71a9, sample ${sample}, ${field}: ${other}`);
+      assert.equal(result.citation_candidates?.[0]?.id, "local");
+    }
+  }
+  t.diagnostic("seed 0x53ce71a9: 4096 encoded decoration samples, 12288 field cases");
 });

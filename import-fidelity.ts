@@ -1,5 +1,6 @@
 /** Source lifecycle, release-window and cross-provider identity rules for issue imports. */
 import { spawnSync } from "node:child_process";
+import { decodeHTML } from "entities";
 import {
   acquireLock, appendHistoryEntry, canonicalDocument, createHistoryEntry, getHistoryPath,
   locateItem, normalizeItemId, readLocatedItem, readSettings, resolveItemTypeRegistry, resolvePmRoot, runActiveOnWriteHooks, serializeItemDocument, writeFileAtomic,
@@ -47,7 +48,7 @@ export interface ImportMatch { item?: PmItem; linkOnly: boolean; via: string; ci
 /** Incidental references are review hints, never permission to transfer an item's ownership. */
 export interface CitationCandidate {
   id: string;
-  reason: "multiple_issues" | "missing_intent";
+  reason: "multiple_issues" | "missing_intent" | "adoption_disabled" | "normalization_limit";
 }
 
 /** A citation cannot pick an owner until the user tags exactly one candidate. */
@@ -94,38 +95,90 @@ function citationReferences(text: string, repoHint: string): { key: string; inde
   return references;
 }
 
-/** Require every raw reference to name the target repository and canonical number, ignoring markup. */
-function hasOtherCitationReference(texts: readonly string[], repo: string, number: number): boolean {
-  const expected = String(number);
-  let found = false;
-  for (const text of texts) {
-    // Consume qualified forms before their embedded path/hash fallback. Bare hashes
-    // remain UNKNOWN: this projection carries no verified owning-repository context.
-    for (const reference of text.matchAll(/github\.com\/([\w.-]+\/[\w.-]+)\/(?:issues|pull)\/([0-9]+)|(?<![\w.-])([\w.-]+\/[\w.-]+)#([0-9]+)|(?:issues\/|pull\/|#)([0-9]+)/gi)) {
-      found = true;
-      const sourceRepo = reference[1] ?? reference[3];
-      const sourceNumber = reference[2] ?? reference[4] ?? reference[5];
-      if (sourceRepo?.toLowerCase() !== repo || sourceNumber !== expected) return true;
-    }
+/** Decode nested representations before either ownership or exclusion; an exhausted bound refuses adoption. */
+function normalizeCitationText(input: string): { text: string; source: string; stable: boolean } {
+  let text = input;
+  for (let pass = 0; pass < 8; pass++) {
+    const decoded = decodeHTML(text.replace(/(?:%[a-f0-9]{2})+/gi, encoded =>
+      Buffer.from(encoded.slice(1).split("%").map(byte => Number.parseInt(byte, 16))).toString("utf8")))
+      .normalize("NFKC").replace(/\p{Default_Ignorable_Code_Point}/gu, "").replace(/\r\n?/g, "\n");
+    if (decoded === text) return { text: citationDisplayText(text), source: text, stable: true };
+    text = decoded;
   }
-  return !found;
+  return { text: citationDisplayText(text), source: text, stable: false };
 }
 
-/** Apply the raw repository/number veto before strict single-issue ownership with explicit intent. */
-function citesIssue(item: PmItem, repo: string, number: number): "eligible" | CitationCandidate["reason"] | undefined {
-  const target = `${repo}#${number}`;
-  const texts = [item.title ?? "", item.description ?? "", item.body ?? ""];
-  const otherReference = hasOtherCitationReference(texts, repo, number);
-  const identities = new Set<string>();
-  let intended = false;
-  for (const [field, text] of texts.entries()) {
-    for (const reference of citationReferences(text, repo)) {
-      identities.add(reference.key);
-      if (reference.key === target && reference.ownsIssue && (field === 0 || /(?:\b(?:fix|fixes|fixed|close|closes|closed|resolve|resolves|resolved)\b[\s:([<`*_]*|\b(?:issue|tracks)\s*:[\s([<`*_]*|\bgh\s+issue\b[\s:([<`*_]*)$/i.test(text.slice(0, reference.index)))) intended = true;
+/** Unwrap link destinations/definitions for anchored intent, retaining the normalized source for exclusion. */
+function citationDisplayText(source: string): string {
+  const definitions = new Map<string, string>();
+  const text = source.replace(/^[ \t]{0,3}\[([^[\]\n]+)\]:[ \t]*(?:<([^>\n]+)>|(\S+)).*$/gm,
+    (_raw: string, label: string, angle: string | undefined, destination: string | undefined) => {
+      definitions.set(label.trim().toLowerCase(), angle ?? destination!);
+      return angle ?? destination!;
+    });
+  return text.replace(/!?\[([^[\]\n]*)\]\((?:<([^<>\n]+)>|([^()[\]\n]*))\)/g,
+    (_raw: string, _label: string, angle: string | undefined, destination: string | undefined) => angle ?? destination!.trim())
+    .replace(/\[([^[\]\n]+)\](?:\[([^[\]\n]*)\])?/g,
+      (raw: string, label: string, key: string | undefined) => definitions.get((key || label).trim().toLowerCase()) ?? raw)
+    .replace(/\\\n/g, "").replace(/(?<!\n)\n(?!\n|[ \t]*(?:Issue|Tracks):)/gi, " ");
+}
+
+/** Refuse every GitHub URL except a complete issue locator for this target, including embedded URLs. */
+function hasOtherGithubUrl(text: string, repo: string, number: number): boolean {
+  const sites = [...text.matchAll(/github\.com/gi)];
+  for (const [index, site] of sites.entries()) {
+    const segment = text.slice(site.index, sites[index + 1]?.index);
+    const token = /^github\.com[^\s<>"'`[\]()*{}]*/i.exec(segment)![0];
+    const locator = trimLocatorPunctuation(token, "),.;:!*_~]}");
+    const reference = /^github\.com\/([\w.-]+\/[\w.-]+)\/issues\/([1-9]\d*)\/?(?:[?#].*)?$/i.exec(locator);
+    if (!reference || reference[1]!.toLowerCase() !== repo || reference[2] !== String(number)) return true;
+  }
+  return false;
+}
+
+/** Inspect normalized source without trusting Markdown interpretation or an assumed repository for bare hashes. */
+function inspectCitationReferences(texts: readonly string[], repo: string, number: number): { mentioned: boolean; unsafe: boolean } {
+  let mentioned = false;
+  let unsafe = false;
+  for (const source of texts) {
+    // Check both retained source and joined soft lines; joining must not discard link labels or destinations.
+    for (const text of [source, source.replace(/(?<!\n)\\?\n(?!\n)[ \t]*/g, "")]) {
+      if (hasOtherGithubUrl(text, repo, number)) unsafe = true;
+      for (const reference of text.matchAll(/github\.com\/([\w.-]+\/[\w.-]+)\/(?:issues|pull)\/([0-9]+)|(?<![\w.-])([\w.-]+\/[\w.-]+)#([0-9]+)|(?:issues[\s/:]*|pull[\s/:]*|#)([0-9]+)/gi)) {
+        const sourceRepo = (reference[1] ?? reference[3])?.toLowerCase();
+        const sourceNumber = reference[2] ?? reference[4] ?? reference[5];
+        if (sourceNumber === String(number) && (sourceRepo === repo || sourceRepo === undefined)) mentioned = true;
+        if (sourceRepo !== repo || sourceNumber !== String(number)) unsafe = true;
+      }
     }
   }
-  if (!identities.has(target)) return undefined;
-  return otherReference || identities.size > 1 ? "multiple_issues" : intended ? "eligible" : "missing_intent";
+  return { mentioned, unsafe };
+}
+
+/** Permit only title references, leading description closing words, or whole body issue-label lines. */
+function hasAnchoredCitationIntent(text: string, field: number, repo: string, number: number): boolean {
+  for (const reference of citationReferences(text, repo)) {
+    if (reference.key !== `${repo}#${number}` || !reference.ownsIssue) continue;
+    if (field === 0) return true;
+    const prefix = text.slice(0, reference.index);
+    if (field === 1 && /^(?:fix|fixes|fixed|close|closes|closed|resolve|resolves|resolved)[ \t]+$/i.test(prefix)) return true;
+    if (field === 2 && /^(?:Issue|Tracks):[ \t]*<?$/i.test(prefix.slice(prefix.lastIndexOf("\n") + 1))) {
+      const line = text.slice(reference.index).split("\n")[0]!;
+      if (/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/[1-9]\d*\/?(?:[?#][^\s<>]*)?>?[.)]*[ \t]*$/i.test(line)) return true;
+    }
+  }
+  return false;
+}
+
+/** Normalize first, exclude other/unknown references, then apply the anchored ownership allowlist. */
+function citesIssue(item: PmItem, repo: string, number: number): "eligible" | CitationCandidate["reason"] | undefined {
+  const normalized = [item.title ?? "", item.description ?? "", item.body ?? ""].map(normalizeCitationText);
+  const assessment = inspectCitationReferences(normalized.flatMap(value => [value.source, value.text]), repo, number);
+  if (!assessment.mentioned) return undefined;
+  if (normalized.some(value => !value.stable)) return "normalization_limit";
+  const intended = normalized.some((value, field) => hasAnchoredCitationIntent(value.text, field, repo, number));
+  if (assessment.unsafe) return "multiple_issues";
+  return intended ? "eligible" : "missing_intent";
 }
 
 /** Trim configurable exporter punctuation in one backwards pass. @internal Shared with parity tests. */
@@ -164,7 +217,7 @@ function providerProvenance(item: PmItem): string {
 }
 
 /** Match GitHub locators or provider back-links before creation, refusing multiple owners. */
-export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, tagged?: PmItem, adoptCited = true): ImportMatch {
+export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, tagged?: PmItem, adoptCited = false): ImportMatch {
   const issueUrl = locators(issue.html_url)[0]!;
   const bodyUrls = new Set(locators(issue.body ?? ""));
   /** Recognize leading native ownership declarations; later prose cannot transfer ownership. */
@@ -178,14 +231,14 @@ export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, tag
   let item = candidates[0];
   let cited = false;
   const incidental: CitationCandidate[] = [];
-  if (!item && adoptCited && !issue.pull_request) {
+  if (!item && !issue.pull_request) {
     const repo = issue.html_url.split("/").slice(3, 5).join("/").toLowerCase();
     const citing: PmItem[] = [];
     for (const candidate of items) {
       if (!candidate.id || candidate.tags?.some(tag => parseProvenanceTag(tag) !== undefined)) continue;
       const assessment = citesIssue(candidate, repo, issue.number);
-      if (assessment === "eligible") citing.push(candidate);
-      else if (assessment !== undefined) incidental.push({ id: candidate.id, reason: assessment });
+      if (assessment === "eligible" && adoptCited) citing.push(candidate);
+      else if (assessment !== undefined) incidental.push({ id: candidate.id, reason: assessment === "eligible" ? "adoption_disabled" : assessment });
     }
     incidental.sort((left, right) => left.id.localeCompare(right.id));
     if (citing.length > 1) throw new AmbiguousCitationError(repo, issue.number, citing.map(candidate => candidate.id!).sort(), incidental);
