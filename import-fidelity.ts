@@ -99,9 +99,12 @@ function citationReferences(text: string, repoHint: string): { key: string; inde
 function normalizeCitationText(input: string): { text: string; source: string; stable: boolean } {
   let text = input;
   for (let pass = 0; pass < 8; pass++) {
-    const decoded = decodeHTML(text.replace(/(?:%[a-f0-9]{2})+/gi, encoded =>
-      Buffer.from(encoded.slice(1).split("%").map(byte => Number.parseInt(byte, 16))).toString("utf8")))
-      .normalize("NFKC").replace(/\p{Default_Ignorable_Code_Point}/gu, "").replace(/\r\n?/g, "\n");
+    const entities = decodeHTML(text.replace(/(?:%[a-f0-9]{2})+/gi, encoded =>
+      Buffer.from(encoded.slice(1).split("%").map(byte => Number.parseInt(byte, 16))).toString("utf8")));
+    // Both Unicode transforms are identity on printable ASCII and line whitespace.
+    const unicode = /[^\x20-\x7e\t\r\n]/.test(entities)
+      ? entities.normalize("NFKC").replace(/\p{Default_Ignorable_Code_Point}/gu, "") : entities;
+    const decoded = unicode.replace(/\r\n?/g, "\n");
     if (decoded === text) return { text: citationDisplayText(text), source: text, stable: true };
     text = decoded;
   }
@@ -110,17 +113,19 @@ function normalizeCitationText(input: string): { text: string; source: string; s
 
 /** Unwrap link destinations/definitions for anchored intent, retaining the normalized source for exclusion. */
 function citationDisplayText(source: string): string {
-  const definitions = new Map<string, string>();
-  const text = source.replace(/^[ \t]{0,3}\[([^[\]\n]+)\]:[ \t]*(?:<([^>\n]+)>|(\S+))/gm,
-    (_raw: string, label: string, angle: string | undefined, destination: string | undefined) => {
-      definitions.set(label.trim().toLowerCase(), angle ?? destination!);
-      return angle ?? destination!;
-    });
-  return text.replace(/!?\[([^[\]\n]*)\]\((?:<([^<>\n]+)>|([^()[\]\n]*))\)/g,
-    (_raw: string, _label: string, angle: string | undefined, destination: string | undefined) => angle ?? destination!.trim())
-    .replace(/\[([^[\]\n]+)\](?:\[([^[\]\n]*)\])?/g,
-      (raw: string, label: string, key: string | undefined) => definitions.get((key || label).trim().toLowerCase()) ?? raw)
-    .replace(/\\\n/g, "").replace(/(?<!\n)\n(?!\n|[ \t]*(?:Issue|Tracks):)/gi, " ");
+  let text = source;
+  if (source.includes("[")) {
+    const definitions = new Map<string, string>();
+    text = source.replace(/^[ \t]{0,3}\[([^[\]\n]+)\]:[ \t]*(?:<([^>\n]+)>|(\S+))/gm,
+      (_raw: string, label: string, angle: string | undefined, destination: string | undefined) => {
+        definitions.set(label.trim().toLowerCase(), angle ?? destination!);
+        return angle ?? destination!;
+      }).replace(/!?\[([^[\]\n]*)\]\((?:<([^<>\n]+)>|([^()[\]\n]*))\)/g,
+      (_raw: string, _label: string, angle: string | undefined, destination: string | undefined) => angle ?? destination!.trim())
+      .replace(/\[([^[\]\n]+)\](?:\[([^[\]\n]*)\])?/g,
+        (raw: string, label: string, key: string | undefined) => definitions.get((key || label).trim().toLowerCase()) ?? raw);
+  }
+  return text.includes("\n") ? text.replace(/\\\n/g, "").replace(/(?<!\n)\n(?!\n|[ \t]*(?:Issue|Tracks):)/gi, " ") : text;
 }
 
 /** Refuse every GitHub URL except a complete issue locator for this target, including embedded URLs. */
@@ -136,17 +141,30 @@ function hasOtherGithubUrl(text: string, repo: string, number: number): boolean 
   return false;
 }
 
+/** Read the immediately preceding repository without making every character a regex start position. */
+function citationRepositoryBefore(text: string, index: number, hash: boolean): string | undefined {
+  if (!hash && text[index - 1] !== "/") return undefined;
+  const end = hash ? index : index - 1;
+  let repoStart = end;
+  while (repoStart > 0 && /[\w.-]/.test(text[repoStart - 1]!)) repoStart--;
+  if (repoStart === end || text[repoStart - 1] !== "/") return undefined;
+  let ownerStart = repoStart - 1;
+  while (ownerStart > 0 && /[\w.-]/.test(text[ownerStart - 1]!)) ownerStart--;
+  if (ownerStart === repoStart - 1 || (!hash && text.slice(Math.max(0, ownerStart - 11), ownerStart).toLowerCase() !== "github.com/")) return undefined;
+  return text.slice(ownerStart, end).toLowerCase();
+}
+
 /** Inspect normalized source without trusting Markdown interpretation or an assumed repository for bare hashes. */
 function inspectCitationReferences(texts: readonly string[], repo: string, number: number): { mentioned: boolean; unsafe: boolean } {
   let mentioned = false;
   let unsafe = false;
-  for (const source of texts) {
+  for (const source of new Set(texts)) {
     // Check both retained source and joined soft lines; joining must not discard link labels or destinations.
-    for (const text of [source, source.replace(/(?<!\n)\\?\n(?!\n)[ \t]*/g, "")]) {
+    for (const text of new Set([source, source.replace(/(?<!\n)\\?\n(?!\n)[ \t]*/g, "")])) {
       if (hasOtherGithubUrl(text, repo, number)) unsafe = true;
-      for (const reference of text.matchAll(/github\.com\/([\w.-]+\/[\w.-]+)\/(?:issues|pull)\/([0-9]+)|(?<![\w.-])([\w.-]+\/[\w.-]+)#([0-9]+)|(?:issues[\s/:]*|pull[\s/:]*|#)([0-9]+)/gi)) {
-        const sourceRepo = (reference[1] ?? reference[3])?.toLowerCase();
-        const sourceNumber = reference[2] ?? reference[4] ?? reference[5];
+      for (const reference of text.matchAll(/(?:issues[\s/:]*|pull[\s/:]*|#)([0-9]+)/gi)) {
+        const sourceRepo = citationRepositoryBefore(text, reference.index, reference[0].startsWith("#"));
+        const sourceNumber = reference[1];
         if (sourceNumber === String(number) && (sourceRepo === repo || sourceRepo === undefined)) mentioned = true;
         if (sourceRepo !== repo || sourceNumber !== String(number)) unsafe = true;
       }

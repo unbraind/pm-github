@@ -91,6 +91,33 @@ reference-definition normalization. The unnecessary trailing match was removed
 without suppressing the rule or changing thresholds; current normalization and
 workflow regressions are rechecked before collecting fresh exact-head evidence.
 
+## Normalization performance
+
+The first full run passed all four release gates, but native Bun on Node 26
+measured **85.562 ms** on the existing 200,000-space ownership probe against its
+unchanged **50 ms** limit. Normalized source/display/joined views were scanned
+repeatedly even when identical, and Unicode/Markdown transforms did work on
+plain text where they are identity operations.
+
+The optimized path keeps every distinct view, scans issue/hash marker positions
+before reading their adjacent repository, and skips only identity transforms:
+Unicode transforms on printable ASCII/line whitespace, Markdown link processing
+when no `[` exists, and soft-line joining when no newline exists. Entity/percent
+decoding still occurs before these decisions. No ownership check is bypassed.
+All existing shape, encoding, positive and non-git cases remain. Local native
+Bun **1.3.5** passes **8/8**, with the ownership probe at **22.892 ms**; CI uses
+the pinned **1.3.14** and must pass its own unchanged budget. The updated scoped
+Node selection passes **52/52**, with no uncovered new-helper branches.
+
+A source-copy revert restores only `normalizeCitationText`, `citationDisplayText`
+and `inspectCitationReferences` from `51dea17`, keeping current tests, anchored
+ownership checks, the new adjacent-repository helper and real SDK paths. Run
+`bun test --test-name-pattern='ownership whitespace trigger' test/import-regex.test.ts`.
+The selected test fails at **112.322 ms**, **1 failure / 0 passes / 7 filtered**,
+exit 1. The fixed suite passes at the same 50 ms limit. No thresholds or timeouts
+were relaxed. This is supplemental local evidence; completed CI at the final
+pushed head supplies the full npm/Bun gate evidence.
+
 ## Behavioral revert proofs
 
 Each proof uses an isolated source copy with current tests and real SDK
