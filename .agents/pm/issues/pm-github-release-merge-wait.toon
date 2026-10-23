@@ -1,0 +1,28 @@
+id: pm-github-release-merge-wait
+title: Derive release merge wait from CI duration and refresh a safe main advance once
+description: "Daily Release PR #171 exceeded the fixed 30-minute wait while required Node 22 and 26 tests were still running. Measure recent successful main CI job durations, report the bounded wait derivation, and permit one protected release-branch update when intervening commits preserve release metadata."
+type: Issue
+status: in_progress
+priority: 1
+tags[3]: changelog-unreleased,ci,release
+created_at: "2026-10-23T15:47:55.215Z"
+updated_at: "2026-10-23T17:04:59.966Z"
+author: codex-agent
+acceptance_criteria: "Workflow consumes tested decision helpers; wait floor is 60 minutes with a cap below the job timeout; one safe refresh restarts checks; release metadata drift, conflicts and repeated main advances abort; npm and Bun release gates pass."
+comments[5]{created_at,author,text}:
+  "2026-10-23T15:47:59.125Z",codex-agent,"Plan: use 20 successful main CI runs and the successful test (22)/(26) job p95 plus max(15 minutes, 25 percent), bounded to 60-120 minutes under an explicit 360-minute job timeout. Inspect every intervening commit for package version or release-artifact changes before one leased branch refresh; restart the wait once. Use the workflow shell and real temporary git repositories for regression and revert proof."
+  "2026-10-23T15:54:59.525Z",codex-agent,"Live read-only execution of the workflow measurement step returned 40 successful Node 22/26 job samples from 20 main push CI runs: p95 1859 seconds plus 900 seconds margin, yielding the 3600-second floor. Focused regressions passed 24/24 and helper coverage was 100/100/100/100. Behavioral revert proof: fixed 30-minute wait failed 2 tests; bypassed metadata guard failed 8; restored abort-on-main-advance failed 3; omitted deadline restart failed 1. All mutants were restored. Rebase preserves a linear protected PR and each updated push uses the previously prepared head as its lease."
+  "2026-10-23T15:56:03.826Z",codex-agent,"The linked pm test runner exposed an inherited tracker-selection environment in the new no-git fixture. The fixture now passes its own explicit tracker path to pm init, so it cannot select or mutate an enclosing tracker. The 60 release workflow tests now pass through pm test, including genuine package/lock dependency updates alongside the prepared version bump."
+  "2026-10-23T16:32:19.971Z",codex-agent,"The complete npm release gate passed with isolated HOME and git configuration: 1045 tests, zero failures or skips, exact 100/100/100/100 coverage over 19 authored modules, 188 documented declarations, zero source duplication, approved identities and no privacy findings, production audit, package dry run, changelog check and publish-attestation check. Strict tracked-project health also passed with isolated HOME. The required Bun release gate is running against the byte-identical source candidate in an independent validation worktree so build and coverage receipts cannot collide. Native Bun already passed all 24 new regressions."
+  "2026-10-23T17:04:57.174Z",codex-agent,"Both required full gates passed: npm run release:check and bun run release:check each ran 1045 tests with zero failures or skips and exact 100/100/100/100 coverage across 19 authored modules. Both also passed typecheck/build, docstrings, lint, zero duplication, privacy, production audit, package dry run, changelog and publish-attestation checks. The independently installed Bun validation worktree used byte-identical source, test and documentation candidate files; npm and Bun package dry runs produced the same package hash. Workflow-focused pm test passed 60/60 and native Bun passed the 24 new regressions. Four behavioral revert controls failed as expected. Remaining validation is the PR CI matrix; live Daily Release dispatch belongs to the orchestrator after merge. Keep this item in progress for orchestrator verification."
+files[3]{path,scope,note}:
+  .github/workflows/release.yml,project,Measured wait and one guarded release-base refresh
+  scripts/release-merge-policy.ts,project,CI timing and per-commit metadata policy
+  test/release-merge-policy.test.ts,project,Real git fixtures and complete workflow-shell regressions
+tests[3]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  node --test test/release-merge-policy.test.ts test/daily-release-plan.test.ts test/release-approval.test.ts test/release-workflow.test.ts,project,180,codex-agent,"2026-10-23T15:54:24.865Z",local_mutation,fix/release-merge-wait-fits-ci
+  "npm run release:check",project,7200,codex-agent,"2026-10-23T16:32:21.591Z",local_mutation,fix/release-merge-wait-fits-ci
+  "bun run release:check",project,7200,codex-agent,"2026-10-23T16:32:23.701Z",local_mutation,fix/release-merge-wait-fits-ci
+docs[1]{path,scope,note}:
+  README.md,project,Daily Release wait derivation and safe refresh limits
+body: ""

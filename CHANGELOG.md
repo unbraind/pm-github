@@ -12,6 +12,7 @@
 
 ### Fixed
 
+- Derive release merge wait from CI duration and refresh a safe main advance once ([pm-github-release-merge-wait](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-release-merge-wait.toon))
 - A publish spelled through a package runner was invisible to the attestation gate, so an unattested one read as clean ([pm-github-5igz](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-5igz.toon))
 - PM CLI filtered native Bun tests falsely report an empty run ([pm-github-2ao1](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-2ao1.toon))
 - Track pm-changelog rendering closed historical incidents as Fixed ([pm-github-n0mm](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-n0mm.toon))

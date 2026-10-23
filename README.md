@@ -870,6 +870,10 @@ Release checks require type checking, docstrings, ESLint, zero source duplicatio
 
 `npm run changelog:full` reads the complete tracker through the SDK and feeds pm-changelog. Closed work supplies release history; the explicit `changelog-unreleased` tag includes a pending candidate without closing its PM item. Other open work stays excluded.
 
+Daily Release measures the successful `test (22)` and `test (26)` jobs from the last 20 successful main push CI runs. Its merge wait is the nearest-rank p95 duration plus the larger of 15 minutes or 25%, bounded to 60–120 minutes. Missing history uses the 60-minute floor. The log and job summary record the samples, p95, margin and bounds; the job timeout is 360 minutes.
+
+A main advance during preparation or waiting can update the release branch once. Every intervening commit must preserve `package.json` and lockfile release versions, `CHANGELOG.md`, `manifest.json`, and release notes, including changes later reverted. Dependency-only changes are eligible. A conflict, metadata change, non-ancestor main, or second advance aborts. A successful update uses a head-specific push lease, restarts the full measured wait, and requires protected checks on the new head. Publication still verifies the merged commit and runs the release gate again.
+
 ## Multi-agent merge safety
 
 This repo tracks its project management in `.agents/pm/` and ships a committed `.gitattributes`
