@@ -634,3 +634,20 @@ test("issue-label URL tails keep the anchored tail grammar after the regex tail 
   assert.equal(matchImportedIssue([hostile], issue).item, undefined);
   assert.ok(performance.now() - started < 1_000, "a long run of ')' must not backtrack polynomially");
 });
+
+test("citation adoption never overwrites an item that already carries structured ownership", () => {
+  const owned = [
+    { id: "url", description: `Fixes ${repo}#30`, github_url: "https://github.com/acme/widgets/issues/31" },
+    { id: "number", description: `Fixes ${repo}#30`, github_number: 31 },
+    { id: "links", description: `Fixes ${repo}#30`, external_links: ["https://github.com/acme/widgets/issues/31"] },
+  ];
+  for (const item of owned) {
+    const result = matchImportedIssue([item], issue);
+    assert.equal(result.item, undefined, item.id);
+    assert.deepEqual(result.citation_candidates, [{ id: item.id, reason: "structured_owner" }], item.id);
+  }
+  const native = { id: "native", description: "GitHub issue https://github.com/acme/widgets/issues/31", title: `Fix ${repo}#30` };
+  assert.equal(matchImportedIssue([native], issue).item, undefined);
+  const docs = { id: "docs", description: `Fixes ${repo}#30`, links: ["https://example.com/design"] };
+  assert.equal(matchImportedIssue([docs], issue).item, docs);
+});

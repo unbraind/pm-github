@@ -420,7 +420,7 @@ fallback deliberately favors refusal over overwriting an unrelated item:
 
 Plans include `citation_candidates: [{id, reason}]`; aggregate dry-run and write
 receipts include `citation_candidates: [{issue, id, reason}]`. Reasons are
-`adoption_disabled`, `missing_intent`, `multiple_issues` or `normalization_limit`.
+`adoption_disabled`, `missing_intent`, `multiple_issues`, `normalization_limit` or `structured_owner` (the item already carries a GitHub issue URL field, issue number, provider provenance or native declaration, so prose citing another issue never re-owns it).
 Candidate reporting never changes the referenced item's status, content or
 fields, including a closed item's completion state.
 

@@ -48,7 +48,7 @@ export interface ImportMatch { item?: PmItem; linkOnly: boolean; via: string; ci
 /** Incidental references are review hints, never permission to transfer an item's ownership. */
 export interface CitationCandidate {
   id: string;
-  reason: "multiple_issues" | "missing_intent" | "adoption_disabled" | "normalization_limit";
+  reason: "multiple_issues" | "missing_intent" | "adoption_disabled" | "normalization_limit" | "structured_owner";
 }
 
 /** A citation cannot pick an owner until the user tags exactly one candidate. */
@@ -240,6 +240,15 @@ function providerProvenance(item: PmItem): string {
     .map(([, value]) => typeof value === "string" ? value : JSON.stringify(value)).join("\n");
 }
 
+/** True when an item already carries a structured GitHub or provider identity of its own. */
+function hasStructuredOwnership(item: PmItem): boolean {
+  const issueLocator = /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+$/;
+  return item.github_number !== undefined || Boolean(providerProvenance(item)) ||
+    (typeof item.description === "string" && /^GitHub issue(?:\s*:\s+|\s+)https?:\/\//i.test(item.description)) ||
+    Object.entries(item).some(([key, value]) => /^(?:github_?url|provenance|external_?(?:links?|url)|links?)$/i.test(key) &&
+      locators(value).some(url => issueLocator.test(url)));
+}
+
 /** Match GitHub locators or provider back-links before creation, refusing multiple owners. */
 export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, tagged?: PmItem, adoptCited = false): ImportMatch {
   const issueUrl = locators(issue.html_url)[0]!;
@@ -261,7 +270,11 @@ export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, tag
     for (const candidate of items) {
       if (!candidate.id || candidate.tags?.some(tag => parseProvenanceTag(tag) !== undefined)) continue;
       const assessment = citesIssue(candidate, repo, issue.number);
-      if (assessment === "eligible" && adoptCited) citing.push(candidate);
+      if (assessment === undefined) continue;
+      // Structured ownership (a GitHub issue URL field, an issue number, provider provenance or a native declaration)
+      // already names an identity; prose citing another issue must never overwrite it.
+      if (assessment === "eligible" && hasStructuredOwnership(candidate)) incidental.push({ id: candidate.id, reason: "structured_owner" });
+      else if (assessment === "eligible" && adoptCited) citing.push(candidate);
       else if (assessment !== undefined) incidental.push({ id: candidate.id, reason: assessment === "eligible" ? "adoption_disabled" : assessment });
     }
     incidental.sort((left, right) => left.id.localeCompare(right.id));
