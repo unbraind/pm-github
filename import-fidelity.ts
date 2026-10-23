@@ -240,20 +240,23 @@ function providerProvenance(item: PmItem): string {
     .map(([, value]) => typeof value === "string" ? value : JSON.stringify(value)).join("\n");
 }
 
+/** Fields whose GitHub locators name an item's owner; shared by the owner matcher and the adoption guard so they cannot drift. */
+const OWNER_LINK_FIELD = /^(?:github_?url|provenance|external_?(?:links?|url)|links?)$/i;
+
 /**
  * True when an item already carries a structured GitHub or provider identity of its own. Mirrors every ownership source
- * identity.ts recognizes: any `github_*` field, a core `external_ref`, a native `source_owner`, provider identity fields
+ * identity.ts and the owner matcher recognize: any `github*` field (`github_url`, `githuburl`, ...), a core `external_ref`, a native `source_owner`, provider identity fields
  * (`linear_*`/`jira_*`/`ado_*` id, key, url or identifier), provider provenance, a native "GitHub issue <url>"
  * declaration, or a GitHub issue URL in provenance/external links.
  */
 function hasStructuredOwnership(item: PmItem): boolean {
   const issueLocator = /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+$/;
   const filled = (value: unknown) => value !== undefined && value !== null && value !== false && !(typeof value === "string" && value.trim() === "");
-  return Object.entries(item).some(([key, value]) => filled(value) && (/^github_/i.test(key) && key !== "github_link_only" ||
+  return Object.entries(item).some(([key, value]) => filled(value) && (/^github/i.test(key) && !/^github_?link_?only$/i.test(key) ||
       /^(?:external_ref|source_owner)$/.test(key) || /^(?:linear|jira|ado)_(?:.*_)?(?:id|key|url|identifier)$/i.test(key))) ||
     item.github_link_only === false || Boolean(providerProvenance(item)) ||
     (typeof item.description === "string" && /^GitHub issue(?:\s*:\s+|\s+)https?:\/\//i.test(item.description)) ||
-    Object.entries(item).some(([key, value]) => /^(?:provenance|external_?(?:links?|url)|links?)$/i.test(key) &&
+    Object.entries(item).some(([key, value]) => OWNER_LINK_FIELD.test(key) &&
       locators(value).some(url => issueLocator.test(url)));
 }
 
@@ -266,7 +269,7 @@ export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, tag
     locators(/^GitHub issue(?:\s*:\s+|\s+)(https?:\/\/\S+)/i.exec(item.description)?.[1]).includes(issueUrl);
   const candidates = items.filter(item => item.id && (item.id === tagged?.id ||
     declaredOwner(item) ||
-    Object.entries(item).some(([key, value]) => /^(?:github_?url|provenance|external_?(?:links?|url)|links?)$/i.test(key) && locators(value).includes(issueUrl)) ||
+    Object.entries(item).some(([key, value]) => OWNER_LINK_FIELD.test(key) && locators(value).includes(issueUrl)) ||
     locators(providerProvenance(item)).some(url => bodyUrls.has(url))));
   if (candidates.length > 1) throw new CommandError(`GitHub issue #${issue.number} has multiple existing owners; import plan is not idempotent. No item was written for this issue.`);
   let item = candidates[0];
