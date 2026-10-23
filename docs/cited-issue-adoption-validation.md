@@ -135,6 +135,18 @@ The isolated behavioral revert restores only `citesIssue` from `cce11c4`, leavin
 the new parser, planner, receipts and real SDK persistence present. Running
 `node --test --test-name-pattern='every accepted second-reference|trailing-slash second reference' test/cited-issue-adoption.test.ts`
 then produces **3 failures, 0 passes, 0 skips, exit 1**. The fixed cases pass.
-The complete adoption/regex selection passes **32/32**; the linked adoption
+The complete adoption/regex selection passes **33/33**; the linked adoption
 command contains **25 tests**. Fresh exact-head npm/Bun release evidence is
 recorded in PR 169 when CI completes, without changing coverage thresholds.
+
+CodeQL then identified quadratic backtracking in the new URL punctuation
+suffix regex. The parser now calls the existing backwards punctuation scanner
+with its citation delimiter set, leaving the default structured-locator set
+unchanged. The additional adversarial test sends a URL followed by 50,000
+exclamation marks and a non-punctuation sentinel through the real matcher. Its
+best of three local trials is **0.172 ms**, below the existing 50 ms guard.
+Restoring only `citationReferences` from `ef325ba` retains the new scanner and
+test but restores the vulnerable regex call: the test then fails at
+**3,670.058 ms** (one failure, zero passes/skips, exit 1). These timings are local
+regression evidence, not a deployment benchmark. A fresh pushed head receives
+new release-gate and CodeQL evidence.

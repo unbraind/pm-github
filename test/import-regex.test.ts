@@ -54,6 +54,8 @@ test("locator punctuation trim parity table", () => {
   }
   assert.equal(matchImportedIssue([{ id: "owner", links: url + "),.;" }], issue).item?.id, "owner");
   assert.equal(matchImportedIssue([{ id: "owner", links: url + "))x" }], issue).item, undefined);
+  assert.equal(trimLocatorPunctuation(url + ":!]}", "),.;:!]}"), url);
+  assert.equal(trimLocatorPunctuation(url + ":!]}"), url + ":!]}");
 });
 
 test("ownership whitespace trigger: 200000 spaces finish under 50 ms", t => {
@@ -84,6 +86,20 @@ test("locator punctuation trigger: 200000 parentheses finish under 50 ms", t => 
   t.diagnostic(`locator 200000 parentheses plus sentinel (best of 3): ${elapsed.toFixed(3)} ms`);
   assert.ok(elapsed < 50, `locator took ${elapsed.toFixed(3)} ms; limit 50 ms`);
   assert.equal(trimLocatorPunctuation(url + ")".repeat(200_000)), url);
+});
+
+test("citation URL punctuation trigger: 50000 exclamations plus sentinel finish under 50 ms", t => {
+  const description = `Fixes ${url}${"!".repeat(50_000)}x`;
+  matchImportedIssue([{ id: "warmup", description: `Fixes ${url}` }], issue);
+  let elapsed = Infinity;
+  for (let trial = 0; trial < 3; trial++) {
+    const start = performance.now();
+    const result = matchImportedIssue([{ id: "owner", description }], issue);
+    elapsed = Math.min(elapsed, performance.now() - start);
+    assert.equal(result.item, undefined);
+  }
+  t.diagnostic(`citation URL 50000 exclamations plus sentinel (best of 3): ${elapsed.toFixed(3)} ms`);
+  assert.ok(elapsed < 50, `citation URL took ${elapsed.toFixed(3)} ms; limit 50 ms`);
 });
 
 test("privacy phone whitespace parity and 20000-space trigger", t => {

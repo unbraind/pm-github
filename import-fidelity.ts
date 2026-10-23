@@ -80,7 +80,7 @@ function citationReferences(text: string, repoHint: string): { key: string; inde
     const raw = token[0];
     if (/^https?:/i.test(raw)) {
       try {
-        const url = new URL(raw.replace(/[)\].,;:!}]+$/, ""));
+        const url = new URL(trimLocatorPunctuation(raw, "),.;:!]}"));
         const path = /^\/([\w.-]+\/[\w.-]+)\/(issues|pull)\/([1-9]\d*)\/?$/i.exec(url.pathname);
         if (["github.com", "www.github.com"].includes(url.hostname) && path) {
           references.push({ key: `${path[1]!.toLowerCase()}#${path[3]}`, index: token.index, ownsIssue: path[2]!.toLowerCase() === "issues" });
@@ -109,10 +109,10 @@ function citesIssue(item: PmItem, repo: string, number: number): "eligible" | Ci
   return identities.size > 1 ? "multiple_issues" : intended ? "eligible" : "missing_intent";
 }
 
-/** Trim exporter punctuation in one backwards pass. @internal Shared with parity tests. */
-export function trimLocatorPunctuation(locator: string): string {
+/** Trim configurable exporter punctuation in one backwards pass. @internal Shared with parity tests. */
+export function trimLocatorPunctuation(locator: string, punctuation = "),.;"): string {
   let end = locator.length;
-  while (end > 0 && "),.;".includes(locator[end - 1]!)) end--;
+  while (end > 0 && punctuation.includes(locator[end - 1]!)) end--;
   return locator.slice(0, end);
 }
 
