@@ -11,7 +11,7 @@ const url = "https://github.com/fixture/project/issues/42";
 const issue: GhIssue = { number: 42, title: "Fixture", body: "", state: "open", labels: [],
   assignee: null, milestone: null, created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:00:00Z", html_url: url };
 
-test("ownership declaration parity: colon, no colon, whitespace and missing URL", () => {
+test("ownership declaration parity with citation adoption disabled: colon, whitespace and missing URL", () => {
   const rows: ReadonlyArray<readonly [string, boolean]> = [
     [`GitHub issue ${url}`, true], [`GitHub issue   ${url}`, true],
     [`GitHub issue\t${url}`, true], [`GitHub issue: ${url}`, true],
@@ -24,7 +24,7 @@ test("ownership declaration parity: colon, no colon, whitespace and missing URL"
   for (const [description, expected] of rows) {
     const old = /^GitHub issue\s*:?\s+(https?:\/\/[^\s]+)\s*/i.exec(description)?.[1];
     assert.equal(old === url, expected, description);
-    assert.equal(matchImportedIssue([{ id: "owner", description }], issue).via,
+    assert.equal(matchImportedIssue([{ id: "owner", description }], issue, undefined, false).via,
       expected ? "github-declaration" : "new", description);
   }
   // Enumerate separators on both sides of the optional colon, including all JS whitespace.
@@ -32,9 +32,12 @@ test("ownership declaration parity: colon, no colon, whitespace and missing URL"
   for (const before of whitespace) for (const colon of ["", ":"]) for (const after of whitespace) {
     const description = `GitHub issue${before}${colon}${after}${url}`;
     const old = /^GitHub issue\s*:?\s+(https?:\/\/[^\s]+)\s*/i.exec(description)?.[1];
-    assert.equal(matchImportedIssue([{ id: "owner", description }], issue).via,
+    assert.equal(matchImportedIssue([{ id: "owner", description }], issue, undefined, false).via,
       old === url ? "github-declaration" : "new", JSON.stringify(description));
   }
+  const citing = matchImportedIssue([{ id: "citing", description: `GitHub issue:${url}` }], issue);
+  assert.equal(citing.via, "citation");
+  assert.equal(citing.linkOnly, false);
 });
 
 test("locator punctuation trim parity table", () => {

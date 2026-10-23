@@ -6,10 +6,10 @@ status: in_progress
 priority: 2
 tags[3]: changelog-unreleased,github,import
 created_at: "2026-10-23T07:16:54.041Z"
-updated_at: "2026-10-23T08:29:21.353Z"
+updated_at: "2026-10-23T08:51:29.270Z"
 author: codex-agent
 acceptance_criteria: "Exact issue URL or owner/repo#N in title, description or body adopts one untagged item, including closed and canceled items. Bare numbers and other repositories never match; existing structured identity takes precedence. Multiple candidates return typed ambiguous_citation entries listing IDs and a tagging remedy with no create. Gates verify one landing target; receipts count adopts; dry runs show adopts. Import and scheduled sync adopt by default with --no-adopt-cited for reference-only prose. Behavioral revert tests and no-git tracker tests pass. Validate current pm-review main issue 30 and another public repository. Targeted tests, typecheck, lint and npm/Bun CI release gates pass."
-comments[11]{created_at,author,text}:
+comments[13]{created_at,author,text}:
   "2026-10-23T07:17:26.861Z",codex-agent,"Overlap review: pm-github-c093 owns structured URL/provider back-link import matching, pm-github-identity-collisions diagnoses and repairs structured ownership, Projects import matches board and issue provenance, and export upserts linked issues. None adopts arbitrary exact prose citations. This feature adds a fallback only after existing import matching, preserving those paths. Scheduled gated sync already invokes import, so it inherits the default. Plan ambiguous citations before writes and refuse the batch with actionable candidate IDs."
   "2026-10-23T07:24:01.857Z",codex-agent,"Implementation: strong ownership matching stays first; exact qualified title/description/body citations fall back to a single existing item. All imports now prepare identities before writes, and ambiguous citations expose candidate IDs plus an exact tagging remedy. Adoption retains local tags and reports a separate count; provider-owned records retain link-only behavior. New tests use real trackers with a PATH containing node and the pinned pm CLI but no git, plus real git trackers for write-gate acceptance."
   "2026-10-23T07:27:45.693Z",codex-agent,"New citation suite: 13/13 passed, including plain/atomic adoption in non-git trackers, write-gate acceptance, retry identity, ambiguity refusal, punctuation, repo/number boundaries, structured ownership precedence and provider link-only preservation. Live pm-review main aa16d855df1f7b74afd3453617f77e92c44d493e already tags pm-review-withdrawn-lineage for issue 30, so an untouched current-main copy correctly plans update rather than adopt. Preserve this current-state result and locate the pre-tag historical tracker for a separate adoption replay. SDK reads may create runtime caches; verify original tracked file bytes independently."
@@ -21,7 +21,9 @@ comments[11]{created_at,author,text}:
   "2026-10-23T07:49:35.957Z",codex-agent,"Focused write-boundary regression passed: node --test --test-name-pattern=\"ambiguous later issue\" test/import-fidelity.test.ts — 3 tests pass, zero failures/skips (plain, gated, atomic). This updates the old partial-write expectation to the fail-closed preflight contract. The initial CI run still tests the prior assertion; the next pushed head will contain this test-only correction and tracker receipt."
   "2026-10-23T08:27:20.623Z",codex-agent,"Final exact-citation audit reproduced an additional boundary miss: Issue: followed immediately by the issue URL, Reference:owner/repo#N, and a sentence-ending question mark returned new instead of citation. These are qualified prose citations under the acceptance criteria. Adjusted only the regex punctuation boundaries; retained negative URL query/path and longer-number cases. Added the forms to the existing pure matching regression, so test counts stay unchanged. The final source head will receive a fresh full npm/Bun CI run."
   "2026-10-23T08:29:20.672Z",codex-agent,"Punctuation boundary verification: typecheck, test typecheck and targeted lint passed. Four pure matching checks passed with the fix. Isolated behavioral revert restored only citesIssue to the preceding implementation: 1 of 4 checks failed (3 passed), proving the expanded boundary cases detect this correction. The general adoption revert remains 10 failures / 4 passes when only matchImportedIssue is restored to base main. All mutations remain covered by the real-tracker suite and the fresh full CI run."
-files[9]{path,scope}:
+  "2026-10-23T08:50:08.005Z",codex-agent,"CI identified one remaining legacy matcher parity assertion: GitHub issue: immediately followed by a URL was expected to remain new. The declared-ownership parser remains unchanged, but the new exact-citation fallback correctly adopts that form. Scoped both parity-table invocations to explicit adoption opt-out, preserving the original ownership grammar contract; default colon-citation behavior remains asserted in the new adoption suite. This is a test-only correction. The failed job passed 1034/1035 tests and reported four 100 percent coverage dimensions over all 18 authored modules."
+  "2026-10-23T08:51:27.741Z",codex-agent,"Focused verification passed after the parity correction: node --test test/import-regex.test.ts test/cited-issue-adoption.test.ts — 21/21 pass, zero failures/skips. The full regex file was rerun with an explicit default-citation assertion for GitHub issue:URL (citation, linkOnly=false): 7/7 pass. Test typecheck and targeted lint passed. Reviewed every matchImportedIssue test call; strong ownership tests now explicitly opt out only where they assert the legacy grammar. Production source remains unchanged from bbe5718."
+files[10]{path,scope}:
   import-fidelity.ts,project
   index.ts,project
   test/atomic.test.ts,project
@@ -30,6 +32,7 @@ files[9]{path,scope}:
   test/import-errors.test.ts,project
   test/import-fidelity.test.ts,project
   test/import-gate.test.ts,project
+  test/import-regex.test.ts,project
   test/import-selection.test.ts,project
 tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
   node --test test/cited-issue-adoption.test.ts,project,900,codex-agent,"2026-10-23T07:35:49.405Z",local_mutation,feat/cited-issue-adoption
