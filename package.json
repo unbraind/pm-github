@@ -124,5 +124,8 @@
   "duplicationGate": {
     "threshold": 0,
     "minTokens": 50
+  },
+  "dependencies": {
+    "entities": "8.1.0"
   }
 }

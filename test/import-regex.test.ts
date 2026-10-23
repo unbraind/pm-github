@@ -11,7 +11,7 @@ const url = "https://github.com/fixture/project/issues/42";
 const issue: GhIssue = { number: 42, title: "Fixture", body: "", state: "open", labels: [],
   assignee: null, milestone: null, created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:00:00Z", html_url: url };
 
-test("ownership declaration parity: colon, no colon, whitespace and missing URL", () => {
+test("ownership declaration parity with citation adoption disabled: colon, whitespace and missing URL", () => {
   const rows: ReadonlyArray<readonly [string, boolean]> = [
     [`GitHub issue ${url}`, true], [`GitHub issue   ${url}`, true],
     [`GitHub issue\t${url}`, true], [`GitHub issue: ${url}`, true],
@@ -24,7 +24,7 @@ test("ownership declaration parity: colon, no colon, whitespace and missing URL"
   for (const [description, expected] of rows) {
     const old = /^GitHub issue\s*:?\s+(https?:\/\/[^\s]+)\s*/i.exec(description)?.[1];
     assert.equal(old === url, expected, description);
-    assert.equal(matchImportedIssue([{ id: "owner", description }], issue).via,
+    assert.equal(matchImportedIssue([{ id: "owner", description }], issue, undefined, false).via,
       expected ? "github-declaration" : "new", description);
   }
   // Enumerate separators on both sides of the optional colon, including all JS whitespace.
@@ -32,9 +32,13 @@ test("ownership declaration parity: colon, no colon, whitespace and missing URL"
   for (const before of whitespace) for (const colon of ["", ":"]) for (const after of whitespace) {
     const description = `GitHub issue${before}${colon}${after}${url}`;
     const old = /^GitHub issue\s*:?\s+(https?:\/\/[^\s]+)\s*/i.exec(description)?.[1];
-    assert.equal(matchImportedIssue([{ id: "owner", description }], issue).via,
+    assert.equal(matchImportedIssue([{ id: "owner", description }], issue, undefined, false).via,
       old === url ? "github-declaration" : "new", JSON.stringify(description));
   }
+  const citing = matchImportedIssue([{ id: "citing", description: `GitHub issue:${url}` }], issue);
+  assert.equal(citing.via, "new");
+  assert.deepEqual(citing.citation_candidates, [{ id: "citing", reason: "missing_intent" }]);
+  assert.equal(citing.linkOnly, false);
 });
 
 test("locator punctuation trim parity table", () => {
@@ -51,6 +55,8 @@ test("locator punctuation trim parity table", () => {
   }
   assert.equal(matchImportedIssue([{ id: "owner", links: url + "),.;" }], issue).item?.id, "owner");
   assert.equal(matchImportedIssue([{ id: "owner", links: url + "))x" }], issue).item, undefined);
+  assert.equal(trimLocatorPunctuation(url + ":!]}", "),.;:!]}"), url);
+  assert.equal(trimLocatorPunctuation(url + ":!]}"), url + ":!]}");
 });
 
 test("ownership whitespace trigger: 200000 spaces finish under 50 ms", t => {
@@ -81,6 +87,20 @@ test("locator punctuation trigger: 200000 parentheses finish under 50 ms", t => 
   t.diagnostic(`locator 200000 parentheses plus sentinel (best of 3): ${elapsed.toFixed(3)} ms`);
   assert.ok(elapsed < 50, `locator took ${elapsed.toFixed(3)} ms; limit 50 ms`);
   assert.equal(trimLocatorPunctuation(url + ")".repeat(200_000)), url);
+});
+
+test("citation URL punctuation trigger: 50000 exclamations plus sentinel finish under 50 ms", t => {
+  const description = `Fixes ${url}${"!".repeat(50_000)}x`;
+  matchImportedIssue([{ id: "warmup", description: `Fixes ${url}` }], issue);
+  let elapsed = Infinity;
+  for (let trial = 0; trial < 3; trial++) {
+    const start = performance.now();
+    const result = matchImportedIssue([{ id: "owner", description }], issue);
+    elapsed = Math.min(elapsed, performance.now() - start);
+    assert.equal(result.item, undefined);
+  }
+  t.diagnostic(`citation URL 50000 exclamations plus sentinel (best of 3): ${elapsed.toFixed(3)} ms`);
+  assert.ok(elapsed < 50, `citation URL took ${elapsed.toFixed(3)} ms; limit 50 ms`);
 });
 
 test("privacy phone whitespace parity and 20000-space trigger", t => {

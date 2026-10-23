@@ -52,10 +52,10 @@ test("atomic previews distinguish empty upstream data from entirely skipped issu
   let data: GhIssue[] = [];
   await withMockGithub((_req, res) => jsonResponse(res, 200, data), async () => {
     assert.deepEqual(await runImport("acme/widgets", root, parseImportOptions({ atomic: true, "dry-run": true }), { resolveToken: () => undefined }),
-      { dryRun: true, wouldImport: 0, wouldUpdate: 0, wouldSkip: 0, atomic: true });
+      { dryRun: true, wouldImport: 0, wouldUpdate: 0, wouldAdopt: 0, wouldSkip: 0, atomic: true });
     data = [issue({ title: "  " })];
     assert.deepEqual(await runImport("acme/widgets", root, parseImportOptions({ atomic: true, "dry-run": true }), { resolveToken: () => undefined }),
-      { dryRun: true, wouldImport: 0, wouldUpdate: 0, wouldSkip: 1, atomic: true });
+      { dryRun: true, wouldImport: 0, wouldUpdate: 0, wouldAdopt: 0, wouldSkip: 1, atomic: true });
     await assert.rejects(runImport("acme/widgets", root, parseImportOptions({ atomic: true }), { resolveToken: () => undefined }), /Imported 0 issue\(s\); 1 failed/);
   });
   assert.deepEqual(readPmItems(root), []);
@@ -68,7 +68,7 @@ test("ungated import tolerates unavailable comments and still writes the issue",
     else jsonResponse(res, 200, [issue({ comments: 1 })]);
   }, async () => {
     const { stderr, result } = await captureStderr(() => runImport("acme/widgets", root, parseImportOptions({ "comments-mode": "both" }), { resolveToken: () => undefined }));
-    assert.deepEqual(result, { imported: 1, updated: 0, skipped: 0 });
+    assert.deepEqual(result, { imported: 1, updated: 0, adopted: 0, skipped: 0 });
     assert.match(stderr.join("\n"), /failed to fetch comments/);
   });
   assert.equal(readPmItems(root)[0].body, "Original body");
