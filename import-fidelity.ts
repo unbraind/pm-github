@@ -42,7 +42,13 @@ export interface ImportFidelity {
   github_release: string;
 }
 /** Identity decision recorded before any import writes. */
-export interface ImportMatch { item?: PmItem; linkOnly: boolean; via: string }
+export interface ImportMatch { item?: PmItem; linkOnly: boolean; via: string; citation_candidates?: CitationCandidate[] }
+
+/** Incidental references are review hints, never permission to transfer an item's ownership. */
+export interface CitationCandidate {
+  id: string;
+  reason: "multiple_issues" | "missing_intent";
+}
 
 /** A citation cannot pick an owner until the user tags exactly one candidate. */
 export interface AmbiguousCitationPlan {
@@ -50,25 +56,37 @@ export interface AmbiguousCitationPlan {
   issue: number;
   candidates: string[];
   remedy: string;
+  citation_candidates?: CitationCandidate[];
 }
 
 /** Carry a typed refusal from identity resolution into the batch's reviewable plan. */
 export class AmbiguousCitationError extends Error {
   readonly entry: AmbiguousCitationPlan;
   /** Retain candidate IDs and the exact provenance tag needed to resolve the conflict. */
-  constructor(repo: string, number: number, candidates: string[]) {
+  constructor(repo: string, number: number, candidates: string[], incidental: CitationCandidate[] = []) {
     const entry: AmbiguousCitationPlan = { action: "ambiguous_citation", issue: number, candidates,
+      ...(incidental.length > 0 ? { citation_candidates: incidental } : {}),
       remedy: `Tag the correct item with gh:${repo}#${number}, then retry.` };
     super(JSON.stringify(entry));
     this.entry = entry;
   }
 }
 
-/** Match complete, repository-qualified prose references, never bare numbers or URL substrings. */
-function citesIssue(item: PmItem, repo: string, number: number): boolean {
-  const text = [item.title, item.description, item.body].join("\n");
-  const references = text.matchAll(/(?<![\w./#-])(?:https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/issues\/|([\w.-]+\/[\w.-]+)#)([1-9]\d*)(?![\w/#=&%-]|[.?]\w)/gi);
-  return [...references].some(match => (match[1] ?? match[2]!).toLowerCase() === repo && Number(match[3]) === number);
+/** Require one distinct issue across all prose fields and a title reference or explicit fix/track intent. */
+function citesIssue(item: PmItem, repo: string, number: number): "eligible" | CitationCandidate["reason"] | undefined {
+  const target = `${repo}#${number}`;
+  const identities = new Set<string>();
+  let intended = false;
+  for (const [field, text] of [item.title ?? "", item.description ?? "", item.body ?? ""].entries()) {
+    const references = text.matchAll(/(?<![\w./#-])(?:https?:\/\/(?:www\.)?github\.com\/([^/\s]+\/[^/\s]+)\/issues\/|([\w.-]+\/[\w.-]+)#)([1-9]\d*)(?![\w/=&%-]|\.\w)/gi);
+    for (const reference of references) {
+      const key = `${(reference[1] ?? reference[2]!).toLowerCase()}#${reference[3]}`;
+      identities.add(key);
+      if (key === target && (field === 0 || /(?:\b(?:fix|fixes|fixed|close|closes|closed|resolve|resolves|resolved)\b[\s:([<`*_]*|\b(?:issue|tracks)\s*:[\s([<`*_]*|\bgh\s+issue\b[\s:([<`*_]*)$/i.test(text.slice(0, reference.index)))) intended = true;
+    }
+  }
+  if (!identities.has(target)) return undefined;
+  return identities.size > 1 ? "multiple_issues" : intended ? "eligible" : "missing_intent";
 }
 
 /** Trim exporter punctuation in one backwards pass. @internal Shared with parity tests. */
@@ -120,17 +138,25 @@ export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, tag
   if (candidates.length > 1) throw new CommandError(`GitHub issue #${issue.number} has multiple existing owners; import plan is not idempotent. No item was written for this issue.`);
   let item = candidates[0];
   let cited = false;
+  const incidental: CitationCandidate[] = [];
   if (!item && adoptCited && !issue.pull_request) {
     const repo = issue.html_url.split("/").slice(3, 5).join("/").toLowerCase();
-    const citing = items.filter(candidate => candidate.id &&
-      !candidate.tags?.some(tag => parseProvenanceTag(tag) !== undefined) && citesIssue(candidate, repo, issue.number));
-    if (citing.length > 1) throw new AmbiguousCitationError(repo, issue.number, citing.map(candidate => candidate.id!).sort());
+    const citing: PmItem[] = [];
+    for (const candidate of items) {
+      if (!candidate.id || candidate.tags?.some(tag => parseProvenanceTag(tag) !== undefined)) continue;
+      const assessment = citesIssue(candidate, repo, issue.number);
+      if (assessment === "eligible") citing.push(candidate);
+      else if (assessment !== undefined) incidental.push({ id: candidate.id, reason: assessment });
+    }
+    incidental.sort((left, right) => left.id.localeCompare(right.id));
+    if (citing.length > 1) throw new AmbiguousCitationError(repo, issue.number, citing.map(candidate => candidate.id!).sort(), incidental);
     item = citing[0];
     cited = Boolean(item);
   }
   const provider = item && (Boolean(providerProvenance(item)) || (copiedProviderMarkersOwnItem(item) && item.tags?.some(tag => /^(linear|jira|ado):/i.test(tag))));
   const native = item && declaredOwner(item);
   return { item, linkOnly: Boolean(item && (provider || native || item.github_link_only === true)),
+    ...(incidental.length > 0 ? { citation_candidates: incidental } : {}),
     via: cited ? "citation" : item ? (provider ? "provider-link" : native ? "github-declaration" : item.id === tagged?.id ? "provenance-tag" : "github-url") : "new" };
 }
 

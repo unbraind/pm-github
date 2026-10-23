@@ -2,10 +2,15 @@
 
 The importer first resolves established provenance tags, structured URLs and
 provider back-links. Only an issue without an established owner reaches exact
-title/description/body citation matching. One candidate is adopted; multiple
-candidates refuse the batch before any writes and report `ambiguous_citation`
+title/description/body citation matching. Only a single-issue item with explicit
+fix/track intent or a title reference is eligible. One eligible candidate is
+adopted; multiple eligible candidates refuse the batch before any writes and report `ambiguous_citation`
 with candidate IDs and a tagging remedy. Status push, export and Projects
 matching retain their existing scope.
+
+Incidental references carry `citation_candidates` hints with item IDs and
+`missing_intent` or `multiple_issues` reasons. They never hand status or fields
+to the importer; the GitHub issue imports normally into its own item.
 
 ## Public tracker dry runs
 
@@ -18,9 +23,9 @@ rewritten for the replay.
 
 | Repository and tracker revision | Issues fetched/planned | Create | Update | Adopt | Skip | Original files unchanged |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| pm-review current main `aa16d855df1f7b74afd3453617f77e92c44d493e` | 1 / 1 | 0 | 1 | 0 | 0 | 106 / 106 |
+| pm-review current main `e1fc83a81507ca6a91f1675b74863c050f1a89f1` | 1 / 1 | 0 | 1 | 0 | 0 | 106 / 106 |
 | pm-review pre-tag history `f72250e4c5ee8dfafaf57ee8afe20ddd3cbc993e` | 1 / 1 | 0 | 0 | 1 | 0 | 106 / 106 |
-| pm-context current main `8d9576778a3609f156e9444ed659ca7c2e2aa9e7` | 5 / 5 | 2 | 3 | 0 | 0 | 181 / 181 |
+| pm-context current main `7d7479ae77c13d01c54b2b4560ad54091ffed788` | 5 / 5 | 2 | 3 | 0 | 0 | 181 / 181 |
 
 The requested pm-review current-main check now correctly plans an **update**:
 [PR 33](https://github.com/unbraind/pm-review/pull/33) already added the issue's
@@ -28,6 +33,10 @@ provenance tag after the duplicate-import incident. Claiming an adopt on that
 untouched snapshot would contradict structured-identity precedence. Replaying
 the actual [pre-tag tracker](https://github.com/unbraind/pm-review/tree/f72250e4c5ee8dfafaf57ee8afe20ddd3cbc993e/.agents/pm)
 produces this adoption entry:
+
+The pre-tag item's description says `Fix` followed by the issue URL and its body
+says `Issue:` followed by the same URL. Those are two references to one distinct
+issue with explicit intent, so the tightened ownership rule still adopts it.
 
 ```json
 {
@@ -67,22 +76,32 @@ Node and the pinned pm CLI. Gate write cases use disposable Git repositories.
 Assertions cover single-candidate adoption, terminal candidates, no duplicate
 on retry, ambiguity before any batch write, URL punctuation, repository and
 issue-number boundaries, colon-prefixed labels and sentence-ending question marks,
-structured ownership precedence, provider link-only
-behavior, separate adoption counts, opt-out, and conflicting batch targets.
+structured ownership precedence, provider link-only behavior, separate adoption
+counts and opt-out. Review regressions also prove these ownership boundaries:
+
+| Finding | Fixed behavior and persistence evidence |
+| --- | --- |
+| A closed item says only `Related: acme/widgets#30` while issue 30 is open | Import creates the issue item and reports `missing_intent`; the original item's entire SDK projection, including status/body/closure fields, is unchanged |
+| A roadmap cites issues 30 and 31 | Selecting either issue alone creates its own item and reports `multiple_issues`; the roadmap stays open and unchanged |
+| References span repositories or fields | All distinct identities count, including title references and URL query/fragment forms; repeated URL/shorthand for the same identity counts once |
+| Intent-bearing single-issue owners compete | Two eligible owners still refuse writes; incidental hints are reported separately and never create ambiguity |
 
 `test/import-selection.test.ts` installs the built package into a disposable
 consumer and exercises the actual CLI dispatch, including the advertised
 `--no-adopt-cited` flag and its create-versus-adopt behavior.
 
-Behavioral revert proof copied the current source and test into an isolated
-scratch package, then restored **only** `matchImportedIssue` from base main.
-`node --test test/cited-issue-adoption.test.ts` exited 1 with 10 failures and
-4 passes, versus 14 passes with the fix; neither run skipped tests. The fixed
-worktree was untouched. Tests import live TypeScript, so no compiled artifact
-could mask the revert.
+Review revert proofs used an isolated source copy and restored only
+`citesIssue` and `matchImportedIssue` from pre-review head `4220a37`, leaving the
+new planner/receipt code and real SDK persistence unchanged. Neither proof
+changed the package worktree or rebuilt a stale artifact: tests import live TS.
 
-A focused punctuation revert restored only `citesIssue` to the preceding
-implementation while retaining adoption and the expanded regression cases.
-The four pure matching checks then produced 1 failure and 3 passes; the fixed
-helper passes all four. This specifically proves colon-prefixed labels and
-sentence-ending question marks are accepted without admitting URL queries.
+| Exact test selection | Reverted result | Fixed result |
+| --- | --- | --- |
+| `node --test --test-name-pattern='closed incidental item' test/cited-issue-adoption.test.ts` | 2 failures, 0 passes, exit 1 | Both plain/atomic cases pass |
+| `node --test --test-name-pattern='roadmap never adopts' test/cited-issue-adoption.test.ts` | 2 failures, 0 passes, exit 1 | Both plain/atomic cases pass |
+
+`node --test test/cited-issue-adoption.test.ts test/import-regex.test.ts` passes
+28 tests with zero failures/skips. The PM-linked adoption command also passes
+21 tests. Typecheck, test typecheck, build, lint, docstrings and strict tracker
+health pass locally. Full npm/Bun release-gate evidence is recorded in PR 169
+and the final handoff at the exact pushed head; thresholds remain unchanged.

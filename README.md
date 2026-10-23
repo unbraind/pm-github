@@ -361,7 +361,7 @@ pm github import owner/repo --dry-run
 | `--with-comments` | boolean | Fetch issue comments and append them to the item body |
 | `--comments-mode <mode>` | `body`\|`annotations`\|`both` | How fetched GitHub comments are persisted (default `body`). `annotations` syncs comments into the pm item's native comments collection via the SDK; `both` writes the body section AND native comments. `annotations`/`both` are idempotent on re-import (dedupe by GitHub comment id) |
 | `--atomic` | boolean | Commit every create, update, close, and reopen in one workspace-writer-locked, crash-resumable transaction (requires pm CLI/SDK >=2026.7.20). Normal failure compensation restores updated/closed items and deletes newly created items; an incomplete compensation is reported explicitly for retry or repair. |
-| `--no-adopt-cited` | boolean | Disable default citation adoption when prose references describe related work rather than the item's own issue. Existing provenance/URL matching still applies. |
+| `--no-adopt-cited` | boolean | Require explicit provenance even for eligible intent-bearing prose, such as copied titles or fix phrases. Existing provenance/URL matching still applies. |
 | `--link-deps` | boolean | After import, map dependency references in issue **bodies** (`Blocked by #N`, `Depends on owner/repo#N`, `Blocks #N`) to pm dependency edges between the linked items. Idempotent, best-effort, and re-runnable; see [Dependency linking](#dependency-linking---link-deps) below. |
 | `--gate` | boolean | Fail-closed privacy gate: verify plan completeness (every fetched issue accounted for exactly once) and provenance idempotency (every re-import lands on exactly one `gh:owner/repo#N`-tagged item) BEFORE the write, then scan the proposed tracker change with [`pm github gate`](#pm-github-gate) AFTER it. Any finding — or any unreadable scan input — exits non-zero so an automated pipeline can never commit or push the change. Embeds `gate` receipts in the result. |
 | `--dry-run` | boolean | Preview without writing |
@@ -377,10 +377,39 @@ tag/URL/provider ownership matching takes precedence. Items with an established
 `gh:` issue tag are excluded from this fallback. Closed and canceled items remain
 eligible because their fix may already have landed.
 
-One candidate produces an `adopt` plan entry: the existing ID receives the
+Adoption requires **both** of these ownership signals:
+
+- The combined title, description and body cite exactly one distinct GitHub
+  issue, counting qualified references to every repository. Repeated URLs and
+  shorthand for the same issue count once. A second issue disqualifies the item
+  even when only one issue is selected for import.
+- The target reference appears in the title, or directly follows explicit intent:
+  `fix`/`fixes`/`fixed`, `close`/`closes`/`closed`,
+  `resolve`/`resolves`/`resolved`, `Issue:`, `Tracks:` or `GH issue`.
+  Keywords and labels ignore case; punctuation and opening Markdown delimiters
+  around the reference are accepted. The closing words follow
+  [GitHub's supported keyword list](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue).
+
+| Existing item prose | Decision for issue 30 |
+| --- | --- |
+| Body: `Fixes acme/widgets#30` | Eligible for adoption |
+| Body: `Issue: https://github.com/acme/widgets/issues/30` | Eligible for adoption |
+| Title: `Handle acme/widgets#30` | Eligible if no other issue is cited |
+| Body: `Related: acme/widgets#30` | Incidental; `missing_intent` |
+| Title: `Roadmap acme/widgets#30 and acme/widgets#31` | Incidental for either issue; `multiple_issues` |
+| Description: `Fixes acme/widgets#30`; body: `See other/repo#8` | Incidental; `multiple_issues` |
+
+Incidental mentions never transfer ownership. The issue imports normally into
+its own item, leaving the incidental item's status, content and fields intact,
+including a closed item's completion state. Plans include
+`citation_candidates: [{id, reason}]`; aggregate dry-run and write receipts
+include `citation_candidates: [{issue, id, reason}]`. These hints let an agent
+explicitly tag the correct item when the prose does not establish ownership.
+
+One eligible candidate produces an `adopt` plan entry: the existing ID receives the
 provenance tag and `github_*` fields through the normal upsert, retaining local
 tags and any established provider ownership. Later imports use the structured
-identity. Two or more candidates produce `ambiguous_citation`, candidate IDs and
+identity. Two or more eligible candidates produce `ambiguous_citation`, candidate IDs and
 a remedy: tag the correct item with `gh:owner/repo#N`, then retry. The entire
 batch refuses writes until resolved; dry-run returns `blocked: true` and the
 refusal entries with zero planned write counts.
@@ -389,8 +418,10 @@ Dry runs show `adopt` entries and `wouldAdopt`; write receipts report `adopted`
 separately from `imported` and `updated`. Gated idempotency counts an adopt as one
 existing landing item with its provenance tag, never a new entry. This is on by
 default for manual imports and scheduled gated syncs, whose import step uses the
-same planner. Use `--no-adopt-cited` when citations are reference-only and a
-separate imported item is intentional. The legacy import alias shares this flag.
+same planner. Use `--no-adopt-cited` to require explicit provenance even for
+intent-bearing prose, for example when titles or fix phrases are copied from
+other work. Incidental mentions are already excluded by default. The legacy
+import alias shares this flag.
 Status push (`github sync`), export and Projects matching retain their existing
 scope. Citation adoption also works in a non-git tracker; actual `--gate` writes
 still require a Git worktree for the proposed-change privacy scan.

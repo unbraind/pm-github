@@ -26,7 +26,7 @@ import type {
 import { CloseoutUsageError, compactCloseoutReport, runCloseout } from "./closeout.ts";
 import {
   AmbiguousCitationError, buildImportFidelity, fetchImportTimeline, importFidelityFields, matchImportedIssue, persistImportFidelity, readImportReleases, selectImportContextIndex, validateImportLifetime,
-  type AmbiguousCitationPlan, type ImportFidelity,
+  type AmbiguousCitationPlan, type CitationCandidate, type ImportFidelity,
 } from "./import-fidelity.ts";
 import { refreshChanges, runRefresh } from "./refresh.ts";
 import { exploreGithubIdentities, planGithubIdentityRepair, applyGithubIdentityRepair } from "./identity.ts";
@@ -1331,6 +1331,8 @@ export interface PreparedGithubImport {
   linkOnly?: boolean;
   /** Auditable identity and lifecycle conflict decision. */
   identity?: { via: string; conflict?: { local: string; github: string; rule: string } };
+  /** Rejected prose references remain visible for explicit manual provenance tagging. */
+  citation_candidates?: CitationCandidate[];
   match?: PmItem;
 }
 
@@ -3163,6 +3165,7 @@ export async function prepareGithubImport(
     fidelity,
     linkOnly: identity.linkOnly,
     identity: { via: identity.via, ...(conflict ? { conflict } : {}) },
+    ...(identity.citation_candidates ? { citation_candidates: identity.citation_candidates } : {}),
     match,
   };
 }
@@ -3494,6 +3497,8 @@ export async function runImport(
   let gateCompleteness: ImportPlanCompletenessReceipts | undefined;
   let gateIdempotency: ImportIdempotencyReceipts | undefined;
   let gatePlanByNumber: Map<number, PreparedGithubImport> | undefined;
+  const citationCandidates: (CitationCandidate & { issue: number })[] = [];
+  let citationReceipt: { citation_candidates?: typeof citationCandidates } = {};
   {
     const planned: PreparedGithubImport[] = [];
     const skippedNumbers: number[] = [];
@@ -3513,6 +3518,7 @@ export async function runImport(
       } catch (error) {
         if (!(error instanceof AmbiguousCitationError)) throw error;
         ambiguous.push(error.entry);
+        for (const candidate of error.entry.citation_candidates ?? []) citationCandidates.push({ issue: issue.number, ...candidate });
         continue;
       }
       if (!entry) {
@@ -3520,9 +3526,11 @@ export async function runImport(
         continue;
       }
       planned.push(entry);
+      for (const candidate of entry.citation_candidates ?? []) citationCandidates.push({ issue: issue.number, ...candidate });
     }
+    if (citationCandidates.length > 0) citationReceipt = { citation_candidates: citationCandidates };
     if (ambiguous.length > 0) {
-      const refusal = { code: "ambiguous_citation", blocked: true, plan: ambiguous };
+      const refusal = { code: "ambiguous_citation", blocked: true, plan: ambiguous, ...citationReceipt };
       if (!opts.dryRun) throw new CommandError(JSON.stringify(refusal));
       for (const entry of ambiguous) console.error(`[dry-run] #${entry.issue} ambiguous_citation: ${entry.candidates.join(", ")}. ${entry.remedy}`);
       return { dryRun: true, wouldImport: 0, wouldUpdate: 0, wouldAdopt: 0, wouldSkip: skippedNumbers.length,
@@ -3566,10 +3574,11 @@ export async function runImport(
       closed_at: entry.linkOnly ? entry.match!.closed_at : source.github_closed_at,
       close_reason: entry.linkOnly ? "preserved-provider-owner" : reason,
       release: entry.linkOnly ? "preserved-provider-owner" : source.github_release,
-      identity: entry.identity };
+      identity: entry.identity,
+      ...(entry.citation_candidates ? { citation_candidates: entry.citation_candidates } : {}) };
   });
   const adoptionCount = gatePlan!.filter(entry => entry.identity?.via === "citation").length;
-  const planFields = opts.gate || adoptionCount > 0 ? { plan: fidelityPlan() } : {};
+  const planFields = { ...(opts.gate || adoptionCount > 0 || citationCandidates.length > 0 ? { plan: fidelityPlan() } : {}), ...citationReceipt };
   const gatePlanFields = { ...planFields, ...(opts.gate ? { gate: { completeness: gateCompleteness, idempotency: gateIdempotency, scan: "post-write" } } : {}) };
 
   if (opts.atomic) {
@@ -6619,7 +6628,7 @@ export function isMutatingGithubCommand(command: string, options: Record<string,
 // ---------------------------------------------------------------------------
 
 const IMPORT_FLAGS = [
-  { long: "--no-adopt-cited", description: "Disable default adoption of one untagged item citing the exact issue; use when prose citations are references rather than ownership. Multiple candidates otherwise refuse import until one is tagged" },
+  { long: "--no-adopt-cited", description: "Require explicit provenance instead of adopting one untagged item with single-issue fix/track intent. Incidental or multi-issue citations are hints only; multiple eligible owners refuse import until one is tagged" },
   { long: "--issue", value_name: "N[,N...]", description: "Fetch exactly these issue numbers, #N, or same-repo owner/repo#N references; conflicts with --state/--all/--labels/--since/--assignee/--milestone/--limit. Missing numbers fail before writes (reported by --dry-run); PRs require --include-prs" },
   { long: "--limit", value_name: "n", description: "Positive list-mode issue cap, newest-updated first; reports limit and truncated when more exist (one extra matching issue is fetched to check). Invalid with --issue" },
   { long: "--all", description: "Include closed issues (shorthand for --state all)" },
