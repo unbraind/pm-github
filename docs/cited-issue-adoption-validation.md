@@ -66,7 +66,8 @@ or SDK writes. Plain and atomic non-git cases run with a PATH containing only
 Node and the pinned pm CLI. Gate write cases use disposable Git repositories.
 Assertions cover single-candidate adoption, terminal candidates, no duplicate
 on retry, ambiguity before any batch write, URL punctuation, repository and
-issue-number boundaries, structured ownership precedence, provider link-only
+issue-number boundaries, colon-prefixed labels and sentence-ending question marks,
+structured ownership precedence, provider link-only
 behavior, separate adoption counts, opt-out, and conflicting batch targets.
 
 `test/import-selection.test.ts` installs the built package into a disposable
@@ -79,3 +80,9 @@ scratch package, then restored **only** `matchImportedIssue` from base main.
 4 passes, versus 14 passes with the fix; neither run skipped tests. The fixed
 worktree was untouched. Tests import live TypeScript, so no compiled artifact
 could mask the revert.
+
+A focused punctuation revert restored only `citesIssue` to the preceding
+implementation while retaining adoption and the expanded regression cases.
+The four pure matching checks then produced 1 failure and 3 passes; the fixed
+helper passes all four. This specifically proves colon-prefixed labels and
+sentence-ending question marks are accepted without admitting URL queries.

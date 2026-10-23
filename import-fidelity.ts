@@ -67,7 +67,7 @@ export class AmbiguousCitationError extends Error {
 /** Match complete, repository-qualified prose references, never bare numbers or URL substrings. */
 function citesIssue(item: PmItem, repo: string, number: number): boolean {
   const text = [item.title, item.description, item.body].join("\n");
-  const references = text.matchAll(/(?<![\w./:#-])(?:https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/issues\/|([\w.-]+\/[\w.-]+)#)([1-9]\d*)(?![\w/#?=&%-]|\.\w)/gi);
+  const references = text.matchAll(/(?<![\w./#-])(?:https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/issues\/|([\w.-]+\/[\w.-]+)#)([1-9]\d*)(?![\w/#=&%-]|[.?]\w)/gi);
   return [...references].some(match => (match[1] ?? match[2]!).toLowerCase() === repo && Number(match[3]) === number);
 }
 

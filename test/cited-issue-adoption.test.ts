@@ -110,7 +110,8 @@ for (const atomic of [false, true]) {
 
 test("citation matching accepts exact qualified references across prose fields and trailing punctuation", () => {
   for (const field of ["title", "description", "body"]) {
-    for (const citation of [issue.html_url, `${issue.html_url}.`, `(${issue.html_url})`, `${repo}#30`, `ACME/Widgets#30;`]) {
+    for (const citation of [issue.html_url, `${issue.html_url}.`, `(${issue.html_url})`, `${issue.html_url}?`,
+      `Issue:${issue.html_url}`, `${repo}#30`, `Reference:${repo}#30`, `${repo}#30?`, `ACME/Widgets#30;`]) {
       const local = { id: "local", [field]: `Fixed ${citation}` };
       assert.equal(matchImportedIssue([local], issue).item, local, `${field}: ${citation}`);
     }
