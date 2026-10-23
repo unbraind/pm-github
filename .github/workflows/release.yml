@@ -28,6 +28,8 @@ jobs:
     # refusal could fire. The step check stays as defence in depth.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    # At most two 120-minute waits, leaving time for preparation and verification.
+    timeout-minutes: 360
     env:
       RELEASE_TIMEZONE: Europe/Vienna
     steps:
@@ -281,12 +283,51 @@ jobs:
             git commit -m "Release ${REPO_NAME} ${RELEASE_TAG}"
           fi
 
+      - name: Measure release merge wait
+        if: steps.decide.outputs.should_release == 'true'
+        id: merge_wait
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          timings="$(mktemp)"
+          trap 'rm -f "$timings"' EXIT
+          # Only successful push runs on main, never PR/fork timing samples.
+          if run_ids="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=20" \
+            --jq '.workflow_runs[].id')"; then
+            for run_id in $run_ids; do
+              if ! gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?filter=latest&per_page=100" \
+                --jq '.jobs[] | {name,conclusion,started_at,completed_at}' >> "$timings"; then
+                echo "::warning::Could not measure CI run ${run_id}; using available samples."
+              fi
+            done
+          else
+            echo "::warning::CI history unavailable; using the conservative 60-minute floor."
+          fi
+          jq -s '.' "$timings" > "${timings}.json"
+          trap 'rm -f "$timings" "${timings}.json"' EXIT
+          node --input-type=module -e '
+          import { readFileSync, appendFileSync } from "node:fs";
+          import { deriveReleaseMergeWait } from "./scripts/release-merge-policy.ts";
+          const plan = deriveReleaseMergeWait(JSON.parse(readFileSync(process.argv[1], "utf8")));
+          appendFileSync(process.env.GITHUB_OUTPUT, "wait_seconds=" + plan.wait_seconds + "\n");
+          const summary = "Release merge wait: " + plan.wait_seconds / 60 + " minutes. " +
+            "Last 20 successful main push CI runs; successful test (22)/(26) samples: " + plan.sample_count +
+            "; nearest-rank p95: " + plan.p95_seconds + "s; margin: max(900s, 25% of p95) = " + plan.margin_seconds +
+            "s; floor: 60m; cap: 120m; job timeout: 360m. One safe refresh restarts this wait.\n";
+          console.log(summary);
+          try { appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary); }
+          catch { console.log("::warning::Could not write merge wait summary."); }
+          ' "${timings}.json"
+
       - name: Merge release metadata through protected PR
         if: steps.decide.outputs.should_release == 'true'
         id: release_pr
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          MERGE_WAIT_SECONDS: ${{ steps.merge_wait.outputs.wait_seconds }}
           RELEASE_BASE_SHA: ${{ steps.decide.outputs.base_sha }}
           RELEASE_TAG: ${{ steps.decide.outputs.tag }}
           NPM_VERSION: ${{ steps.decide.outputs.npm_version }}
@@ -294,15 +335,36 @@ jobs:
           RELEASE_PR_NUMBER: ${{ steps.decide.outputs.pr_number }}
         run: |
           set -euo pipefail
-          git fetch origin main --force
-          current_main_sha="$(git rev-parse origin/main)"
-          if [[ "$current_main_sha" != "$RELEASE_BASE_SHA" ]]; then
-            echo "::error::main advanced from ${RELEASE_BASE_SHA} to ${current_main_sha} while preparing the release. Retry from the new main head."
-            exit 1
-          fi
-
           release_branch="$RELEASE_BRANCH"
           pr_number="$RELEASE_PR_NUMBER"
+          release_base_sha="$RELEASE_BASE_SHA"
+          refreshed=0
+          merge_wait_seconds="${MERGE_WAIT_SECONDS:-3600}"
+          if [[ ! "$merge_wait_seconds" =~ ^[0-9]+$ ]] || (( merge_wait_seconds < 3600 || merge_wait_seconds > 7200 )); then
+            echo "::error::Release merge wait must be between 60 and 120 minutes."
+            exit 1
+          fi
+          # One refresh is shared by preparation and the entire wait, never one per poll.
+          refresh_release_base() {
+            git fetch origin main --force
+            current_main_sha="$(git rev-parse origin/main)"
+            if [[ "$current_main_sha" == "$release_base_sha" ]]; then return; fi
+            if (( refreshed )); then
+              echo "::error::main advanced again after the single release refresh; retry release preparation."
+              exit 1
+            fi
+            node --input-type=module -e '
+            import { assertSafeReleaseAdvance } from "./scripts/release-merge-policy.ts";
+            assertSafeReleaseAdvance(process.argv[1], process.argv[2]);
+            ' "$release_base_sha" "$current_main_sha"
+            # A conflict fails closed; rebase keeps the protected release PR linear.
+            git rebase "$current_main_sha"
+            release_base_sha="$current_main_sha"
+            refreshed=1
+            echo "Updated release branch from main once; required CI must pass on the new head."
+          }
+          refresh_release_base
+
           remote_branch_sha="$(git ls-remote --heads origin "refs/heads/${release_branch}" | cut -f1)"
           if [[ -z "$pr_number" && -n "$remote_branch_sha" ]]; then
             echo "::error::Refusing to overwrite a release branch without a verified workflow PR."
@@ -342,14 +404,14 @@ jobs:
 
           owner="${GITHUB_REPOSITORY%/*}"
           repo="${GITHUB_REPOSITORY#*/}"
-          deadline=$(( SECONDS + 1800 ))
+          deadline=$(( SECONDS + merge_wait_seconds ))
           awaiting_approval=0
           merge_err="$(mktemp)"
           pr_view_err="$(mktemp)"
           merged_sha=""
           while :; do
             # Read mergeStateStatus + statusCheckRollup only to detect the
-            # fatal DIRTY/BEHIND states and to keep the deadline message
+            # fatal DIRTY state and to keep the deadline message
             # diagnosable. The merge decision is NOT derived from this state
             # (see the step-level comment above): the merge API call is the
             # authority. `set -e` is active, so an unguarded `gh pr view`
@@ -387,11 +449,24 @@ jobs:
             fi
 
             case "$merge_state" in
-              DIRTY | BEHIND)
-                echo "::error::Release PR #${pr_number} is ${merge_state}; it conflicts with main or its base moved. Retry the release from the new main head."
+              DIRTY)
+                echo "::error::Release PR #${pr_number} is DIRTY; it conflicts with main. Retry the release from the new main head."
                 exit 1
                 ;;
             esac
+
+            previous_refresh="$refreshed"
+            refresh_release_base
+            if [[ "$refreshed" != "$previous_refresh" ]]; then
+              updated_commit="$(git rev-parse HEAD)"
+              git push --force-with-lease="refs/heads/${release_branch}:${release_commit}" \
+                origin "HEAD:refs/heads/${release_branch}"
+              release_commit="$updated_commit"
+              deadline=$(( SECONDS + merge_wait_seconds ))
+              # Re-read checks on the new head; never merge from the old rollup.
+              continue
+            fi
+            # BEHIND can lag a fetched main ref; retry without consuming a refresh.
 
             # required_conversation_resolution is enabled, so any unresolved
             # review thread blocks the merge forever. Advisory bot reviewers
@@ -480,11 +555,11 @@ jobs:
 
             if (( SECONDS >= deadline )); then
               if [[ "$awaiting_approval" == 1 ]]; then
-                echo "::error::Release PR #${pr_number} did not merge within 30 minutes because its CI run is awaiting workflow approval (last state: ${merge_state}). Approve the run linked above once; this repository requires approval for a contributor that has no merged PR yet. Nothing was published or tagged."
+                echo "::error::Release PR #${pr_number} did not merge within $(( merge_wait_seconds / 60 )) minutes because its CI run is awaiting workflow approval (last state: ${merge_state}). Approve the run linked above once; this repository requires approval for a contributor that has no merged PR yet. Nothing was published or tagged."
               elif [[ "$awaiting_approval" == unknown ]]; then
-                echo "::error::Release PR #${pr_number} did not merge within 30 minutes; current workflow approval state is unavailable (last state: ${merge_state}; still settling: ${unsettled:-none}; failing: ${failing:-none}). Inspect workflow runs and required checks; nothing was published or tagged."
+                echo "::error::Release PR #${pr_number} did not merge within $(( merge_wait_seconds / 60 )) minutes; current workflow approval state is unavailable (last state: ${merge_state}; still settling: ${unsettled:-none}; failing: ${failing:-none}). Inspect workflow runs and required checks; nothing was published or tagged."
               else
-                echo "::error::Release PR #${pr_number} did not merge within 30 minutes (last state: ${merge_state}; still settling: ${unsettled:-none}; failing: ${failing:-none}). A required check failed or never reported, or a required review is missing; not merging or publishing."
+                echo "::error::Release PR #${pr_number} did not merge within $(( merge_wait_seconds / 60 )) minutes (last state: ${merge_state}; still settling: ${unsettled:-none}; failing: ${failing:-none}). A required check failed or never reported, or a required review is missing; not merging or publishing."
               fi
               exit 1
             fi
@@ -573,9 +648,8 @@ jobs:
             echo "::warning::Could not write release summary: ${summary_error}"
           fi
 
-      # The release PR can only contain the prepared release commit because the
-      # base SHA is checked immediately before creation. Re-check the exact
-      # merged main commit anyway so npm always receives byte-for-byte validated
+      # Preparation and the optional main refresh preserve release metadata.
+      # Re-check the exact merged main commit so npm always receives byte-for-byte validated
       # repository state, and fail safely before publication if main moved.
       - name: Verify merged release
         if: steps.decide.outputs.should_release == 'true'
