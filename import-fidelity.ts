@@ -240,10 +240,11 @@ function providerProvenance(item: PmItem): string {
     .map(([, value]) => typeof value === "string" ? value : JSON.stringify(value)).join("\n");
 }
 
-/** True when an item already carries a structured GitHub or provider identity of its own. */
+/** True when an item already carries a structured GitHub or provider identity of its own (any core external_ref counts). */
 function hasStructuredOwnership(item: PmItem): boolean {
   const issueLocator = /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+$/;
   return item.github_number !== undefined || Boolean(providerProvenance(item)) ||
+    (typeof item.external_ref === "string" && item.external_ref.trim() !== "") ||
     (typeof item.description === "string" && /^GitHub issue(?:\s*:\s+|\s+)https?:\/\//i.test(item.description)) ||
     Object.entries(item).some(([key, value]) => /^(?:github_?url|provenance|external_?(?:links?|url)|links?)$/i.test(key) &&
       locators(value).some(url => issueLocator.test(url)));

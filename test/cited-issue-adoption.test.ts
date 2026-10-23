@@ -640,6 +640,8 @@ test("citation adoption never overwrites an item that already carries structured
     { id: "url", description: `Fixes ${repo}#30`, github_url: "https://github.com/acme/widgets/issues/31" },
     { id: "number", description: `Fixes ${repo}#30`, github_number: 31 },
     { id: "links", description: `Fixes ${repo}#30`, external_links: ["https://github.com/acme/widgets/issues/31"] },
+    { id: "ref", description: `Fixes ${repo}#30`, external_ref: "gh:acme/widgets#31" },
+    { id: "linear", description: `Fixes ${repo}#30`, external_ref: "linear:ENG-31" },
   ];
   for (const item of owned) {
     const result = matchImportedIssue([item], issue);
