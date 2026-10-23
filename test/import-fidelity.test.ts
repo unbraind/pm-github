@@ -202,7 +202,7 @@ for (const atomic of [false, true]) {
 }
 
 for (const mode of ["plain", "gate", "atomic"] as const) {
-  test(`ambiguous later issue documents write boundary (${mode})`, async () => tracker(async (_directory, pmRoot) => {
+  test(`ambiguous later issue refuses the batch before writes (${mode})`, async () => tracker(async (_directory, pmRoot) => {
     const second = { ...recorded("pm-csv-72"), state: "open" as const, closed_at: null };
     const first = { ...second, number: 1, html_url: "https://github.com/unbraind/pm-csv/issues/1", title: "Earlier issue" };
     await identityItem(pmRoot, { github_url: second.html_url });
@@ -212,10 +212,7 @@ for (const mode of ["plain", "gate", "atomic"] as const) {
       parseImportOptions({ state: "all", gate: mode === "gate", atomic: mode === "atomic" }),
       { fetchIssues: async () => [first, second], resolveToken: () => undefined })), /multiple existing owners/);
     const after = await listItems(pmRoot);
-    if (mode === "plain") {
-      assert.equal(after.length, before.length + 1);
-      assert.equal(after.find(item => item.github_url === first.html_url)?.title, first.title);
-    } else assert.deepEqual(after, before);
+    assert.deepEqual(after, before);
   }));
 }
 
