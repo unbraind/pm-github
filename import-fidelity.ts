@@ -240,13 +240,20 @@ function providerProvenance(item: PmItem): string {
     .map(([, value]) => typeof value === "string" ? value : JSON.stringify(value)).join("\n");
 }
 
-/** True when an item already carries a structured GitHub or provider identity of its own (any core external_ref counts). */
+/**
+ * True when an item already carries a structured GitHub or provider identity of its own. Mirrors every ownership source
+ * identity.ts recognizes: any `github_*` field, a core `external_ref`, a native `source_owner`, provider identity fields
+ * (`linear_*`/`jira_*`/`ado_*` id, key, url or identifier), provider provenance, a native "GitHub issue <url>"
+ * declaration, or a GitHub issue URL in provenance/external links.
+ */
 function hasStructuredOwnership(item: PmItem): boolean {
   const issueLocator = /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+$/;
-  return item.github_number !== undefined || Boolean(providerProvenance(item)) ||
-    (typeof item.external_ref === "string" && item.external_ref.trim() !== "") ||
+  const filled = (value: unknown) => value !== undefined && value !== null && value !== false && !(typeof value === "string" && value.trim() === "");
+  return Object.entries(item).some(([key, value]) => filled(value) && (/^github_/i.test(key) && key !== "github_link_only" ||
+      /^(?:external_ref|source_owner)$/.test(key) || /^(?:linear|jira|ado)_(?:.*_)?(?:id|key|url|identifier)$/i.test(key))) ||
+    item.github_link_only === false || Boolean(providerProvenance(item)) ||
     (typeof item.description === "string" && /^GitHub issue(?:\s*:\s+|\s+)https?:\/\//i.test(item.description)) ||
-    Object.entries(item).some(([key, value]) => /^(?:github_?url|provenance|external_?(?:links?|url)|links?)$/i.test(key) &&
+    Object.entries(item).some(([key, value]) => /^(?:provenance|external_?(?:links?|url)|links?)$/i.test(key) &&
       locators(value).some(url => issueLocator.test(url)));
 }
 

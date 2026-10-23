@@ -642,6 +642,10 @@ test("citation adoption never overwrites an item that already carries structured
     { id: "links", description: `Fixes ${repo}#30`, external_links: ["https://github.com/acme/widgets/issues/31"] },
     { id: "ref", description: `Fixes ${repo}#30`, external_ref: "gh:acme/widgets#31" },
     { id: "linear", description: `Fixes ${repo}#30`, external_ref: "linear:ENG-31" },
+    { id: "source-owner", description: `Fixes ${repo}#30`, source_owner: "linear", status: "closed" },
+    { id: "provider-field", description: `Fixes ${repo}#30`, jira_issue_key: "ENG-31" },
+    { id: "github-field", description: `Fixes ${repo}#30`, github_state: "closed" },
+    { id: "not-link-only", description: `Fixes ${repo}#30`, github_link_only: false },
   ];
   for (const item of owned) {
     const result = matchImportedIssue([item], issue);
