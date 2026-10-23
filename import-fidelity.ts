@@ -4,7 +4,7 @@ import {
   acquireLock, appendHistoryEntry, canonicalDocument, createHistoryEntry, getHistoryPath,
   locateItem, normalizeItemId, readLocatedItem, readSettings, resolveItemTypeRegistry, resolvePmRoot, runActiveOnWriteHooks, serializeItemDocument, writeFileAtomic,
 } from "@unbrained/pm-cli/sdk";
-import { CommandError, fetchJSON, githubApiBase, githubGraphQL, parseNextLink, type GhIssue, type PmItem } from "./index.ts";
+import { CommandError, fetchJSON, githubApiBase, githubGraphQL, parseNextLink, parseProvenanceTag, type GhIssue, type PmItem } from "./index.ts";
 
 /**
  * Select the latest external edit or different lifecycle generation in immutable history.
@@ -44,6 +44,33 @@ export interface ImportFidelity {
 /** Identity decision recorded before any import writes. */
 export interface ImportMatch { item?: PmItem; linkOnly: boolean; via: string }
 
+/** A citation cannot pick an owner until the user tags exactly one candidate. */
+export interface AmbiguousCitationPlan {
+  action: "ambiguous_citation";
+  issue: number;
+  candidates: string[];
+  remedy: string;
+}
+
+/** Carry a typed refusal from identity resolution into the batch's reviewable plan. */
+export class AmbiguousCitationError extends Error {
+  readonly entry: AmbiguousCitationPlan;
+  /** Retain candidate IDs and the exact provenance tag needed to resolve the conflict. */
+  constructor(repo: string, number: number, candidates: string[]) {
+    const entry: AmbiguousCitationPlan = { action: "ambiguous_citation", issue: number, candidates,
+      remedy: `Tag the correct item with gh:${repo}#${number}, then retry.` };
+    super(JSON.stringify(entry));
+    this.entry = entry;
+  }
+}
+
+/** Match complete, repository-qualified prose references, never bare numbers or URL substrings. */
+function citesIssue(item: PmItem, repo: string, number: number): boolean {
+  const text = [item.title, item.description, item.body].join("\n");
+  const references = text.matchAll(/(?<![\w./:#-])(?:https:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/issues\/|([\w.-]+\/[\w.-]+)#)([1-9]\d*)(?![\w/#?=&%-]|\.\w)/gi);
+  return [...references].some(match => (match[1] ?? match[2]!).toLowerCase() === repo && Number(match[3]) === number);
+}
+
 /** Trim exporter punctuation in one backwards pass. @internal Shared with parity tests. */
 export function trimLocatorPunctuation(locator: string): string {
   let end = locator.length;
@@ -80,7 +107,7 @@ function providerProvenance(item: PmItem): string {
 }
 
 /** Match GitHub locators or provider back-links before creation, refusing multiple owners. */
-export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, tagged?: PmItem): ImportMatch {
+export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, tagged?: PmItem, adoptCited = true): ImportMatch {
   const issueUrl = locators(issue.html_url)[0]!;
   const bodyUrls = new Set(locators(issue.body ?? ""));
   /** Recognize leading native ownership declarations; later prose cannot transfer ownership. */
@@ -91,11 +118,20 @@ export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, tag
     Object.entries(item).some(([key, value]) => /^(?:github_?url|provenance|external_?(?:links?|url)|links?)$/i.test(key) && locators(value).includes(issueUrl)) ||
     locators(providerProvenance(item)).some(url => bodyUrls.has(url))));
   if (candidates.length > 1) throw new CommandError(`GitHub issue #${issue.number} has multiple existing owners; import plan is not idempotent. No item was written for this issue.`);
-  const item = candidates[0];
+  let item = candidates[0];
+  let cited = false;
+  if (!item && adoptCited && !issue.pull_request) {
+    const repo = issue.html_url.split("/").slice(3, 5).join("/").toLowerCase();
+    const citing = items.filter(candidate => candidate.id &&
+      !candidate.tags?.some(tag => parseProvenanceTag(tag) !== undefined) && citesIssue(candidate, repo, issue.number));
+    if (citing.length > 1) throw new AmbiguousCitationError(repo, issue.number, citing.map(candidate => candidate.id!).sort());
+    item = citing[0];
+    cited = Boolean(item);
+  }
   const provider = item && (Boolean(providerProvenance(item)) || (copiedProviderMarkersOwnItem(item) && item.tags?.some(tag => /^(linear|jira|ado):/i.test(tag))));
   const native = item && declaredOwner(item);
   return { item, linkOnly: Boolean(item && (provider || native || item.github_link_only === true)),
-    via: item ? (provider ? "provider-link" : native ? "github-declaration" : item.id === tagged?.id ? "provenance-tag" : "github-url") : "new" };
+    via: cited ? "citation" : item ? (provider ? "provider-link" : native ? "github-declaration" : item.id === tagged?.id ? "provenance-tag" : "github-url") : "new" };
 }
 
 /** Read calendar release tags from the selected tracker checkout, including annotated tag dates. */

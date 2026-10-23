@@ -1,0 +1,35 @@
+id: pm-github-cited-issue-adoption
+title: Adopt an existing item that cites the imported GitHub issue
+description: "Prevent gated imports from duplicating existing prose-citing work. Add exact citation adoption after established identity matching, refuse ambiguous citations, expose receipts and an opt-out, and validate dry runs against public trackers."
+type: Feature
+status: in_progress
+priority: 2
+tags[3]: changelog-unreleased,github,import
+created_at: "2026-10-23T07:16:54.041Z"
+updated_at: "2026-10-23T07:42:13.982Z"
+author: codex-agent
+acceptance_criteria: "Exact issue URL or owner/repo#N in title, description or body adopts one untagged item, including closed and canceled items. Bare numbers and other repositories never match; existing structured identity takes precedence. Multiple candidates return typed ambiguous_citation entries listing IDs and a tagging remedy with no create. Gates verify one landing target; receipts count adopts; dry runs show adopts. Import and scheduled sync adopt by default with --no-adopt-cited for reference-only prose. Behavioral revert tests and no-git tracker tests pass. Validate current pm-review main issue 30 and another public repository. Targeted tests, typecheck, lint and npm/Bun CI release gates pass."
+comments[7]{created_at,author,text}:
+  "2026-10-23T07:17:26.861Z",codex-agent,"Overlap review: pm-github-c093 owns structured URL/provider back-link import matching, pm-github-identity-collisions diagnoses and repairs structured ownership, Projects import matches board and issue provenance, and export upserts linked issues. None adopts arbitrary exact prose citations. This feature adds a fallback only after existing import matching, preserving those paths. Scheduled gated sync already invokes import, so it inherits the default. Plan ambiguous citations before writes and refuse the batch with actionable candidate IDs."
+  "2026-10-23T07:24:01.857Z",codex-agent,"Implementation: strong ownership matching stays first; exact qualified title/description/body citations fall back to a single existing item. All imports now prepare identities before writes, and ambiguous citations expose candidate IDs plus an exact tagging remedy. Adoption retains local tags and reports a separate count; provider-owned records retain link-only behavior. New tests use real trackers with a PATH containing node and the pinned pm CLI but no git, plus real git trackers for write-gate acceptance."
+  "2026-10-23T07:27:45.693Z",codex-agent,"New citation suite: 13/13 passed, including plain/atomic adoption in non-git trackers, write-gate acceptance, retry identity, ambiguity refusal, punctuation, repo/number boundaries, structured ownership precedence and provider link-only preservation. Live pm-review main aa16d855df1f7b74afd3453617f77e92c44d493e already tags pm-review-withdrawn-lineage for issue 30, so an untouched current-main copy correctly plans update rather than adopt. Preserve this current-state result and locate the pre-tag historical tracker for a separate adoption replay. SDK reads may create runtime caches; verify original tracked file bytes independently."
+  "2026-10-23T07:36:10.754Z",codex-agent,"Public dry-run evidence: current pm-review main aa16d855df1f7b74afd3453617f77e92c44d493e issue 30 plans 0 creates, 1 update, 0 adopts because PR 33 already added provenance. Actual pre-tag snapshot f72250e4c5ee8dfafaf57ee8afe20ddd3cbc993e plans 0 creates, 0 updates, 1 adopt into pm-review-withdrawn-lineage; gate new_entries=0. Current pm-context main 8d9576778a3609f156e9444ed659ca7c2e2aa9e7 plans 5 issues: 2 creates, 3 updates, 0 adopts, 0 skips, not truncated. All three are plain-directory archive copies. SHA-256 comparisons verify 106/106, 106/106 and 181/181 original files unchanged. Detailed receipts are in docs/cited-issue-adoption-validation.md."
+  "2026-10-23T07:38:52.136Z",codex-agent,"Behavioral revert proof: an isolated scratch package retained the new planner, receipts and tests, but restored only matchImportedIssue from base main. node --test test/cited-issue-adoption.test.ts exited 1 with the expected adoption and ambiguity assertion failures. Tests import live TypeScript, so no stale build could hide the revert. The fixed worktree was never reverted and its 14 adoption regressions pass. Full npm/Bun release evidence will come from the PR CI release gates at unchanged thresholds."
+  "2026-10-23T07:40:47.558Z",codex-agent,"Local checks passed: npm run typecheck; npm run build; npm run build:test; npm run lint; npm run docstring (17 files, 187 documented declarations); npm run duplication (18 authored modules, zero duplicated lines); changelog generation/check and strict tracker health. Behavioral revert: 14 tests, 10 fail and 4 pass with only the old matcher restored; fixed matcher: 14 pass, zero skips. Broader import regressions and the mandatory linked-test run are in progress. The current dependency pin is unchanged; registry CLI version was verified as 2026.10.23."
+  "2026-10-23T07:42:06.837Z",codex-agent,"Mandatory linked verification completed: pm test pm-github-cited-issue-adoption --run --progress passed its one linked command, node --test test/cited-issue-adoption.test.ts (14 tests pass, zero failures/skips). Public tracker dry runs and behavioral revert evidence are complete. The ready-for-review PR will use CI npm run release:check and bun run release:check, unchanged thresholds, as full release-gate evidence; the final report will link the exact-head run and its counts. No merge or release is authorized."
+files[9]{path,scope}:
+  import-fidelity.ts,project
+  index.ts,project
+  test/atomic.test.ts,project
+  test/cited-issue-adoption.test.ts,project
+  test/dryrun-preview.test.ts,project
+  test/import-errors.test.ts,project
+  test/import-fidelity.test.ts,project
+  test/import-gate.test.ts,project
+  test/import-selection.test.ts,project
+tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  node --test test/cited-issue-adoption.test.ts,project,900,codex-agent,"2026-10-23T07:35:49.405Z",local_mutation,feat/cited-issue-adoption
+docs[2]{path,scope}:
+  docs/cited-issue-adoption-validation.md,project
+  README.md,project
+body: ""

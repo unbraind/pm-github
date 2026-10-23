@@ -25,8 +25,8 @@ import type {
 } from "@unbrained/pm-cli/sdk/authoring";
 import { CloseoutUsageError, compactCloseoutReport, runCloseout } from "./closeout.ts";
 import {
-  buildImportFidelity, fetchImportTimeline, importFidelityFields, matchImportedIssue, persistImportFidelity, readImportReleases, selectImportContextIndex, validateImportLifetime,
-  type ImportFidelity,
+  AmbiguousCitationError, buildImportFidelity, fetchImportTimeline, importFidelityFields, matchImportedIssue, persistImportFidelity, readImportReleases, selectImportContextIndex, validateImportLifetime,
+  type AmbiguousCitationPlan, type ImportFidelity,
 } from "./import-fidelity.ts";
 import { refreshChanges, runRefresh } from "./refresh.ts";
 import { exploreGithubIdentities, planGithubIdentityRepair, applyGithubIdentityRepair } from "./identity.ts";
@@ -175,6 +175,8 @@ const COMMENTS_MODES: readonly CommentsMode[] = ["body", "annotations", "both"];
  * of the import path consumes a typed shape rather than re-parsing strings.
  */
 export interface ImportOptions {
+  /** Disable fallback adoption when citations are references rather than ownership evidence. */
+  noAdoptCited?: boolean;
   /** Explicit comma-separated issue numbers or same-repository references. */
   issue?: string;
   /** Positive cap on list-mode issues, ordered by latest update. */
@@ -2732,6 +2734,7 @@ export function parseImportOptions(options: Record<string, unknown>): ImportOpti
     atomic: optionEnabled(options, "atomic"),
     linkDeps: optionEnabled(options, "link-deps", "linkDeps"),
     gate: optionEnabled(options, "gate"),
+    noAdoptCited: optionEnabled(options, "no-adopt-cited", "noAdoptCited"),
   };
 }
 
@@ -3113,7 +3116,7 @@ export async function prepareGithubImport(
   const title = issue.title.trim();
   if (!title) return undefined;
 
-  const identity = matchImportedIssue(fidelityContext.items, issue, match);
+  const identity = matchImportedIssue(fidelityContext.items, issue, match, !opts.noAdoptCited);
   match = identity.item;
   const timeline = await fidelityContext.timeline(issue, repo, token);
   const fidelity = buildImportFidelity(issue, fidelityContext.releases, timeline);
@@ -3151,7 +3154,7 @@ export async function prepareGithubImport(
       (issue.state_reason ? ` · state reason ${issue.state_reason}` : "") +
       ` · created ${issue.created_at} · updated ${issue.updated_at}`,
     body: writeCommentsToBody ? composeBody(issue, comments) : (issue.body || ""),
-    tags: [...new Set([...(identity.linkOnly ? match!.tags! : []), ...labels, tag, ...(ghAuthorTag ? [ghAuthorTag] : [])])],
+    tags: [...new Set([...(identity.linkOnly || identity.via === "citation" ? match!.tags ?? [] : []), ...labels, tag, ...(ghAuthorTag ? [ghAuthorTag] : [])])],
     assignee: issue.assignee?.login,
     milestone: issue.milestone?.title,
     comments,
@@ -3176,6 +3179,8 @@ export interface ImportPlanCompletenessReceipts {
 
 /** Receipts from the gated import's idempotency check. */
 export interface ImportIdempotencyReceipts {
+  /** Existing untagged items selected by exact prose citation, each with one landing target. */
+  readonly adopted: number;
   /** Distinct `gh:owner/repo#N` provenance keys in the existing corpus. */
   readonly provenance_indexed: number;
   /** Number of plan entries matched to an existing item via its provenance tag. */
@@ -3272,6 +3277,7 @@ export function verifyImportIdempotency(
   for (const entry of prepared) {
     if (entry.match?.id) {
       matchedIds.push(entry.match.id);
+      if (entry.identity?.via === "citation" && !entry.tags.includes(provenanceTag(repo, entry.issueNumber))) untaggedNewEntries++;
       continue;
     }
     if (!entry.tags.includes(provenanceTag(repo, entry.issueNumber))) untaggedNewEntries++;
@@ -3286,8 +3292,9 @@ export function verifyImportIdempotency(
     );
   }
   return {
+    adopted: prepared.filter(entry => entry.identity?.via === "citation").length,
     provenance_indexed: tagOwners.size,
-    matched_by_provenance: matchedIds.length,
+    matched_by_provenance: prepared.filter(entry => entry.match?.id && entry.identity?.via !== "citation").length,
     new_entries: prepared.length - matchedIds.length,
   };
 }
@@ -3442,12 +3449,13 @@ export async function runImport(
         dryRun: true,
         wouldImport: 0,
         wouldUpdate: 0,
+        wouldAdopt: 0,
         wouldSkip: 0,
         ...(opts.atomic ? { atomic: true } : {}),
         ...fetchFields,
       };
     }
-    return { imported: 0, updated: 0, skipped: 0, ...fetchFields, ...(emptyGateReceipt ? { gate: emptyGateReceipt } : {}) };
+    return { imported: 0, updated: 0, adopted: 0, skipped: 0, ...fetchFields, ...(emptyGateReceipt ? { gate: emptyGateReceipt } : {}) };
   }
 
   console.error(`Found ${filtered.length} issue(s).`);
@@ -3470,14 +3478,15 @@ export async function runImport(
 
   let imported = 0;
   let updated = 0;
+  let adopted = 0;
   let skipped = 0;
   // Planned native comments the write phase could not land (contended lock,
   // refused add, unparsable created id). Ungated runs warn and continue; gated
   // runs add this to the plan-divergence refusal at the end.
   let commentWriteFailures = 0;
 
-  // Gated pipeline, phase 1 — plan BEFORE any mutation. The same prepare step
-  // the write paths use builds every plan entry up front, so completeness
+  // Plan every import BEFORE any mutation, including ungated citation refusals.
+  // The same prepare step builds every entry up front, so gated completeness
   // (every fetched issue accounted for exactly once) and idempotency (every
   // re-import lands on exactly one provenance-tagged item) are proven while
   // the tracker is still untouched. Both checks throw before any write.
@@ -3485,32 +3494,45 @@ export async function runImport(
   let gateCompleteness: ImportPlanCompletenessReceipts | undefined;
   let gateIdempotency: ImportIdempotencyReceipts | undefined;
   let gatePlanByNumber: Map<number, PreparedGithubImport> | undefined;
-  if (opts.gate || opts.atomic) {
+  {
     const planned: PreparedGithubImport[] = [];
     const skippedNumbers: number[] = [];
+    const ambiguous: AmbiguousCitationPlan[] = [];
     for (const issue of filtered) {
-      const entry = await prepareGithubImport(
-        issue,
-        repo,
-        opts,
-        token,
-        existing.get(`${repo.toLowerCase()}#${issue.number}`),
-        dependencies.fetchIssueComments,
-        fidelityContext,
-      );
+      let entry: PreparedGithubImport | undefined;
+      try {
+        entry = await prepareGithubImport(
+          issue,
+          repo,
+          opts,
+          token,
+          existing.get(`${repo.toLowerCase()}#${issue.number}`),
+          dependencies.fetchIssueComments,
+          fidelityContext,
+        );
+      } catch (error) {
+        if (!(error instanceof AmbiguousCitationError)) throw error;
+        ambiguous.push(error.entry);
+        continue;
+      }
       if (!entry) {
         skippedNumbers.push(issue.number);
         continue;
       }
       planned.push(entry);
     }
+    if (ambiguous.length > 0) {
+      const refusal = { code: "ambiguous_citation", blocked: true, plan: ambiguous };
+      if (!opts.dryRun) throw new CommandError(JSON.stringify(refusal));
+      for (const entry of ambiguous) console.error(`[dry-run] #${entry.issue} ambiguous_citation: ${entry.candidates.join(", ")}. ${entry.remedy}`);
+      return { dryRun: true, wouldImport: 0, wouldUpdate: 0, wouldAdopt: 0, wouldSkip: skippedNumbers.length,
+        ...(opts.atomic ? { atomic: true } : {}), ...refusal, ...fetchFields };
+    }
     if (opts.gate) {
-    gateCompleteness = verifyImportPlanCompleteness(filtered, planned, skippedNumbers);
-    gateIdempotency = verifyImportIdempotency(
-      existingItems,
-      planned,
-      repo,
-    );
+      gateCompleteness = verifyImportPlanCompleteness(filtered, planned, skippedNumbers);
+    }
+    if (opts.gate || planned.some(entry => entry.identity?.via === "citation")) {
+      gateIdempotency = verifyImportIdempotency(existingItems, planned, repo);
     }
     gatePlan = planned;
     gatePlanByNumber = new Map(planned.map((entry) => [entry.issueNumber, entry]));
@@ -3528,7 +3550,7 @@ export async function runImport(
     }
     if (opts.gate) console.error(
       `pm github gate: plan verified — ${gateCompleteness!.planned} planned, ${gateCompleteness!.skipped} skipped, ` +
-        `${gateIdempotency!.matched_by_provenance} matched by provenance, ${gateIdempotency!.new_entries} new.`,
+        `${gateIdempotency!.matched_by_provenance} matched by provenance, ${gateIdempotency!.adopted} adopted, ${gateIdempotency!.new_entries} new.`,
     );
   }
 
@@ -3537,7 +3559,7 @@ export async function runImport(
     const source = entry.fidelity!;
     const reason = source.github_close_reason.split(" (", 1)[0]!;
     return { issue: entry.issueNumber, item: entry.match?.id,
-      action: entry.linkOnly ? "link" : entry.match?.id ? "update" : "create", status: entry.status,
+      action: entry.identity?.via === "citation" ? "adopt" : entry.linkOnly ? "link" : entry.match?.id ? "update" : "create", status: entry.status,
       ...source, github_close_reason: reason,
       created_at: entry.linkOnly ? entry.match!.created_at : source.github_created_at,
       updated_at_policy: "sdk-mutation-clock; source in github_updated_at",
@@ -3546,7 +3568,9 @@ export async function runImport(
       release: entry.linkOnly ? "preserved-provider-owner" : source.github_release,
       identity: entry.identity };
   });
-  const gatePlanFields = opts.gate ? { plan: fidelityPlan(), gate: { completeness: gateCompleteness, idempotency: gateIdempotency, scan: "post-write" } } : {};
+  const adoptionCount = gatePlan!.filter(entry => entry.identity?.via === "citation").length;
+  const planFields = opts.gate || adoptionCount > 0 ? { plan: fidelityPlan() } : {};
+  const gatePlanFields = { ...planFields, ...(opts.gate ? { gate: { completeness: gateCompleteness, idempotency: gateIdempotency, scan: "post-write" } } : {}) };
 
   if (opts.atomic) {
     // The gated pipeline already prepared every entry (and counted its skips)
@@ -3561,6 +3585,7 @@ export async function runImport(
           dryRun: true,
           wouldImport: 0,
           wouldUpdate: 0,
+          wouldAdopt: 0,
           wouldSkip: skipped,
           atomic: true,
           ...fetchFields,
@@ -3574,13 +3599,13 @@ export async function runImport(
 
     if (opts.dryRun) {
       imported = prepared.filter((entry) => !entry.match?.id).length;
-      updated = prepared.length - imported;
+      updated = prepared.length - imported - adoptionCount;
       for (const entry of prepared) {
-        const action = entry.match?.id ? "update" : "import";
+        const action = entry.identity?.via === "citation" ? "adopt" : entry.match?.id ? "update" : "import";
         console.error(`  [dry-run][atomic] #${entry.issueNumber} ${action}: ${opts.gate ? "(gated title)" : entry.title} (${entry.status})`);
       }
       console.error(
-        `[dry-run] Atomic plan would import ${imported}, update ${updated}, skip ${skipped}.`,
+        `[dry-run] Atomic plan would import ${imported}, update ${updated}, skip ${skipped}. Adopt ${adoptionCount}.`,
       );
       if (opts.linkDeps) {
         console.error(
@@ -3592,6 +3617,7 @@ export async function runImport(
         dryRun: true,
         wouldImport: imported,
         wouldUpdate: updated,
+        wouldAdopt: adoptionCount,
         wouldSkip: skipped,
         atomic: true,
         ...(opts.linkDeps ? { wouldLinkDependencyCandidates: countDependencyRefCandidates(repo, filtered) } : {}),
@@ -3644,36 +3670,22 @@ export async function runImport(
       transactionId: result.transactionId,
       recovered: result.recovered,
       imported: result.imported,
-      updated: result.updated,
+      updated: result.updated - (result.recovered ? 0 : adoptionCount),
+      adopted: result.recovered ? 0 : adoptionCount,
       ...(result.recoveredItems !== undefined ? { recoveredItems: result.recoveredItems } : {}),
       skipped,
       atomic: true,
       ...depLinkResultFields(atomicDepLink),
       ...fetchFields,
-      ...(opts.gate ? { plan: fidelityPlan() } : {}),
+      ...planFields,
       ...(gateReceipt ? { gate: gateReceipt } : {}),
     };
   }
 
   for (const issue of filtered) {
-    // With --gate, the pre-mutation plan phase already prepared (or explicitly
-    // skipped) every issue; reuse the verified plan instead of re-preparing so
-    // the write phase cannot diverge from it.
-    const prepared = gatePlanByNumber
-      ? gatePlanByNumber.get(issue.number)
-      : await prepareGithubImport(
-          issue,
-          repo,
-          opts,
-          token,
-          existing.get(`${repo.toLowerCase()}#${issue.number}`),
-          dependencies.fetchIssueComments,
-          fidelityContext,
-        );
+    // Every import reuses the pre-mutation identity plan, including ungated runs.
+    const prepared = gatePlanByNumber!.get(issue.number);
     if (!prepared) {
-      // A gated run counted its skips during the verified plan phase; only the
-      // ungated path counts them here.
-      if (!gatePlanByNumber) skipped++;
       continue;
     }
 
@@ -3707,10 +3719,11 @@ export async function runImport(
     };
 
     if (opts.dryRun) {
-      const action = match?.id ? "update" : "import";
+      const action = prepared.identity?.via === "citation" ? "adopt" : match?.id ? "update" : "import";
       const metadata = !opts.gate && labels.length > 0 ? `${status}, ${labels.join(",")}` : status;
       console.error(`  [dry-run] #${issue.number} ${action}: ${opts.gate ? "(gated title)" : title} (${metadata})`);
-      if (match?.id) updated++;
+      if (prepared.identity?.via === "citation") adopted++;
+      else if (match?.id) updated++;
       else imported++;
       continue;
     }
@@ -3720,7 +3733,8 @@ export async function runImport(
       const linked = pmRun(["--path", pmRoot, "update", ownerId, "--add-tags", tags.join(",")]);
       if (!linked.ok) throw new CommandError(`Could not link GitHub issue #${issue.number} to its existing owner.`);
       await persistImportFidelity(pmRoot, ownerId, prepared.fidelity!, true);
-      updated++;
+      if (prepared.identity?.via === "citation") adopted++;
+      else updated++;
       continue;
     }
     if (match?.id) {
@@ -3768,7 +3782,8 @@ export async function runImport(
         commentWriteFailures += (await syncGithubCommentsToAnnotations(match.id, comments, pmRoot, issue.number)).failed;
       }
       await persistImportFidelity(pmRoot, match.id, prepared.fidelity!, false);
-      updated++;
+      if (prepared.identity?.via === "citation") adopted++;
+      else updated++;
       continue;
     }
 
@@ -3836,7 +3851,7 @@ export async function runImport(
   }
 
   if (opts.dryRun) {
-    console.error(`[dry-run] Would import ${imported}, update ${updated}, skip ${skipped}.`);
+    console.error(`[dry-run] Would import ${imported}, update ${updated}, skip ${skipped}. Adopt ${adopted}.`);
     if (opts.linkDeps) {
       console.error(
         `[dry-run] --link-deps: ${countDependencyRefCandidates(repo, filtered)} candidate reference(s) parsed; ` +
@@ -3847,6 +3862,7 @@ export async function runImport(
       dryRun: true,
       wouldImport: imported,
       wouldUpdate: updated,
+      wouldAdopt: adopted,
       wouldSkip: skipped,
       ...(opts.linkDeps ? { wouldLinkDependencyCandidates: countDependencyRefCandidates(repo, filtered) } : {}),
       ...gatePlanFields,
@@ -3854,8 +3870,8 @@ export async function runImport(
     };
   }
 
-  console.error(`Imported ${imported} new, updated ${updated} existing, skipped ${skipped}.`);
-  if (imported === 0 && updated === 0 && skipped > 0) {
+  console.error(`Imported ${imported} new, updated ${updated} existing, adopted ${adopted}, skipped ${skipped}.`);
+  if (imported === 0 && updated === 0 && adopted === 0 && skipped > 0) {
     throw new CommandError(`Imported 0 issue(s); ${skipped} failed.`);
   }
   // A gated import is all-or-nothing in effect: a planned write that failed
@@ -3877,7 +3893,7 @@ export async function runImport(
   // pushed; scan the proposed tracker change now and fail closed.
   if (opts.gate) verifyImportedProvenance(await readImportItems(), gatePlan!, repo);
   const gateReceipt = opts.gate ? gateImportWrites(pmRoot) : undefined;
-  return { imported, updated, skipped, ...fetchFields, ...depLinkResultFields(depLink), ...(opts.gate ? { plan: fidelityPlan() } : {}), ...(gateReceipt ? { gate: gateReceipt } : {}) };
+  return { imported, updated, adopted, skipped, ...fetchFields, ...depLinkResultFields(depLink), ...planFields, ...(gateReceipt ? { gate: gateReceipt } : {}) };
 }
 
 /**
@@ -6603,6 +6619,7 @@ export function isMutatingGithubCommand(command: string, options: Record<string,
 // ---------------------------------------------------------------------------
 
 const IMPORT_FLAGS = [
+  { long: "--no-adopt-cited", description: "Disable default adoption of one untagged item citing the exact issue; use when prose citations are references rather than ownership. Multiple candidates otherwise refuse import until one is tagged" },
   { long: "--issue", value_name: "N[,N...]", description: "Fetch exactly these issue numbers, #N, or same-repo owner/repo#N references; conflicts with --state/--all/--labels/--since/--assignee/--milestone/--limit. Missing numbers fail before writes (reported by --dry-run); PRs require --include-prs" },
   { long: "--limit", value_name: "n", description: "Positive list-mode issue cap, newest-updated first; reports limit and truncated when more exist (one extra matching issue is fetched to check). Invalid with --issue" },
   { long: "--all", description: "Include closed issues (shorthand for --state all)" },

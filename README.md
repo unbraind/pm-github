@@ -361,12 +361,39 @@ pm github import owner/repo --dry-run
 | `--with-comments` | boolean | Fetch issue comments and append them to the item body |
 | `--comments-mode <mode>` | `body`\|`annotations`\|`both` | How fetched GitHub comments are persisted (default `body`). `annotations` syncs comments into the pm item's native comments collection via the SDK; `both` writes the body section AND native comments. `annotations`/`both` are idempotent on re-import (dedupe by GitHub comment id) |
 | `--atomic` | boolean | Commit every create, update, close, and reopen in one workspace-writer-locked, crash-resumable transaction (requires pm CLI/SDK >=2026.7.20). Normal failure compensation restores updated/closed items and deletes newly created items; an incomplete compensation is reported explicitly for retry or repair. |
+| `--no-adopt-cited` | boolean | Disable default citation adoption when prose references describe related work rather than the item's own issue. Existing provenance/URL matching still applies. |
 | `--link-deps` | boolean | After import, map dependency references in issue **bodies** (`Blocked by #N`, `Depends on owner/repo#N`, `Blocks #N`) to pm dependency edges between the linked items. Idempotent, best-effort, and re-runnable; see [Dependency linking](#dependency-linking---link-deps) below. |
 | `--gate` | boolean | Fail-closed privacy gate: verify plan completeness (every fetched issue accounted for exactly once) and provenance idempotency (every re-import lands on exactly one `gh:owner/repo#N`-tagged item) BEFORE the write, then scan the proposed tracker change with [`pm github gate`](#pm-github-gate) AFTER it. Any finding — or any unreadable scan input — exits non-zero so an automated pipeline can never commit or push the change. Embeds `gate` receipts in the result. |
 | `--dry-run` | boolean | Preview without writing |
 | `--type <type>` | string | Override pm item type (default: Issue) |
 
 Each imported item records GitHub provenance: the `gh:owner/repo#N` idempotency tag, a `github_author:<login>` tag, and an enriched description (`author @<login> · state reason <reason> · created <iso> · updated <iso>`). GitHub issues closed as `not_planned` import as pm `canceled` instead of `closed`, preserving the difference between completed work and deliberately dropped work. The integration declares the `github_url`, `github_number`, `github_state`, `github_author`, `github_created_at`, and `github_updated_at` schema fields.
+
+Before creating an issue item, import looks for an existing item citing exactly
+`https://github.com/owner/repo/issues/N` or `owner/repo#N` in its title,
+description or body. Trailing punctuation such as `.` and `)` is accepted;
+bare `#N`, another repository and longer issue numbers never match. Existing
+tag/URL/provider ownership matching takes precedence. Items with an established
+`gh:` issue tag are excluded from this fallback. Closed and canceled items remain
+eligible because their fix may already have landed.
+
+One candidate produces an `adopt` plan entry: the existing ID receives the
+provenance tag and `github_*` fields through the normal upsert, retaining local
+tags and any established provider ownership. Later imports use the structured
+identity. Two or more candidates produce `ambiguous_citation`, candidate IDs and
+a remedy: tag the correct item with `gh:owner/repo#N`, then retry. The entire
+batch refuses writes until resolved; dry-run returns `blocked: true` and the
+refusal entries with zero planned write counts.
+
+Dry runs show `adopt` entries and `wouldAdopt`; write receipts report `adopted`
+separately from `imported` and `updated`. Gated idempotency counts an adopt as one
+existing landing item with its provenance tag, never a new entry. This is on by
+default for manual imports and scheduled gated syncs, whose import step uses the
+same planner. Use `--no-adopt-cited` when citations are reference-only and a
+separate imported item is intentional. The legacy import alias shares this flag.
+Status push (`github sync`), export and Projects matching retain their existing
+scope. Citation adoption also works in a non-git tracker; actual `--gate` writes
+still require a Git worktree for the proposed-change privacy scan.
 
 `--issue` deduplicates references and fetches each selected issue directly, including closed issues, without listing the repository. Every selected number is fetched and checked before any tracker write. A missing number fails the whole import; `--dry-run` instead reports `missingIssues` and previews the available selection. Pull request numbers require `--include-prs`. Selection combines with comment modes, dependency linking, atomic imports, gates, dry runs, and custom item types, preserving provenance-based re-import idempotency.
 

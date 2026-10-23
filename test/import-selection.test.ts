@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, delimiter } from "node:path";
 import test from "node:test";
-import { comments as readComments } from "@unbrained/pm-cli/sdk";
+import { comments as readComments, create } from "@unbrained/pm-cli/sdk";
 import {
   CommandError, EXIT_CODE, fetchAllIssues, parseImportOptions, parseIssueNumbers,
   readPmItems, runImport, type GhIssue, type GhComment,
@@ -254,6 +254,7 @@ test("built package dispatch advertises and honors selectors and limits through 
     assert.equal(help.code, 0, help.stderr);
     assert.match(help.stdout, /--issue/);
     assert.match(help.stdout, /--limit/);
+    assert.match(help.stdout, /--no-adopt-cited/);
     const selected = await call(["unbraind/pm-web", "--issue", "189", "--dry-run", "--json"]);
     assert.equal(selected.code, 0, selected.stderr);
     assert.equal((JSON.parse(selected.stdout) as { wouldImport: number }).wouldImport, 1);
@@ -263,5 +264,13 @@ test("built package dispatch advertises and honors selectors and limits through 
     assert.equal(server.requests.length, 2);
     assert.equal(server.requests[0]!.url, "/repos/unbraind/pm-web/issues/189");
     assert.deepEqual(readPmItems(pmRoot), []);
+    await create({ type: "Task", title: "Fix unbraind/pm-web#189" }, { pmRoot });
+    const adopted = await call(["unbraind/pm-web", "--issue", "189", "--dry-run", "--json"]);
+    assert.equal(adopted.code, 0, adopted.stderr);
+    assert.equal((JSON.parse(adopted.stdout) as { wouldAdopt: number }).wouldAdopt, 1);
+    const optedOut = await call(["unbraind/pm-web", "--issue", "189", "--dry-run", "--no-adopt-cited", "--json"]);
+    assert.equal(optedOut.code, 0, optedOut.stderr);
+    assert.equal((JSON.parse(optedOut.stdout) as { wouldImport: number }).wouldImport, 1);
+    assert.equal(readPmItems(pmRoot).length, 1);
   });
 }));

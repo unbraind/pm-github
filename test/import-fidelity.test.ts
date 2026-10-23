@@ -286,12 +286,12 @@ test("identity accepts nested GitHub links, provider back-links, exact URLs and 
   assert.throws(() => matchImportedIssue([{ id: "one", links: issue.html_url }, { id: "two", links: issue.html_url }], issue), /multiple existing owners/);
 });
 
-test("identity excludes descriptions even when multiple items mention another issue", () => {
+test("citation opt-out excludes prose while retaining structured identity matching", () => {
   const issue = recorded("pm-linear-134");
   const references = ["one", "two"].map(id => ({ id, description: `Blocked by ${issue.html_url}#issuecomment-1`,
     body: issue.html_url, source_description: issue.html_url, unrelated_url: issue.html_url }));
-  assert.doesNotThrow(() => matchImportedIssue(references, issue));
-  assert.deepEqual(matchImportedIssue(references, issue), { item: undefined, linkOnly: false, via: "new" });
+  assert.doesNotThrow(() => matchImportedIssue(references, issue, undefined, false));
+  assert.deepEqual(matchImportedIssue(references, issue, undefined, false), { item: undefined, linkOnly: false, via: "new" });
   const owner = { id: "owner", github_url: issue.html_url };
   assert.equal(matchImportedIssue([...references, owner], issue).item, owner);
   assert.throws(() => matchImportedIssue([owner, { ...owner, id: "competitor" }], issue), /multiple existing owners/);

@@ -430,7 +430,7 @@ test("verifyImportIdempotency fails duplicate provenance, untagged creates, and 
     ],
     "acme/widgets",
   );
-  assert.deepStrictEqual(receipts, { provenance_indexed: 1, matched_by_provenance: 1, new_entries: 1 });
+  assert.deepStrictEqual(receipts, { adopted: 0, provenance_indexed: 1, matched_by_provenance: 1, new_entries: 1 });
 });
 
 test("a gated import refuses to write when the corpus cannot yield an idempotent plan", async () => {
@@ -629,7 +629,7 @@ test("gated dry-run embeds the verified plan receipts and writes nothing", async
       assert.strictEqual(preview.wouldImport, 1);
       const gate = preview.gate as Record<string, unknown>;
       assert.deepStrictEqual(gate.completeness, { fetched: 1, planned: 1, skipped: 0 });
-      assert.deepStrictEqual(gate.idempotency, { provenance_indexed: 0, matched_by_provenance: 0, new_entries: 1 });
+      assert.deepStrictEqual(gate.idempotency, { adopted: 0, provenance_indexed: 0, matched_by_provenance: 0, new_entries: 1 });
       assert.strictEqual(gate.scan, "post-write");
       // Nothing was written: the working tree still matches the baseline commit.
       assert.strictEqual(git(["status", "--porcelain"]).stdout.trim(), "");
