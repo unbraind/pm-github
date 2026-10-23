@@ -646,6 +646,7 @@ test("citation adoption never overwrites an item that already carries structured
     { id: "provider-field", description: `Fixes ${repo}#30`, jira_issue_key: "ENG-31" },
     { id: "github-field", description: `Fixes ${repo}#30`, github_state: "closed" },
     { id: "githuburl", description: `Fixes ${repo}#30`, githuburl: "https://github.com/acme/widgets/issues/31" },
+    { id: "upper-tag", title: `${repo}#30`, description: `Fixes ${repo}#30`, tags: ["GH:other/widgets#31"] },
     { id: "not-link-only", description: `Fixes ${repo}#30`, github_link_only: false },
   ];
   for (const item of owned) {

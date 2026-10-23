@@ -245,7 +245,7 @@ const OWNER_LINK_FIELD = /^(?:github_?url|provenance|external_?(?:links?|url)|li
 
 /**
  * True when an item already carries a structured GitHub or provider identity of its own. Mirrors every ownership source
- * identity.ts and the owner matcher recognize: any `github*` field (`github_url`, `githuburl`, ...), a core `external_ref`, a native `source_owner`, provider identity fields
+ * identity.ts and the owner matcher recognize: any `github*` field (`github_url`, `githuburl`, ...), a GitHub identity tag in any case (`gh:`, `GH:`), a core `external_ref`, a native `source_owner`, provider identity fields
  * (`linear_*`/`jira_*`/`ado_*` id, key, url or identifier), provider provenance, a native "GitHub issue <url>"
  * declaration, or a GitHub issue URL in provenance/external links.
  */
@@ -255,6 +255,7 @@ function hasStructuredOwnership(item: PmItem): boolean {
   return Object.entries(item).some(([key, value]) => filled(value) && (/^github/i.test(key) && !/^github_?link_?only$/i.test(key) ||
       /^(?:external_ref|source_owner)$/.test(key) || /^(?:linear|jira|ado)_(?:.*_)?(?:id|key|url|identifier)$/i.test(key))) ||
     item.github_link_only === false || Boolean(providerProvenance(item)) ||
+    Boolean(item.tags?.some(tag => /^gh:[^/\s]+\/[^#\s]+#[1-9]\d*$/i.test(tag))) ||
     (typeof item.description === "string" && /^GitHub issue(?:\s*:\s+|\s+)https?:\/\//i.test(item.description)) ||
     Object.entries(item).some(([key, value]) => OWNER_LINK_FIELD.test(key) &&
       locators(value).some(url => issueLocator.test(url)));
