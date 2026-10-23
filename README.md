@@ -361,12 +361,81 @@ pm github import owner/repo --dry-run
 | `--with-comments` | boolean | Fetch issue comments and append them to the item body |
 | `--comments-mode <mode>` | `body`\|`annotations`\|`both` | How fetched GitHub comments are persisted (default `body`). `annotations` syncs comments into the pm item's native comments collection via the SDK; `both` writes the body section AND native comments. `annotations`/`both` are idempotent on re-import (dedupe by GitHub comment id) |
 | `--atomic` | boolean | Commit every create, update, close, and reopen in one workspace-writer-locked, crash-resumable transaction (requires pm CLI/SDK >=2026.7.20). Normal failure compensation restores updated/closed items and deletes newly created items; an incomplete compensation is reported explicitly for retry or repair. |
+| `--adopt-cited` | boolean | Explicitly opt in to conservative citation adoption (default: off). Tag new items `gh:owner/repo#N` instead. Default imports only report citation candidates. |
 | `--link-deps` | boolean | After import, map dependency references in issue **bodies** (`Blocked by #N`, `Depends on owner/repo#N`, `Blocks #N`) to pm dependency edges between the linked items. Idempotent, best-effort, and re-runnable; see [Dependency linking](#dependency-linking---link-deps) below. |
 | `--gate` | boolean | Fail-closed privacy gate: verify plan completeness (every fetched issue accounted for exactly once) and provenance idempotency (every re-import lands on exactly one `gh:owner/repo#N`-tagged item) BEFORE the write, then scan the proposed tracker change with [`pm github gate`](#pm-github-gate) AFTER it. Any finding — or any unreadable scan input — exits non-zero so an automated pipeline can never commit or push the change. Embeds `gate` receipts in the result. |
 | `--dry-run` | boolean | Preview without writing |
 | `--type <type>` | string | Override pm item type (default: Issue) |
 
 Each imported item records GitHub provenance: the `gh:owner/repo#N` idempotency tag, a `github_author:<login>` tag, and an enriched description (`author @<login> · state reason <reason> · created <iso> · updated <iso>`). GitHub issues closed as `not_planned` import as pm `canceled` instead of `closed`, preserving the difference between completed work and deliberately dropped work. The integration declares the `github_url`, `github_number`, `github_state`, `github_author`, `github_created_at`, and `github_updated_at` schema fields.
+
+The primary way to prevent duplicate imports is to tag an item
+`gh:owner/repo#N` **when it is created**, for example
+`pm create issue "Fix widget behavior" --tags "gh:acme/widgets#30"`.
+For an existing item, use `pm update <id> --add-tags "gh:acme/widgets#30"`. A prose URL is context, not an
+ownership declaration. Existing tag/structured URL/provider matching takes
+precedence and is unchanged.
+
+**Citation adoption is off by default.** Manual imports, the legacy alias and
+scheduled gated syncs retain normal create behavior when explicit ownership is
+absent. They report read-only `citation_candidates` so an agent can tag the
+correct item, including when several candidates exist. No candidate is adopted
+or ambiguity-blocked by default.
+
+Use `--adopt-cited` on the CLI, `adoptCited: true` in SDK import options, or
+`adopt-cited: true` on the reusable sync workflow to enable the fallback. The
+fallback deliberately favors refusal over overwriting an unrelated item:
+
+1. **Normalize before checking.** Decode complete named/numeric HTML entities and
+   percent-encoded bytes repeatedly until stable, bounded to eight passes.
+   Apply NFKC and remove zero-width/bidi control characters. Unwrap Markdown
+   link destinations and reference definitions and join soft line breaks for
+   intent matching. Retain normalized source as well as the unwrapped view for
+   exclusion, so a link label cannot hide a second reference. Joined-line views
+   also expose split references. A normalization bound exhaustion is a refusal.
+2. **Allowlisted ownership.** A qualified target issue reference must appear in
+   the title, directly follow `Fix`, `Fixes`, `Fixed`, `Close`, `Closes`, `Closed`,
+   `Resolve`, `Resolves` or `Resolved` at the start of the description, or be a
+   URL on a whole body line `Issue: <url>` or `Tracks: <url>`. Matching ignores
+   case. Body fix phrases, `Related:` mentions, unanchored phrases and bare
+   numbers cannot authorize adoption.
+3. **Exclude every other reference.** Across all normalized fields, any other
+   `github.com` URL, foreign repository, different `#<digits>` or
+   `issues`/`pull` token followed by another number vetoes adoption. Unattributed
+   paths/bare hashes also refuse adoption: this item projection has no verified
+   owning-repository context. PR URLs, including a same-number PR URL, are other
+   URLs. The scan over-counts code and incidental text deliberately. These
+   checks reduce risk; they do not make arbitrary prose an ownership contract.
+
+| Existing prose | Default | With `--adopt-cited` |
+| --- | --- | --- |
+| Description: `Fixes acme/widgets#30` | Create + `adoption_disabled` hint | Eligible if no other reference |
+| Body line: `Issue: https://github.com/acme/widgets/issues/30` | Create + hint | Eligible if no other reference |
+| Title: `Handle acme/widgets#30` | Create + hint | Eligible if no other reference |
+| Body: `Fixes acme/widgets#30` | Create + `missing_intent` hint | Create + hint |
+| Body: `Related: acme/widgets#30` | Create + `missing_intent` hint | Create + hint |
+| Title cites issues 30 and 31 | Create + `multiple_issues` hint | Create + hint |
+| Description fixes issue 30; body has `**https://github.com/other/widgets/issues/30**` | Create + hint | Create + `multiple_issues` hint |
+| Description fixes issue 30; body has `[other](https://github.com/other/widgets/issues&sol;31)` or `issues%2F31` | Create + hint | Create + `multiple_issues` hint |
+
+Plans include `citation_candidates: [{id, reason}]`; aggregate dry-run and write
+receipts include `citation_candidates: [{issue, id, reason}]`. Reasons are
+`adoption_disabled`, `missing_intent`, `multiple_issues`, `normalization_limit` or `structured_owner` (the item already carries a `github_*` field, a core `external_ref` or `source_owner`, a `linear_*`/`jira_*`/`ado_*` identity field, provider provenance, a GitHub issue URL in its links or a native declaration, so prose citing another issue never re-owns it).
+Candidate reporting never changes the referenced item's status, content or
+fields, including a closed item's completion state.
+
+With explicit opt-in, one eligible untagged candidate produces an `adopt` plan:
+its ID receives the provenance tag and `github_*` fields through normal upsert.
+Closed/canceled owners remain eligible. Two or more eligible owners refuse the
+batch with typed `ambiguous_citation`, IDs and a remedy to tag the correct item.
+The default path never applies that fallback ambiguity refusal. Existing
+structured-identity collision checks still apply in both modes.
+
+Dry runs show `adopt` and `wouldAdopt`; write receipts report `adopted` separately
+from `imported`/`updated`. Gated idempotency counts an opt-in adopt as one landing
+item. Status push, export and Projects matching retain their scope. Citation
+reporting and opt-in adoption work in non-git trackers; actual `--gate` writes
+still require a Git worktree for the proposed-change privacy scan.
 
 `--issue` deduplicates references and fetches each selected issue directly, including closed issues, without listing the repository. Every selected number is fetched and checked before any tracker write. A missing number fails the whole import; `--dry-run` instead reports `missingIssues` and previews the available selection. Pull request numbers require `--include-prs`. Selection combines with comment modes, dependency linking, atomic imports, gates, dry runs, and custom item types, preserving provenance-based re-import idempotency.
 
@@ -781,6 +850,7 @@ Optional inputs:
 
 | Input | Default | Behavior |
 | --- | --- | --- |
+| `adopt-cited` | `false` | Explicitly enable conservative normalized citation adoption for preview, import and repeat verification. Primary prevention is creating items with `gh:owner/repo#N` tags. Leave false to retain normal creates with read-only candidate hints. |
 | `npm-project-dir` | `.` | Relative npm project directory for `npm ci --ignore-scripts`, the CLI `node_modules/.bin` PATH entry, and `post-import-script`. Must have `package.json`, contain no `..` segments, and resolve inside the workspace (including symlinks); invalid paths fail before caching/install. The tracker and publication scope stay at the repository root. |
 | `post-import-script` | `changelog:full` | Caller npm script name invoked with `npm run --if-present` after import and before the final scan. Override for a different package script, or set `""` to disable. Missing scripts are skipped. Raw shell commands are not accepted. Generated `CHANGELOG.md` is staged with the tracker. Changing any file outside the documented scope fails the run, whether staged, unstaged, or untracked. |
 | `automation-app-client-id` | `""` | Optional GitHub App client ID, paired with the `automation_app_private_key` workflow-call secret. Enables eligible native PR runs through a fresh repo-scoped token; absent credentials retain GITHUB_TOKEN with a notice. |
@@ -806,6 +876,7 @@ jobs:
     uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@RELEASE_COMMIT_SHA # vRELEASE_VERSION
     with:
       automation-app-client-id: ${{ vars.PM_GITHUB_APP_CLIENT_ID }}
+      adopt-cited: false # Tag new items gh:owner/repo#N; opt in only for deliberate adoption.
     secrets:
       automation_app_private_key: ${{ secrets.PM_GITHUB_APP_PRIVATE_KEY }}
 ```

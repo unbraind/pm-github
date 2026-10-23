@@ -4,6 +4,7 @@
 
 ### Added
 
+- Require opt-in before adopting cited GitHub issue items ([pm-github-cited-issue-adoption](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-cited-issue-adoption.toon))
 - Explore provider identity collisions and approve scoped provenance repairs ([pm-github-identity-collisions](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-identity-collisions.toon))
 - Reconcile authenticated GitHub webhooks through a durable deduplicating inbox ([pm-github-webhook-inbox](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-webhook-inbox.toon))
 - Let reusable workflows carry their own release version ([pm-github-znig](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-znig.toon))

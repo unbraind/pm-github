@@ -202,7 +202,7 @@ for (const atomic of [false, true]) {
 }
 
 for (const mode of ["plain", "gate", "atomic"] as const) {
-  test(`ambiguous later issue documents write boundary (${mode})`, async () => tracker(async (_directory, pmRoot) => {
+  test(`ambiguous later issue refuses the batch before writes (${mode})`, async () => tracker(async (_directory, pmRoot) => {
     const second = { ...recorded("pm-csv-72"), state: "open" as const, closed_at: null };
     const first = { ...second, number: 1, html_url: "https://github.com/unbraind/pm-csv/issues/1", title: "Earlier issue" };
     await identityItem(pmRoot, { github_url: second.html_url });
@@ -212,10 +212,7 @@ for (const mode of ["plain", "gate", "atomic"] as const) {
       parseImportOptions({ state: "all", gate: mode === "gate", atomic: mode === "atomic" }),
       { fetchIssues: async () => [first, second], resolveToken: () => undefined })), /multiple existing owners/);
     const after = await listItems(pmRoot);
-    if (mode === "plain") {
-      assert.equal(after.length, before.length + 1);
-      assert.equal(after.find(item => item.github_url === first.html_url)?.title, first.title);
-    } else assert.deepEqual(after, before);
+    assert.deepEqual(after, before);
   }));
 }
 
@@ -286,12 +283,12 @@ test("identity accepts nested GitHub links, provider back-links, exact URLs and 
   assert.throws(() => matchImportedIssue([{ id: "one", links: issue.html_url }, { id: "two", links: issue.html_url }], issue), /multiple existing owners/);
 });
 
-test("identity excludes descriptions even when multiple items mention another issue", () => {
+test("citation opt-out excludes prose while retaining structured identity matching", () => {
   const issue = recorded("pm-linear-134");
   const references = ["one", "two"].map(id => ({ id, description: `Blocked by ${issue.html_url}#issuecomment-1`,
     body: issue.html_url, source_description: issue.html_url, unrelated_url: issue.html_url }));
-  assert.doesNotThrow(() => matchImportedIssue(references, issue));
-  assert.deepEqual(matchImportedIssue(references, issue), { item: undefined, linkOnly: false, via: "new" });
+  assert.doesNotThrow(() => matchImportedIssue(references, issue, undefined, false));
+  assert.deepEqual(matchImportedIssue(references, issue, undefined, false), { item: undefined, linkOnly: false, via: "new", citation_candidates: [{ id: "one", reason: "missing_intent" }, { id: "two", reason: "missing_intent" }] });
   const owner = { id: "owner", github_url: issue.html_url };
   assert.equal(matchImportedIssue([...references, owner], issue).item, owner);
   assert.throws(() => matchImportedIssue([owner, { ...owner, id: "competitor" }], issue), /multiple existing owners/);

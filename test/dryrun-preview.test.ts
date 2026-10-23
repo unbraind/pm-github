@@ -53,6 +53,7 @@ test("non-atomic --dry-run previews updates for already-linked issues instead of
     dryRun: true,
     wouldImport: 1,
     wouldUpdate: 1,
+    wouldAdopt: 0,
     wouldSkip: 0,
   });
   assert.ok(

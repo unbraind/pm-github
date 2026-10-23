@@ -130,6 +130,7 @@ test("atomic dry-run previews creates and updates without invoking the SDK", asy
       dryRun: true,
       wouldImport: 1,
       wouldUpdate: 1,
+      wouldAdopt: 0,
       wouldSkip: 1,
       atomic: true,
     });

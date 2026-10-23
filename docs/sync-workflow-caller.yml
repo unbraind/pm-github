@@ -31,6 +31,7 @@ jobs:
     uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@RELEASE_COMMIT_SHA # vRELEASE_VERSION
     with:
       automation-app-client-id: ${{ vars.PM_GITHUB_APP_CLIENT_ID }}
+      adopt-cited: false # Primary prevention: tag new items gh:owner/repo#N.
       npm-project-dir: "." # For pm-rust, use: npm-project-dir: tests/oracle
       # Defaults shown explicitly; use "" to disable an optional action; empty CI also disables auto-merge.
       post-import-script: "changelog:full"
