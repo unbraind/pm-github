@@ -111,7 +111,7 @@ function normalizeCitationText(input: string): { text: string; source: string; s
 /** Unwrap link destinations/definitions for anchored intent, retaining the normalized source for exclusion. */
 function citationDisplayText(source: string): string {
   const definitions = new Map<string, string>();
-  const text = source.replace(/^[ \t]{0,3}\[([^[\]\n]+)\]:[ \t]*(?:<([^>\n]+)>|(\S+)).*$/gm,
+  const text = source.replace(/^[ \t]{0,3}\[([^[\]\n]+)\]:[ \t]*(?:<([^>\n]+)>|(\S+))/gm,
     (_raw: string, label: string, angle: string | undefined, destination: string | undefined) => {
       definitions.set(label.trim().toLowerCase(), angle ?? destination!);
       return angle ?? destination!;

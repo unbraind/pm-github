@@ -86,6 +86,10 @@ both TypeScript builds, lint, docstrings and zero duplication pass locally.
 Scoped coverage preflight found no uncovered branches in the new normalization,
 exclusion and anchored ownership functions. Full npm/Bun release-gate evidence
 and CodeQL run links are recorded on PR 169 at the final pushed head.
+The initial CodeQL alert check flagged an overlapping trailing wildcard in
+reference-definition normalization. The unnecessary trailing match was removed
+without suppressing the rule or changing thresholds; current normalization and
+workflow regressions are rechecked before collecting fresh exact-head evidence.
 
 ## Behavioral revert proofs
 
