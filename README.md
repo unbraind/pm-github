@@ -380,9 +380,13 @@ eligible because their fix may already have landed.
 Adoption requires **both** of these ownership signals:
 
 - The combined title, description and body cite exactly one distinct GitHub
-  issue, counting qualified references to every repository. Repeated URLs and
-  shorthand for the same issue count once. A second issue disqualifies the item
-  even when only one issue is selected for import.
+  issue or PR, counting references to every repository. One parser handles
+  `owner/repo#N`, issue and `/pull/N` URLs, optional trailing `/`, query strings,
+  fragments such as `#issuecomment-123`, and trailing prose punctuation.
+  Bare `#N` uses the imported repository as a hint when counting additional
+  targets, but cannot establish ownership on its own; neither can a PR URL.
+  Repeated URLs and shorthand for the same identity count once. A second
+  issue or PR disqualifies the item even when only one issue is selected.
 - The target reference appears in the title, or directly follows explicit intent:
   `fix`/`fixes`/`fixed`, `close`/`closes`/`closed`,
   `resolve`/`resolves`/`resolved`, `Issue:`, `Tracks:` or `GH issue`.
@@ -398,6 +402,9 @@ Adoption requires **both** of these ownership signals:
 | Body: `Related: acme/widgets#30` | Incidental; `missing_intent` |
 | Title: `Roadmap acme/widgets#30 and acme/widgets#31` | Incidental for either issue; `multiple_issues` |
 | Description: `Fixes acme/widgets#30`; body: `See other/repo#8` | Incidental; `multiple_issues` |
+| Body: `Fixes acme/widgets#30 and https://github.com/acme/widgets/issues/31/` | Incidental; `multiple_issues` |
+| Body: `Fixes acme/widgets#30 and #31` (importing `acme/widgets`) | Incidental; `multiple_issues` |
+| Body: `Fixes acme/widgets#30 and https://github.com/acme/widgets/pull/31#issuecomment-123` | Incidental; `multiple_issues` |
 
 Incidental mentions never transfer ownership. The issue imports normally into
 its own item, leaving the incidental item's status, content and fields intact,

@@ -2,7 +2,7 @@
 
 The importer first resolves established provenance tags, structured URLs and
 provider back-links. Only an issue without an established owner reaches exact
-title/description/body citation matching. Only a single-issue item with explicit
+title/description/body citation matching. Only a single-target item with explicit
 fix/track intent or a title reference is eligible. One eligible candidate is
 adopted; multiple eligible candidates refuse the batch before any writes and report `ambiguous_citation`
 with candidate IDs and a tagging remedy. Status push, export and Projects
@@ -105,3 +105,36 @@ changed the package worktree or rebuilt a stale artifact: tests import live TS.
 21 tests. Typecheck, test typecheck, build, lint, docstrings and strict tracker
 health pass locally. Full npm/Bun release-gate evidence is recorded in PR 169
 and the final handoff at the exact pushed head; thresholds remain unchanged.
+
+## Reference-parser review follow-up
+
+The second review found that `Fixes acme/widgets#30 and
+https://github.com/acme/widgets/issues/31/` could still transfer ownership:
+the earlier counting regex skipped the trailing-slash URL. A shared parser now
+produces the identities and source positions used by both distinct-target
+counting and intent checks. It recognizes qualified shorthand, repository-hinted
+bare `#N`, issue and PR URLs, optional trailing slashes, query strings, comment
+fragments, prose punctuation and Markdown link boundaries. Foreign and malformed
+URLs are consumed as URL tokens so their interior hash text cannot masquerade
+as a separate reference. Bare numbers and PR URLs count toward additional
+targets but cannot establish issue ownership on their own.
+
+The property-style regression exercises 17 ownership forms against 35 second
+reference forms with five punctuation/Markdown wrappers in all three prose
+fields: **8,925 disqualification combinations**, plus **51 positive ownership
+controls**. The matrix includes issue and PR links, other repositories, slash,
+query and fragment combinations, and Markdown links adjacent to following text.
+Repeated URL/shorthand/bare references to the same identity remain one target.
+
+Plain and atomic real non-git tracker regressions reproduce the reported
+trailing-slash example. They require one create, zero adopts and a
+`multiple_issues` candidate hint, then verify that the entire original roadmap
+projection remains unchanged after import.
+
+The isolated behavioral revert restores only `citesIssue` from `cce11c4`, leaving
+the new parser, planner, receipts and real SDK persistence present. Running
+`node --test --test-name-pattern='every accepted second-reference|trailing-slash second reference' test/cited-issue-adoption.test.ts`
+then produces **3 failures, 0 passes, 0 skips, exit 1**. The fixed cases pass.
+The complete adoption/regex selection passes **32/32**; the linked adoption
+command contains **25 tests**. Fresh exact-head npm/Bun release evidence is
+recorded in PR 169 when CI completes, without changing coverage thresholds.

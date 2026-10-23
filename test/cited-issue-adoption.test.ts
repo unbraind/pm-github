@@ -144,7 +144,59 @@ for (const atomic of [false, true]) {
     }
     assert.equal((await items(pmRoot)).length, 3);
   }));
+
+  test(`${atomic ? "atomic" : "plain"} trailing-slash second reference preserves the roadmap in a non-git tracker`, async () => tracker(async pmRoot => {
+    const local = (await create({ type: "Task", title: "Independent roadmap", description: `Fixes ${repo}#30 and https://github.com/${repo}/issues/31/`,
+      body: "Keep the roadmap context", status: "open" }, { pmRoot })).item;
+    const before = (await get(local.id, {}, { pmRoot })).item;
+    const preview = (await importing(pmRoot, { atomic, "dry-run": true })).result;
+    assert.equal(preview.wouldImport, 1);
+    assert.equal(preview.wouldAdopt, 0);
+    assert.deepEqual(preview.citation_candidates, [{ issue: 30, id: local.id, reason: "multiple_issues" }]);
+    assert.equal((preview.plan as { action: string }[])[0]!.action, "create");
+    const landed = (await importing(pmRoot, { atomic })).result;
+    assert.equal(landed.imported, 1);
+    assert.equal(landed.adopted, 0);
+    assert.deepEqual(landed.citation_candidates, preview.citation_candidates);
+    assert.deepEqual((await get(local.id, {}, { pmRoot })).item, before);
+    assert.equal((await items(pmRoot)).length, 2);
+  }));
 }
+
+test("every accepted second-reference shape disqualifies a fix item across every prose field", () => {
+  const suffixes = ["", "/", "#issuecomment-123", "/#issuecomment-123", "?view=all", "/?view=all", "?view=all#issuecomment-123", "/?view=all#issuecomment-123"];
+  const firstShapes = [`${repo}#30`, ...suffixes.flatMap(suffix => [issue.html_url + suffix, `http://www.github.com/${repo}/issues/30${suffix}`])];
+  const secondShapes = [`${repo}#31`, "#31", "other/widgets#31", ...["issues", "pull"].flatMap(kind => suffixes.flatMap(suffix => [
+    `https://github.com/${repo}/${kind}/31${suffix}`, `http://www.github.com/other/widgets/${kind}/31${suffix}`,
+  ]))];
+  for (const first of firstShapes) {
+    for (const field of ["title", "description", "body"] as const) {
+      assert.equal(matchImportedIssue([{ id: "local", [field]: `Fixes ${first}` }], issue).via, "citation", `${field}: ${first}`);
+      for (const second of secondShapes) {
+        for (const text of [second, `${second}.`, `(${second})`, `[reference](${second}).`, `[reference](${second})next`]) {
+          const local = { id: "local", title: "Local work", description: `Fixes ${first}`, body: "" };
+          local[field] += ` and ${text}`;
+          const result = matchImportedIssue([local], issue);
+          assert.equal(result.via, "new", `${first}; ${field}: ${text}`);
+          assert.deepEqual(result.citation_candidates, [{ id: "local", reason: "multiple_issues" }]);
+        }
+      }
+    }
+  }
+});
+
+test("one parser deduplicates equivalent locators without granting ownership to bare numbers or PR links", () => {
+  const local = { id: "local", title: `Fixes ${repo}#30`, description: `Issue: ${issue.html_url}/?view=all#issuecomment-123`,
+    body: `Same target #30 and ${issue.html_url}#issuecomment-456` };
+  assert.equal(matchImportedIssue([local], issue).item, local);
+  for (const text of ["#30", `https://github.com/${repo}/pull/30/`, `https://github.com/${repo}/issues/30/extra`,
+    `${issue.html_url}.json`, "https://github.com/other/widgets/issues/30/", "https://other.test/acme/widgets/issues/30/", "https://["]) {
+    assert.equal(matchImportedIssue([{ id: "local", title: `Fixes ${text}` }], issue).via, "new", text);
+  }
+  for (const embedded of ["https://other.test/path#31", "https://other.test/acme/widgets#31", "https://github.com/search?q=other/widgets%2331", "https://[bad#31"]) {
+    assert.equal(matchImportedIssue([{ id: "local", description: `Fixes ${repo}#30 and ${embedded}` }], issue).via, "citation", embedded);
+  }
+});
 
 test("citation matching accepts exact qualified references across prose fields and trailing punctuation", () => {
   for (const field of ["title", "description", "body"]) {

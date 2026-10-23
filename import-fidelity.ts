@@ -72,17 +72,37 @@ export class AmbiguousCitationError extends Error {
   }
 }
 
-/** Require one distinct issue across all prose fields and a title reference or explicit fix/track intent. */
+/** Parse issue/PR identities once, resolving bare numbers only for conservative counting. */
+function citationReferences(text: string, repoHint: string): { key: string; index: number; ownsIssue: boolean }[] {
+  const references: { key: string; index: number; ownsIssue: boolean }[] = [];
+  const tokens = text.matchAll(/(?<![\w./#-])(?:https?:\/\/[^\s<>"'`\])}]+|(?:[\w.-]+\/[\w.-]+)?#[1-9]\d*(?![\w/=&%-]|\.\w))/gi);
+  for (const token of tokens) {
+    const raw = token[0];
+    if (/^https?:/i.test(raw)) {
+      try {
+        const url = new URL(raw.replace(/[)\].,;:!}]+$/, ""));
+        const path = /^\/([\w.-]+\/[\w.-]+)\/(issues|pull)\/([1-9]\d*)\/?$/i.exec(url.pathname);
+        if (["github.com", "www.github.com"].includes(url.hostname) && path) {
+          references.push({ key: `${path[1]!.toLowerCase()}#${path[3]}`, index: token.index, ownsIssue: path[2]!.toLowerCase() === "issues" });
+        }
+      } catch { /* Malformed URL tokens never expose shorter hash references inside them. */ }
+    } else {
+      const [repo, number] = raw.split("#");
+      references.push({ key: `${repo || repoHint}#${number}`.toLowerCase(), index: token.index, ownsIssue: repo !== "" });
+    }
+  }
+  return references;
+}
+
+/** Require one distinct target across all prose fields and a qualified issue reference with explicit intent. */
 function citesIssue(item: PmItem, repo: string, number: number): "eligible" | CitationCandidate["reason"] | undefined {
   const target = `${repo}#${number}`;
   const identities = new Set<string>();
   let intended = false;
   for (const [field, text] of [item.title ?? "", item.description ?? "", item.body ?? ""].entries()) {
-    const references = text.matchAll(/(?<![\w./#-])(?:https?:\/\/(?:www\.)?github\.com\/([^/\s]+\/[^/\s]+)\/issues\/|([\w.-]+\/[\w.-]+)#)([1-9]\d*)(?![\w/=&%-]|\.\w)/gi);
-    for (const reference of references) {
-      const key = `${(reference[1] ?? reference[2]!).toLowerCase()}#${reference[3]}`;
-      identities.add(key);
-      if (key === target && (field === 0 || /(?:\b(?:fix|fixes|fixed|close|closes|closed|resolve|resolves|resolved)\b[\s:([<`*_]*|\b(?:issue|tracks)\s*:[\s([<`*_]*|\bgh\s+issue\b[\s:([<`*_]*)$/i.test(text.slice(0, reference.index)))) intended = true;
+    for (const reference of citationReferences(text, repo)) {
+      identities.add(reference.key);
+      if (reference.key === target && reference.ownsIssue && (field === 0 || /(?:\b(?:fix|fixes|fixed|close|closes|closed|resolve|resolves|resolved)\b[\s:([<`*_]*|\b(?:issue|tracks)\s*:[\s([<`*_]*|\bgh\s+issue\b[\s:([<`*_]*)$/i.test(text.slice(0, reference.index)))) intended = true;
     }
   }
   if (!identities.has(target)) return undefined;
