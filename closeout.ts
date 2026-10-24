@@ -14,6 +14,7 @@ export interface CloseoutRow {
   pr: number;
   action: "close" | "skip" | "needs_review";
   candidates?: number[];
+  missing_evidence?: { pr: number; code: CloseoutCode; reason: string }[];
   reason: string;
   code: CloseoutCode;
 }
@@ -37,9 +38,10 @@ interface CheckGate {
 interface PullRequest {
   number: number;
   body: string | null;
-  merged: boolean;
+  merged: boolean | null;
   merged_at: string | null;
   merge_commit_sha: string | null;
+  commits: number | null;
   html_url: string;
   head: { sha: string };
   base: { ref: string; repo: { full_name: string } };
@@ -132,23 +134,38 @@ function pullRequest(value: unknown, repo: string, number: number): PullRequest 
   const raw = record(value);
   const base = record(raw.base);
   const baseRepo = record(base.repo);
-  const head = record(raw.head);
+  const head = raw.head === null || raw.head === undefined ? {} : record(raw.head);
   if (raw.number !== number || text(baseRepo.full_name).toLowerCase() !== repo.toLowerCase()
     || text(raw.html_url).toLowerCase() !== `https://github.com/${repo}/pull/${number}`.toLowerCase()
     || (raw.body !== null && typeof raw.body !== "string")) throw new Error("Pull-request identity or body is unverifiable.");
   return {
-    number, body: raw.body as string | null, merged: raw.merged === true,
+    number, body: raw.body as string | null, merged: typeof raw.merged === "boolean" ? raw.merged : null,
+    commits: Number.isSafeInteger(raw.commits) && Number(raw.commits) >= 0 ? Number(raw.commits) : null,
     merged_at: raw.merged_at as string | null, merge_commit_sha: raw.merge_commit_sha as string | null,
-    html_url: raw.html_url as string, head: { sha: text(head.sha) },
+    html_url: raw.html_url as string, head: { sha: typeof head.sha === "string" ? head.sha : "" },
     base: { ref: text(base.ref), repo: { full_name: baseRepo.full_name as string } },
   };
 }
 
+/** Read a validated merge time; missing or malformed chronology remains unknown. */
+function mergeTime(value: unknown): number {
+  try { return Date.parse(isoDate(text(value))); }
+  catch { return Number.NaN; }
+}
+
+/** Name each missing merge fact without copying untrusted API values. */
+function mergeEvidenceGaps(pr: PullRequest): string[] {
+  return [
+    ...(pr.merged === true ? [] : ["merged"]),
+    ...(Number.isFinite(mergeTime(pr.merged_at)) ? [] : ["merged_at"]),
+    ...(typeof pr.merge_commit_sha === "string" && /^[a-f0-9]{40}$/.test(pr.merge_commit_sha) ? [] : ["merge_commit_sha"]),
+    ...(/^[a-f0-9]{40}$/.test(pr.head.sha) ? [] : ["head.sha"]),
+  ];
+}
+
 /** Require complete, well-formed merge facts before any check queries or writes. */
 function mergeEvidence(pr: PullRequest): boolean {
-  return pr.merged && typeof pr.merged_at === "string" && isoDate(pr.merged_at).length > 0
-    && typeof pr.merge_commit_sha === "string" && /^[a-f0-9]{40}$/.test(pr.merge_commit_sha)
-    && /^[a-f0-9]{40}$/.test(pr.head.sha);
+  return mergeEvidenceGaps(pr).length === 0;
 }
 
 /** Treat only permission and not-found responses as protection metadata gaps. */
@@ -431,7 +448,8 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
     const older = (row: unknown) => typeof row === "object" && row !== null && Date.parse(String((row as { updated_at?: unknown }).updated_at)) < cutoff;
     for (const value of await pages(api, `/repos/${repo}/pulls?state=closed&sort=updated&direction=desc&per_page=100`, false, older)) {
       const pr = record(value);
-      if (pr.merged_at !== null && Date.parse(isoDate(text(pr.merged_at))) >= Date.parse(since)) {
+      // A missing or malformed merge time is uncertainty, never proof of an unmerged PR.
+      if (!Number.isFinite(mergeTime(pr.merged_at)) || mergeTime(pr.merged_at) >= cutoff) {
         if (!Number.isSafeInteger(pr.number) || Number(pr.number) < 1) throw new Error("Invalid selected pull-request number.");
         numbers.push(Number(pr.number));
       }
@@ -449,9 +467,13 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
   const checks: CheckGate[] = [];
   const closures: { row: CloseoutRow; reason: string; at: string; resolution: string; expectedResult: string; actualResult: string }[] = [];
   const candidates = new Map<string, { row: CloseoutRow; pr: PullRequest; declared: boolean; commitsReadable: boolean }[]>();
+  const unreadable: number[] = [];
   for (const number of [...new Set(numbers)].sort((a, b) => a - b)) {
-    const pr = pullRequest(await payload(api, `/repos/${repo}/pulls/${number}`), repo, number);
-    let gate: CheckGate = { pr: number, code: "incomplete_merge", rule: "unavailable", ok: false, passed: [], reason: "Pull request is not merged or merge evidence is incomplete." };
+    let evidence: unknown;
+    try { evidence = await payload(api, `/repos/${repo}/pulls/${number}`); }
+    catch { unreadable.push(number); continue; }
+    const pr = pullRequest(evidence, repo, number);
+    let gate: CheckGate = { pr: number, code: "incomplete_merge", rule: "unavailable", ok: false, passed: [], reason: `Missing or invalid merge evidence: ${mergeEvidenceGaps(pr).join(", ")}.` };
     if (mergeEvidence(pr)) gate = await checkCloseoutHead(api, repo, pr, declared);
     checks.push(gate);
     const refs = deliveryReferences(pr.body ?? "", repo, items.keys());
@@ -459,12 +481,13 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
     let messages: string[] = [];
     let commitsReadable = false;
     try {
-      if (gate.code !== "incomplete_merge") {
-        messages = (await pages(api, `/repos/${repo}/pulls/${number}/commits?per_page=100`))
-          .map(value => text(record(record(value).commit).message));
+      if (pr.merged !== false) {
+        const commits = await pages(api, `/repos/${repo}/pulls/${number}/commits?per_page=100`);
+        if (pr.commits === null || commits.length !== pr.commits) throw new Error("Incomplete commit evidence.");
+        messages = commits.map(value => text(record(record(value).commit).message));
         commitsReadable = true;
       }
-    } catch { /* Description declarations remain usable when commits cannot be read. */ }
+    } catch { /* Retain description references; unresolved commit evidence is held during attribution. */ }
     for (const ref of deliveryReferences(messages.join("\n"), repo, items.keys())) {
       const existing = refs.find(entry => entry.item === ref.item && entry.repo.toLowerCase() === ref.repo.toLowerCase());
       if (existing) existing.declared ||= ref.declared;
@@ -507,11 +530,27 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
       }
       const row: CloseoutRow = { item: ref.item, pr: number, action: "skip", code, reason };
       plan.push(row);
-      if (pr.merged && ["not_delivery", "head_checks_failed", "head_evidence_unavailable", "required_checks_unverified"].includes(code)) {
+      if (pr.merged !== false && items.has(ref.item) && ref.repo.toLowerCase() === repo.toLowerCase()
+        && !skip.has(ref.item) && !TERMINAL_STATUSES.includes(items.get(ref.item)!.status)
+        && items.get(ref.item)!.type !== "Epic" && !activeChildren.has(ref.item)) {
         const group = candidates.get(ref.item) ?? [];
         group.push({ row, pr, declared: ref.declared, commitsReadable });
         candidates.set(ref.item, group);
       }
+    }
+  }
+  // A failed PR read can hide linkage and a competing claim. Retain its number for
+  // every active eligible item; without the PR evidence no item can be proved unrelated.
+  for (const number of unreadable) {
+    const url = `https://github.com/${repo}/pull/${number}`;
+    for (const item of items.values()) {
+      if (skip.has(item.id) || TERMINAL_STATUSES.includes(item.status) || item.type === "Epic" || activeChildren.has(item.id)) continue;
+      const row: CloseoutRow = { item: item.id, pr: number, action: "needs_review", code: "head_evidence_unavailable", reason: "Pull-request fetch failed; merge, linkage and delivery evidence unavailable." };
+      plan.push(row);
+      const group = candidates.get(item.id) ?? [];
+      group.push({ row, pr: { number, html_url: url, body: null, merged: true, merged_at: null, merge_commit_sha: null, commits: null,
+        head: { sha: "" }, base: { ref: "", repo: { full_name: repo } } }, declared: false, commitsReadable: false });
+      candidates.set(item.id, group);
     }
   }
   // Resolve attribution before any SDK mutation; passing checks never break a delivery tie.
@@ -519,11 +558,19 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
     const item = items.get(id)!;
     const explicit = item.tags.filter(tag => tag.startsWith("delivery-pr:"));
     const cutoff = await acceptanceChangedAt(pmRoot, id, item.created_at);
+    const plausible = group.filter(entry => !Number.isFinite(mergeTime(entry.pr.merged_at)) || mergeTime(entry.pr.merged_at) > cutoff);
     const eligible = explicit.length > 0
       ? group.filter(entry => explicit.length === 1 && explicit[0] === `delivery-pr:${entry.pr.html_url}`)
-      : group.filter(entry => entry.declared && Date.parse(entry.pr.merged_at!) > cutoff);
-    const unknownClaims = explicit.length === 0 && group.some(entry => !entry.declared && !entry.commitsReadable && Date.parse(entry.pr.merged_at!) > cutoff);
-    const selected = eligible.length === 1 && !unknownClaims ? eligible[0] : undefined;
+      : plausible.filter(entry => entry.declared);
+    const uncertain = explicit.length === 1 && eligible.length === 1 ? eligible : plausible;
+    const missing = uncertain.flatMap(entry => {
+      const gaps = ["incomplete_merge", "head_evidence_unavailable", "required_checks_unverified"].includes(entry.row.code)
+        || (entry.row.code === "head_checks_failed" && /missing|no check/.test(entry.row.reason))
+        ? [{ pr: entry.pr.number, code: entry.row.code, reason: entry.row.reason }] : [];
+      if (!entry.commitsReadable) gaps.push({ pr: entry.pr.number, code: "head_evidence_unavailable", reason: "Commit delivery evidence unavailable or incomplete." });
+      return gaps;
+    });
+    const selected = eligible.length === 1 && missing.length === 0 ? eligible[0] : undefined;
     for (const entry of group) {
       if (selected === entry) continue;
       if (selected) {
@@ -532,11 +579,13 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
           entry.row.code = "duplicate_selection";
           entry.row.reason = "Another merged PR uniquely supplies the delivery evidence for this item.";
         }
-      } else if (group.length > 1 || entry.row.action === "close" || explicit.length > 0) {
+      } else if (group.length > 1 || entry.row.action === "close" || explicit.length > 0 || missing.length > 0) {
         entry.row.action = "needs_review";
         entry.row.code = "needs_review";
-        entry.row.reason = "Delivery attribution is unresolved; set one delivery-pr:<canonical PR URL> tag or verify a unique delivery claim after the last acceptance-criteria change.";
-        entry.row.candidates = group.map(candidate => candidate.pr.number);
+        entry.row.reason = "Delivery attribution is unresolved; set one delivery-pr:<canonical PR URL> tag or verify a unique delivery claim after the last acceptance-criteria change."
+          + missing.map(gap => ` PR #${gap.pr}: ${gap.reason}`).join("");
+        entry.row.candidates = group.map(candidate => candidate.pr.number).sort((a, b) => a - b);
+        if (missing.length > 0) entry.row.missing_evidence = missing;
       }
     }
   }

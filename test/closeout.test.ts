@@ -25,7 +25,7 @@ const link = (id: string, repository = repo) => `Closes ${bareLink(id, repositor
 
 /** Complete synthetic merged PR; prose is never trusted as closure evidence. */
 function pull(body: string | null, overrides: Record<string, unknown> = {}) {
-  return { number: 42, body, merged: true, merged_at: mergedAt, merge_commit_sha: merge,
+  return { number: 42, body, merged: true, commits: 0, merged_at: mergedAt, merge_commit_sha: merge,
     html_url: `https://github.com/${repo}/pull/42`, head: { sha: head }, base: { ref: "main", repo: { full_name: repo } }, ...overrides };
 }
 
@@ -293,8 +293,8 @@ for (const protection of [403, 404, "empty"] as const) {
       }), async () => {
         const report = await closeout(root);
         assert.equal(report.checks[0]!.rule, protection === "empty" ? "fallback" : "unavailable");
-        assert.equal(report.plan[0]!.action, protection !== "empty" || conclusion === "failure" || conclusion === null ? "skip" : "close");
-        assert.equal(report.plan[0]!.code, protection !== "empty" ? "required_checks_unverified" : conclusion === "failure" || conclusion === null ? "head_checks_failed" : "head_checks_passed");
+        assert.equal(report.plan[0]!.action, protection !== "empty" ? "needs_review" : conclusion === "failure" || conclusion === null ? "skip" : "close");
+        assert.equal(report.plan[0]!.code, protection !== "empty" ? "needs_review" : conclusion === "failure" || conclusion === null ? "head_checks_failed" : "head_checks_passed");
         assert.equal(snapshot(root), before);
       });
     }
@@ -324,7 +324,7 @@ for (const [name, data] of Object.entries({ noRuns: { total_count: 0, check_runs
       const before = snapshot(root);
       const report = await closeout(root, { pr: "42", apply: true });
       assert.equal(report.closed, 0);
-      assert.equal(report.plan[0]!.action, "skip");
+      assert.equal(report.plan[0]!.action, "needs_review");
       assert.equal(snapshot(root), before);
     });
   }));
@@ -336,7 +336,7 @@ test("unmerged PRs and incomplete merge facts skip; null body contributes no ref
       if (request.url!.includes("/pulls/")) jsonResponse(response, 200, pull(link(ids[0]!), changes));
     }), async server => {
       assert.equal((await closeout(root, { pr: "42", apply: true })).closed, 0);
-      assert.equal(server.requests.length, 1);
+      assert.equal(server.requests.filter(request => !request.url.includes("/commits?")).length, 1);
     });
   }
   await withMockGithub(fixture(null), async () => assert.deepEqual((await closeout(root)).plan, []));
@@ -344,6 +344,7 @@ test("unmerged PRs and incomplete merge facts skip; null body contributes no ref
 
 test("since drains every page and uses inclusive merge time rather than update time", async () => tracker(async (root, ids) => {
   await withMockGithub(fixture(link(ids[0]!), (request, response, _body, base) => {
+    if (request.url!.endsWith("/pulls/40")) jsonResponse(response, 200, pull(link(ids[0]!), { number: 40, html_url: `https://github.com/${repo}/pull/40`, merged: false }));
     if (request.url!.includes("/pulls?")) {
       const page = new URL(request.url!, base).searchParams.get("page");
       jsonResponse(response, 200, page === "2" ? [{ number: 42, merged_at: mergedAt }] : [
@@ -352,7 +353,7 @@ test("since drains every page and uses inclusive merge time rather than update t
     }
   }), async server => {
     const report = await closeout(root, { since: mergedAt });
-    assert.equal(report.plan[0]!.pr, 42);
+    assert.equal(report.plan.find(row => row.action === "close")!.pr, 42);
     assert.equal(server.requests.filter(request => request.url.includes("/pulls?")).length, 2);
   });
 }));
@@ -448,7 +449,8 @@ test("since validates selected numbers and permits an empty selection", async ()
       if (request.url!.includes("/pulls?")) jsonResponse(response, 200, selected);
     }), async () => {
       if (selected.length === 0) assert.deepEqual((await closeout(root, { since: "2099-10-13" })).plan, []);
-      else await assert.rejects(() => closeout(root, { since: "2099-10-13" }));
+      else if (selected[0]?.number === 0) await assert.rejects(() => closeout(root, { since: "2099-10-13" }));
+      else assert.deepEqual((await closeout(root, { since: "2099-10-13" })).plan, []);
     });
   }
 }));
@@ -576,7 +578,7 @@ test("unreadable effective rules preserve known requirements without hiding auth
     }), async () => {
       const report = await closeout(root);
       assert.equal(report.checks[0]!.rule, "unavailable");
-      assert.equal(report.plan[0]!.action, "skip");
+      assert.equal(report.plan[0]!.action, "needs_review");
     });
   }
 }));
@@ -584,7 +586,7 @@ test("unreadable effective rules preserve known requirements without hiding auth
 test("repository resolution accepts valid dot, underscore and hyphen repository names", async () => tracker(async (root, ids) => {
   for (const repository of ["fixture/.github", "fixture/_repo", "fixture/-repo"]) {
     await withMockGithub(fixture(link(ids[0]!, repository), (request, response) => {
-      if (request.url!.includes("/pulls/")) jsonResponse(response, 200, pull(link(ids[0]!, repository), {
+      if (/\/pulls\/42$/.test(request.url!)) jsonResponse(response, 200, pull(link(ids[0]!, repository), {
         html_url: `https://github.com/${repository}/pull/42`, base: { ref: "main", repo: { full_name: repository } },
       }));
     }), async () => {
@@ -615,7 +617,7 @@ test("unreadable supplemental rules never relax a known required check to neutra
     await withMockGithub(fixture(link(ids[0]!), (request, response) => {
       if (request.url!.includes("/rules/branches/")) jsonResponse(response, status, {});
       if (request.url!.includes("/check-runs")) jsonResponse(response, 200, { total_count: 1, check_runs: [run({ conclusion: "neutral" })] });
-    }), async () => assert.equal((await closeout(root)).plan[0]!.action, "skip"));
+    }), async () => assert.equal((await closeout(root)).plan[0]!.action, "needs_review"));
   }
 }));
 
@@ -627,7 +629,7 @@ test("unauthorized classic protection cannot invoke the permissive fallback", as
     const report = await closeout(root, { pr: "42", apply: true });
     assert.equal(report.closed, 0);
     assert.equal(report.checks[0]!.rule, "unavailable");
-    assert.equal(report.plan[0]!.action, "skip");
+    assert.equal(report.plan[0]!.action, "needs_review");
     assert.equal(snapshot(root), before);
     assert.ok(!JSON.stringify(report).includes("private error text"));
   });
@@ -657,7 +659,7 @@ test("unreadable protection sources refuse without hiding invalid authorization"
     }), async () => {
       const report = await closeout(root);
       assert.equal(report.checks[0]!.rule, "unavailable");
-      assert.equal(report.plan[0]!.action, "skip");
+      assert.equal(report.plan[0]!.action, "needs_review");
     });
   }
 }));
@@ -729,7 +731,7 @@ test("compact report counts routine skips and retains individual refusals with t
     assert.deepEqual(report.skipped, { already_terminal: 1, other_repository: 1 });
     assert.equal(report.plan.length, 1);
     assert.equal(report.plan[0]!.action, "refuse");
-    assert.equal(report.plan[0]!.code, "head_checks_failed");
+    assert.equal(report.checks[0]!.code, "head_checks_failed");
     assert.equal(report.checks.length, 1);
     assert.equal(full.plan.length, 3);
   });
@@ -746,7 +748,7 @@ test("declared contexts verify exact names and latest statuses without requiring
     for (const names of ["CI\nLegacy", "CI\nmissing"]) {
       const report = await closeout(root, { pr: "42", apply: true, "required-checks": names });
       assert.equal(report.closed, 0);
-      assert.equal(report.plan[0]!.code, "head_checks_failed");
+      assert.equal(report.checks[0]!.code, "head_checks_failed");
       assert.equal(snapshot(root), before);
     }
     const report = await closeout(root, { pr: "42", apply: true, "required-checks": "  CI\nlegacy\nCI  " });
@@ -766,7 +768,7 @@ test("declared names cannot bypass a readable app binding", async () => tracker(
     const before = snapshot(root);
     const report = await closeout(root, { pr: "42", apply: true, "required-checks": "CI" });
     assert.equal(report.closed, 0);
-    assert.equal(report.plan[0]!.code, "head_checks_failed");
+    assert.equal(report.checks[0]!.code, "head_checks_failed");
     assert.equal(snapshot(root), before);
   });
 }));
@@ -779,12 +781,12 @@ test("newline context arrays preserve literal names and empty declarations fail 
     const before = snapshot(root);
     for (const names of [[], "", " \n\t\r\n ", ["", "\n"]]) {
       const report = await closeout(root, { pr: "42", apply: true, "required-checks": names });
-      assert.equal(report.plan[0]!.code, "required_checks_unverified");
+      assert.equal(report.plan[0]!.code, "needs_review");
       assert.equal(snapshot(root), before);
     }
     // A former space-separated list is one literal name, so observed runs cannot satisfy it.
     const missing = await closeout(root, { pr: "42", apply: true, "required-checks": "test (22) test (26)" });
-    assert.equal(missing.plan[0]!.code, "head_checks_failed");
+    assert.equal(missing.plan[0]!.code, "needs_review");
     assert.equal(snapshot(root), before);
     const report = await closeout(root, { pr: "42", apply: true, requiredChecks: ["  test (22)\n\n", "test (26)\r\n"] });
     assert.equal(report.closed, 1);

@@ -43,7 +43,7 @@ function evidence(id: string): CloseoutApi {
   const head = "a".repeat(40);
   return { base: "https://api.github.com", next: () => undefined, async get(url) {
     let body: unknown = [];
-    if (url.endsWith("/pulls/1")) body = { number: 1, body: `Delivers ${id}`, merged: true,
+    if (url.endsWith("/pulls/1")) body = { number: 1, body: `Delivers ${id}`, merged: true, commits: 0,
       merged_at: completed, merge_commit_sha: "b".repeat(40), html_url: `https://github.com/${repo}/pull/1`,
       head: { sha: head }, base: { ref: "main", repo: { full_name: repo } } };
     else if (url.includes("/protection/")) body = { contexts: ["CI"], checks: [] };

@@ -120,20 +120,29 @@ case "$1 $2" in
   "auth setup-git") ;;
   "pr list")
     if [[ -f "$PR_STATE" ]]; then
-      printf '[{"number":7,"headRepository":{"name":"widgets"},"headRepositoryOwner":{"login":"acme"},"isCrossRepository":false}]'
+      printf '[{"number":7,"headRepository":{"name":"widgets"},"headRepositoryOwner":{"login":"acme"},"isCrossRepository":false,"autoMergeRequest":%s}]' "$(if [[ -f "$AUTO_STATE" ]]; then printf '{}'; else printf null; fi)"
     else printf '[{"number":99,"isCrossRepository":true}]'; fi ;;
   "pr create"|"pr edit")
     [[ "\${PR_DENIED:-false}" != true ]] || exit 1
     touch "$PR_STATE"
+    if [[ -f "$AUTO_STATE" ]]; then touch "$ARMED_EDIT"; fi
     while [[ $# -gt 0 ]]; do
       if [[ "$1" == --body-file ]]; then cp "$2" "$PR_BODY"; break; fi
       shift
     done ;;
-  "pr merge") [[ "\${AUTO_MERGE_DENIED:-false}" != true ]] || exit 1 ;;
+  "pr merge")
+    if [[ "$*" == *--disable-auto* ]]; then
+      [[ "\${DISABLE_DENIED:-false}" != true ]] || exit 1
+      [[ -f "$AUTO_STATE" ]] || exit 1
+      rm -f "$AUTO_STATE"
+    else
+      [[ "\${AUTO_MERGE_DENIED:-false}" != true ]] || exit 1
+      touch "$AUTO_STATE"
+    fi ;;
   "pr view") printf '{"state":"MERGED"}\\n' ;;
   "pr close") rm -f "$PR_STATE" ;;
   "workflow run") [[ "\${DISPATCH_DENIED:-false}" != true ]] || exit 1 ;;
-  "run list") ;;
+  "run list") [[ "\${RUN_LIST_DENIED:-false}" != true ]] || exit 1 ;;
   *) exit 96 ;;
 esac
 `, { mode: 0o755 });
@@ -144,7 +153,7 @@ esac
     EVENT_DEFAULT_BRANCH: "", GITHUB_WORKSPACE: root, NPM_PROJECT_DIR: "tools/oracle", PM_GITHUB_VERSION: version,
     SYNC_BRANCH: branch, POST_CLOSEOUT_SCRIPT: "changelog:full", CI_WORKFLOWS: "ci.yml", RUNNER_TEMP: base,
     GITHUB_ENV: join(base, "job-env"), GITHUB_OUTPUT: join(base, "job-output"), GITHUB_PATH: join(base, "job-path"),
-    PR_STATE: join(base, "pr-state"), PR_BODY: join(base, "pr-body"), RECEIPTS: join(base, "receipts") });
+    AUTO_STATE: join(base, "auto-state"), ARMED_EDIT: join(base, "armed-edit"), PR_STATE: join(base, "pr-state"), PR_BODY: join(base, "pr-body"), RECEIPTS: join(base, "receipts") });
   const server = await startMockGithub((req, res) => {
     const url = req.url!;
     if (url.includes("/check-runs")) env.HEAD_LOOKUPS = String(Number(env.HEAD_LOOKUPS ?? 0) + 1);
@@ -154,7 +163,7 @@ esac
     if (url.includes("/pulls?")) jsonResponse(res, 200, env.NO_DELIVERY === "true" ? [] : [...(env.AMBIGUOUS === "true" ? [{ number: 43, merged_at: "2026-10-16T00:00:00Z", updated_at: "2026-10-16T00:00:00Z" }] : []), { number: 42, merged_at: "2026-10-15T00:00:00Z", updated_at: "2026-10-15T00:00:00Z" }]);
     else if (url.includes("/commits?")) jsonResponse(res, 200, []);
     else if (/\/pulls\/(42|43)$/.test(url)) jsonResponse(res, 200, { number: Number(url.split("/").at(-1)), body: env.NO_LINKS === "true" ? "Routine maintenance" : `Closes https://github.com/${env.FOREIGN_LINK === "true" ? "other/project" : "acme/widgets"}/blob/main/.agents/pm/tasks/${id}.toon${env.SUMMARY_ROWS === "true" ? `\nhttps://github.com/other/project/blob/main/.agents/pm/tasks/${id}.toon` : ""}${env.SUMMARY_ITEM ? `\nhttps://github.com/acme/widgets/blob/main/.agents/pm/tasks/${env.SUMMARY_ITEM}.toon` : ""}`,
-      merged: true, merged_at: "2026-10-15T00:00:00Z", merge_commit_sha: env.INCOMPLETE_MERGE === "true" ? null : "b".repeat(40), html_url: `https://github.com/acme/widgets/pull/${url.split("/").at(-1)}`,
+      merged: true, commits: 0, merged_at: "2026-10-15T00:00:00Z", merge_commit_sha: env.INCOMPLETE_MERGE === "true" ? null : "b".repeat(40), html_url: `https://github.com/acme/widgets/pull/${url.split("/").at(-1)}`,
       head: { sha }, base: { ref: "trunk", repo: { full_name: "acme/widgets" } } });
     else if (url.includes("/protection/")) jsonResponse(res, 200, { contexts: ["CI"], checks: [] });
     else if (url.includes("/rules/branches/")) jsonResponse(res, 200, []);
@@ -166,7 +175,21 @@ esac
     else jsonResponse(res, 404, {});
   });
   Object.assign(env, { PM_GITHUB_API_BASE: server.baseUrl });
-  const run = (names: string[], source = workflow) => bash(names.map(name => `(
+  // Model the workflow's always() cleanup even when an ordinary step exits early.
+  const run = (names: string[], source = workflow) => bash((names.includes("Disarm previous closeout auto-merge")
+    ? ': > "$GITHUB_ENV"\n' : "") + `
+cleanup_landing() {
+  status=$?
+  set -a
+  if [[ -f "$GITHUB_ENV" ]]; then source "$GITHUB_ENV"; fi
+  set +a
+  if [[ "$status" != 0 || "\${CLOSEOUT_AUTOMERGE_ALLOWED:-}" != true ]]; then
+    ( ${shell("Disarm closeout auto-merge on unsuccessful landing", source)} ) || status=1
+  fi
+  exit "$status"
+}
+trap cleanup_landing EXIT
+` + names.map(name => `(
 set -a
 if [[ -f "$GITHUB_ENV" ]]; then source "$GITHUB_ENV"; fi
 set +a
@@ -181,7 +204,7 @@ ${shell(name, source)}
   }
 }
 
-const setup = ["Require caller default branch", "Validate closeout inputs", "Validate npm project directory", "Prepare sync branch from default branch",
+const setup = ["Disarm previous closeout auto-merge", "Require caller default branch", "Validate closeout inputs", "Validate npm project directory", "Prepare sync branch from default branch",
   "Install dependencies", "Resolve sync commit scope", "Require clean setup artifacts", "Install pinned pm-github extension", "Configure PM merge drivers", "Isolate workflow setup artifacts", "Verify gate is available"];
 const finish = ["Close delivered tracker items", "Run caller post-closeout script", "Gate tracker and regenerated changelog", "Verify strict pm health",
   "Validate publication credentials", "Commit gated closeout changes and open review PR", "Dispatch caller CI and report parked runs"];
@@ -276,9 +299,8 @@ test("permission-limited read token fails closed with a clear diagnostic", async
   assert.equal((await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item.status, "in_progress");
   Object.assign(f.env, { READ_DENIED: "false", CHECKS_DENIED: "true" });
   const checks = await f.run(finish);
-  assert.notEqual(checks.code, 0);
-  assert.match(checks.out, /Closeout refused; check token read access/);
-  unpublished(f.git);
+  assert.equal(checks.code, 0, checks.out);
+  assert.match(readFileSync(f.env.PR_BODY!, "utf8"), /missing_evidence/);
   assert.equal((await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item.status, "in_progress");
 }));
 
@@ -389,14 +411,14 @@ for (const mode of ["unlinked", "foreign", "terminal", "local", "incomplete", "u
     if (mode.includes("incomplete")) f.env.INCOMPLETE_MERGE = "true";
     if (mode === "terminal") await update(f.id, { status: "canceled" }, { pmRoot: f.pmRoot, noExtensions: true });
     const result = await f.run([...setup, ...finish]);
-    assert.equal(result.code, mode === "local" || mode === "incomplete" ? 1 : 0, result.out);
-    if (mode === "local") assert.match(result.out, /token read access to head checks for linked local tracker items/);
+    assert.equal(result.code, 0, result.out);
+    if (mode === "local") assert.match(readFileSync(f.env.PR_BODY!, "utf8"), /missing_evidence/);
     if (mode === "incomplete") {
-      assert.match(result.out, /incomplete merged-PR metadata blocks a linked local tracker item/);
+      assert.match(readFileSync(f.env.PR_BODY!, "utf8"), /incomplete_merge/);
       assert.equal(f.env.HEAD_LOOKUPS, undefined);
     }
-    unpublished(f.git);
-    assert.equal(existsSync(f.env.PR_STATE!), false);
+    if (mode !== "local" && mode !== "incomplete") unpublished(f.git);
+    assert.equal(existsSync(f.env.PR_STATE!), mode === "local" || mode === "incomplete");
   }));
 }
 
@@ -429,10 +451,11 @@ for (const mode of ["undeclared", "blank", "missing", "neutral", "skipped", "pen
       const item = (await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item;
       assert.match(String(item.actual_result), mode === "metadata" ? /required checks satisfied/ : /caller-declared checks concluded success; repository required-check metadata was unavailable; successful head checks: CI/);
     } else {
-      assert.equal(report.plan[0]!.code, mode === "undeclared" || mode === "blank" ? "required_checks_unverified" : "head_checks_failed");
-      if (mode === "undeclared" || mode === "blank") assert.equal(result.code, 1, result.out);
+      assert.equal(report.plan[0]!.code, mode === "undeclared" || mode === "blank" || mode === "missing" ? "needs_review" : "head_checks_failed");
+      if (["undeclared", "blank", "missing"].includes(mode)) assert.equal(result.code, 0, result.out);
       assert.equal(readFileSync(join(f.pmRoot, "tasks", `${f.id}.toon`), "utf8"), before);
-      assert.equal(existsSync(f.env.PR_STATE!), false);
+      assert.equal(existsSync(f.env.PR_STATE!), ["undeclared", "blank", "missing"].includes(mode));
+      if (["undeclared", "blank", "missing"].includes(mode)) return;
       unpublished(f.git);
       assert.doesNotMatch(readFileSync(f.env.RECEIPTS!, "utf8"), /pr (create|edit)|workflow run/);
     }
@@ -472,8 +495,47 @@ test("ambiguous deliveries open a review-only PR listing every candidate and lea
   assert.match(body, /"action": "needs_review"/);
   assert.match(body, /"candidates": \[\s*42,\s*43\s*\]/);
   assert.match(body, /closeout-review\.json/);
-  assert.doesNotMatch(readFileSync(f.env.RECEIPTS!, "utf8"), /pr merge/);
+  assert.doesNotMatch(readFileSync(f.env.RECEIPTS!, "utf8"), /pr merge .*--auto/);
   assert.match(result.out, /automatic landing is disabled/);
   const published = f.git("show", `refs/remotes/origin/${branch}:.agents/pm/closeout-review.json`);
   assert.deepEqual(JSON.parse(published), { needs_review: [{ item: f.id, action: "needs_review", candidates: [42, 43] }] });
 }));
+
+
+test("earlier armed auto-merge is disabled before a later hold updates the reused PR", async () => fixture(async f => {
+  f.env.APP_DEADLINE = String(Math.floor(Date.now() / 1000) + 600);
+  const first = await f.run([...setup, ...finish]);
+  assert.equal(first.code, 0, first.out);
+  assert.equal(existsSync(f.env.AUTO_STATE!), true);
+  f.env.AMBIGUOUS = "true";
+  const second = await f.run([...setup, ...finish]);
+  assert.equal(second.code, 0, second.out);
+  assert.equal(existsSync(f.env.AUTO_STATE!), false);
+  assert.equal(existsSync(f.env.ARMED_EDIT!), false, "held branch must be disarmed before updating its PR");
+  assert.match(readFileSync(f.env.PR_BODY!, "utf8"), /Automatic merge is disabled because delivery attribution needs_review/);
+  assert.match(readFileSync(f.env.RECEIPTS!, "utf8"), /pr merge 7 -R acme\/widgets --disable-auto/);
+}));
+
+for (const mode of ["guard", "setup", "evidence", "privacy", "no-op", "empty-ci", "dispatch", "maintenance", "disable-denied"]) {
+  test(`previous auto-merge is revoked on workflow exit: ${mode}`, async () => fixture(async f => {
+    f.env.APP_DEADLINE = String(Math.floor(Date.now() / 1000) + 600);
+    const first = await f.run([...setup, ...finish]);
+    assert.equal(first.code, 0, first.out);
+    assert.equal(existsSync(f.env.AUTO_STATE!), true);
+    if (mode === "guard") f.env.RUN_REF = "refs/heads/feature";
+    if (mode === "setup") f.env.NPM_PROJECT_DIR = "../outside";
+    if (mode === "evidence") f.env.READ_DENIED = "true";
+    if (mode === "privacy") f.env.SUMMARY_ITEM = "ghp_" + "A".repeat(36);
+    if (mode === "no-op") f.env.NO_DELIVERY = "true";
+    if (mode === "empty-ci") f.env.CI_WORKFLOWS = "";
+    if (mode === "dispatch") f.env.DISPATCH_DENIED = "true";
+    if (mode === "maintenance") f.env.RUN_LIST_DENIED = "true";
+    if (mode === "disable-denied") f.env.DISABLE_DENIED = "true";
+    const priorBranch = f.git("ls-remote", "origin", `refs/heads/${branch}`);
+    const second = await f.run([...setup, ...finish]);
+    assert.equal(second.code, ["no-op", "empty-ci"].includes(mode) ? 0 : 1, second.out);
+    assert.equal(existsSync(f.env.AUTO_STATE!), mode === "disable-denied");
+    assert.equal(existsSync(f.env.ARMED_EDIT!), false);
+    if (mode === "disable-denied") assert.equal(f.git("ls-remote", "origin", `refs/heads/${branch}`), priorBranch);
+  }));
+}

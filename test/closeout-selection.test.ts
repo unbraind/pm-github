@@ -22,6 +22,12 @@ interface SelectionOptions {
   history?: "missing" | "invalid" | "unverified";
   failure?: number;
   mentionPr?: number;
+  errorPr?: number;
+  since?: boolean;
+  status?: "canceled";
+  excluded?: boolean;
+  container?: "epic" | "children";
+  gap?: "missing-merged" | "merge-sha" | "invalid-merge-sha" | "merge-time" | "invalid-time" | "head-sha" | "missing-head" | "null-head" | "missing-checks" | "failed-checks" | "required-metadata" | "checks-fetch" | "checks-pagination" | "commits-fetch" | "invalid-commits" | "commits-pagination" | "commits-count" | "missing-commits-count" | "invalid-commits-count" | "pr-fetch";
 }
 
 /** Run selection with git absent from PATH and inspect all durable completion evidence. */
@@ -34,12 +40,14 @@ async function selection(options: SelectionOptions) {
     });
     assert.equal(init.status, 0, init.stderr);
     const item = await runWithReproducibleProcessEnvironment({ PM_CLOCK: at(1), PM_SEED: "delivery" }, async () =>
-      (await create({ title: "Enforce acceptance criteria", type: "Issue", author: "fixture", acceptanceCriteria: "Initial criteria" }, sdk)).item);
+      (await create({ title: "Enforce acceptance criteria", type: options.container === "epic" ? "Epic" : "Issue", author: "fixture", acceptanceCriteria: "Initial criteria" }, sdk)).item);
     if (options.criteriaDay) await runWithReproducibleProcessEnvironment({ PM_CLOCK: at(options.criteriaDay), PM_SEED: "criteria" }, () =>
       update(item.id, { acceptanceCriteria: "Updated acceptance criteria" }, sdk));
     // A later unrelated edit must not move the acceptance cutoff.
     await runWithReproducibleProcessEnvironment({ PM_CLOCK: at(20), PM_SEED: "annotation" }, () =>
       update(item.id, { status: "in_progress", tags: options.tags?.map(n => `delivery-pr:${prUrl(n)}`).join(",") }, sdk));
+    if (options.container === "children") await create({ title: "Undelivered child", type: "Task", parent: item.id, author: "fixture" }, sdk);
+    if (options.status) await update(item.id, { status: options.status }, sdk);
     const historyPath = join(root, "history", `${item.id}.jsonl`);
     const validHistory = readFileSync(historyPath, "utf8");
     if (options.history === "missing") rmSync(historyPath);
@@ -52,27 +60,39 @@ async function selection(options: SelectionOptions) {
       writeFileSync(historyPath, events.join("\n") + "\n");
     }
     const reference = `https://github.com/${repo}/blob/main/.agents/pm/issues/${item.id}.toon`;
-    const api: CloseoutApi = { base: "https://api.github.com", next: () => undefined, get: async endpoint => {
+    const api: CloseoutApi = { base: "https://api.github.com", next: link => link, get: async endpoint => {
       const number = Number(/\/pulls\/(\d+)/.exec(endpoint)?.[1]);
       const headNumber = Number.parseInt(/\/commits\/(\w{2})/.exec(endpoint)?.[1] ?? "00", 16);
+      if (endpoint.includes("/pulls?")) return { body: JSON.stringify(options.dates.map((day, i) => ({ number: i + 1, merged_at: options.gap === "merge-time" ? null : at(day), updated_at: at(day) }))) };
+      const affected = number === 1 || headNumber === 1;
+      if (number === 1 && options.gap === "pr-fetch" && !endpoint.includes("/commits?")) throw new Error("PR unavailable");
+      if (options.gap === "required-metadata" && endpoint.includes("/branches/gap/")) throw new Error("HTTP 403");
+      if (headNumber === 1 && options.gap === "checks-fetch" && endpoint.includes("/check-runs")) throw new Error("Checks unavailable");
       if (endpoint.includes("/commits?")) {
-        if (options.commits === "error") throw new Error("Unavailable commit evidence");
+        if (number === 1 && options.gap === "invalid-commits") return { body: "[{}]" };
+        if (number === 1 && options.gap === "commits-fetch") throw new Error("Commits unavailable");
+        if (number === 1 && options.gap === "commits-pagination") return { body: "[]", linkHeader: endpoint };
+        if (options.commits === "error" && (options.errorPr === undefined || options.errorPr === number)) throw new Error("Unavailable commit evidence");
         return { body: JSON.stringify(options.commits === "invalid" ? [{}] : options.commits ? [{ commit: {
           message: options.commits === "claim" ? `Closes ${item.id}\nSee ${reference}` : `See ${reference}`,
         } }] : []) };
       }
       const value = endpoint.includes("/pulls/") ? {
-        number, merged: true, merged_at: at(options.dates[number - 1]!), merge_commit_sha: "b".repeat(40), html_url: prUrl(number),
+        number, commits: affected && options.gap === "invalid-commits-count" ? -1 : affected && options.gap === "missing-commits-count" ? undefined : affected && options.gap === "commits-count" ? 1 : options.commits ? 1 : 0, merged: affected && options.gap === "missing-merged" ? undefined : true, merged_at: affected && options.gap === "merge-time" ? null : affected && options.gap === "invalid-time" ? "invalid" : at(options.dates[number - 1]!), merge_commit_sha: affected && options.gap === "merge-sha" ? null : affected && options.gap === "invalid-merge-sha" ? "invalid" : "b".repeat(40), html_url: prUrl(number),
         body: options.body === "none" ? "Routine work" : `${options.body === "mention" || options.mentionPr === number ? "See" : "Closes"} ${reference}`,
-        head: { sha: number.toString(16).padStart(2, "0").repeat(20) }, base: { ref: "main", repo: { full_name: repo } },
+        head: affected && options.gap === "missing-head" ? undefined : affected && options.gap === "null-head" ? null : { sha: affected && options.gap === "head-sha" ? "invalid" : number.toString(16).padStart(2, "0").repeat(20) }, base: { ref: affected && options.gap === "required-metadata" ? "gap" : "main", repo: { full_name: repo } },
       } : endpoint.includes("/protection/") ? { contexts: ["CI"], checks: [] }
         : endpoint.includes("/check-runs") ? { total_count: 1, check_runs: [{ name: "CI", head_sha: headNumber.toString(16).padStart(2, "0").repeat(20),
-          status: "completed", conclusion: options.failure === headNumber ? "failure" : "success", app: { id: 1 } }] } : [];
+          status: "completed", conclusion: options.failure === headNumber || (headNumber === 1 && options.gap === "failed-checks") ? "failure" : "success", app: { id: 1 } }] } : [];
+      if (headNumber === 1 && endpoint.includes("/check-runs")) {
+        if (options.gap === "missing-checks") return { body: JSON.stringify({ total_count: 0, check_runs: [] }) };
+        if (options.gap === "checks-pagination") return { body: JSON.stringify({ total_count: 2, check_runs: [] }) };
+      }
       return { body: JSON.stringify(value) };
     } };
     const before = options.history === "missing" ? "" : readFileSync(historyPath, "utf8");
     const report = await withEnv({ PATH: root, GIT_CEILING_DIRECTORIES: dirname(root) }, () =>
-      runCloseout(root, repo, { pr: options.dates.map((_, i) => String(i + 1)), apply: true }, api));
+      runCloseout(root, repo, { ...(options.since ? { since: at(1) } : { pr: options.dates.map((_, i) => String(i + 1)) }), skip: options.excluded ? item.id : undefined, apply: true }, api));
     if (options.history !== "missing") assert.equal(report.closed === 0 ? readFileSync(historyPath, "utf8") : before, before);
     if (options.history === "invalid") writeFileSync(historyPath, validHistory);
     const result = (await get(item.id, {}, sdk)).item;
@@ -155,7 +175,7 @@ test("commit claims can supply unique delivery, while mentions and unavailable c
   for (const commits of ["mention", "invalid", "error"] as const) {
     const { report } = await selection({ dates: [8], body: "mention", commits });
     assert.equal(report.closed, 0);
-    assert.equal(report.plan[0]!.code, "not_delivery");
+    assert.equal(report.plan[0]!.code, commits === "mention" ? "not_delivery" : "needs_review");
   }
 });
 
@@ -168,7 +188,44 @@ test("unreadable later commit claims never permit fallback to an earlier descrip
 });
 
 test("unreadable commits before changed criteria cannot supply another qualifying claim", async () => {
-  const { report } = await selection({ dates: [4, 8], criteriaDay: 7, mentionPr: 1, commits: "error" });
+  const { report } = await selection({ dates: [4, 8], criteriaDay: 7, mentionPr: 1, commits: "error", errorPr: 1 });
   assert.equal(report.closed, 1);
   assert.equal(report.plan.find(row => row.action === "close")!.pr, 2);
+});
+
+
+for (const gap of ["missing-merged", "merge-sha", "invalid-merge-sha", "merge-time", "invalid-time", "head-sha", "missing-head", "null-head", "missing-checks", "failed-checks", "required-metadata", "checks-fetch", "checks-pagination", "commits-fetch", "invalid-commits", "commits-pagination", "commits-count", "missing-commits-count", "invalid-commits-count", "pr-fetch"] as const) {
+  for (const other of [true, false]) test(`incomplete candidate holds attribution: ${gap}, other valid claim=${other}`, async () => {
+    const { report, item } = await selection({ dates: other ? [8, 9] : [8], gap, mentionPr: gap === "commits-count" || gap === "missing-commits-count" || gap === "invalid-commits-count" ? 1 : undefined, tags: gap === "pr-fetch" && !other ? [1] : undefined });
+    assert.equal(report.closed, 0);
+    assert.equal(item.status, "in_progress");
+    assert.ok(report.plan.length > 0);
+    for (const row of report.plan) {
+      assert.equal(row.action, gap === "failed-checks" && !other ? "skip" : "needs_review");
+      if (gap === "failed-checks" && !other) continue;
+      assert.deepEqual(row.candidates, other ? [1, 2] : [1]);
+      if (gap !== "failed-checks") assert.ok(row.missing_evidence?.some(gap => gap.pr === 1), JSON.stringify(row));
+    }
+  });
+}
+
+
+test("since retains missing merge timestamps and holds the linked candidate", async () => {
+  const { report } = await selection({ dates: [8, 9], gap: "merge-time", since: true });
+  assert.equal(report.closed, 0);
+  assert.deepEqual(report.plan[0]!.candidates, [1, 2]);
+  assert.ok(report.plan[0]!.missing_evidence?.some(gap => gap.pr === 1));
+});
+
+test("an explicit valid delivery link resolves an incomplete competing candidate", async () => {
+  const { report } = await selection({ dates: [8, 9], gap: "merge-sha", tags: [2] });
+  assert.equal(report.closed, 1);
+  assert.equal(report.plan.find(row => row.action === "close")!.pr, 2);
+});
+
+for (const scope of ["terminal", "excluded", "epic", "children"] as const) test(`unreadable PRs cannot select ineligible items: ${scope}`, async () => {
+  const { report, item } = await selection({ dates: [8], gap: "pr-fetch", status: scope === "terminal" ? "canceled" : undefined,
+    excluded: scope === "excluded", container: scope === "epic" || scope === "children" ? scope : undefined });
+  assert.equal(report.closed, 0);
+  assert.ok(report.plan.every(row => row.item !== item.id));
 });

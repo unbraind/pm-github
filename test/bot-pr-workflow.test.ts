@@ -27,7 +27,7 @@ function fixture(run: (f: { dir: string; env: NodeJS.ProcessEnv; receipts: () =>
   const env: NodeJS.ProcessEnv & { RECEIPTS: string } = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1",
     GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture", GIT_AUTHOR_EMAIL: "fixture@users.noreply.github.com", GIT_COMMITTER_EMAIL: "fixture@users.noreply.github.com",
     APP_DEADLINE: "1700002400", REPOSITORY: "acme/widgets", DEFAULT_BRANCH: "trunk", SYNC_BRANCH: "automation/proposal", SYNC_PUBLISHED: "true", SYNC_PR_NUMBER: "7", CI_WORKFLOWS: "ci.yml codeql.yml",
-    RECEIPTS: join(dir, "receipts"), STATE: join(dir, "state"), PATH: bin + ":" + process.env.PATH };
+    GITHUB_ENV: join(dir, "job-env"), RECEIPTS: join(dir, "receipts"), STATE: join(dir, "state"), PATH: bin + ":" + process.env.PATH };
   const git = (...args: string[]) => {
     const r = spawnSync("git", args, { cwd: dir, env, encoding: "utf8" });
     assert.equal(r.status, 0, r.stderr); return r.stdout.trim();
@@ -211,7 +211,10 @@ test("sync and closeout share PR maintenance apart from the closeout attribution
     + '  exit 0\nfi\n';
   const closeout = maintenance("closeout");
   assert.equal(closeout.split(hold).length, 2);
-  assert.equal(maintenance("sync"), closeout.replace(hold, ""));
+  const landingReceipt = 'if [[ -n "${APP_DEADLINE:-}" ]]; then\n'
+    + '  printf \'CLOSEOUT_AUTOMERGE_ALLOWED=true\\n\' >> "${GITHUB_ENV}"\nfi\n';
+  assert.equal(closeout.split(landingReceipt).length, 2);
+  assert.equal(maintenance("sync"), closeout.replace(hold, "").replace(landingReceipt, ""));
 });
 
 for (const kind of ["sync", "closeout"]) {
@@ -231,7 +234,7 @@ for (const kind of ["sync", "closeout"]) {
     assert.match(mint, /skip-token-revoke: false/);
     assert.ok(source.indexOf("name: Verify strict pm health") < source.indexOf("name: Create automation app token"));
     assert.ok(source.indexOf("name: Validate publication credentials") < source.indexOf("name: Commit gated"));
-    assert.equal(source.split("GH_TOKEN: ${{ steps.automation_token.outputs.token || github.token }}").length - 1, 2);
+    assert.equal(source.split("GH_TOKEN: ${{ steps.automation_token.outputs.token || github.token }}").length - 1, kind === "closeout" ? 3 : 2);
     assert.match(source, /MAINTENANCE_ATTEMPTS: \$\{\{ steps.automation_token.outputs.token != '' && '40' \|\| '120' \}\}/);
     assert.equal((source.match(/secrets\.automation_app_private_key/g) ?? []).length, 2);
     assert.match(source, /APP_DEADLINE: \$\{\{ steps.publication_auth.outputs.deadline \}\}/);
