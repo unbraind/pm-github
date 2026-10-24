@@ -160,10 +160,10 @@ esac
     if (env.PROTECTION_DENIED === "true" && (url.includes("/protection/") || url.includes("/rules/branches/"))) { jsonResponse(res, 403, {}); return; }
     if (env.READ_DENIED === "true" || (env.CHECKS_DENIED === "true" && url.includes("/check-runs"))) { jsonResponse(res, 403, { message: "Resource not accessible by integration" }); return; }
     const sha = "a".repeat(40);
-    if (url.includes("/pulls?")) jsonResponse(res, 200, env.NO_DELIVERY === "true" ? [] : [...(env.AMBIGUOUS === "true" ? [{ number: 43, merged_at: "2026-10-16T00:00:00Z", updated_at: "2026-10-16T00:00:00Z" }] : []), { number: 42, merged_at: "2026-10-15T00:00:00Z", updated_at: "2026-10-15T00:00:00Z" }]);
+    if (url.includes("/pulls?")) jsonResponse(res, 200, env.NO_DELIVERY === "true" ? [] : [...(env.AMBIGUOUS === "true" ? [{ number: 43, merged_at: "2026-10-16T00:00:00Z", updated_at: "2026-10-16T00:00:00Z" }] : []), { number: 42, merged_at: env.UNMERGED_COMPETITOR === "true" ? null : "2026-10-15T00:00:00Z", updated_at: "2026-10-15T00:00:00Z" }]);
     else if (url.includes("/commits?")) jsonResponse(res, 200, []);
     else if (/\/pulls\/(42|43)$/.test(url)) jsonResponse(res, 200, { number: Number(url.split("/").at(-1)), body: env.NO_LINKS === "true" ? "Routine maintenance" : `Closes https://github.com/${env.FOREIGN_LINK === "true" ? "other/project" : "acme/widgets"}/blob/main/.agents/pm/tasks/${id}.toon${env.SUMMARY_ROWS === "true" ? `\nhttps://github.com/other/project/blob/main/.agents/pm/tasks/${id}.toon` : ""}${env.SUMMARY_ITEM ? `\nhttps://github.com/acme/widgets/blob/main/.agents/pm/tasks/${env.SUMMARY_ITEM}.toon` : ""}`,
-      merged: true, commits: 0, merged_at: "2026-10-15T00:00:00Z", merge_commit_sha: env.INCOMPLETE_MERGE === "true" ? null : "b".repeat(40), html_url: `https://github.com/acme/widgets/pull/${url.split("/").at(-1)}`,
+      merged: !(env.UNMERGED_COMPETITOR === "true" && url.endsWith("/42")), commits: 0, merged_at: env.UNMERGED_COMPETITOR === "true" && url.endsWith("/42") ? null : "2026-10-15T00:00:00Z", merge_commit_sha: env.INCOMPLETE_MERGE === "true" ? null : "b".repeat(40), html_url: `https://github.com/acme/widgets/pull/${url.split("/").at(-1)}`,
       head: { sha }, base: { ref: "trunk", repo: { full_name: "acme/widgets" } } });
     else if (url.includes("/protection/")) jsonResponse(res, 200, { contexts: ["CI"], checks: [] });
     else if (url.includes("/rules/branches/")) jsonResponse(res, 200, []);
@@ -539,3 +539,16 @@ for (const mode of ["guard", "setup", "evidence", "privacy", "no-op", "empty-ci"
     if (mode === "disable-denied") assert.equal(f.git("ls-remote", "origin", `refs/heads/${branch}`), priorBranch);
   }));
 }
+
+
+test("confirmed unmerged references cannot block publication of a unique merged delivery", async () => fixture(async f => {
+  f.env.AMBIGUOUS = "true";
+  f.env.UNMERGED_COMPETITOR = "true";
+  const result = await f.run([...setup, ...finish]);
+  assert.equal(result.code, 0, result.out);
+  assert.equal((await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item.status, "closed");
+  const body = readFileSync(f.env.PR_BODY!, "utf8");
+  assert.match(body, /"action": "close"/);
+  assert.doesNotMatch(body, /"action": "needs_review"|"code": "incomplete_merge"/);
+  assert.match(body, /"not_merged": 1/);
+}));

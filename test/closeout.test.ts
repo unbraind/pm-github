@@ -330,12 +330,17 @@ for (const [name, data] of Object.entries({ noRuns: { total_count: 0, check_runs
   }));
 }
 
-test("unmerged PRs and incomplete merge facts skip; null body contributes no references", async () => tracker(async (root, ids) => {
+test("confirmed unmerged PRs are routine skips and incomplete merge facts hold; null body contributes no references", async () => tracker(async (root, ids) => {
   for (const changes of [{ merged: false }, { merged_at: null }, { merge_commit_sha: null }, { merge_commit_sha: "bad" }, { head: { sha: "bad" } }]) {
     await withMockGithub(fixture(link(ids[0]!), (request, response) => {
       if (request.url!.includes("/pulls/")) jsonResponse(response, 200, pull(link(ids[0]!), changes));
     }), async server => {
-      assert.equal((await closeout(root, { pr: "42", apply: true })).closed, 0);
+      const report = await closeout(root, { pr: "42", apply: true });
+      assert.equal(report.closed, 0);
+      if ("merged" in changes && changes.merged === false) {
+        assert.equal(report.plan[0]!.code, "not_merged");
+        assert.deepEqual(compactCloseoutReport(report).skipped, { not_merged: 1 });
+      }
       assert.equal(server.requests.filter(request => !request.url.includes("/commits?")).length, 1);
     });
   }

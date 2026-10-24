@@ -542,7 +542,7 @@ jobs:
           fi
           # Publish only actionable decisions and counts, with no API prose.
           summary_file="${RUNNER_TEMP}/pm-github-closeout-summary.json"
-          jq '{plan: [.plan[] | select(.code != "already_terminal" and .code != "other_repository" and .code != "duplicate_selection" and .code != "explicit_skip") | {item, pr, action: (if .action == "skip" then "refuse" else .action end), code} + (if .candidates then {candidates} else {} end) + (if .missing_evidence then {missing_evidence} else {} end)], skipped: ([.plan[] | select(.code == "already_terminal" or .code == "other_repository" or .code == "duplicate_selection" or .code == "explicit_skip")] | group_by(.code) | map({key: .[0].code, value: length}) | from_entries)}' "${RUNNER_TEMP}/pm-github-closeout.json" > "${summary_file}"
+          jq '{plan: [.plan[] | select(.code != "already_terminal" and .code != "other_repository" and .code != "duplicate_selection" and .code != "explicit_skip" and .code != "not_merged") | {item, pr, action: (if .action == "skip" then "refuse" else .action end), code} + (if .candidates then {candidates} else {} end) + (if .missing_evidence then {missing_evidence} else {} end)], skipped: ([.plan[] | select(.code == "already_terminal" or .code == "other_repository" or .code == "duplicate_selection" or .code == "explicit_skip" or .code == "not_merged")] | group_by(.code) | map({key: .[0].code, value: length}) | from_entries)}' "${RUNNER_TEMP}/pm-github-closeout.json" > "${summary_file}"
           # Scan the public summary as added diff content before any publication.
           summary_patch="${RUNNER_TEMP}/pm-github-closeout-summary.patch"
           {

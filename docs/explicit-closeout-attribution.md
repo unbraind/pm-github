@@ -77,3 +77,5 @@ Fix-only revert evidence is recorded on `pm-github-closeout-attribution`: replac
 
 
 A resolved explicit delivery link cannot leave a `needs_review` row for its closed item. Unreadable PR rows begin as refusals, and only unresolved attribution promotes them to review together with candidate details. Additional real-tracker controls cover six unreadable commit-set conditions with reference-free descriptions, crossed with another valid claim or none; these hold possible commit-only delivery instead of treating missing messages as proof of no link.
+
+Confirmed unmerged PRs discovered while checking uncertain `--since` timestamps use the routine `not_merged` decision. They cannot supply delivery or trigger the workflow's incomplete-merge refusal. `confirmed unmerged references cannot block publication of a unique merged delivery` executes the real workflow with both PR kinds and verifies publication, closure and the compact skip count.

@@ -22,7 +22,7 @@ export interface CloseoutRow {
 /** Stable decisions used by automation and compact skip counts. */
 export type CloseoutCode = "already_terminal" | "other_repository" | "duplicate_selection" | "explicit_skip"
   | "needs_review" | "unknown_item" | "epic" | "active_children" | "not_delivery" | "close_failed"
-  | "head_checks_passed" | "head_checks_failed" | "head_evidence_unavailable" | "required_checks_unverified" | "incomplete_merge";
+  | "head_checks_passed" | "head_checks_failed" | "head_evidence_unavailable" | "required_checks_unverified" | "not_merged" | "incomplete_merge";
 
 /** Which head-check policy was evaluated for one selected pull request. */
 interface CheckGate {
@@ -506,6 +506,7 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
       else if (!items.has(ref.item)) { code = "unknown_item"; reason = "Item does not exist in the tracker."; }
       else if (skip.has(ref.item)) { code = "explicit_skip"; reason = "Explicitly excluded by --skip."; }
       else if (TERMINAL_STATUSES.includes(items.get(ref.item)!.status)) { code = "already_terminal"; reason = "Item is already closed or canceled."; }
+      else if (pr.merged === false) { code = "not_merged"; reason = "Pull request is confirmed unmerged and cannot deliver this item."; }
       else if (!gate.ok) { code = gate.code; reason = gate.reason; }
       else if (items.get(ref.item)!.type === "Epic") { code = "epic"; reason = "Epics close when their children are done, not by a pull request."; }
       else if (activeChildren.has(ref.item)) { code = "active_children"; reason = `Item has ${activeChildren.get(ref.item)} non-terminal child item(s).`; }
@@ -615,7 +616,7 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
 export function compactCloseoutReport(report: Awaited<ReturnType<typeof runCloseout>>) {
   const skipped: Partial<Record<CloseoutCode, number>> = {};
   const plan = report.plan.flatMap(row => {
-    if (["already_terminal", "other_repository", "duplicate_selection", "explicit_skip"].includes(row.code)) {
+    if (["already_terminal", "other_repository", "duplicate_selection", "explicit_skip", "not_merged"].includes(row.code)) {
       skipped[row.code] = (skipped[row.code] ?? 0) + 1;
       return [];
     }
