@@ -63,8 +63,8 @@ export function collectCoverageSources(root: string, target: string): string[] {
   });
 }
 
-/** Heap ceiling for the c8 merge process; GitHub-hosted Linux runners have 16 GiB. */
-export const COVERAGE_HEAP_FLAG = "--max-old-space-size=8192";
+/** Heap ceiling for c8 aggregation on public Linux runners with 16 GB RAM. */
+export const COVERAGE_HEAP_FLAG = "--max-old-space-size=12288";
 
 /**
  * Run the strict all-source gate and return its exit status.
@@ -91,9 +91,9 @@ export function runCoverageGate(root: string, runner: CoverageRunner = spawnSync
     const node = nodeToolingExecutable(process.versions);
     // c8 merges the raw V8 coverage of every spawned process, including each
     // real pm CLI child the sync-pipeline tests start. That merge exceeded Node's
-    // default ~4 GiB heap on CI ("Reached heap limit"), after every test had
-    // passed. The larger heap is a resource limit only: thresholds, includes
-    // and the test set are unchanged.
+    // former 8 GiB ceiling on Node 26 after all 1,337 tests passed, even with
+    // matrix setup shared. Leave runner headroom with a 12 GiB heap ceiling.
+    // This changes resources only: thresholds, includes and the test set stay unchanged.
     const result = runner(node, [COVERAGE_HEAP_FLAG, c8, "--100", "--all", "--exclude-after-remap", "--extension=.ts", "--extension=.js",
       `--reports-dir=${reports}`, `--temp-directory=${join(reports, "v8")}`,
       "--reporter=text", "--reporter=lcov", "--reporter=json-summary", "--reporter=json",

@@ -2,18 +2,24 @@ id: pm-github-vhi6
 title: Bound coverage aggregation memory and compare default-heap CI behavior
 description: "During the PR #122 privacy-scope regression work, an identity-isolated npm release:check completed 587/587 tests with zero failures, skips or cancellations, then c8 report aggregation exhausted Node's default 4 GiB heap. Native coverage receipts occupied approximately 2.9 GiB. The security fix is being validated with NODE_OPTIONS=--max-old-space-size=12288 and unchanged source inventory and four 100-percent thresholds. Compare default-heap CI behavior, investigate bounded report aggregation or documented resource requirements, and retain complete authored-source and real CLI coverage. Earlier local heap-exhaustion observations also appear in pm-github-fmrf; this task tracks current default-heap acceptance separately from the scope fix in pm-github-wrmt."
 type: Task
-status: open
+status: in_progress
 priority: 2
 tags[3]: coverage,follow-up,gates
 created_at: "2026-10-14T14:32:34.672Z"
-updated_at: "2026-10-24T15:10:00.744Z"
+updated_at: "2026-10-24T15:42:24.889Z"
 author: codex-agent
-comments[3]{created_at,author,text}:
+comments[5]{created_at,author,text}:
   "2026-10-14T15:04:27.090Z",codex-agent,"Confirmed resource workaround: complete identity-isolated npm and Bun release:check each passed 587/587 tests and all 11 checks with NODE_OPTIONS=--max-old-space-size=12288. Coverage remains exact 100/100/100/100 across 12 authored modules, without source exemptions or threshold changes. The earlier default-heap npm run passed all 587 tests before c8 aggregation exhausted the heap. Default-heap CI comparison and bounded aggregation remain follow-up work; the security change does not alter coverage implementation or CI memory settings."
   "2026-10-24T14:34:24.911Z",codex-agent,"Additional measured receipt from pm-github-closeout-attribution / PR 174: CI https://github.com/unbraind/pm-github/actions/runs/40101464708 at 30b94f1 failed all four npm/Bun release jobs on Node 22/26 with JavaScript heap exhaustion during c8 aggregation at the existing 8192 MiB limit. The Node 26 test phases each passed 1337/1337, zero failures/cancellations/skips before aggregation failed. No release-gate pass is claimed. This round reduces repeated setup in the new 36-case workflow matrix (shared immutable Git/tracker baselines and only the actual closeout/publication steps); the broader bounded aggregation task remains open, with thresholds, source inventory and heap configuration unchanged."
   "2026-10-24T15:10:00.744Z",codex-agent,"Second receipt: https://github.com/unbraind/pm-github/actions/runs/40103921945 at ad2e7cb passed 1337/1337 tests in every npm/Bun Node 22/26 job, then all four c8 aggregations exhausted the unchanged 8192 MiB heap. Sharing tracker callers alone was insufficient while package setup still repeated per cell. The next harness prepares package/scope setup once per immutable baseline; every one of the 36 cases still restores input, runs actual branch preparation, real CLI closeout, publication privacy/refusal gates and leased push, with fresh receipts and provenance/history assertions. No coverage resource or threshold change is used. The broader bounded aggregation task remains open."
+  "2026-10-24T15:38:04.069Z",codex-agent,"Third CI https://github.com/unbraind/pm-github/actions/runs/40106191758 at cff0f1c passed the complete npm release gate on Node 22 after preparing four baseline callers once. Both Node 26 jobs still passed 1337/1337 tests and exhausted c8 at 8192 MiB. Fixture reductions alone cannot establish Node 26 full-gate acceptance. Adjust only the c8 merge heap ceiling to 12288 MiB, leaving headroom on this public repository's documented 16 GB ubuntu-latest runners (https://docs.github.com/en/actions/reference/runners/github-hosted-runners#standard-github-hosted-runners-for-public-repositories). All four coverage thresholds remain 100, the complete 19-module inventory, zero-exclusion policy, test set and dependency pins stay unchanged. Earlier comments preserving the 8 GiB ceiling describe failed earlier attempts; measured Node 26 failures now justify this resource-only revision. General bounded aggregation remains unfinished and this item will not be closed."
+  "2026-10-24T15:42:23.333Z",codex-agent,"Resource-only local verification: PM-linked node --test test/coverage-gate.test.ts passes 9/9, zero failures/cancellations/skips. These tests run real c8 fixture reports and preserve threshold-refusal, missing-source, invalid-receipt and pre-entry heap-routing controls. Production typecheck, test typecheck, lint, docstrings and zero duplication pass. Only COVERAGE_HEAP_FLAG changes from 8192 to 12288 MiB, plus explanatory comments. Full CI is still required; this is not bounded-memory certification and the general task stays in progress for orchestrator follow-up."
 files[3]{path,scope}:
   scripts/coverage-gate.ts,project
   test/closeout-workflow.test.ts,project
   test/import-gate.test.ts,project
+tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  node --test test/coverage-gate.test.ts,project,300,codex-agent,"2026-10-24T15:38:03.298Z",local_mutation,fix/closeout-delivery-attribution
+docs[1]{path,scope}:
+  docs/explicit-closeout-attribution.md,project
 body: ""
