@@ -493,8 +493,9 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
       if (existing) existing.declared ||= ref.declared;
       else refs.push(ref);
     }
+    // An unreadable commit set cannot prove that an item has no commit-only delivery link.
     for (const item of items.values()) {
-      if (item.tags.includes(`delivery-pr:${pr.html_url}`) && !refs.some(ref => ref.item === item.id && ref.repo.toLowerCase() === repo.toLowerCase())) {
+      if ((item.tags.includes(`delivery-pr:${pr.html_url}`) || (!commitsReadable && pr.merged !== false)) && !refs.some(ref => ref.item === item.id && ref.repo.toLowerCase() === repo.toLowerCase())) {
         refs.push({ item: item.id, repo, declared: false });
       }
     }
@@ -545,7 +546,7 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
     const url = `https://github.com/${repo}/pull/${number}`;
     for (const item of items.values()) {
       if (skip.has(item.id) || TERMINAL_STATUSES.includes(item.status) || item.type === "Epic" || activeChildren.has(item.id)) continue;
-      const row: CloseoutRow = { item: item.id, pr: number, action: "needs_review", code: "head_evidence_unavailable", reason: "Pull-request fetch failed; merge, linkage and delivery evidence unavailable." };
+      const row: CloseoutRow = { item: item.id, pr: number, action: "skip", code: "head_evidence_unavailable", reason: "Pull-request fetch failed; merge, linkage and delivery evidence unavailable." };
       plan.push(row);
       const group = candidates.get(item.id) ?? [];
       group.push({ row, pr: { number, html_url: url, body: null, merged: true, merged_at: null, merge_commit_sha: null, commits: null,

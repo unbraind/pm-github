@@ -22,6 +22,7 @@ interface SelectionOptions {
   history?: "missing" | "invalid" | "unverified";
   failure?: number;
   mentionPr?: number;
+  unlinkedPr?: number;
   errorPr?: number;
   since?: boolean;
   status?: "canceled";
@@ -78,8 +79,8 @@ async function selection(options: SelectionOptions) {
         } }] : []) };
       }
       const value = endpoint.includes("/pulls/") ? {
-        number, commits: affected && options.gap === "invalid-commits-count" ? -1 : affected && options.gap === "missing-commits-count" ? undefined : affected && options.gap === "commits-count" ? 1 : options.commits ? 1 : 0, merged: affected && options.gap === "missing-merged" ? undefined : true, merged_at: affected && options.gap === "merge-time" ? null : affected && options.gap === "invalid-time" ? "invalid" : at(options.dates[number - 1]!), merge_commit_sha: affected && options.gap === "merge-sha" ? null : affected && options.gap === "invalid-merge-sha" ? "invalid" : "b".repeat(40), html_url: prUrl(number),
-        body: options.body === "none" ? "Routine work" : `${options.body === "mention" || options.mentionPr === number ? "See" : "Closes"} ${reference}`,
+        number, commits: affected && options.gap === "invalid-commits-count" ? -1 : affected && options.gap === "missing-commits-count" ? undefined : affected && (options.gap === "commits-count" || options.gap === "invalid-commits") ? 1 : options.commits ? 1 : 0, merged: affected && options.gap === "missing-merged" ? undefined : true, merged_at: affected && options.gap === "merge-time" ? null : affected && options.gap === "invalid-time" ? "invalid" : at(options.dates[number - 1]!), merge_commit_sha: affected && options.gap === "merge-sha" ? null : affected && options.gap === "invalid-merge-sha" ? "invalid" : "b".repeat(40), html_url: prUrl(number),
+        body: options.body === "none" || options.unlinkedPr === number ? "Routine work" : `${options.body === "mention" || options.mentionPr === number ? "See" : "Closes"} ${reference}`,
         head: affected && options.gap === "missing-head" ? undefined : affected && options.gap === "null-head" ? null : { sha: affected && options.gap === "head-sha" ? "invalid" : number.toString(16).padStart(2, "0").repeat(20) }, base: { ref: affected && options.gap === "required-metadata" ? "gap" : "main", repo: { full_name: repo } },
       } : endpoint.includes("/protection/") ? { contexts: ["CI"], checks: [] }
         : endpoint.includes("/check-runs") ? { total_count: 1, check_runs: [{ name: "CI", head_sha: headNumber.toString(16).padStart(2, "0").repeat(20),
@@ -229,3 +230,26 @@ for (const scope of ["terminal", "excluded", "epic", "children"] as const) test(
   assert.equal(report.closed, 0);
   assert.ok(report.plan.every(row => row.item !== item.id));
 });
+
+
+test("explicit delivery link cannot leave a held row for its closed item after a competing PR fetch fails", async () => {
+  const { report, item } = await selection({ dates: [8, 9], gap: "pr-fetch", tags: [2] });
+  assert.equal(report.closed, 1);
+  assert.equal(item.status, "closed");
+  assert.ok(report.plan.every(row => row.action !== "needs_review"));
+});
+
+
+for (const gap of ["commits-fetch", "invalid-commits", "commits-pagination", "commits-count", "missing-commits-count", "invalid-commits-count"] as const) {
+  for (const other of [true, false]) test(`unreadable commit-only candidates hold attribution: ${gap}, other valid claim=${other}`, async () => {
+    const { report, item } = await selection({ dates: other ? [8, 9] : [8], gap, unlinkedPr: 1 });
+    assert.equal(report.closed, 0);
+    assert.equal(item.status, "in_progress");
+    assert.ok(report.plan.length > 0);
+    for (const row of report.plan) {
+      assert.equal(row.action, "needs_review");
+      assert.deepEqual(row.candidates, other ? [1, 2] : [1]);
+      assert.ok(row.missing_evidence?.some(gap => gap.pr === 1));
+    }
+  });
+}
