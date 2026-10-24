@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Hold ambiguous merged-PR delivery until attribution is verified ([pm-github-closeout-attribution](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-closeout-attribution.toon))
+
 ## 2026.10.24 - 2026-10-24
 
 ### Fixed

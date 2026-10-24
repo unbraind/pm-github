@@ -48,17 +48,41 @@ PR body, including links in follow-up lists (`PM:`), can produce `not_delivery`
 rows for otherwise eligible items with the reason "Mentioned, not delivered".
 Tracker PR URL metadata with no body reference or declaration produces no row.
 
-When several merged PRs declare delivery, closeout selects the latest merge with
-complete merge facts and passing head checks. Equal merge times use the higher
-PR number. Other qualifying claims receive `duplicate_selection`; mention-only
-PRs retain `not_delivery`. All completion fields and the appended close event use
-the selected PR's merge time, merge SHA, head SHA and check evidence.
+A merged PR is a delivery candidate only when it claims the item through an explicit
+`delivery-pr:` tag, a closing declaration, or a commit claim naming the item.
+A fully inspected mention-only or link-only PR is context: it remains listed as
+`skip` / `not_delivery`, never enters the candidate set, and its merge/check gaps
+cannot hold another delivery. Unreadable PR or commit evidence remains unresolved
+because it may hide a claim; a known candidate's incomplete evidence still holds.
+
+Closeout never breaks a delivery tie by PR number or merge order. Prefer one explicit
+item tag linking the delivery PR, for example:
+
+```sh
+pm update pm-x --add-tags delivery-pr:https://github.com/example/project/pull/19
+```
+
+The tagged PR must be in the selected PR set and pass the merge and head-check gates.
+Ordinary `pr_url` metadata remains contextual. Without an explicit tag, exactly one
+linked merged PR must declare the item in its description or commit messages and
+merge strictly after the last acceptance-criteria edit in the item's SDK history.
+Creation is the cutoff when no later criteria edit exists; comments and unrelated
+updates do not move it. Missing or unverifiable history cannot establish chronology.
+Unreadable commits on an otherwise qualifying mention also hold selection: they may hide another claim. A failed check on the unique PR never permits fallback to an earlier delivery.
+
+Unresolved attribution produces `needs_review` rows listing every linked candidate
+PR number, leaving the item and its history unchanged. Multiple or unmatched explicit
+tags also require review. The reusable workflow includes these rows and candidates
+in the closeout PR body. An all-held run proposes only the privacy-gated
+`closeout-review.json` report in the tracker, so it can still open a review PR.
+All completion fields and the appended close event use the selected PR's merge
+time, merge SHA, head SHA and check evidence.
 
 **A mention is not delivery.** PR bodies routinely link follow-ups, epics and
 related work for context, so a link alone never closes an item. An item is
 closed only when:
 
-- its delivery is explicitly declared; a canonical link may be preceded on the same
+- its delivery is selected by an explicit item tag or a unique claim after the last criteria edit; a canonical link may be preceded on the same
   line by a GitHub-style closing keyword: `Closes`, `Fixes`, `Resolves` or
   `Delivers` (and their tense forms), for example `- Closes [pm-x](…/pm-x.toon)`;
 - it is not an `Epic`; epics close when their children are done;

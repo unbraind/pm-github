@@ -17,7 +17,7 @@ const cli = join(import.meta.dirname, "../node_modules/.bin/pm");
 const repo = "fixture/project";
 const head = "a".repeat(40);
 const merge = "b".repeat(40);
-const mergedAt = "2026-10-13T12:30:00Z";
+const mergedAt = "2099-10-13T12:30:00Z";
 const bareLink = (id: string, repository = repo) => `https://github.com/${repository}/blob/main/.agents/pm/tasks/${id}.toon`;
 
 /** Explicit delivery declarations used by all positive closeout fixtures. */
@@ -25,7 +25,7 @@ const link = (id: string, repository = repo) => `Closes ${bareLink(id, repositor
 
 /** Complete synthetic merged PR; prose is never trusted as closure evidence. */
 function pull(body: string | null, overrides: Record<string, unknown> = {}) {
-  return { number: 42, body, merged: true, merged_at: mergedAt, merge_commit_sha: merge,
+  return { number: 42, body, merged: true, commits: 0, merged_at: mergedAt, merge_commit_sha: merge,
     html_url: `https://github.com/${repo}/pull/42`, head: { sha: head }, base: { ref: "main", repo: { full_name: repo } }, ...overrides };
 }
 
@@ -42,7 +42,8 @@ function fixture(body: string | null, override?: MockGithubHandler): MockGithubH
       if (response.writableEnded) return;
     }
     const url = request.url!;
-    if (url.includes("/pulls/")) jsonResponse(response, 200, pull(body, { number: Number(url.split("/").at(-1)), html_url: `https://github.com/${repo}/pull/${url.split("/").at(-1)}` }));
+    if (url.includes("/commits?")) jsonResponse(response, 200, []);
+    else if (url.includes("/pulls/")) jsonResponse(response, 200, pull(body, { number: Number(url.split("/").at(-1)), html_url: `https://github.com/${repo}/pull/${url.split("/").at(-1)}` }));
     else if (url.includes("/rules/branches/")) jsonResponse(response, 200, []);
     else if (url.includes("/protection/")) jsonResponse(response, 200, { contexts: ["CI"], checks: [{ context: "CI", app_id: 7 }] });
     else if (url.includes("/check-runs")) jsonResponse(response, 200, { total_count: 1, check_runs: [run()] });
@@ -142,7 +143,7 @@ test("apply persists only exact GitHub reason facts; repeated selection writes z
     assert.equal(item.status, "closed");
     assert.equal(item.close_reason, JSON.stringify({ pr: 42, url: `https://github.com/${repo}/pull/42`, merge_commit_sha: merge,
       head_sha: head, merged_at: mergedAt, checks: ["CI"] }));
-    assert.equal(item.completed_at, "2026-10-13T12:30:00.000Z");
+    assert.equal(item.completed_at, "2099-10-13T12:30:00.000Z");
     assert.equal(item.resolution, `Delivered by https://github.com/${repo}/pull/42 (merge ${merge.slice(0, 12)}, head ${head.slice(0, 12)})`);
     assert.equal(item.expected_result, "Verified delivery");
     assert.equal(item.actual_result, `Merged at ${mergedAt}; required checks satisfied; successful head checks: CI`);
@@ -202,7 +203,7 @@ test("apply continues after lock and policy refusals and counts only successful 
       const result = await closeout(root, { pr: "42", apply: true });
       assert.equal(result.closed, 2);
       assert.equal(result.failed, 2);
-      assert.deepEqual(result.plan.map(row => row.action), ["skip", "close", "skip", "close"]);
+      assert.deepEqual(result.plan.map(row => row.action), ["needs_review", "close", "needs_review", "close"]);
       assert.equal(result.plan[0]!.reason, "SDK close refused: lock_conflict.");
       assert.match(result.plan[2]!.reason, /workflow_policy/);
       assert.ok(!JSON.stringify(result).includes("private-lock-owner") && !JSON.stringify(result).includes("Private policy") && !JSON.stringify(result).includes(root));
@@ -231,21 +232,21 @@ test("public apply reports partial results as CommandError exit 1 after remainin
         const report = JSON.parse((error as Error).message) as { closed: number; failed: number; plan: { action: string; reason: string }[] };
         assert.equal(report.closed, 1);
         assert.equal(report.failed, 1);
-        assert.deepEqual(report.plan.map(row => row.action), ["skip", "close"]);
+        assert.deepEqual(report.plan.map(row => row.action), ["needs_review", "close"]);
         assert.equal(report.plan[0]!.reason, "SDK close refused: lock_conflict.");
         return true;
       });
       assert.equal((await get(ids[1]!, {}, { pmRoot: root, noExtensions: true })).item.status, "closed");
-      assert.equal(server.requests.filter(request => request.url.includes("/pulls/")).length, 1);
+      assert.equal(server.requests.filter(request => /\/pulls\/\d+$/.test(request.url)).length, 1);
     }));
   } finally { await unlock(); }
 }));
 
-test("equal merge times select the higher PR number before writes", async () => tracker(async (root, ids) => {
+test("equal merge times require review before writes", async () => tracker(async (root, ids) => {
   await withMockGithub(fixture(link(ids[0]!)), async () => {
     const report = await closeout(root, { pr: ["43", "42"], apply: true });
-    assert.equal(report.closed, 1);
-    assert.deepEqual(report.plan.map(row => [row.pr, row.action, row.code]), [[42, "skip", "duplicate_selection"], [43, "close", "head_checks_passed"]]);
+    assert.equal(report.closed, 0);
+    assert.deepEqual(report.plan.map(row => [row.pr, row.action, row.code]), [[42, "needs_review", "needs_review"], [43, "needs_review", "needs_review"]]);
   });
 }));
 
@@ -272,14 +273,14 @@ test("legacy required statuses use newest context and cannot bypass a failed run
       if (request.url!.includes("/statuses")) jsonResponse(response, 200, [{ context: "legacy", state }, { context: "legacy", state: "failure" }]);
     }), async () => {
       const report = await closeout(root);
-      assert.equal(report.plan[0]!.action, state === "success" ? "close" : "skip");
+      assert.equal(report.plan[0]!.action, state === "success" ? "close" : "needs_review");
       if (state === "success") assert.deepEqual(report.checks[0]!.passed, ["CI", "legacy"]);
     });
   }
   await withMockGithub(fixture(link(ids[0]!), (request, response) => {
     if (request.url!.includes("/protection/")) jsonResponse(response, 200, { contexts: ["CI"], checks: [{ context: "CI", app_id: -1 }] });
     if (request.url!.includes("/statuses")) jsonResponse(response, 200, [{ context: "CI", state: "failure" }]);
-  }), async () => assert.equal((await closeout(root)).plan[0]!.action, "skip"));
+  }), async () => assert.equal((await closeout(root)).plan[0]!.action, "needs_review"));
 }));
 
 for (const protection of [403, 404, "empty"] as const) {
@@ -292,8 +293,8 @@ for (const protection of [403, 404, "empty"] as const) {
       }), async () => {
         const report = await closeout(root);
         assert.equal(report.checks[0]!.rule, protection === "empty" ? "fallback" : "unavailable");
-        assert.equal(report.plan[0]!.action, protection !== "empty" || conclusion === "failure" || conclusion === null ? "skip" : "close");
-        assert.equal(report.plan[0]!.code, protection !== "empty" ? "required_checks_unverified" : conclusion === "failure" || conclusion === null ? "head_checks_failed" : "head_checks_passed");
+        assert.equal(report.plan[0]!.action, protection !== "empty" || conclusion === "failure" || conclusion === null ? "needs_review" : "close");
+        assert.equal(report.plan[0]!.code, protection !== "empty" || conclusion === "failure" || conclusion === null ? "needs_review" : "head_checks_passed");
         assert.equal(snapshot(root), before);
       });
     }
@@ -323,19 +324,24 @@ for (const [name, data] of Object.entries({ noRuns: { total_count: 0, check_runs
       const before = snapshot(root);
       const report = await closeout(root, { pr: "42", apply: true });
       assert.equal(report.closed, 0);
-      assert.equal(report.plan[0]!.action, "skip");
+      assert.equal(report.plan[0]!.action, "needs_review");
       assert.equal(snapshot(root), before);
     });
   }));
 }
 
-test("unmerged PRs and incomplete merge facts skip; null body contributes no references", async () => tracker(async (root, ids) => {
+test("confirmed unmerged PRs are routine skips and incomplete merge facts hold; null body contributes no references", async () => tracker(async (root, ids) => {
   for (const changes of [{ merged: false }, { merged_at: null }, { merge_commit_sha: null }, { merge_commit_sha: "bad" }, { head: { sha: "bad" } }]) {
     await withMockGithub(fixture(link(ids[0]!), (request, response) => {
       if (request.url!.includes("/pulls/")) jsonResponse(response, 200, pull(link(ids[0]!), changes));
     }), async server => {
-      assert.equal((await closeout(root, { pr: "42", apply: true })).closed, 0);
-      assert.equal(server.requests.length, 1);
+      const report = await closeout(root, { pr: "42", apply: true });
+      assert.equal(report.closed, 0);
+      if ("merged" in changes && changes.merged === false) {
+        assert.equal(report.plan[0]!.code, "not_merged");
+        assert.deepEqual(compactCloseoutReport(report).skipped, { not_merged: 1 });
+      }
+      assert.equal(server.requests.filter(request => !request.url.includes("/commits?")).length, 1);
     });
   }
   await withMockGithub(fixture(null), async () => assert.deepEqual((await closeout(root)).plan, []));
@@ -343,15 +349,16 @@ test("unmerged PRs and incomplete merge facts skip; null body contributes no ref
 
 test("since drains every page and uses inclusive merge time rather than update time", async () => tracker(async (root, ids) => {
   await withMockGithub(fixture(link(ids[0]!), (request, response, _body, base) => {
+    if (request.url!.endsWith("/pulls/40")) jsonResponse(response, 200, pull(link(ids[0]!), { number: 40, html_url: `https://github.com/${repo}/pull/40`, merged: false }));
     if (request.url!.includes("/pulls?")) {
       const page = new URL(request.url!, base).searchParams.get("page");
       jsonResponse(response, 200, page === "2" ? [{ number: 42, merged_at: mergedAt }] : [
-        { number: 40, merged_at: null }, { number: 41, merged_at: "2026-10-12T00:00:00Z" }],
+        { number: 40, merged_at: null }, { number: 41, merged_at: "2099-10-12T00:00:00Z" }],
       page === "2" ? {} : { Link: nextLinkHeader(base, "/repos/fixture/project/pulls?state=closed&page=2") });
     }
   }), async server => {
     const report = await closeout(root, { since: mergedAt });
-    assert.equal(report.plan[0]!.pr, 42);
+    assert.equal(report.plan.find(row => row.action === "close")!.pr, 42);
     assert.equal(server.requests.filter(request => request.url.includes("/pulls?")).length, 2);
   });
 }));
@@ -371,8 +378,8 @@ test("head check and status pagination retains all required evidence", async () 
 test("invalid selectors fail before HTTP or writes", async () => tracker(async (root) => {
   await withMockGithub(fixture(null), async server => {
     for (const options of [{}, { pr: [] }, { pr: false }, { pr: "" }, { pr: ["42", 43] }, { pr: "0" }, { pr: "1.2" }, { pr: "9007199254740992" },
-      { pr: "42", since: "2026-10-01" }, { since: "yesterday" }, { since: "2026-02-30" }, { since: "2026-10-01T12:00:00" },
-      { since: "2026-10-01T99:00:00Z" }, { since: false }, { since: "" }, { pr: "42", skip: [] }, { pr: "42", skip: true }, { pr: "42", "required-checks": ["CI", 42] }, { pr: "42", "required-checks": false }]) {
+      { pr: "42", since: "2099-10-01" }, { since: "yesterday" }, { since: "2099-02-30" }, { since: "2099-10-01T12:00:00" },
+      { since: "2099-10-01T99:00:00Z" }, { since: false }, { since: "" }, { pr: "42", skip: [] }, { pr: "42", skip: true }, { pr: "42", "required-checks": ["CI", 42] }, { pr: "42", "required-checks": false }]) {
       await assert.rejects(() => closeout(root, options), CloseoutUsageError);
     }
     for (const repository of [undefined, "invalid", "bad/repo/name", "./repo", "../repo", "fixture/.", "fixture/.."]) await assert.rejects(() => runCloseout(root, repository, { pr: "42" }, api()), CloseoutUsageError);
@@ -446,8 +453,9 @@ test("since validates selected numbers and permits an empty selection", async ()
     await withMockGithub(fixture(null, (request, response) => {
       if (request.url!.includes("/pulls?")) jsonResponse(response, 200, selected);
     }), async () => {
-      if (selected.length === 0) assert.deepEqual((await closeout(root, { since: "2026-10-13" })).plan, []);
-      else await assert.rejects(() => closeout(root, { since: "2026-10-13" }));
+      if (selected.length === 0) assert.deepEqual((await closeout(root, { since: "2099-10-13" })).plan, []);
+      else if (selected[0]?.number === 0) await assert.rejects(() => closeout(root, { since: "2099-10-13" }));
+      else assert.deepEqual((await closeout(root, { since: "2099-10-13" })).plan, []);
     });
   }
 }));
@@ -459,8 +467,8 @@ test("public command registration reuses repo resolution and shared transport", 
     assert.equal((result.result as { plan: { action: string }[] }).plan[0]!.action, "close");
     const compact = await harness.runCommand({ command: "github closeout", pmRoot: root,
       global: { json: false }, options: { pr: ["42", "43", "44"] } });
-    assert.deepEqual((compact.result as { plan: { pr: number; action: string }[] }).plan.map(row => [row.pr, row.action]), [[44, "close"]]);
-    assert.deepEqual((compact.result as { skipped: object }).skipped, { duplicate_selection: 2 });
+    assert.deepEqual((compact.result as { plan: { pr: number; action: string }[] }).plan.map(row => [row.pr, row.action]), [[42, "needs_review"], [43, "needs_review"], [44, "needs_review"]]);
+    assert.deepEqual((compact.result as { skipped: object }).skipped, {});
     const full = await harness.runCommand({ command: "github closeout", pmRoot: root,
       global: { json: false }, options: { pr: ["42", "43", "44"], full: true } });
     assert.equal((full.result as { plan: object[] }).plan.length, 3);
@@ -474,14 +482,14 @@ test("public command registration reuses repo resolution and shared transport", 
       (error: unknown) => (error as { exitCode?: number }).exitCode === 2 && /positive pull-request numbers/.test((error as Error).message));
     await assert.rejects(harness.runCommand({ command: "github closeout", pmRoot: root, options: { pr: ["42"] } }),
       (error: unknown) => (error as { exitCode?: number }).exitCode === 1 && /Invalid GitHub evidence object/.test((error as Error).message));
-    assert.equal(server.requests.filter(request => request.url.includes("/pulls/")).length, 1);
+    assert.equal(server.requests.filter(request => /\/pulls\/\d+$/.test(request.url)).length, 1);
   }));
 }));
 
 test("since stops paging once a row was last updated before the cutoff", async () => tracker(async (root, ids) => {
   await withMockGithub(fixture(link(ids[0]!), (request, response, _body, base) => {
     if (request.url!.includes("/pulls?")) {
-      jsonResponse(response, 200, [{ number: 42, merged_at: mergedAt, updated_at: mergedAt }, { number: 41, merged_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:00:00Z" }],
+      jsonResponse(response, 200, [{ number: 42, merged_at: mergedAt, updated_at: mergedAt }, { number: 41, merged_at: "2099-10-01T00:00:00Z", updated_at: "2099-10-01T00:00:00Z" }],
         { Link: nextLinkHeader(base, "/repos/fixture/project/pulls?state=closed&page=2") });
     }
   }), async server => {
@@ -492,6 +500,7 @@ test("since stops paging once a row was last updated before the cutoff", async (
 }));
 
 test("packed CLI preserves repeatable selectors, TOON/JSON shape and no-op apply", async () => tracker(async (root, ids) => {
+  for (const id of ids) await update(id, { tags: `delivery-pr:https://github.com/${repo}/pull/43` }, { pmRoot: root, noExtensions: true });
   const packageRoot = join(import.meta.dirname, "..");
   const packed = await boundedCli("npm", ["pack", "--ignore-scripts", "--foreground-scripts=false", "--json", "--pack-destination", root], packageRoot,
     { ...process.env, PM_PATH: join(packageRoot, ".agents/pm") });
@@ -541,7 +550,7 @@ test("effective ruleset checks supplement classic required contexts", async () =
         if (request.url!.includes("/rules/branches/")) jsonResponse(response, 200, [
           { type: "deletion" }, { type: "required_status_checks", parameters: { required_status_checks: [{ context: "ruleset", integration_id: app }] } }]);
         if (request.url!.includes("/check-runs")) jsonResponse(response, 200, { total_count: 2, check_runs: [run(), run({ name: "ruleset", conclusion: state })] });
-      }), async () => assert.equal((await closeout(root)).plan[0]!.action, state === "success" ? "close" : "skip"));
+      }), async () => assert.equal((await closeout(root)).plan[0]!.action, state === "success" ? "close" : "needs_review"));
     }
   }
 }));
@@ -574,7 +583,7 @@ test("unreadable effective rules preserve known requirements without hiding auth
     }), async () => {
       const report = await closeout(root);
       assert.equal(report.checks[0]!.rule, "unavailable");
-      assert.equal(report.plan[0]!.action, "skip");
+      assert.equal(report.plan[0]!.action, "needs_review");
     });
   }
 }));
@@ -582,7 +591,7 @@ test("unreadable effective rules preserve known requirements without hiding auth
 test("repository resolution accepts valid dot, underscore and hyphen repository names", async () => tracker(async (root, ids) => {
   for (const repository of ["fixture/.github", "fixture/_repo", "fixture/-repo"]) {
     await withMockGithub(fixture(link(ids[0]!, repository), (request, response) => {
-      if (request.url!.includes("/pulls/")) jsonResponse(response, 200, pull(link(ids[0]!, repository), {
+      if (/\/pulls\/42$/.test(request.url!)) jsonResponse(response, 200, pull(link(ids[0]!, repository), {
         html_url: `https://github.com/${repository}/pull/42`, base: { ref: "main", repo: { full_name: repository } },
       }));
     }), async () => {
@@ -613,7 +622,7 @@ test("unreadable supplemental rules never relax a known required check to neutra
     await withMockGithub(fixture(link(ids[0]!), (request, response) => {
       if (request.url!.includes("/rules/branches/")) jsonResponse(response, status, {});
       if (request.url!.includes("/check-runs")) jsonResponse(response, 200, { total_count: 1, check_runs: [run({ conclusion: "neutral" })] });
-    }), async () => assert.equal((await closeout(root)).plan[0]!.action, "skip"));
+    }), async () => assert.equal((await closeout(root)).plan[0]!.action, "needs_review"));
   }
 }));
 
@@ -625,7 +634,7 @@ test("unauthorized classic protection cannot invoke the permissive fallback", as
     const report = await closeout(root, { pr: "42", apply: true });
     assert.equal(report.closed, 0);
     assert.equal(report.checks[0]!.rule, "unavailable");
-    assert.equal(report.plan[0]!.action, "skip");
+    assert.equal(report.plan[0]!.action, "needs_review");
     assert.equal(snapshot(root), before);
     assert.ok(!JSON.stringify(report).includes("private error text"));
   });
@@ -642,7 +651,7 @@ test("declared policy preserves readable ruleset requirements when classic prote
     }), async () => {
       const report = await closeout(root, { pr: "42", "required-checks": "CI" });
       assert.equal(report.checks[0]!.rule, "declared");
-      assert.equal(report.plan[0]!.action, conclusion === "success" ? "close" : "skip");
+      assert.equal(report.plan[0]!.action, conclusion === "success" ? "close" : "needs_review");
     });
   }
 }));
@@ -655,7 +664,7 @@ test("unreadable protection sources refuse without hiding invalid authorization"
     }), async () => {
       const report = await closeout(root);
       assert.equal(report.checks[0]!.rule, "unavailable");
-      assert.equal(report.plan[0]!.action, "skip");
+      assert.equal(report.plan[0]!.action, "needs_review");
     });
   }
 }));
@@ -717,7 +726,7 @@ test("successful optional checks are never labelled as required", async () => tr
   });
 }));
 
-test("compact report counts routine skips and retains individual refusals with their head evidence", async () => tracker(async (root, ids) => {
+test("compact report counts routine skips and retains item holds with their head evidence", async () => tracker(async (root, ids) => {
   await update(ids[1]!, { status: "canceled" }, { pmRoot: root, noExtensions: true });
   await withMockGithub(fixture([link(ids[0]!), link(ids[1]!), link(ids[0]!, "other/project")].join("\n"), (request, response) => {
     if (request.url!.includes("/check-runs")) jsonResponse(response, 200, { total_count: 1, check_runs: [run({ conclusion: "failure" })] });
@@ -726,8 +735,10 @@ test("compact report counts routine skips and retains individual refusals with t
     const report = compactCloseoutReport(full);
     assert.deepEqual(report.skipped, { already_terminal: 1, other_repository: 1 });
     assert.equal(report.plan.length, 1);
-    assert.equal(report.plan[0]!.action, "refuse");
-    assert.equal(report.plan[0]!.code, "head_checks_failed");
+    assert.equal(report.plan[0]!.action, "needs_review");
+    assert.deepEqual(report.plan[0]!.candidates, [42]);
+    assert.ok(report.plan[0]!.missing_evidence?.some(gap => gap.code === "head_checks_failed"));
+    assert.equal(report.checks[0]!.code, "head_checks_failed");
     assert.equal(report.checks.length, 1);
     assert.equal(full.plan.length, 3);
   });
@@ -744,7 +755,7 @@ test("declared contexts verify exact names and latest statuses without requiring
     for (const names of ["CI\nLegacy", "CI\nmissing"]) {
       const report = await closeout(root, { pr: "42", apply: true, "required-checks": names });
       assert.equal(report.closed, 0);
-      assert.equal(report.plan[0]!.code, "head_checks_failed");
+      assert.equal(report.checks[0]!.code, "head_checks_failed");
       assert.equal(snapshot(root), before);
     }
     const report = await closeout(root, { pr: "42", apply: true, "required-checks": "  CI\nlegacy\nCI  " });
@@ -764,7 +775,7 @@ test("declared names cannot bypass a readable app binding", async () => tracker(
     const before = snapshot(root);
     const report = await closeout(root, { pr: "42", apply: true, "required-checks": "CI" });
     assert.equal(report.closed, 0);
-    assert.equal(report.plan[0]!.code, "head_checks_failed");
+    assert.equal(report.checks[0]!.code, "head_checks_failed");
     assert.equal(snapshot(root), before);
   });
 }));
@@ -777,12 +788,12 @@ test("newline context arrays preserve literal names and empty declarations fail 
     const before = snapshot(root);
     for (const names of [[], "", " \n\t\r\n ", ["", "\n"]]) {
       const report = await closeout(root, { pr: "42", apply: true, "required-checks": names });
-      assert.equal(report.plan[0]!.code, "required_checks_unverified");
+      assert.equal(report.plan[0]!.code, "needs_review");
       assert.equal(snapshot(root), before);
     }
     // A former space-separated list is one literal name, so observed runs cannot satisfy it.
     const missing = await closeout(root, { pr: "42", apply: true, "required-checks": "test (22) test (26)" });
-    assert.equal(missing.plan[0]!.code, "head_checks_failed");
+    assert.equal(missing.plan[0]!.code, "needs_review");
     assert.equal(snapshot(root), before);
     const report = await closeout(root, { pr: "42", apply: true, requiredChecks: ["  test (22)\n\n", "test (26)\r\n"] });
     assert.equal(report.closed, 1);

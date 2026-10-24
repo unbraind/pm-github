@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import type { ServerResponse } from "node:http";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { create, get, update } from "@unbrained/pm-cli/sdk";
+import { runWithReproducibleProcessEnvironment, create, get, update } from "@unbrained/pm-cli/sdk";
+import type { runCloseout } from "../closeout.ts";
 import { jsonResponse, startMockGithub } from "./helpers/mock-github-server.ts";
 
 const repoRoot = resolve(import.meta.dirname, "..");
@@ -59,9 +61,60 @@ test.before(async () => {
 });
 test.after(() => rmSync(packedRoot, { recursive: true, force: true }));
 
+const claimKinds = ["closing keyword", "delivery tag", "commit claim", "mention-only", "link-only"] as const;
+type ClaimKind = typeof claimKinds[number];
+
+/** One cell in the end-to-end item-decision table; only external evidence is synthetic. */
+interface DecisionCase {
+  selection: "explicit delivery tag" | "single post-criteria claim" | "ambiguous" | "claim kinds";
+  primaryClaim: ClaimKind;
+  competitorClaim: ClaimKind;
+  competitor: "none" | "valid" | "missing merge SHA" | "failed evidence fetch" | "failed checks" | "pagination cut";
+  peer: "none" | "retag mid-run";
+}
+
+/** Serve distinct PR provenance and schedule a real peer SDK retag after the item snapshot. */
+async function decisionEvidence(url: string, res: ServerResponse, cell: DecisionCase, id: string, pmRoot: string, env: NodeJS.ProcessEnv) {
+  const number = Number(/\/pulls\/(\d+)/.exec(url)?.[1]);
+  const headNumber = Number(/\/commits\/([12])/.exec(url)?.[1]);
+  const head = String(headNumber).repeat(40);
+  const at = (day: number) => `2026-10-${String(day).padStart(2, "0")}T00:00:00Z`;
+  if (url.includes("/pulls?")) {
+    jsonResponse(res, 200, (cell.competitor === "none" ? [2] : [2, 1]).map(n => ({ number: n, merged_at: at(n === 2 ? 8 : 4), updated_at: at(8) })));
+  } else if (url.includes("/commits?")) {
+    const kind = number === 2 ? cell.primaryClaim : cell.competitorClaim;
+    jsonResponse(res, 200, kind === "commit claim" ? [{ commit: { message: `PM item: ${id}` } }] : []);
+  }
+  else if (number) {
+    if (number === 1 && cell.competitor === "failed evidence fetch") { jsonResponse(res, 403, {}); return; }
+    if (number === 2 && cell.peer === "retag mid-run" && env.PEER_RETAG_APPLIED !== "true") {
+      env.PEER_RETAG_APPLIED = "true";
+      await update(id, { tags: "delivery-pr:https://github.com/acme/widgets/pull/1", author: "peer" }, { pmRoot, noExtensions: true });
+    }
+    const kind = number === 2 ? cell.primaryClaim : cell.competitorClaim;
+    const link = `https://github.com/acme/widgets/blob/main/.agents/pm/tasks/${id}.toon`;
+    const body = kind === "closing keyword" ? `Closes ${link}` : kind === "mention-only" ? `See ${link}` : kind === "link-only" ? link : "Routine work";
+    jsonResponse(res, 200, { number, body,
+      commits: kind === "commit claim" ? 1 : 0, merged: true, merged_at: at(number === 2 ? 8 : 4),
+      merge_commit_sha: number === 1 && cell.competitor === "missing merge SHA" ? null : (number === 1 ? "a" : "b").repeat(40),
+      html_url: `https://github.com/acme/widgets/pull/${number}`, head: { sha: String(number).repeat(40) }, base: { ref: "trunk", repo: { full_name: "acme/widgets" } } });
+  } else if (url.includes("/protection/")) jsonResponse(res, 200, { contexts: ["CI"], checks: [] });
+  else if (url.includes("/check-runs")) jsonResponse(res, 200, {
+    total_count: headNumber === 1 && cell.competitor === "pagination cut" ? 2 : 1,
+    check_runs: [{ name: "CI", head_sha: head, status: "completed", conclusion: headNumber === 1 && cell.competitor === "failed checks" ? "failure" : "success", app: { id: 7 } }],
+  });
+  else jsonResponse(res, 200, []);
+}
+
+/** The real caller and publication boundary exposed to workflow assertions. */
+interface WorkflowFixture {
+  root: string; base: string; pmRoot: string; id: string; env: NodeJS.ProcessEnv;
+  run: (names: string[], source?: string) => ReturnType<typeof bash>;
+  git: (...args: string[]) => string;
+}
+
 /** A real caller with one eligible item, nested npm dependencies, and a local publication boundary. */
-async function fixture(fn: (f: { root: string; base: string; pmRoot: string; id: string; env: NodeJS.ProcessEnv;
-  run: (names: string[], source?: string) => ReturnType<typeof bash>; git: (...args: string[]) => string }) => Promise<void>) {
+async function fixture(fn: (f: WorkflowFixture) => Promise<void>, cell?: DecisionCase) {
   const base = mkdtempSync(join(tmpdir(), "closeout-caller-"));
   const root = join(base, "caller");
   const remote = join(base, "remote.git");
@@ -76,9 +129,19 @@ async function fixture(fn: (f: { root: string; base: string; pmRoot: string; id:
   command(root, "git", ["init", "--bare", remote], env);
   git("init", "-b", "trunk");
   command(root, cli, ["--pm-path", pmRoot, "init", "fixture"], env);
-  const item = await create({ title: "Verified delivery", type: "Task", author: "fixture", acceptanceCriteria: "Delivery verified" }, { pmRoot, noExtensions: true });
+  const item = await runWithReproducibleProcessEnvironment({ PM_CLOCK: "2026-10-01T00:00:00Z", PM_SEED: "workflow" }, () => create({ title: "Verified delivery", type: "Task", author: "fixture", acceptanceCriteria: "Delivery verified" }, { pmRoot, noExtensions: true }));
   const id = item.item.id;
   await update(id, { status: "in_progress" }, { pmRoot, noExtensions: true });
+  if (cell?.selection === "single post-criteria claim") await runWithReproducibleProcessEnvironment({ PM_CLOCK: "2026-10-07T00:00:00Z", PM_SEED: "table-criteria" }, () =>
+    update(id, { acceptanceCriteria: "Criteria revised between the two merges" }, { pmRoot, noExtensions: true }));
+  if (cell?.selection === "explicit delivery tag") await update(id, { tags: "delivery-pr:https://github.com/acme/widgets/pull/2" }, { pmRoot, noExtensions: true });
+  if (cell?.selection === "claim kinds") {
+    const tags = [cell.primaryClaim === "delivery tag" ? 2 : 0, cell.competitor !== "none" && cell.competitorClaim === "delivery tag" ? 1 : 0]
+      .filter(Boolean).map(n => `delivery-pr:https://github.com/acme/widgets/pull/${n}`);
+    if (tags.length) await update(id, { tags: tags.join(",") }, { pmRoot, noExtensions: true });
+  }
+  // With no competitor, ambiguity means an explicit selector outside the selected set.
+  if (cell?.selection === "ambiguous" && cell.competitor === "none") await update(id, { tags: "delivery-pr:https://github.com/acme/widgets/pull/99" }, { pmRoot, noExtensions: true });
   const project = join(root, "tools/oracle");
   mkdirSync(join(project, "node_modules/@unbrained"), { recursive: true });
   mkdirSync(join(project, "node_modules/.bin"), { recursive: true });
@@ -120,20 +183,29 @@ case "$1 $2" in
   "auth setup-git") ;;
   "pr list")
     if [[ -f "$PR_STATE" ]]; then
-      printf '[{"number":7,"headRepository":{"name":"widgets"},"headRepositoryOwner":{"login":"acme"},"isCrossRepository":false}]'
+      printf '[{"number":7,"headRepository":{"name":"widgets"},"headRepositoryOwner":{"login":"acme"},"isCrossRepository":false,"autoMergeRequest":%s}]' "$(if [[ -f "$AUTO_STATE" ]]; then printf '{}'; else printf null; fi)"
     else printf '[{"number":99,"isCrossRepository":true}]'; fi ;;
   "pr create"|"pr edit")
     [[ "\${PR_DENIED:-false}" != true ]] || exit 1
     touch "$PR_STATE"
+    if [[ -f "$AUTO_STATE" ]]; then touch "$ARMED_EDIT"; fi
     while [[ $# -gt 0 ]]; do
       if [[ "$1" == --body-file ]]; then cp "$2" "$PR_BODY"; break; fi
       shift
     done ;;
-  "pr merge") [[ "\${AUTO_MERGE_DENIED:-false}" != true ]] || exit 1 ;;
+  "pr merge")
+    if [[ "$*" == *--disable-auto* ]]; then
+      [[ "\${DISABLE_DENIED:-false}" != true ]] || exit 1
+      [[ -f "$AUTO_STATE" ]] || exit 1
+      rm -f "$AUTO_STATE"
+    else
+      [[ "\${AUTO_MERGE_DENIED:-false}" != true ]] || exit 1
+      touch "$AUTO_STATE"
+    fi ;;
   "pr view") printf '{"state":"MERGED"}\\n' ;;
   "pr close") rm -f "$PR_STATE" ;;
   "workflow run") [[ "\${DISPATCH_DENIED:-false}" != true ]] || exit 1 ;;
-  "run list") ;;
+  "run list") [[ "\${RUN_LIST_DENIED:-false}" != true ]] || exit 1 ;;
   *) exit 96 ;;
 esac
 `, { mode: 0o755 });
@@ -144,16 +216,21 @@ esac
     EVENT_DEFAULT_BRANCH: "", GITHUB_WORKSPACE: root, NPM_PROJECT_DIR: "tools/oracle", PM_GITHUB_VERSION: version,
     SYNC_BRANCH: branch, POST_CLOSEOUT_SCRIPT: "changelog:full", CI_WORKFLOWS: "ci.yml", RUNNER_TEMP: base,
     GITHUB_ENV: join(base, "job-env"), GITHUB_OUTPUT: join(base, "job-output"), GITHUB_PATH: join(base, "job-path"),
-    PR_STATE: join(base, "pr-state"), PR_BODY: join(base, "pr-body"), RECEIPTS: join(base, "receipts") });
+    AUTO_STATE: join(base, "auto-state"), ARMED_EDIT: join(base, "armed-edit"), PR_STATE: join(base, "pr-state"), PR_BODY: join(base, "pr-body"), RECEIPTS: join(base, "receipts") });
   const server = await startMockGithub((req, res) => {
     const url = req.url!;
+    if (cell) {
+      void decisionEvidence(url, res, cell, id, pmRoot, env).catch((error: Error) => res.destroy(error));
+      return;
+    }
     if (url.includes("/check-runs")) env.HEAD_LOOKUPS = String(Number(env.HEAD_LOOKUPS ?? 0) + 1);
     if (env.PROTECTION_DENIED === "true" && (url.includes("/protection/") || url.includes("/rules/branches/"))) { jsonResponse(res, 403, {}); return; }
     if (env.READ_DENIED === "true" || (env.CHECKS_DENIED === "true" && url.includes("/check-runs"))) { jsonResponse(res, 403, { message: "Resource not accessible by integration" }); return; }
     const sha = "a".repeat(40);
-    if (url.includes("/pulls?")) jsonResponse(res, 200, env.NO_DELIVERY === "true" ? [] : [{ number: 42, merged_at: "2026-10-15T00:00:00Z", updated_at: "2026-10-15T00:00:00Z" }]);
-    else if (url.endsWith("/pulls/42")) jsonResponse(res, 200, { number: 42, body: env.NO_LINKS === "true" ? "Routine maintenance" : `Closes https://github.com/${env.FOREIGN_LINK === "true" ? "other/project" : "acme/widgets"}/blob/main/.agents/pm/tasks/${id}.toon${env.SUMMARY_ROWS === "true" ? `\nhttps://github.com/other/project/blob/main/.agents/pm/tasks/${id}.toon` : ""}${env.SUMMARY_ITEM ? `\nhttps://github.com/acme/widgets/blob/main/.agents/pm/tasks/${env.SUMMARY_ITEM}.toon` : ""}`,
-      merged: true, merged_at: "2026-10-15T00:00:00Z", merge_commit_sha: env.INCOMPLETE_MERGE === "true" ? null : "b".repeat(40), html_url: "https://github.com/acme/widgets/pull/42",
+    if (url.includes("/pulls?")) jsonResponse(res, 200, env.NO_DELIVERY === "true" ? [] : [...(env.AMBIGUOUS === "true" ? [{ number: 43, merged_at: "2026-10-16T00:00:00Z", updated_at: "2026-10-16T00:00:00Z" }] : []), { number: 42, merged_at: env.UNMERGED_COMPETITOR === "true" ? null : "2026-10-15T00:00:00Z", updated_at: "2026-10-15T00:00:00Z" }]);
+    else if (url.includes("/commits?")) jsonResponse(res, 200, []);
+    else if (/\/pulls\/(42|43)$/.test(url)) jsonResponse(res, 200, { number: Number(url.split("/").at(-1)), body: env.NO_LINKS === "true" ? "Routine maintenance" : `Closes https://github.com/${env.FOREIGN_LINK === "true" ? "other/project" : "acme/widgets"}/blob/main/.agents/pm/tasks/${id}.toon${env.SUMMARY_ROWS === "true" ? `\nhttps://github.com/other/project/blob/main/.agents/pm/tasks/${id}.toon` : ""}${env.SUMMARY_ITEM ? `\nhttps://github.com/acme/widgets/blob/main/.agents/pm/tasks/${env.SUMMARY_ITEM}.toon` : ""}`,
+      merged: !(env.UNMERGED_COMPETITOR === "true" && url.endsWith("/42")), commits: 0, merged_at: env.UNMERGED_COMPETITOR === "true" && url.endsWith("/42") ? null : "2026-10-15T00:00:00Z", merge_commit_sha: env.INCOMPLETE_MERGE === "true" ? null : "b".repeat(40), html_url: `https://github.com/acme/widgets/pull/${url.split("/").at(-1)}`,
       head: { sha }, base: { ref: "trunk", repo: { full_name: "acme/widgets" } } });
     else if (url.includes("/protection/")) jsonResponse(res, 200, { contexts: ["CI"], checks: [] });
     else if (url.includes("/rules/branches/")) jsonResponse(res, 200, []);
@@ -165,7 +242,21 @@ esac
     else jsonResponse(res, 404, {});
   });
   Object.assign(env, { PM_GITHUB_API_BASE: server.baseUrl });
-  const run = (names: string[], source = workflow) => bash(names.map(name => `(
+  // Model the workflow's always() cleanup even when an ordinary step exits early.
+  const run = (names: string[], source = workflow) => bash((names.includes("Disarm previous closeout auto-merge")
+    ? ': > "$GITHUB_ENV"\n' : "") + `
+cleanup_landing() {
+  status=$?
+  set -a
+  if [[ -f "$GITHUB_ENV" ]]; then source "$GITHUB_ENV"; fi
+  set +a
+  if [[ "$status" != 0 || "\${CLOSEOUT_AUTOMERGE_ALLOWED:-}" != true ]]; then
+    ( ${shell("Disarm closeout auto-merge on unsuccessful landing", source)} ) || status=1
+  fi
+  exit "$status"
+}
+trap cleanup_landing EXIT
+` + names.map(name => `(
 set -a
 if [[ -f "$GITHUB_ENV" ]]; then source "$GITHUB_ENV"; fi
 set +a
@@ -180,7 +271,7 @@ ${shell(name, source)}
   }
 }
 
-const setup = ["Require caller default branch", "Validate closeout inputs", "Validate npm project directory", "Prepare sync branch from default branch",
+const setup = ["Disarm previous closeout auto-merge", "Require caller default branch", "Validate closeout inputs", "Validate npm project directory", "Prepare sync branch from default branch",
   "Install dependencies", "Resolve sync commit scope", "Require clean setup artifacts", "Install pinned pm-github extension", "Configure PM merge drivers", "Isolate workflow setup artifacts", "Verify gate is available"];
 const finish = ["Close delivered tracker items", "Run caller post-closeout script", "Gate tracker and regenerated changelog", "Verify strict pm health",
   "Validate publication credentials", "Commit gated closeout changes and open review PR", "Dispatch caller CI and report parked runs"];
@@ -275,9 +366,8 @@ test("permission-limited read token fails closed with a clear diagnostic", async
   assert.equal((await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item.status, "in_progress");
   Object.assign(f.env, { READ_DENIED: "false", CHECKS_DENIED: "true" });
   const checks = await f.run(finish);
-  assert.notEqual(checks.code, 0);
-  assert.match(checks.out, /Closeout refused; check token read access/);
-  unpublished(f.git);
+  assert.equal(checks.code, 0, checks.out);
+  assert.match(readFileSync(f.env.PR_BODY!, "utf8"), /missing_evidence/);
   assert.equal((await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item.status, "in_progress");
 }));
 
@@ -342,7 +432,7 @@ test("behavioural revert: removing only the no-op guard opens a PR with zero clo
   const prepared = await f.run(setup);
   assert.equal(prepared.code, 0, prepared.out);
   await update(f.id, { title: "Caller observation without delivery" }, { pmRoot: f.pmRoot, noExtensions: true });
-  const mutant = workflow.replace('if [[ "${CLOSEOUT_CLOSED}" == 0 ]] || git diff --cached --quiet -- "${sync_scope[0]}" "${sync_scope[@]:2}"; then', "if false; then");
+  const mutant = workflow.replace('if [[ "${CLOSEOUT_CLOSED}" == 0 && "${CLOSEOUT_REVIEW:-0}" == 0 ]] || git diff --cached --quiet -- "${sync_scope[0]}" "${sync_scope[@]:2}"; then', "if false; then");
   assert.notEqual(mutant, workflow);
   const result = await f.run(finish, mutant);
   assert.equal(result.code, 0, result.out);
@@ -388,14 +478,14 @@ for (const mode of ["unlinked", "foreign", "terminal", "local", "incomplete", "u
     if (mode.includes("incomplete")) f.env.INCOMPLETE_MERGE = "true";
     if (mode === "terminal") await update(f.id, { status: "canceled" }, { pmRoot: f.pmRoot, noExtensions: true });
     const result = await f.run([...setup, ...finish]);
-    assert.equal(result.code, mode === "local" || mode === "incomplete" ? 1 : 0, result.out);
-    if (mode === "local") assert.match(result.out, /token read access to head checks for linked local tracker items/);
+    assert.equal(result.code, 0, result.out);
+    if (mode === "local") assert.match(readFileSync(f.env.PR_BODY!, "utf8"), /missing_evidence/);
     if (mode === "incomplete") {
-      assert.match(result.out, /incomplete merged-PR metadata blocks a linked local tracker item/);
+      assert.match(readFileSync(f.env.PR_BODY!, "utf8"), /incomplete_merge/);
       assert.equal(f.env.HEAD_LOOKUPS, undefined);
     }
-    unpublished(f.git);
-    assert.equal(existsSync(f.env.PR_STATE!), false);
+    if (mode !== "local" && mode !== "incomplete") unpublished(f.git);
+    assert.equal(existsSync(f.env.PR_STATE!), mode === "local" || mode === "incomplete");
   }));
 }
 
@@ -428,12 +518,12 @@ for (const mode of ["undeclared", "blank", "missing", "neutral", "skipped", "pen
       const item = (await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item;
       assert.match(String(item.actual_result), mode === "metadata" ? /required checks satisfied/ : /caller-declared checks concluded success; repository required-check metadata was unavailable; successful head checks: CI/);
     } else {
-      assert.equal(report.plan[0]!.code, mode === "undeclared" || mode === "blank" ? "required_checks_unverified" : "head_checks_failed");
-      if (mode === "undeclared" || mode === "blank") assert.equal(result.code, 1, result.out);
+      assert.equal(report.plan[0]!.code, "needs_review");
+      assert.equal(result.code, 0, result.out);
       assert.equal(readFileSync(join(f.pmRoot, "tasks", `${f.id}.toon`), "utf8"), before);
-      assert.equal(existsSync(f.env.PR_STATE!), false);
-      unpublished(f.git);
-      assert.doesNotMatch(readFileSync(f.env.RECEIPTS!, "utf8"), /pr (create|edit)|workflow run/);
+      assert.equal(existsSync(f.env.PR_STATE!), true);
+      assert.match(readFileSync(f.env.PR_BODY!, "utf8"), /"action": "needs_review"/);
+      assert.doesNotMatch(readFileSync(f.env.PR_BODY!, "utf8"), /"action": "close"/);
     }
   }));
 }
@@ -458,4 +548,230 @@ for (const [scenario, names, input] of [
     assert.equal((await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item.status, "closed");
     assert.equal(existsSync(join(f.root, "injected")), false);
   }));
+}
+
+
+test("ambiguous deliveries open a review-only PR listing every candidate and leave the item open", async () => fixture(async f => {
+  f.env.AMBIGUOUS = "true";
+  f.env.APP_DEADLINE = String(Math.floor(Date.now() / 1000) + 600);
+  const result = await f.run([...setup, ...finish]);
+  assert.equal(result.code, 0, result.out);
+  assert.equal((await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item.status, "in_progress");
+  const body = readFileSync(f.env.PR_BODY!, "utf8");
+  assert.match(body, /"action": "needs_review"/);
+  assert.match(body, /"candidates": \[\s*42,\s*43\s*\]/);
+  assert.match(body, /closeout-review\.json/);
+  assert.doesNotMatch(readFileSync(f.env.RECEIPTS!, "utf8"), /pr merge .*--auto/);
+  assert.match(result.out, /automatic landing is disabled/);
+  const published = f.git("show", `refs/remotes/origin/${branch}:.agents/pm/closeout-review.json`);
+  assert.deepEqual(JSON.parse(published), { needs_review: [{ item: f.id, action: "needs_review", candidates: [42, 43] }] });
+}));
+
+
+test("earlier armed auto-merge is disabled before a later hold updates the reused PR", async () => fixture(async f => {
+  f.env.APP_DEADLINE = String(Math.floor(Date.now() / 1000) + 600);
+  const first = await f.run([...setup, ...finish]);
+  assert.equal(first.code, 0, first.out);
+  assert.equal(existsSync(f.env.AUTO_STATE!), true);
+  f.env.AMBIGUOUS = "true";
+  const second = await f.run([...setup, ...finish]);
+  assert.equal(second.code, 0, second.out);
+  assert.equal(existsSync(f.env.AUTO_STATE!), false);
+  assert.equal(existsSync(f.env.ARMED_EDIT!), false, "held branch must be disarmed before updating its PR");
+  assert.match(readFileSync(f.env.PR_BODY!, "utf8"), /Automatic merge is disabled because delivery attribution needs_review/);
+  assert.match(readFileSync(f.env.RECEIPTS!, "utf8"), /pr merge 7 -R acme\/widgets --disable-auto/);
+}));
+
+for (const mode of ["guard", "setup", "evidence", "privacy", "no-op", "empty-ci", "dispatch", "maintenance", "disable-denied"]) {
+  test(`previous auto-merge is revoked on workflow exit: ${mode}`, async () => fixture(async f => {
+    f.env.APP_DEADLINE = String(Math.floor(Date.now() / 1000) + 600);
+    const first = await f.run([...setup, ...finish]);
+    assert.equal(first.code, 0, first.out);
+    assert.equal(existsSync(f.env.AUTO_STATE!), true);
+    if (mode === "guard") f.env.RUN_REF = "refs/heads/feature";
+    if (mode === "setup") f.env.NPM_PROJECT_DIR = "../outside";
+    if (mode === "evidence") f.env.READ_DENIED = "true";
+    if (mode === "privacy") f.env.SUMMARY_ITEM = "ghp_" + "A".repeat(36);
+    if (mode === "no-op") f.env.NO_DELIVERY = "true";
+    if (mode === "empty-ci") f.env.CI_WORKFLOWS = "";
+    if (mode === "dispatch") f.env.DISPATCH_DENIED = "true";
+    if (mode === "maintenance") f.env.RUN_LIST_DENIED = "true";
+    if (mode === "disable-denied") f.env.DISABLE_DENIED = "true";
+    const priorBranch = f.git("ls-remote", "origin", `refs/heads/${branch}`);
+    const second = await f.run([...setup, ...finish]);
+    assert.equal(second.code, ["no-op", "empty-ci"].includes(mode) ? 0 : 1, second.out);
+    assert.equal(existsSync(f.env.AUTO_STATE!), mode === "disable-denied");
+    assert.equal(existsSync(f.env.ARMED_EDIT!), false);
+    if (mode === "disable-denied") assert.equal(f.git("ls-remote", "origin", `refs/heads/${branch}`), priorBranch);
+  }));
+}
+
+
+test("confirmed unmerged references cannot block publication of a unique merged delivery", async () => fixture(async f => {
+  f.env.AMBIGUOUS = "true";
+  f.env.UNMERGED_COMPETITOR = "true";
+  const result = await f.run([...setup, ...finish]);
+  assert.equal(result.code, 0, result.out);
+  assert.equal((await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item.status, "closed");
+  const body = readFileSync(f.env.PR_BODY!, "utf8");
+  assert.match(body, /"action": "close"/);
+  assert.doesNotMatch(body, /"action": "needs_review"|"code": "incomplete_merge"/);
+  assert.match(body, /"not_merged": 1/);
+}));
+
+
+/** Reuse immutable input baselines; the workflow resets Git and tracker state before every cell. */
+interface SharedDecisionFixture {
+  fixture: WorkflowFixture;
+  cell: DecisionCase;
+  environment: string;
+  setupFiles: { path: string; contents: Buffer }[];
+  release: () => void;
+  done: Promise<void>;
+}
+const decisionFixtures = new Map<string, Promise<SharedDecisionFixture>>();
+
+/** Retain real SDK/CLI/publication behavior while avoiding redundant fixture creation. */
+async function decisionFixture(cell: DecisionCase): Promise<WorkflowFixture> {
+  // A missing competitor needs its own unresolved-selector baseline for the ambiguous source.
+  const key = `${cell.selection}/${cell.selection === "ambiguous" && cell.competitor === "none"}/${cell.selection === "claim kinds" && cell.primaryClaim === "delivery tag"}/${cell.selection === "claim kinds" && cell.competitor !== "none" && cell.competitorClaim === "delivery tag"}`;
+  let pending = decisionFixtures.get(key);
+  if (!pending) {
+    let release = () => {};
+    const lifetime = new Promise<void>(resolveLifetime => { release = resolveLifetime; });
+    const sharedCell = { ...cell };
+    pending = new Promise<SharedDecisionFixture>((resolveReady, reject) => {
+      const done = fixture(async f => {
+        const prepared = await f.run(setup);
+        assert.equal(prepared.code, 0, prepared.out);
+        const setupFiles = [join(f.pmRoot, "settings.json"), join(f.pmRoot, "history/_workspace.jsonl")]
+          .filter(existsSync).map(path => ({ path, contents: readFileSync(path) }));
+        resolveReady({ fixture: f, cell: sharedCell, release, done,
+          environment: readFileSync(f.env.GITHUB_ENV!, "utf8"), setupFiles });
+        await lifetime;
+      }, sharedCell);
+      void done.catch(reject);
+    });
+    decisionFixtures.set(key, pending);
+  }
+  const shared = await pending;
+  Object.assign(shared.cell, cell);
+  const f = shared.fixture;
+  // Restore the disposable input even when a previous mutation-control cell failed before publication.
+  f.git("reset", "--hard", "trunk");
+  // Restore only workflow-owned setup inputs; publication restores these before committing.
+  for (const file of shared.setupFiles) writeFileSync(file.path, file.contents);
+  writeFileSync(f.env.GITHUB_ENV!, shared.environment);
+  delete f.env.PEER_RETAG_APPLIED;
+  // A prior cell's PR receipt must never count as publication by the current cell.
+  for (const path of [f.env.PR_STATE!, f.env.PR_BODY!]) rmSync(path, { force: true });
+  writeFileSync(f.env.RECEIPTS!, "");
+  return f;
+}
+
+test.after(async () => {
+  for (const pending of decisionFixtures.values()) {
+    const shared = await pending;
+    shared.release();
+    await shared.done;
+  }
+});
+
+
+/** Retain all 36 selection/peer rows and cross both claim dimensions with all six evidence states. */
+const decisionCases: DecisionCase[] = [];
+for (const selection of ["explicit delivery tag", "single post-criteria claim", "ambiguous"] as const) {
+  for (const competitor of ["none", "valid", "missing merge SHA", "failed evidence fetch", "failed checks", "pagination cut"] as const) {
+    for (const peer of ["none", "retag mid-run"] as const) decisionCases.push({ selection, competitor, peer, primaryClaim: selection === "ambiguous" && competitor === "none" ? "mention-only" : "closing keyword", competitorClaim: "closing keyword" });
+  }
+}
+for (const primaryClaim of claimKinds) for (const competitorClaim of claimKinds) {
+  for (const competitor of ["none", "valid", "missing merge SHA", "failed evidence fetch", "failed checks", "pagination cut"] as const) {
+    decisionCases.push({ selection: "claim kinds", competitor, peer: "none", primaryClaim, competitorClaim });
+  }
+}
+
+/** Expected winners are defined from the table inputs, independently of the closeout implementation. */
+function expectedDecision(cell: DecisionCase): { chosen?: number; candidates: number[]; context: number[]; held: boolean } {
+  const { selection, competitor, peer, primaryClaim, competitorClaim } = cell;
+  if (selection !== "claim kinds") {
+    // Preserve the earlier mention-only input with an unmatched selector: it is context, not ambiguity.
+    if (selection === "ambiguous" && competitor === "none") return { candidates: [], context: [2], held: false };
+    const closes = selection !== "ambiguous" && (peer === "retag mid-run" ? selection === "explicit delivery tag" && competitor === "valid"
+      : selection === "explicit delivery tag" || competitor !== "failed evidence fetch");
+    return { chosen: closes ? peer === "retag mid-run" ? 1 : 2 : undefined, candidates: competitor === "none" ? [2] : [1, 2], context: [], held: !closes };
+  }
+  const primary = !["mention-only", "link-only"].includes(primaryClaim);
+  const other = competitor !== "none" && (!["mention-only", "link-only"].includes(competitorClaim) || competitor === "failed evidence fetch");
+  const tags = [primaryClaim === "delivery tag" ? 2 : 0, competitor !== "none" && competitorClaim === "delivery tag" ? 1 : 0].filter(Boolean);
+  const candidates = [...(other ? [1] : []), ...(primary ? [2] : [])];
+  const context = [...(competitor !== "none" && !other ? [1] : []), ...(!primary ? [2] : [])];
+  const selected = tags.length === 1 ? tags[0] : tags.length === 0 && candidates.length === 1 ? candidates[0] : undefined;
+  const chosen = selected === 2 || (selected === 1 && competitor === "valid") ? selected : undefined;
+  return { chosen, candidates, context, held: candidates.length > 0 && chosen === undefined };
+}
+
+for (const cell of decisionCases) {
+  const { selection, competitor, peer, primaryClaim, competitorClaim } = cell;
+  const expected = expectedDecision(cell);
+  test(`item decision end to end: ${selection} / ${competitor} / ${peer} / primary=${primaryClaim} / competitor=${competitorClaim}`, async () => {
+    const f = await decisionFixture(cell);
+    const result = await f.run(["Prepare sync branch from default branch", "Close delivered tracker items", "Commit gated closeout changes and open review PR"]);
+    const report = JSON.parse(readFileSync(join(f.base, "pm-github-closeout.json"), "utf8")) as Awaited<ReturnType<typeof runCloseout>>;
+    const item = (await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item;
+    assert.equal(f.env.PEER_RETAG_APPLIED === "true", peer === "retag mid-run");
+    assert.equal(result.code, 0, result.out);
+    const closes = expected.chosen !== undefined;
+    const publishes = closes || expected.held;
+    assert.equal(existsSync(f.env.PR_STATE!), publishes, "only a close or hold publishes tracker changes");
+    assert.equal(item.status, closes ? "closed" : "in_progress", JSON.stringify(report));
+    assert.equal(report.closed, closes ? 1 : 0);
+    assert.equal(report.failed, 0);
+    const published = publishes ? `refs/remotes/origin/${branch}` : "trunk";
+    const itemPath = `.agents/pm/tasks/${f.id}.toon`;
+    const publishedItem = f.git("show", `${published}:${itemPath}`);
+    const localItem = readFileSync(join(f.root, itemPath), "utf8").trim();
+    if (!publishes && peer === "retag mid-run") {
+      assert.notEqual(publishedItem, localItem, "a peer edit alone stays local without a closeout publication");
+      assert.deepEqual(item.tags, ["delivery-pr:https://github.com/acme/widgets/pull/1"]);
+    } else assert.equal(publishedItem, localItem);
+    const history = f.git("show", `${published}:.agents/pm/history/${f.id}.jsonl`);
+    assert.equal(history.split('"op":"close"').length - 1, closes ? 1 : 0);
+    const body = publishes ? readFileSync(f.env.PR_BODY!, "utf8") : "";
+    assert.deepEqual(report.plan.filter(row => row.code === "not_delivery").map(row => row.pr).sort(), expected.context);
+    for (const row of report.plan.filter(row => row.code === "not_delivery")) {
+      assert.equal(row.action, "skip");
+      assert.equal(row.candidates, undefined);
+      assert.equal(row.missing_evidence, undefined);
+      if (publishes) assert.match(body, new RegExp(`"pr": ${row.pr},\\s*"action": "skip",\\s*"code": "not_delivery"`));
+    }
+    if (closes) {
+      const chosen = expected.chosen!;
+      const provenance = JSON.parse(item.close_reason!) as { pr: number; url: string; head_sha: string; merge_commit_sha: string; merged_at: string; checks: string[] };
+      assert.deepEqual(provenance, { pr: chosen, url: `https://github.com/acme/widgets/pull/${chosen}`, head_sha: String(chosen).repeat(40),
+        merge_commit_sha: (chosen === 1 ? "a" : "b").repeat(40), merged_at: `2026-10-0${chosen === 1 ? 4 : 8}T00:00:00Z`, checks: ["CI"] });
+      assert.equal(item.completed_at, provenance.merged_at.replace("Z", ".000Z"));
+      assert.match(item.resolution!, new RegExp(`pull/${chosen} `));
+      assert.equal(item.expected_result, item.acceptance_criteria);
+      assert.ok(item.actual_result!.includes(provenance.merged_at));
+      assert.deepEqual(report.plan.filter(row => row.code !== "not_delivery").sort((a, b) => a.pr - b.pr).map(row => [row.pr, row.action, row.code]),
+        expected.candidates.map(pr => [pr, pr === chosen ? "close" : "skip", pr === chosen ? "head_checks_passed" : "duplicate_selection"]));
+      assert.match(body, new RegExp(`"pr": ${chosen},\\s*"action": "close"`));
+      assert.doesNotMatch(body, /"action": "needs_review"|"action": "refuse"/);
+      assert.equal(f.git("ls-tree", "--name-only", published, ".agents/pm/closeout-review.json"), "");
+    } else if (expected.held) {
+      const held = report.plan.filter(row => row.code !== "not_delivery").sort((a, b) => a.pr - b.pr);
+      assert.deepEqual(held.map(row => [row.pr, row.action, row.code, row.candidates]),
+        expected.candidates.map(pr => [pr, "needs_review", "needs_review", expected.candidates]));
+      for (const row of held) assert.ok(row.missing_evidence?.every(gap => expected.candidates.includes(gap.pr)) ?? true);
+      const review = JSON.parse(f.git("show", `${published}:.agents/pm/closeout-review.json`)) as { needs_review: { candidates: number[] }[] };
+      assert.deepEqual(review.needs_review.map(row => row.candidates), [expected.candidates]);
+      assert.match(body, /"action": "needs_review"/);
+      assert.doesNotMatch(body, /"action": "close"|"action": "refuse"/);
+    } else {
+      assert.ok(report.plan.every(row => row.action === "skip" && row.code === "not_delivery"));
+      assert.equal(f.git("ls-tree", "--name-only", published, ".agents/pm/closeout-review.json"), "");
+    }
+    if (!closes) assert.doesNotMatch(readFileSync(f.env.RECEIPTS!, "utf8"), /pr merge .*--auto/);
+  });
 }
