@@ -95,9 +95,15 @@ async function decisionEvidence(url: string, res: ServerResponse, cell: Decision
   else jsonResponse(res, 200, []);
 }
 
+/** The real caller and publication boundary exposed to workflow assertions. */
+interface WorkflowFixture {
+  root: string; base: string; pmRoot: string; id: string; env: NodeJS.ProcessEnv;
+  run: (names: string[], source?: string) => ReturnType<typeof bash>;
+  git: (...args: string[]) => string;
+}
+
 /** A real caller with one eligible item, nested npm dependencies, and a local publication boundary. */
-async function fixture(fn: (f: { root: string; base: string; pmRoot: string; id: string; env: NodeJS.ProcessEnv;
-  run: (names: string[], source?: string) => ReturnType<typeof bash>; git: (...args: string[]) => string }) => Promise<void>, cell?: DecisionCase) {
+async function fixture(fn: (f: WorkflowFixture) => Promise<void>, cell?: DecisionCase) {
   const base = mkdtempSync(join(tmpdir(), "closeout-caller-"));
   const root = join(base, "caller");
   const remote = join(base, "remote.git");
@@ -598,11 +604,63 @@ test("confirmed unmerged references cannot block publication of a unique merged 
 }));
 
 
+/** Reuse immutable input baselines; the workflow resets Git and tracker state before every cell. */
+interface SharedDecisionFixture {
+  fixture: WorkflowFixture;
+  cell: DecisionCase;
+  release: () => void;
+  done: Promise<void>;
+}
+const decisionFixtures = new Map<string, Promise<SharedDecisionFixture>>();
+
+/** Retain real SDK/CLI/publication behavior while avoiding redundant fixture creation. */
+async function decisionFixture(cell: DecisionCase): Promise<WorkflowFixture> {
+  // A missing competitor needs its own unresolved-selector baseline for the ambiguous source.
+  const key = `${cell.selection}/${cell.selection === "ambiguous" && cell.competitor === "none"}`;
+  let pending = decisionFixtures.get(key);
+  if (!pending) {
+    let release = () => {};
+    const lifetime = new Promise<void>(resolveLifetime => { release = resolveLifetime; });
+    const sharedCell = { ...cell };
+    pending = new Promise<SharedDecisionFixture>((resolveReady, reject) => {
+      const done = fixture(async f => {
+        resolveReady({ fixture: f, cell: sharedCell, release, done });
+        await lifetime;
+      }, sharedCell);
+      void done.catch(reject);
+    });
+    decisionFixtures.set(key, pending);
+  }
+  const shared = await pending;
+  Object.assign(shared.cell, cell);
+  const f = shared.fixture;
+  // Restore the disposable input even when a previous mutation-control cell failed before publication.
+  f.git("reset", "--hard", "trunk");
+  delete f.env.PEER_RETAG_APPLIED;
+  // A prior cell's PR receipt must never count as publication by the current cell.
+  for (const path of [f.env.PR_STATE!, f.env.PR_BODY!]) rmSync(path, { force: true });
+  writeFileSync(f.env.RECEIPTS!, "");
+  return f;
+}
+
+test.after(async () => {
+  for (const pending of decisionFixtures.values()) {
+    const shared = await pending;
+    shared.release();
+    await shared.done;
+  }
+});
+
+
 for (const selection of ["explicit delivery tag", "single post-criteria claim", "ambiguous"] as const) {
   for (const competitor of ["none", "valid", "missing merge SHA", "failed evidence fetch", "failed checks", "pagination cut"] as const) {
     for (const peer of ["none", "retag mid-run"] as const) {
-      test(`item decision end to end: ${selection} / ${competitor} / ${peer}`, async () => fixture(async f => {
-        const result = await f.run([...setup, ...finish]);
+      test(`item decision end to end: ${selection} / ${competitor} / ${peer}`, async () => {
+        const f = await decisionFixture({ selection, competitor, peer });
+        // The unchanged workflow prepares a fresh tracker from trunk for each cell.
+        // Other workflow controls exercise changelog/health/dispatch; this table runs
+        // the real closeout command, publication gate, privacy scans and leased push.
+        const result = await f.run([...setup, "Close delivered tracker items", "Commit gated closeout changes and open review PR"]);
         const report = JSON.parse(readFileSync(join(f.base, "pm-github-closeout.json"), "utf8")) as Awaited<ReturnType<typeof runCloseout>>;
         const item = (await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item;
         assert.equal(f.env.PEER_RETAG_APPLIED === "true", peer === "retag mid-run");
@@ -645,7 +703,7 @@ for (const selection of ["explicit delivery tag", "single post-criteria claim", 
           assert.doesNotMatch(body, /"action": "close"|"action": "refuse"/);
           assert.doesNotMatch(readFileSync(f.env.RECEIPTS!, "utf8"), /pr merge .*--auto/);
         }
-      }, { selection, competitor, peer }));
+      });
     }
   }
 }
