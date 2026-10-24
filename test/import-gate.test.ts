@@ -677,8 +677,8 @@ test("the caller default branch guard is first and preserves the remaining step 
   assert.deepEqual(steps.map(step => step.split("\n")[0]), [
     "Require caller default branch", "Resolve pm-github release version", "Validate sync inputs", "Checkout caller default branch",
     "Validate npm project directory", "Setup Node.js", "Prepare sync branch from default branch",
-    "Install dependencies", "Resolve sync commit scope", "Install pinned pm-github extension",
-    "Configure PM merge drivers", "Verify gate is available", "Validate GitHub access",
+    "Install dependencies", "Resolve sync commit scope", "Require clean setup artifacts", "Install pinned pm-github extension",
+    "Configure PM merge drivers", "Isolate workflow setup artifacts", "Verify gate is available", "Validate GitHub access",
     "Revalidate GitHub blockers (report only)", "Preview GitHub to pm plan",
     "Gated GitHub to pm import", "Verify repeat import is a no-op", "Run caller post-import script",
     "Gate tracker and regenerated changelog", "Verify strict pm health",
@@ -841,7 +841,12 @@ function workflowShell(names: readonly string[]): string {
     const next = workflow.indexOf("\n      - name:", start + 1);
     const step = workflow.slice(start, next < 0 ? undefined : next);
     const block = /        run: \|\n([\s\S]*)/.exec(step);
-    if (block) return block[1]!.split("\n").filter(line => line.startsWith("          ")).map(line => line.slice(10)).join("\n");
+    if (block) {
+      const body = block[1]!.split("\n").filter(line => line.startsWith("          ")).map(line => line.slice(10)).join("\n");
+      // Actions runs each step in its own shell; the health cleanup trap must
+      // finish before the subsequent publication step, including on failure.
+      return name === "Verify strict pm health" ? `(\n${body}\n)` : body;
+    }
     const single = /        run: (.+)/.exec(step);
     assert.ok(single, `${name} needs executable shell`);
     return single[1]!;
@@ -875,7 +880,7 @@ function packWorkflowCandidate(packageRoot: string, destination: string, env: No
 }
 
 /** Install the candidate and create a local gh PR receipt boundary, never a network writer. */
-async function prepareWorkflowFixture(root: string, base: string): Promise<NodeJS.ProcessEnv> {
+async function prepareWorkflowFixture(root: string, base: string, inspectSetup?: () => void): Promise<NodeJS.ProcessEnv> {
   if (!fs.existsSync(path.join(root, "package.json"))) fs.writeFileSync(path.join(root, "package.json"), "{}\n");
   // Match caller dependency/runtime ignores before installing the extension;
   // fixture setup itself must not masquerade as a post-import change.
@@ -950,23 +955,148 @@ esac
     PM_GLOBAL_PATH: fixtureGlobalRoot, PM_TELEMETRY_INLINE_FLUSH: "1", PM_PATH: path.join(root, ".agents", "pm"), REPOSITORY: "acme/widgets", CALLING_REPOSITORY: "acme/widgets",
     NPM_PROJECT_PATH: root, GITHUB_WORKSPACE: root,
     POST_IMPORT_SCRIPT: "changelog:full", CI_WORKFLOWS: "ci.yml", SYNC_PR_NUMBER: "1",
-    PM_GITHUB_VERSION: "2026.10.4", DEFAULT_BRANCH: "main", SYNC_BRANCH, SYNC_LEASE: "", RUNNER_TEMP: base,
+    PM_SYNC_TRACKER: ".agents/pm", PM_GITHUB_VERSION: "2026.10.4", DEFAULT_BRANCH: "main", SYNC_BRANCH, SYNC_LEASE: "", RUNNER_TEMP: base,
     GITHUB_ENV: path.join(base, "job-env"), REVIEW_RECEIPT: path.join(base, "review.md"), REVIEW_ACTIONS: path.join(base, "review-actions") };
   const packageRoot = path.resolve(import.meta.dirname, "..");
   const packed = await packWorkflowCandidate(packageRoot, base, env);
   assert.equal(packed.code, 0, packed.stderr);
   const [{ filename }] = JSON.parse(packed.stdout) as [{ filename: string }];
   const archive = path.join(base, filename).replace(/'/g, "'\\''");
+  const clean = await executeWorkflow(workflowShell(["Resolve sync commit scope", "Require clean setup artifacts"]), root, env);
+  assert.equal(clean.code, 0, clean.stdout + clean.stderr);
   const installed = await executeWorkflow(`./node_modules/.bin/pm package install '${archive}' --project`, root, env);
   assert.equal(installed.code, 0, installed.stderr);
-  const restored = await executeWorkflow(workflowShell(["Configure PM merge drivers", "Verify gate is available"]), root, env);
-  assert.equal(restored.code, 0, restored.stderr);
+  const configured = await executeWorkflow(workflowShell(["Configure PM merge drivers"]), root, env);
+  assert.equal(configured.code, 0, configured.stderr);
+  inspectSetup?.();
+  const recorded = await executeWorkflow(workflowShell(["Isolate workflow setup artifacts", "Verify gate is available"]), root, env);
+  assert.equal(recorded.code, 0, recorded.stdout + recorded.stderr);
   return env;
 }
 
 const WORKFLOW_IMPORT_SEQUENCE = ["Resolve sync commit scope", "Validate GitHub access", "Revalidate GitHub blockers (report only)", "Preview GitHub to pm plan", "Gated GitHub to pm import",
   "Verify repeat import is a no-op", "Run caller post-import script", "Gate tracker and regenerated changelog",
   "Verify strict pm health", "Validate publication credentials", "Commit gated sync changes and open review PR", "Dispatch caller CI and report parked runs"] as const;
+
+for (const attributes of ["missing", "outdated"] as const) {
+  for (const registry of ["tracked", "untracked"] as const) {
+    test(`setup artifacts never enter tracker publication: ${attributes} attributes, ${registry} registry`, async () => {
+      const { root, base, bare, git } = initSyncRepo();
+      const registryPath = ".agents/pm/extensions/.managed-extensions.json";
+      const originalAttributes = "# Caller-owned attributes\n*.txt text eol=lf\n";
+      const originalRegistry = '{"version":1,"updated_at":"2026-10-01T00:00:00Z","entries":[]}\n';
+      try {
+        if (attributes === "missing") assert.equal(git(["rm", "--", ".gitattributes"]).status, 0);
+        else {
+          fs.writeFileSync(path.join(root, ".gitattributes"), originalAttributes);
+          assert.equal(git(["add", "--", ".gitattributes"]).status, 0);
+        }
+        if (registry === "tracked") {
+          fs.mkdirSync(path.dirname(path.join(root, registryPath)), { recursive: true });
+          fs.writeFileSync(path.join(root, registryPath), originalRegistry);
+          assert.equal(git(["add", "-f", "--", registryPath]).status, 0);
+        }
+        assert.equal(git(["commit", "-qm", "Caller setup baseline"]).status, 0);
+        const env = await prepareWorkflowFixture(root, base, () => {
+          assert.notEqual(fs.readFileSync(path.join(root, ".gitattributes"), "utf8"), originalAttributes,
+            "the real attributes setup must produce a change");
+          assert.notEqual(fs.readFileSync(path.join(root, registryPath), "utf8"), originalRegistry,
+            "the real extension installation must write its registry");
+        });
+        assert.equal(git(["switch", "-c", SYNC_BRANCH]).status, 0);
+        const handle = githubHandler([issue(1, "Public setup regression", "Reviewed public body.")]);
+        await withMockGithub((req, res, url, server) => {
+          if (req.url === "/repos/acme/widgets") jsonResponse(res, 200, { private: false });
+          else handle(req, res, url, server);
+        }, async () => {
+          const runEnv = { ...env, PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE };
+          const split = WORKFLOW_IMPORT_SEQUENCE.indexOf("Verify repeat import is a no-op");
+          const first = await executeWorkflow(workflowShell(WORKFLOW_IMPORT_SEQUENCE.slice(0, split)), root, runEnv);
+          assert.equal(first.code, 0, first.stdout + first.stderr);
+          const items = fs.readdirSync(path.join(root, ".agents/pm/issues")).filter(file => file.endsWith(".toon"));
+          assert.equal(items.length, 1, "the first import must be nonempty");
+          const expected = [`.agents/pm/issues/${items[0]}`, `.agents/pm/history/${items[0]!.replace(/\.toon$/, ".jsonl")}`].sort();
+          const before = expected.map(file => fs.readFileSync(path.join(root, file)));
+          const rest = await executeWorkflow(workflowShell(WORKFLOW_IMPORT_SEQUENCE.slice(split)), root, runEnv);
+          assert.equal(rest.code, 0, rest.stdout + rest.stderr);
+          assert.deepEqual(expected.map(file => fs.readFileSync(path.join(root, file))), before,
+            "the identical second import must preserve item and history bytes");
+          assert.deepEqual(git(["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"]).stdout.trim().split("\n").sort(), expected,
+            "publication contains exactly the imported item and its history");
+          assert.ok(remoteRefs(bare).includes("refs/heads/" + SYNC_BRANCH));
+          if (attributes === "missing") assert.equal(fs.existsSync(path.join(root, ".gitattributes")), false);
+          else assert.equal(fs.readFileSync(path.join(root, ".gitattributes"), "utf8"), originalAttributes);
+          if (registry === "untracked") assert.equal(fs.existsSync(path.join(root, registryPath)), false);
+          else assert.equal(fs.readFileSync(path.join(root, registryPath), "utf8"), originalRegistry);
+          assert.equal(git(["status", "--porcelain"]).stdout, "", "setup leaves no publication-tree residue");
+        });
+      } finally { fs.rmSync(base, { recursive: true, force: true }); }
+    });
+  }
+}
+
+for (const artifact of [".gitattributes", ".agents/pm/extensions/.managed-extensions.json"]) {
+  test(`preexisting setup artifact edits are preserved and refused: ${artifact}`, async () => {
+    const { root, base, bare, git } = initSyncRepo();
+    const planted = "# Caller change must survive refusal\n";
+    try {
+      fs.mkdirSync(path.dirname(path.join(root, artifact)), { recursive: true });
+      fs.writeFileSync(path.join(root, artifact), planted);
+      const helper = workflowShell(["Resolve sync commit scope"]).split("<<'SCOPE'\n")[1]!.split("\nSCOPE")[0]!;
+      fs.writeFileSync(path.join(base, "pm-github-sync-scope.sh"), helper);
+      for (const staged of [false, true]) {
+        if (staged) assert.equal(git(["add", "-f", "--", artifact]).status, 0);
+        const result = await executeWorkflow(workflowShell(["Require clean setup artifacts"]), root,
+          { ...process.env, PM_SYNC_TRACKER: ".agents/pm", RUNNER_TEMP: base });
+        assert.equal(result.code, 1, result.stdout + result.stderr);
+        assert.match(result.stdout, /Changed path outside sync commit scope/);
+        assert.ok(result.stdout.includes(artifact));
+        assert.equal(fs.readFileSync(path.join(root, artifact), "utf8"), planted);
+        assert.deepEqual(remoteRefs(bare), ["refs/heads/main"]);
+      }
+    } finally { fs.rmSync(base, { recursive: true, force: true }); }
+  });
+  test(`caller edits to setup artifacts still refuse publication: ${artifact}`, async () => {
+    const { root, base, bare, git } = initSyncRepo();
+    try {
+      fs.writeFileSync(path.join(root, "post-import.cjs"), 'require("node:fs").appendFileSync(process.env.ARTIFACT, " ");\n');
+      fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ scripts: { "plant-artifact": "node post-import.cjs" } }));
+      assert.equal(git(["add", "--", "post-import.cjs", "package.json"]).status, 0);
+      assert.equal(git(["commit", "-qm", "Caller artifact editor"]).status, 0);
+      const env = await prepareWorkflowFixture(root, base);
+      const planted = (fs.existsSync(path.join(root, artifact)) ? fs.readFileSync(path.join(root, artifact), "utf8") : "") + " ";
+      assert.equal(git(["switch", "-c", SYNC_BRANCH]).status, 0);
+      const handle = githubHandler([issue(1, "Public caller edit regression", "Reviewed public body.")]);
+      await withMockGithub((req, res, url, server) => {
+        if (req.url === "/repos/acme/widgets") jsonResponse(res, 200, { private: false });
+        else handle(req, res, url, server);
+      }, async () => {
+        const result = await executeWorkflow(workflowShell(WORKFLOW_IMPORT_SEQUENCE), root, { ...env,
+          PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE, POST_IMPORT_SCRIPT: "plant-artifact", ARTIFACT: artifact });
+        assert.notEqual(result.code, 0, result.stdout + result.stderr);
+        assert.match(result.stdout, /Changed path outside sync commit scope/);
+        assert.equal(fs.readFileSync(path.join(root, artifact), "utf8"), planted, "refusal must preserve caller bytes");
+        assert.deepEqual(remoteRefs(bare), ["refs/heads/main"]);
+        assert.equal(fs.existsSync(env.REVIEW_RECEIPT!), false);
+      });
+    } finally { fs.rmSync(base, { recursive: true, force: true }); }
+  });
+}
+
+test("strict health restores isolated setup artifacts even on failure", async () => {
+  const { root, base, bare, git } = initSyncRepo();
+  try {
+    const env = await prepareWorkflowFixture(root, base);
+    const before = fs.readFileSync(path.join(root, ".gitattributes"));
+    const shell = workflowShell(["Verify strict pm health"]).replace("pm health --strict-exit", "pm health --strict-exit\nexit 29");
+    const result = await executeWorkflow(shell, root, env);
+    assert.equal(result.code, 29, result.stdout + result.stderr);
+    assert.deepEqual(fs.readFileSync(path.join(root, ".gitattributes")), before);
+    assert.equal(fs.existsSync(path.join(root, ".agents/pm/extensions/.managed-extensions.json")), false);
+    assert.equal(git(["diff", "--name-only", "--", ".gitattributes"]).stdout, "");
+    assert.deepEqual(remoteRefs(bare), ["refs/heads/main"]);
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
 
 test("workflow packing isolates prepare from the caller tracker in clones and linked worktrees", async () => {
   const { root, base } = initSyncRepo();
@@ -1612,7 +1742,7 @@ if (mode === "multiple") writeFileSync("second.txt", "changed\\n");
 });
 
 test("publication rechecks late changes and rescans the exact working content it commits", async () => {
-  for (const mode of ["staged", "unstaged", "untracked", "credential", "tracker-secret"] as const) {
+  for (const mode of ["staged", "unstaged", "untracked", "credential", "tracker-secret", "attributes", "registry"] as const) {
     const { root, base, bare, git } = initSyncRepo();
     try {
       const env = await prepareWorkflowFixture(root, base);
@@ -1622,7 +1752,8 @@ test("publication rechecks late changes and rescans the exact working content it
         if (req.url === "/repos/acme/widgets") jsonResponse(res, 200, { private: false });
         else handle(req, res, url, server);
       }, async () => {
-        const filename = mode === "tracker-secret" ? "CHANGELOG.md" : mode === "unstaged" ? "package.json" : "late.txt";
+        const filename = mode === "tracker-secret" ? "CHANGELOG.md" : mode === "unstaged" ? "package.json"
+          : mode === "attributes" ? ".gitattributes" : mode === "registry" ? ".agents/pm/extensions/.managed-extensions.json" : "late.txt";
         const mutate = `node -e 'require("node:fs").writeFileSync(process.env.LATE_PATH, process.env.LATE_CONTENT)'\n`
           + (mode === "staged" || mode === "credential" ? 'git add -- "$LATE_PATH"\n' : "");
         // Insert immediately BEFORE the final status check and scan, after link

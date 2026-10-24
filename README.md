@@ -839,6 +839,8 @@ Fleet repos sync their issues into pm through ONE audited implementation: the re
 
 When the tracker has no changes, regenerated `CHANGELOG.md` drift is discarded and the run emits a notice that the caller's own `changelog:check` owns that drift. The sync closes any owned open review PR and exits successfully without pushing or dispatching CI. Changelog changes are published only together with tracker changes.
 
+Before extension and attributes setup, both reusable maintenance workflows require `.gitattributes` and the tracker’s `extensions/.managed-extensions.json` to match the checkout, including the index and ignored untracked files. Immediately after setup they save the runtime artifacts outside the checkout, then restore original tracked bytes or remove setup-created files before any privacy or publication scan. Strict health temporarily uses the saved runtime files after checking that both paths still match the baseline; an exit trap restores the baseline even when health fails. No caller script runs inside either setup window. Preexisting edits and later caller edits to either artifact fail closed and remain untouched, including ignored files. The publication allowlist stays unchanged. Callers receive the fix through their Dependabot workflow pins.
+
 The explicit allowed scope for changed paths is:
 
 - Files beneath the SDK-resolved repository-local pm tracker, excluding its `extensions/`, `locks/`, and `checkpoints/` runtime directories. The extension setup files `settings.json` and `history/_workspace.jsonl` are permitted during setup, then restored before publication and excluded from both the scan and commit.

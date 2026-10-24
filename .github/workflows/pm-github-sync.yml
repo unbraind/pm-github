@@ -258,7 +258,29 @@ jobs:
               fi
             done
           }
+          restore_workflow_setup_artifacts() {
+            for setup_path in .gitattributes "${PM_SYNC_TRACKER}/extensions/.managed-extensions.json"; do
+              if git cat-file -e "HEAD:${setup_path}" 2>/dev/null; then
+                git --literal-pathspecs restore --source=HEAD --staged --worktree -- "${setup_path}"
+              else
+                git --literal-pathspecs rm -q --cached --ignore-unmatch -- "${setup_path}"
+                rm -f -- "${setup_path}"
+              fi
+            done
+          }
+          check_sync_setup_clean() {
+            for setup_path in .gitattributes "${PM_SYNC_TRACKER}/extensions/.managed-extensions.json"; do
+              git --literal-pathspecs ls-files --others -z -- "${setup_path}" > "${RUNNER_TEMP}/pm-github-setup-status"
+              if ! git --literal-pathspecs diff --quiet -- "${setup_path}" || \
+                 ! git --literal-pathspecs diff --cached --quiet -- "${setup_path}" || \
+                 [[ -s "${RUNNER_TEMP}/pm-github-setup-status" ]]; then
+                printf '::error::Changed path outside sync commit scope: %q\n' "${setup_path}"
+                return 1
+              fi
+            done
+          }
           check_sync_scope() {
+            check_sync_setup_clean
             local entry path failed=0
             git status --porcelain=v1 -z --untracked-files=all > "${RUNNER_TEMP}/pm-github-sync-status"
             while IFS= read -r -d '' entry; do
@@ -302,6 +324,15 @@ jobs:
           }
           SCOPE
 
+      # Restore only these two files inside the bounded setup windows.
+      # Refuse existing edits (including ignored files) before claiming ownership.
+      - name: Require clean setup artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
+          check_sync_setup_clean
+
       - name: Install pinned pm-github extension
         shell: bash
         run: |
@@ -311,6 +342,18 @@ jobs:
 
       - name: Configure PM merge drivers
         run: pm merge install
+
+      # Runtime setup must be absent from every publication/privacy scan.
+      # Save it outside the checkout only for the bounded strict-health step.
+      - name: Isolate workflow setup artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p -- "${RUNNER_TEMP}/pm-github-setup"
+          cp -p -- .gitattributes "${RUNNER_TEMP}/pm-github-setup/attributes"
+          cp -p -- "${PM_SYNC_TRACKER}/extensions/.managed-extensions.json" "${RUNNER_TEMP}/pm-github-setup/registry"
+          source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
+          restore_workflow_setup_artifacts
 
       - name: Verify gate is available
         run: pm github gate --json
@@ -400,8 +443,18 @@ jobs:
           source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
           gate_sync_change
 
+      # No caller code runs while runtime setup is temporarily active for health.
+      # Check the baseline first and restore even on failure, before any later gate.
       - name: Verify strict pm health
-        run: pm health --strict-exit
+        shell: bash
+        run: |
+          set -euo pipefail
+          source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
+          check_sync_setup_clean
+          trap restore_workflow_setup_artifacts EXIT
+          cp -p -- "${RUNNER_TEMP}/pm-github-setup/attributes" .gitattributes
+          cp -p -- "${RUNNER_TEMP}/pm-github-setup/registry" "${PM_SYNC_TRACKER}/extensions/.managed-extensions.json"
+          pm health --strict-exit
 
       # Mint only after caller scripts and local gates have finished. The key
       # is passed only to the pinned official action; its token is repo-scoped.
