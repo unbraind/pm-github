@@ -205,7 +205,14 @@ for (const kind of ["sync", "closeout"]) {
   }));
 }
 
-test("sync and closeout execute identical PR maintenance", () => assert.equal(maintenance("sync"), maintenance("closeout")));
+test("sync and closeout share PR maintenance apart from the closeout attribution hold", () => {
+  const hold = 'if [[ "${CLOSEOUT_REVIEW:-0}" != 0 ]]; then\n'
+    + '  echo "::notice::Delivery attribution needs review; caller checks were dispatched and automatic landing is disabled."\n'
+    + '  exit 0\nfi\n';
+  const closeout = maintenance("closeout");
+  assert.equal(closeout.split(hold).length, 2);
+  assert.equal(maintenance("sync"), closeout.replace(hold, ""));
+});
 
 for (const kind of ["sync", "closeout"]) {
   test(`${kind}: App publication uses a pinned repo-scoped token after gates and bounds its lifetime`, () => {

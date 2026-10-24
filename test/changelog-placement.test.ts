@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { create, get } from "@unbrained/pm-cli/sdk";
+import { create, get, runWithReproducibleProcessEnvironment } from "@unbrained/pm-cli/sdk";
 import { runCloseout, type CloseoutApi } from "../closeout.ts";
 import { parseImportOptions, runImport, type GhIssue } from "../index.ts";
 
@@ -43,7 +43,7 @@ function evidence(id: string): CloseoutApi {
   const head = "a".repeat(40);
   return { base: "https://api.github.com", next: () => undefined, async get(url) {
     let body: unknown = [];
-    if (url.includes("/pulls/")) body = { number: 1, body: `Delivers ${id}`, merged: true,
+    if (url.endsWith("/pulls/1")) body = { number: 1, body: `Delivers ${id}`, merged: true,
       merged_at: completed, merge_commit_sha: "b".repeat(40), html_url: `https://github.com/${repo}/pull/1`,
       head: { sha: head }, base: { ref: "main", repo: { full_name: repo } } };
     else if (url.includes("/protection/")) body = { contexts: ["CI"], checks: [] };
@@ -71,7 +71,8 @@ for (const kind of ["closeout", "sync"]) {
           custom: 'node -e "require(\'node:fs\').writeFileSync(\'custom.txt\', JSON.stringify(process.argv.slice(1)))"',
         } }));
         // The CLI's stdin mode avoids spawning an unrelated pm installation.
-        const item = await create({ title: kind === "closeout" ? "October delivery" : "Unrelated native item", type: "Issue" }, { pmRoot, noExtensions: true });
+        const item = await runWithReproducibleProcessEnvironment({ PM_CLOCK: "2026-09-01T00:00:00Z", PM_SEED: "placement" }, () =>
+          create({ title: kind === "closeout" ? "October delivery" : "Unrelated native item", type: "Issue" }, { pmRoot, noExtensions: true }));
         assert.equal(spawnSync("git", ["add", ".agents/pm", "package.json"], { cwd: root, env }).status, 0);
         assert.equal(spawnSync("git", ["commit", "-qm", "September release"], { cwd: root, env }).status, 0);
         if (tagged) assert.equal(spawnSync("git", ["tag", "v2026.9.2"], { cwd: root, env }).status, 0);
