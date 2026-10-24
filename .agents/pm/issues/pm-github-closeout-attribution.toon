@@ -2,13 +2,18 @@ id: pm-github-closeout-attribution
 title: Hold ambiguous merged-PR delivery until attribution is verified
 description: "Follow up the completed declaration matcher with explicit item delivery links, acceptance-criteria chronology and needs_review candidates; pm-ado issue 33 and PR 32 expose incorrect durable delivery provenance."
 type: Issue
-status: in_progress
+status: closed
 priority: 1
 tags[3]: changelog-unreleased,closeout,"gh:unbraind/pm-ado#33"
 created_at: "2026-10-24T06:16:55.856Z"
-updated_at: "2026-10-24T18:12:19.996Z"
+updated_at: "2026-10-24T21:45:45.188Z"
+closed_at: "2026-10-24T21:45:45.067Z"
+completed_at: "2026-10-24T21:45:45.067Z"
 author: codex-agent
 acceptance_criteria: Explicit delivery link wins; otherwise exactly one claimed merged PR after the latest criteria change may close; ambiguous items remain open with all candidates reported; completion uses the chosen merge timestamp.
+resolution: Explicit delivery claims select the implementing PR while mention-only context cannot hold it; ambiguous or unreadable candidates remain open with bound revision and merge-time provenance.
+expected_result: Explicit delivery link wins; otherwise exactly one claimed merged PR after the latest criteria change may close; ambiguous items remain open with all candidates reported; completion uses the chosen merge timestamp.
+actual_result: "https://github.com/unbraind/pm-github/pull/174, merged 2026-10-24T19:10:50Z, merge 1ec3a768e9496d04a8fdf9684167b2910ca59f02: Explicit delivery claims select the implementing PR while mention-only context cannot hold it; ambiguous or unreadable candidates remain open with bound revision and merge-time provenance."
 comments[51]{created_at,author,text}:
   "2026-10-24T06:16:59.176Z",codex-agent,"Read pm-ado issue 33 and dirty PR 32. Existing pm-github-uqjf is closed and covers declarations; this follow-up replaces its latest-merge tie-break with explicit delivery attribution and acceptance-history checks. Plan: real non-git tracker regressions, function-only revert proof, focused local gates and npm/Bun CI release gates. PR 32 will be closed with cross-links after the fix PR exists; issue 33 stays open."
   "2026-10-24T06:21:01.545Z",codex-agent,"Implemented explicit delivery-pr URL tags, immutable SDK acceptance-history cutoff, unique body/commit claims and needs_review rows retaining all candidates. Check success no longer breaks ties or falls back to old delivery. Review-only workflow runs persist a privacy-gated closeout-review.json report and open a PR without closing any item. Initial non-git selection suite passes 13/13; existing chronological tie-break assertions updated to require review. Dependency pins and gate thresholds unchanged."
@@ -177,4 +182,5 @@ tests[13]:
 docs[2]{path,scope}:
   docs/explicit-closeout-attribution.md,project
   README.md,project
+close_reason: "https://github.com/unbraind/pm-github/pull/174, merged 2026-10-24T19:10:50Z, merge 1ec3a768e9496d04a8fdf9684167b2910ca59f02: Explicit delivery claims select the implementing PR while mention-only context cannot hold it; ambiguous or unreadable candidates remain open with bound revision and merge-time provenance."
 body: ""

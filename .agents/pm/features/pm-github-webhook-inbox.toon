@@ -2,13 +2,18 @@ id: pm-github-webhook-inbox
 title: Reconcile authenticated GitHub webhooks through a durable deduplicating inbox
 description: "Explicitly supplied issue webhook deliveries are signature verified before durable intake, deduplicated, and reconciled against current provider state into bounded proposals."
 type: Feature
-status: in_progress
+status: closed
 priority: 2
 tags[3]: changelog-unreleased,github,webhooks
 created_at: "2026-10-21T20:34:29.731Z"
-updated_at: "2026-10-22T11:47:29.084Z"
+updated_at: "2026-10-24T21:53:34.387Z"
+closed_at: "2026-10-24T21:53:34.381Z"
+completed_at: "2026-10-24T21:53:34.381Z"
 author: codex-agent
 acceptance_criteria: Duplicate and out-of-order events do not regress lifecycle; signature failures cause zero writes; polling refresh remains a recovery route; typed SDK and CLI with compact TOON/JSON refusals and remedies; real public-tracker copy validation without git; npm and Bun CI gates pass.
+resolution: "Authenticated deduplicated durable webhook hints reconcile against current provider state, preventing stale lifecycle replay; invalid signatures write nothing and polling remains recovery."
+expected_result: Duplicate and out-of-order events do not regress lifecycle; signature failures cause zero writes; polling refresh remains a recovery route; typed SDK and CLI with compact TOON/JSON refusals and remedies; real public-tracker copy validation without git; npm and Bun CI gates pass.
+actual_result: "https://github.com/unbraind/pm-github/pull/165, merged 2026-10-22T13:58:05Z, merge 394129e3a8a607bfc13dd8acc8adfe4704165da2: Authenticated deduplicated durable webhook hints reconcile against current provider state, preventing stale lifecycle replay; invalid signatures write nothing and polling remains recovery."
 comments[13]{created_at,author,text}:
   "2026-10-21T20:34:36.573Z",codex-agent,"Overlap audit: existing refresh.ts polls only explicitly linked issues and owns update-only import transactions. Installed CLI MCP tool definitions transport pm commands, with no authenticated GitHub event inbox. pm-observer src/ingest.ts and export-adapters.ts ingest agent exports, not provider webhooks. No duplicate feature found by tracker search. PR #164 owns historical tracker reconciliation; its items remain untouched. Design: authenticate exact payload bytes before all writes; store minimal durable delivery hints; reconcile via current-provider refresh previews only; retain receipts and retry failures. Polling refresh remains the apply and recovery route."
   "2026-10-21T20:41:00.447Z",codex-agent,"Implementation: authenticated intake stores minimal immutable delivery hints; token-owned writer locking serializes concurrent deduplication; atomically published receipts are file/directory-flushed before acknowledgment. Reconciliation coalesces selected issue numbers and uses read-only current-provider refresh previews, persisting compact outcome receipts without item changes. No receiver is installed. Local targeted suite: 7/7 passing, new webhooks.ts measured 100% statements/branches/functions/lines. No-git acceptance removes git from PATH and sets a discovery ceiling. CI now invokes explicit npm and Bun release:check at unchanged thresholds; full gates run remotely because the host is saturated."
@@ -34,4 +39,5 @@ tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,
 docs[2]{path,scope}:
   docs/webhook-inbox.md,project
   README.md,project
+close_reason: "https://github.com/unbraind/pm-github/pull/165, merged 2026-10-22T13:58:05Z, merge 394129e3a8a607bfc13dd8acc8adfe4704165da2: Authenticated deduplicated durable webhook hints reconcile against current provider state, preventing stale lifecycle replay; invalid signatures write nothing and polling remains recovery."
 body: ""

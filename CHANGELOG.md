@@ -2,30 +2,28 @@
 
 ## Unreleased
 
+### Added
+
+- Reconcile authenticated GitHub webhooks through a durable deduplicating inbox ([pm-github-webhook-inbox](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-webhook-inbox.toon))
+- Explore provider identity collisions and approve scoped provenance repairs ([pm-github-identity-collisions](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-identity-collisions.toon))
+- Require opt-in before adopting cited GitHub issue items ([pm-github-cited-issue-adoption](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-cited-issue-adoption.toon))
+
 ### Fixed
 
-- Hold ambiguous merged-PR delivery until attribution is verified ([pm-github-closeout-attribution](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-closeout-attribution.toon))
-
-## 2026.10.24 - 2026-10-24
-
-### Fixed
-
+- Derive release merge wait from CI duration and refresh a safe main advance once ([pm-github-release-merge-wait](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-release-merge-wait.toon))
 - Publish tracker sync after restoring workflow-owned setup artifacts ([pm-github-sync-setup-artifacts](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-sync-setup-artifacts.toon))
+- Hold ambiguous merged-PR delivery until attribution is verified ([pm-github-closeout-attribution](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-closeout-attribution.toon))
 
 ## 2026.10.23 - 2026-10-23
 
 ### Added
 
-- Require opt-in before adopting cited GitHub issue items ([pm-github-cited-issue-adoption](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-cited-issue-adoption.toon))
-- Explore provider identity collisions and approve scoped provenance repairs ([pm-github-identity-collisions](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-identity-collisions.toon))
-- Reconcile authenticated GitHub webhooks through a durable deduplicating inbox ([pm-github-webhook-inbox](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-webhook-inbox.toon))
 - Let reusable workflows carry their own release version ([pm-github-znig](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-znig.toon))
 - Preserve imported GitHub lifetimes, closure evidence and release attribution while linking cross-provider items ([pm-github-c093](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-c093.toon))
 - Refresh only already-linked GitHub items without importing new ones ([pm-github-ullj](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-ullj.toon))
 
 ### Fixed
 
-- Derive release merge wait from CI duration and refresh a safe main advance once ([pm-github-release-merge-wait](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-release-merge-wait.toon))
 - A publish spelled through a package runner was invisible to the attestation gate, so an unattested one read as clean ([pm-github-5igz](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-5igz.toon))
 - PM CLI filtered native Bun tests falsely report an empty run ([pm-github-2ao1](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-2ao1.toon))
 - Track pm-changelog rendering closed historical incidents as Fixed ([pm-github-n0mm](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-n0mm.toon))

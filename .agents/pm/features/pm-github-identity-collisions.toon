@@ -2,13 +2,18 @@ id: pm-github-identity-collisions
 title: Explore provider identity collisions and approve scoped provenance repairs
 description: "Add a read-only graph of conflicting external_ref, GitHub provenance tags and native ownership, with narrowly scoped repair plans."
 type: Feature
-status: in_progress
+status: closed
 priority: 2
 tags[3]: changelog-unreleased,github,identity
 created_at: "2026-10-22T19:22:17.645Z"
-updated_at: "2026-10-22T21:00:37.645Z"
+updated_at: "2026-10-24T21:53:34.353Z"
+closed_at: "2026-10-24T21:53:34.349Z"
+completed_at: "2026-10-24T21:53:34.349Z"
 author: codex-agent
 acceptance_criteria: Synthetic copied examples and genuinely multi-provider items remain distinguishable; ambiguous identities refuse apply; approved repairs are audited and idempotent.
+resolution: "Distinguishes explicit provider identities from copied examples, refuses ambiguous ownership and applies only approved scoped provenance repairs with an audited idempotent recovery journal."
+expected_result: Synthetic copied examples and genuinely multi-provider items remain distinguishable; ambiguous identities refuse apply; approved repairs are audited and idempotent.
+actual_result: "https://github.com/unbraind/pm-github/pull/167, merged 2026-10-22T21:34:56Z, merge 313810ae0047fb60ce9e3e6ae6be99c212387c07: Distinguishes explicit provider identities from copied examples, refuses ambiguous ownership and applies only approved scoped provenance repairs with an audited idempotent recovery journal."
 comments[13]{created_at,author,text}:
   "2026-10-22T19:23:58.055Z",codex-agent,"Overlap recheck: core SDK complete-list certification, metadata validation, similarity duplicates, semantic previews, item mutations and durable writer transactions remain authoritative. pm-github import-fidelity and refresh already reuse rightful owners or refuse multiple owners; they expose no offline collision graph or approved detach surface. pm-jira provenance/export matching and pm-linear provenance indexing retain provider semantics. New scope: bounded offline graph of exact external_ref and GitHub tag/URL claims versus copied prose; one explicitly approved tag/reference detach from an independently declared owner, refusing ambiguous source metadata. Acceptance: copied examples and genuine multi-provider ownership remain distinct; ambiguous identities refuse apply; approved repairs are audited and idempotent. Use real non-git trackers and a read-only public tracker copy; full npm/Bun release gates in CI due host load."
   "2026-10-22T19:37:45.190Z",codex-agent,"Implementation reuses refresh scratch reads because complete SDK list calls produce derived runtime caches. Scratch copies now normalize only copied file permissions, supporting read-only input trackers. Production repair scope is exact GitHub tag detach only: the pinned SDK has no audited core external_ref clear operation (unset refuses it), so reference repair returns unsupported_repair with a provider-workflow remedy instead of bypassing core mutation rules. Added native source ownership evidence and single-item contradictory identity diagnosis. Plans use real SDK previews, approval digests and locked rechecks; native comment/history audit binds the exact scope and SDK replay handles interrupted mutation recovery."
@@ -34,4 +39,5 @@ docs[3]{path,scope}:
   docs/identity-collisions-validation.md,project
   docs/identity-collisions.md,project
   README.md,project
+close_reason: "https://github.com/unbraind/pm-github/pull/167, merged 2026-10-22T21:34:56Z, merge 313810ae0047fb60ce9e3e6ae6be99c212387c07: Distinguishes explicit provider identities from copied examples, refuses ambiguous ownership and applies only approved scoped provenance repairs with an audited idempotent recovery journal."
 body: ""
