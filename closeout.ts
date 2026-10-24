@@ -41,7 +41,7 @@ interface PullRequest {
   merged: boolean | null;
   merged_at: string | null;
   merge_commit_sha: string | null;
-  commits: number | null;
+  commits?: number | null;
   html_url: string;
   head: { sha: string };
   base: { ref: string; repo: { full_name: string } };
