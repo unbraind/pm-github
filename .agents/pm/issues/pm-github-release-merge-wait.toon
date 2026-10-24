@@ -6,9 +6,9 @@ status: closed
 priority: 1
 tags[3]: changelog-unreleased,ci,release
 created_at: "2026-10-23T15:47:55.215Z"
-updated_at: "2026-10-24T21:45:45.406Z"
+updated_at: "2026-10-24T23:11:00.471Z"
 closed_at: "2026-10-24T21:45:45.400Z"
-completed_at: "2026-10-24T21:45:45.400Z"
+completed_at: "2026-10-23T18:18:26.000Z"
 author: codex-agent
 acceptance_criteria: "Workflow consumes tested decision helpers; wait floor is 60 minutes with a cap below the job timeout; one safe refresh restarts checks; release metadata drift, conflicts and repeated main advances abort; npm and Bun release gates pass."
 resolution: "Workflow consumes tested duration-based wait helpers with a 60-minute floor, bounded timeout and one safe main refresh; metadata drift, conflicts and repeated advances abort."

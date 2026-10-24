@@ -6,9 +6,9 @@ status: closed
 priority: 1
 tags[3]: changelog-unreleased,closeout,"gh:unbraind/pm-ado#33"
 created_at: "2026-10-24T06:16:55.856Z"
-updated_at: "2026-10-24T21:45:45.188Z"
+updated_at: "2026-10-24T23:10:58.595Z"
 closed_at: "2026-10-24T21:45:45.067Z"
-completed_at: "2026-10-24T21:45:45.067Z"
+completed_at: "2026-10-24T19:10:50.000Z"
 author: codex-agent
 acceptance_criteria: Explicit delivery link wins; otherwise exactly one claimed merged PR after the latest criteria change may close; ambiguous items remain open with all candidates reported; completion uses the chosen merge timestamp.
 resolution: Explicit delivery claims select the implementing PR while mention-only context cannot hold it; ambiguous or unreadable candidates remain open with bound revision and merge-time provenance.

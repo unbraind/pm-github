@@ -6,9 +6,9 @@ status: closed
 priority: 2
 tags[3]: changelog-unreleased,github,import
 created_at: "2026-10-23T07:16:54.041Z"
-updated_at: "2026-10-24T21:53:34.315Z"
+updated_at: "2026-10-24T23:11:01.391Z"
 closed_at: "2026-10-24T21:53:34.304Z"
-completed_at: "2026-10-24T21:53:34.304Z"
+completed_at: "2026-10-23T17:16:37.000Z"
 author: codex-agent
 acceptance_criteria: "Adoption is off by default across CLI, SDK and reusable sync, enabled only with --adopt-cited, adoptCited true or adopt-cited true respectively. Default import retains normal create/structured-match behavior and read-only citation_candidates without fallback ambiguity refusal. Document creating items with gh:owner/repo#N as primary duplicate prevention; Normalize HTML named/numeric entities and percent bytes repeatedly until stable with a bounded refusal, apply NFKC and remove invisible/bidi controls, unwrap Markdown links/reference definitions and join soft breaks before anchored ownership checks while retaining source for conservative exclusion; Only title qualified references, leading description closing-keyword references, or whole body Issue:/Tracks: URL lines can authorize opt-in adoption. Any other normalized GitHub URL, foreign repository, other number or unattributed reference refuses adoption and reports candidate hints. Preserve structured identity precedence, single-owner upsert, eligible-owner ambiguity refusal, receipts, idempotency and non-git support; Keep all review reproductions and prior shape inputs, add encoded-reference fuzzing and explicit pm-review Issue label positives/default creates, record behavioral function/workflow reverts and public dry-run receipts, run targeted checks and wait for exact-head npm/Bun CI release gates"
 resolution: "Citation adoption is explicit opt-in across CLI/SDK/workflow; bounded normalization and anchored ownership checks retain ambiguity refusals, structured identity and no-git idempotency."

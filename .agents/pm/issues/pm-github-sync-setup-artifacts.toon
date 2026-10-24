@@ -6,9 +6,9 @@ status: closed
 priority: 1
 tags[4]: changelog-unreleased,"gh:unbraind/pm-github#168",sync,workflow
 created_at: "2026-10-24T05:12:10.201Z"
-updated_at: "2026-10-24T21:45:45.354Z"
+updated_at: "2026-10-24T23:10:59.553Z"
 closed_at: "2026-10-24T21:45:45.339Z"
-completed_at: "2026-10-24T21:45:45.339Z"
+completed_at: "2026-10-24T06:01:04.000Z"
 author: codex-agent
 resolution: Restores workflow-owned setup artifacts before tracker publication and proves only authorized tracker/changelog changes are published.
 expected_result: "Reusable sync setup can change merge attributes and the managed extension registry before its publication scope gate. Bound setup ownership to a clean baseline, remove only workflow-produced setup changes before the scope gate, preserve fail-closed rejection of caller edits, and verify nonempty import and repeat-import idempotency in synthetic callers."
