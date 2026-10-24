@@ -181,7 +181,7 @@ ${shell(name, source)}
 }
 
 const setup = ["Require caller default branch", "Validate closeout inputs", "Validate npm project directory", "Prepare sync branch from default branch",
-  "Install dependencies", "Resolve sync commit scope", "Install pinned pm-github extension", "Configure PM merge drivers", "Verify gate is available"];
+  "Install dependencies", "Resolve sync commit scope", "Require clean setup artifacts", "Install pinned pm-github extension", "Configure PM merge drivers", "Isolate workflow setup artifacts", "Verify gate is available"];
 const finish = ["Close delivered tracker items", "Run caller post-closeout script", "Gate tracker and regenerated changelog", "Verify strict pm health",
   "Validate publication credentials", "Commit gated closeout changes and open review PR", "Dispatch caller CI and report parked runs"];
 
@@ -202,7 +202,7 @@ test("closeout contract keeps sync safety helpers, exact pins, env bindings and 
     if (!step.includes("run:")) continue;
     assert.doesNotMatch(shell(name), /\$\{\{/);
   }
-  for (const name of ["Validate npm project directory", "Resolve sync commit scope", "Install dependencies", "Install pinned pm-github extension", "Gate tracker and regenerated changelog", "Verify strict pm health"]) {
+  for (const name of ["Validate npm project directory", "Resolve sync commit scope", "Install dependencies", "Require clean setup artifacts", "Install pinned pm-github extension", "Isolate workflow setup artifacts", "Gate tracker and regenerated changelog", "Verify strict pm health"]) {
     assert.equal(shell(name), shell(name, sync), name);
   }
   assert.match(workflow, /--force-with-lease="refs\/heads\/\$\{SYNC_BRANCH\}:\$\{SYNC_LEASE\}"/);
