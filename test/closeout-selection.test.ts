@@ -165,7 +165,8 @@ test("a claim before or equal to the acceptance change stays open", async () => 
 test("a unique later claim with failing checks never falls back to an earlier PR", async () => {
   const { report } = await selection({ dates: [4, 8], criteriaDay: 7, failure: 2 });
   assert.equal(report.closed, 0);
-  assert.deepEqual(report.plan.map(row => row.code), ["duplicate_selection", "head_checks_failed"]);
+  assert.deepEqual(report.plan.map(row => row.code), ["needs_review", "needs_review"]);
+  assert.ok(report.plan.every(row => row.missing_evidence?.some(gap => gap.pr === 2 && gap.code === "head_checks_failed")));
 });
 
 test("commit claims can supply unique delivery, while mentions and unavailable commits cannot", async () => {
@@ -202,10 +203,9 @@ for (const gap of ["missing-merged", "merge-sha", "invalid-merge-sha", "merge-ti
     assert.equal(item.status, "in_progress");
     assert.ok(report.plan.length > 0);
     for (const row of report.plan) {
-      assert.equal(row.action, gap === "failed-checks" && !other ? "skip" : "needs_review");
-      if (gap === "failed-checks" && !other) continue;
+      assert.equal(row.action, "needs_review");
       assert.deepEqual(row.candidates, other ? [1, 2] : [1]);
-      if (gap !== "failed-checks") assert.ok(row.missing_evidence?.some(gap => gap.pr === 1), JSON.stringify(row));
+      assert.ok(row.missing_evidence?.some(gap => gap.pr === 1), JSON.stringify(row));
     }
   });
 }

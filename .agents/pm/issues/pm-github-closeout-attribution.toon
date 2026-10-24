@@ -6,10 +6,10 @@ status: in_progress
 priority: 1
 tags[3]: changelog-unreleased,closeout,"gh:unbraind/pm-ado#33"
 created_at: "2026-10-24T06:16:55.856Z"
-updated_at: "2026-10-24T12:19:40.568Z"
+updated_at: "2026-10-24T14:11:00.212Z"
 author: codex-agent
 acceptance_criteria: Explicit delivery link wins; otherwise exactly one claimed merged PR after the latest criteria change may close; ambiguous items remain open with all candidates reported; completion uses the chosen merge timestamp.
-comments[27]{created_at,author,text}:
+comments[32]{created_at,author,text}:
   "2026-10-24T06:16:59.176Z",codex-agent,"Read pm-ado issue 33 and dirty PR 32. Existing pm-github-uqjf is closed and covers declarations; this follow-up replaces its latest-merge tie-break with explicit delivery attribution and acceptance-history checks. Plan: real non-git tracker regressions, function-only revert proof, focused local gates and npm/Bun CI release gates. PR 32 will be closed with cross-links after the fix PR exists; issue 33 stays open."
   "2026-10-24T06:21:01.545Z",codex-agent,"Implemented explicit delivery-pr URL tags, immutable SDK acceptance-history cutoff, unique body/commit claims and needs_review rows retaining all candidates. Check success no longer breaks ties or falls back to old delivery. Review-only workflow runs persist a privacy-gated closeout-review.json report and open a PR without closing any item. Initial non-git selection suite passes 13/13; existing chronological tie-break assertions updated to require review. Dependency pins and gate thresholds unchanged."
   "2026-10-24T06:24:07.508Z",codex-agent,"Pinned pm test run passed selection 13/13 with no failures or skips; test-result storage is disabled by existing project policy, so this comment retains the receipt. Independently inspected pm-ado PRs 16 and 19: 16 explicitly leaves statement enforcement open; 19 declares the item and merged at 2026-10-08T01:19:51Z. Added a review-only workflow report; held attribution also disables automatic landing after dispatching caller checks."
@@ -37,7 +37,13 @@ comments[27]{created_at,author,text}:
   "2026-10-24T12:15:43.152Z",codex-agent,"The pinned PM-linked node --test test/closeout-revision.test.ts run passed 109/109 with zero failures, skips or cancellations. Further audit found a document/history read boundary: a peer SDK update writes the item before appending history while retaining its lock. Acceptance chronology now uses verifyHistoryEntries(history, selectedDocument), so a new document cannot borrow the previous revision criteria cutoff. A real-SDK history_append scheduling barrier exercises this partial-write boundary. The superseded local broad gate was stopped before changing source; only final-source receipts will be used."
   "2026-10-24T12:17:28.572Z",codex-agent,"History-binding revert proof: in an isolated source copy changed only verifyHistoryEntries(history, selectedDocument) back to verifyHistoryEntries(history), retained the real SDK partial-write scheduling barrier, and ran node --test --test-name-pattern=\"binds acceptance history\" test/closeout-revision.test.ts. Reverted: 0 pass, 1 fail (closed 1 instead of 0 using an older criteria cutoff for the newer document). Restored: 1 pass, 0 fail. The final local targeted command covers all four closeout suites and enforces exact 100/100/100/100 coverage for closeout.ts."
   "2026-10-24T12:19:39.759Z",codex-agent,"Final-source local validation passed: the PM-linked c8 --100 command ran all four closeout suites, 286/286 tests, zero failures/cancellations/skips, exact 100/100/100/100 for closeout.ts. The revision suite contributes 110 tests, including 17-by-6 peer-edit boundaries, bounded retry, guard isolation, removed snapshots, implicit dependent updates and document/history binding. Typecheck, build, test typecheck and lint passed; docstrings, zero-duplication, privacy and canonical changelog checks passed. Strict health with required merge drivers passed with isolated HOME; ambient global extension version skew is absent in the CI-equivalent environment. PM test-result storage is disabled by existing policy, so this comment retains the receipt. Full npm/Bun release evidence will come from CI on the pushed head; thresholds and dependency pins remain unchanged."
-files[9]{path,scope}:
+  "2026-10-24T13:52:01.374Z",codex-agent,"Review round 3: reproduce selected-delivery publication refusal, then derive all candidate rows from one item decision: chosen, superseded informational, or blocking hold. Add a 3 x 6 x 2 end-to-end decision table through the actual workflow publication gate, including peer retags. Record behavioral revert proof; run targeted tests, typecheck and lint locally, and require npm plus Bun full release gates in CI on the pushed head."
+  "2026-10-24T13:57:57.687Z",codex-agent,"Reproduced the exact round-3 blocker before editing runtime source: the explicit-delivery/missing-merge-SHA/no-peer end-to-end test fails ERR_ASSERTION with exit 1 because the real workflow rejects incomplete merged-PR metadata after local closeout. ItemDecision now projects chosen or blocking-hold outcomes across every candidate; all nonchosen candidates become duplicate_selection informational rows, regardless of original evidence failures. Failed chosen checks and SDK refusals hold all peers. Typecheck, test typecheck, lint, docstrings and zero-duplication checks pass. The 36-cell workflow matrix and existing non-git SDK suites are running."
+  "2026-10-24T14:06:16.808Z",codex-agent,"Focused PM-linked c8 verification passed 286/286 tests, zero failures, cancellations or skips, with exact 100/100/100/100 for closeout.ts. Exact command: node node_modules/c8/bin/c8.js --100 --include=closeout.ts --reporter=text --reporter=json --reports-dir=coverage/closeout-revision --temp-directory=coverage/closeout-revision-v8 node --test test/closeout.test.ts test/closeout-attribution.test.ts test/closeout-selection.test.ts test/closeout-revision.test.ts. Existing result-storage policy is disabled; this comment retains the receipt. The peer-retag table explicitly allows a safe hold when a peer invalidates the selected document/history revision before attribution; explicit re-selection with a valid retag closes with fresh provenance."
+  "2026-10-24T14:07:20.953Z",codex-agent,"Round-3 fix-only behavioral revert proof: restored only closeout.ts to 4874023 (the pre-round-3 runtime, retaining all round-2 revision guards), rebuilt dist with npm run build, and retained the new end-to-end tests plus workflow unchanged. Command: node --test --test-name-pattern='item decision end to end: explicit delivery tag / (missing merge SHA|failed evidence fetch) / none' test/closeout-workflow.test.ts. Reverted result: 0/2 passed, 2 ERR_ASSERTION failures, exit 1. Both regressions fail at the workflow publication gate after closeout rather than at load/build: incomplete merge or unavailable evidence leaves a fatal competing refusal. Restored the fix byte-for-byte, rebuilt, then ran the same command through pm test --run --only-index 9 --progress with isolated HOME and Git configuration: 2/2 passed, zero failures/cancellations/skips, exit 0. No tests, workflow gates or thresholds were reverted."
+  "2026-10-24T14:10:59.424Z",codex-agent,"Round-3 final local validation: PM-linked node --test --test-name-pattern='item decision end to end' test/closeout-workflow.test.ts passed 36/36, zero failures/cancellations/skips (3 selection sources x 6 competitor states x 2 peer schedules). The decision table independently expects 12 closed-and-published outcomes with chosen provenance and 24 open-and-published holds listing every candidate. The restored two publication regressions passed 2/2 with isolated HOME/Git configuration; the explicit safe-history hold control passed 1/1. Focused c8 passed 286/286 with exact 100/100/100/100 for closeout.ts. npm run typecheck, npm run build, npm run build:test, npm run lint, npm run docstring, npm run duplication, npm run privacy and changelog generation/check passed. Strict health with required merge drivers passed with isolated HOME; two existing advisory findings do not fail strict health. Source inventory, dependency pins, exclusions and thresholds remain unchanged. The item stays in progress for orchestrator verification, with the claim released before push. Remaining verification is read-only CI: npm run release:check and bun run release:check on Node 22/26, plus native Bun acceptance; exact final-head run URLs/counts will be retained in PR 174 and the handoff. No new PM CLI/SDK defect was encountered in this round."
+files[10]{path,scope}:
+  .github/workflows/ci.yml,project
   .github/workflows/pm-github-closeout.yml,project
   closeout.ts,project
   test/bot-pr-workflow.test.ts,project
@@ -47,7 +53,7 @@ files[9]{path,scope}:
   test/closeout-selection.test.ts,project
   test/closeout-workflow.test.ts,project
   test/closeout.test.ts,project
-tests[7]:
+tests[10]:
   - command: node --test test/closeout-selection.test.ts
     scope: project
     provenance:
@@ -97,6 +103,30 @@ tests[7]:
     provenance:
       author: codex-agent
       created_at: "2026-10-24T12:15:46.250Z"
+      source_kind: local_mutation
+      source_ref: fix/closeout-delivery-attribution
+  - command: "node --test --test-name-pattern=\"item decision end to end\" test/closeout-workflow.test.ts"
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-24T13:57:55.580Z"
+      source_kind: local_mutation
+      source_ref: fix/closeout-delivery-attribution
+  - command: "node --test --test-name-pattern=\"item decision end to end: explicit delivery tag / (missing merge SHA|failed evidence fetch) / none\" test/closeout-workflow.test.ts"
+    scope: project
+    timeout_seconds: 300
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-24T13:58:34.975Z"
+      source_kind: local_mutation
+      source_ref: fix/closeout-delivery-attribution
+  - command: "node --test --test-name-pattern=\"item decision end to end: single post-criteria claim / valid / retag mid-run\" test/closeout-workflow.test.ts"
+    scope: project
+    timeout_seconds: 300
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-24T14:07:22.709Z"
       source_kind: local_mutation
       source_ref: fix/closeout-delivery-attribution
 docs[2]{path,scope}:

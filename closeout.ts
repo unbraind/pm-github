@@ -429,6 +429,25 @@ export function checkEvidence(gate: CheckGate): string {
   return `no readable required checks, so every completed head check run had to succeed, be neutral or be skipped; ${successes}`;
 }
 
+/** The final item outcome controls reporting; superseded PR evidence is informational. */
+type ItemDecision = { kind: "chosen"; row: CloseoutRow }
+  | { kind: "blocking_hold"; reason: string; missing: NonNullable<CloseoutRow["missing_evidence"]> };
+
+/** Project one item decision onto all its candidates, including incomplete competitors. */
+function reportItemDecision(rows: CloseoutRow[], decision: ItemDecision): void {
+  const candidates = rows.map(row => row.pr).sort((a, b) => a - b);
+  for (const row of rows) {
+    if (decision.kind === "chosen") {
+      if (row === decision.row) continue;
+      Object.assign(row, { action: "skip", code: "duplicate_selection",
+        reason: "Another merged PR uniquely supplies the delivery evidence for this item." });
+    } else {
+      Object.assign(row, { action: "needs_review", code: "needs_review", reason: decision.reason, candidates });
+      if (decision.missing.length > 0) row.missing_evidence = decision.missing;
+    }
+  }
+}
+
 /** Deterministic scheduling observer; it never replaces SDK reads or writes. */
 export type CloseoutObserver = (boundary: "listed" | "snapshot" | "history" | "selection" | "before_close" | "locked") => Promise<void>;
 
@@ -592,29 +611,19 @@ async function closeoutAttempt(pmRoot: string, repo: string | undefined, options
       : plausible.filter(entry => entry.declared);
     const uncertain = explicit.length === 1 && eligible.length === 1 ? eligible : plausible;
     const missing = uncertain.flatMap(entry => {
-      const gaps = ["incomplete_merge", "head_evidence_unavailable", "required_checks_unverified"].includes(entry.row.code)
-        || (entry.row.code === "head_checks_failed" && /missing|no check/.test(entry.row.reason))
+      const gaps = ["incomplete_merge", "head_evidence_unavailable", "required_checks_unverified", "head_checks_failed"].includes(entry.row.code)
         ? [{ pr: entry.pr.number, code: entry.row.code, reason: entry.row.reason }] : [];
       if (!entry.commitsReadable) gaps.push({ pr: entry.pr.number, code: "head_evidence_unavailable", reason: "Commit delivery evidence unavailable or incomplete." });
       return gaps;
     });
-    const selected = eligible.length === 1 && missing.length === 0 ? eligible[0] : undefined;
-    for (const entry of group) {
-      if (selected === entry) continue;
-      if (selected) {
-        if (entry.row.action === "close") {
-          entry.row.action = "skip";
-          entry.row.code = "duplicate_selection";
-          entry.row.reason = "Another merged PR uniquely supplies the delivery evidence for this item.";
-        }
-      } else if (group.length > 1 || entry.row.action === "close" || explicit.length > 0 || missing.length > 0) {
-        entry.row.action = "needs_review";
-        entry.row.code = "needs_review";
-        entry.row.reason = "Delivery attribution is unresolved; set one delivery-pr:<canonical PR URL> tag or verify a unique delivery claim after the last acceptance-criteria change."
-          + missing.map(gap => ` PR #${gap.pr}: ${gap.reason}`).join("");
-        entry.row.candidates = group.map(candidate => candidate.pr.number).sort((a, b) => a - b);
-        if (missing.length > 0) entry.row.missing_evidence = missing;
-      }
+    // One item decision owns every candidate status. Evidence codes describe PR facts,
+    // but an unchosen PR cannot remain a fatal refusal after another PR wins.
+    const chosen = eligible.length === 1 && missing.length === 0 ? eligible[0]!.row : undefined;
+    if (chosen) reportItemDecision(group.map(entry => entry.row), { kind: "chosen", row: chosen });
+    else if (group.length > 1 || explicit.length > 0 || missing.length > 0 || group[0]!.row.code !== "not_delivery") {
+      reportItemDecision(group.map(entry => entry.row), { kind: "blocking_hold",
+        reason: "Delivery attribution or chosen PR evidence is unresolved; set one delivery-pr:<canonical PR URL> tag or verify a unique delivery claim after the last acceptance-criteria change."
+          + missing.map(gap => ` PR #${gap.pr}: ${gap.reason}`).join(""), missing });
     }
   }
   await observer?.("selection");
@@ -669,14 +678,14 @@ async function closeoutAttempt(pmRoot: string, repo: string | undefined, options
             await reselect(entry.row.item, entry.row.pr);
             continue;
           }
-          const affected = plan.filter(row => row.item === entry.row.item);
-          for (const row of affected) Object.assign(row, { action: "needs_review", code: "needs_review",
-            candidates: affected.map(candidate => candidate.pr),
-            reason: "Item revision changed again after one delivery re-selection; hold for review." });
+          reportItemDecision(plan.filter(row => row.item === entry.row.item), { kind: "blocking_hold",
+            reason: "Item revision changed again after one delivery re-selection; hold for review.", missing: [] });
           continue;
         }
         failed++;
-        Object.assign(entry.row, { action: "skip", code: "close_failed", reason: closeoutFailureReason(error) });
+        const reason = closeoutFailureReason(error);
+        reportItemDecision(plan.filter(row => row.item === entry.row.item), { kind: "blocking_hold", reason,
+          missing: [{ pr: entry.row.pr, code: "close_failed", reason }] });
       }
     }
     for (const [id, pr] of dependentConflicts) {

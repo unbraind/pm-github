@@ -203,7 +203,7 @@ test("apply continues after lock and policy refusals and counts only successful 
       const result = await closeout(root, { pr: "42", apply: true });
       assert.equal(result.closed, 2);
       assert.equal(result.failed, 2);
-      assert.deepEqual(result.plan.map(row => row.action), ["skip", "close", "skip", "close"]);
+      assert.deepEqual(result.plan.map(row => row.action), ["needs_review", "close", "needs_review", "close"]);
       assert.equal(result.plan[0]!.reason, "SDK close refused: lock_conflict.");
       assert.match(result.plan[2]!.reason, /workflow_policy/);
       assert.ok(!JSON.stringify(result).includes("private-lock-owner") && !JSON.stringify(result).includes("Private policy") && !JSON.stringify(result).includes(root));
@@ -232,7 +232,7 @@ test("public apply reports partial results as CommandError exit 1 after remainin
         const report = JSON.parse((error as Error).message) as { closed: number; failed: number; plan: { action: string; reason: string }[] };
         assert.equal(report.closed, 1);
         assert.equal(report.failed, 1);
-        assert.deepEqual(report.plan.map(row => row.action), ["skip", "close"]);
+        assert.deepEqual(report.plan.map(row => row.action), ["needs_review", "close"]);
         assert.equal(report.plan[0]!.reason, "SDK close refused: lock_conflict.");
         return true;
       });
@@ -273,14 +273,14 @@ test("legacy required statuses use newest context and cannot bypass a failed run
       if (request.url!.includes("/statuses")) jsonResponse(response, 200, [{ context: "legacy", state }, { context: "legacy", state: "failure" }]);
     }), async () => {
       const report = await closeout(root);
-      assert.equal(report.plan[0]!.action, state === "success" ? "close" : "skip");
+      assert.equal(report.plan[0]!.action, state === "success" ? "close" : "needs_review");
       if (state === "success") assert.deepEqual(report.checks[0]!.passed, ["CI", "legacy"]);
     });
   }
   await withMockGithub(fixture(link(ids[0]!), (request, response) => {
     if (request.url!.includes("/protection/")) jsonResponse(response, 200, { contexts: ["CI"], checks: [{ context: "CI", app_id: -1 }] });
     if (request.url!.includes("/statuses")) jsonResponse(response, 200, [{ context: "CI", state: "failure" }]);
-  }), async () => assert.equal((await closeout(root)).plan[0]!.action, "skip"));
+  }), async () => assert.equal((await closeout(root)).plan[0]!.action, "needs_review"));
 }));
 
 for (const protection of [403, 404, "empty"] as const) {
@@ -293,8 +293,8 @@ for (const protection of [403, 404, "empty"] as const) {
       }), async () => {
         const report = await closeout(root);
         assert.equal(report.checks[0]!.rule, protection === "empty" ? "fallback" : "unavailable");
-        assert.equal(report.plan[0]!.action, protection !== "empty" ? "needs_review" : conclusion === "failure" || conclusion === null ? "skip" : "close");
-        assert.equal(report.plan[0]!.code, protection !== "empty" ? "needs_review" : conclusion === "failure" || conclusion === null ? "head_checks_failed" : "head_checks_passed");
+        assert.equal(report.plan[0]!.action, protection !== "empty" || conclusion === "failure" || conclusion === null ? "needs_review" : "close");
+        assert.equal(report.plan[0]!.code, protection !== "empty" || conclusion === "failure" || conclusion === null ? "needs_review" : "head_checks_passed");
         assert.equal(snapshot(root), before);
       });
     }
@@ -550,7 +550,7 @@ test("effective ruleset checks supplement classic required contexts", async () =
         if (request.url!.includes("/rules/branches/")) jsonResponse(response, 200, [
           { type: "deletion" }, { type: "required_status_checks", parameters: { required_status_checks: [{ context: "ruleset", integration_id: app }] } }]);
         if (request.url!.includes("/check-runs")) jsonResponse(response, 200, { total_count: 2, check_runs: [run(), run({ name: "ruleset", conclusion: state })] });
-      }), async () => assert.equal((await closeout(root)).plan[0]!.action, state === "success" ? "close" : "skip"));
+      }), async () => assert.equal((await closeout(root)).plan[0]!.action, state === "success" ? "close" : "needs_review"));
     }
   }
 }));
@@ -651,7 +651,7 @@ test("declared policy preserves readable ruleset requirements when classic prote
     }), async () => {
       const report = await closeout(root, { pr: "42", "required-checks": "CI" });
       assert.equal(report.checks[0]!.rule, "declared");
-      assert.equal(report.plan[0]!.action, conclusion === "success" ? "close" : "skip");
+      assert.equal(report.plan[0]!.action, conclusion === "success" ? "close" : "needs_review");
     });
   }
 }));
@@ -726,7 +726,7 @@ test("successful optional checks are never labelled as required", async () => tr
   });
 }));
 
-test("compact report counts routine skips and retains individual refusals with their head evidence", async () => tracker(async (root, ids) => {
+test("compact report counts routine skips and retains item holds with their head evidence", async () => tracker(async (root, ids) => {
   await update(ids[1]!, { status: "canceled" }, { pmRoot: root, noExtensions: true });
   await withMockGithub(fixture([link(ids[0]!), link(ids[1]!), link(ids[0]!, "other/project")].join("\n"), (request, response) => {
     if (request.url!.includes("/check-runs")) jsonResponse(response, 200, { total_count: 1, check_runs: [run({ conclusion: "failure" })] });
@@ -735,7 +735,9 @@ test("compact report counts routine skips and retains individual refusals with t
     const report = compactCloseoutReport(full);
     assert.deepEqual(report.skipped, { already_terminal: 1, other_repository: 1 });
     assert.equal(report.plan.length, 1);
-    assert.equal(report.plan[0]!.action, "refuse");
+    assert.equal(report.plan[0]!.action, "needs_review");
+    assert.deepEqual(report.plan[0]!.candidates, [42]);
+    assert.ok(report.plan[0]!.missing_evidence?.some(gap => gap.code === "head_checks_failed"));
     assert.equal(report.checks[0]!.code, "head_checks_failed");
     assert.equal(report.checks.length, 1);
     assert.equal(full.plan.length, 3);

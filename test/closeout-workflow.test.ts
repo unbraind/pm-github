@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import type { ServerResponse } from "node:http";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { runWithReproducibleProcessEnvironment, create, get, update } from "@unbrained/pm-cli/sdk";
+import type { runCloseout } from "../closeout.ts";
 import { jsonResponse, startMockGithub } from "./helpers/mock-github-server.ts";
 
 const repoRoot = resolve(import.meta.dirname, "..");
@@ -59,9 +61,43 @@ test.before(async () => {
 });
 test.after(() => rmSync(packedRoot, { recursive: true, force: true }));
 
+/** One cell in the end-to-end item-decision table; only external evidence is synthetic. */
+interface DecisionCase {
+  selection: "explicit delivery tag" | "single post-criteria claim" | "ambiguous";
+  competitor: "none" | "valid" | "missing merge SHA" | "failed evidence fetch" | "failed checks" | "pagination cut";
+  peer: "none" | "retag mid-run";
+}
+
+/** Serve distinct PR provenance and schedule a real peer SDK retag after the item snapshot. */
+async function decisionEvidence(url: string, res: ServerResponse, cell: DecisionCase, id: string, pmRoot: string, env: NodeJS.ProcessEnv) {
+  const number = Number(/\/pulls\/(\d+)/.exec(url)?.[1]);
+  const headNumber = Number(/\/commits\/([12])/.exec(url)?.[1]);
+  const head = String(headNumber).repeat(40);
+  const at = (day: number) => `2026-10-${String(day).padStart(2, "0")}T00:00:00Z`;
+  if (url.includes("/pulls?")) {
+    jsonResponse(res, 200, (cell.competitor === "none" ? [2] : [2, 1]).map(n => ({ number: n, merged_at: at(n === 2 ? 8 : 4), updated_at: at(8) })));
+  } else if (url.includes("/commits?")) jsonResponse(res, 200, []);
+  else if (number) {
+    if (number === 1 && cell.competitor === "failed evidence fetch") { jsonResponse(res, 403, {}); return; }
+    if (number === 2 && cell.peer === "retag mid-run" && env.PEER_RETAG_APPLIED !== "true") {
+      env.PEER_RETAG_APPLIED = "true";
+      await update(id, { tags: "delivery-pr:https://github.com/acme/widgets/pull/1", author: "peer" }, { pmRoot, noExtensions: true });
+    }
+    jsonResponse(res, 200, { number, body: `${cell.selection === "ambiguous" && cell.competitor === "none" ? "See" : "Closes"} https://github.com/acme/widgets/blob/main/.agents/pm/tasks/${id}.toon`,
+      commits: 0, merged: true, merged_at: at(number === 2 ? 8 : 4),
+      merge_commit_sha: number === 1 && cell.competitor === "missing merge SHA" ? null : (number === 1 ? "a" : "b").repeat(40),
+      html_url: `https://github.com/acme/widgets/pull/${number}`, head: { sha: String(number).repeat(40) }, base: { ref: "trunk", repo: { full_name: "acme/widgets" } } });
+  } else if (url.includes("/protection/")) jsonResponse(res, 200, { contexts: ["CI"], checks: [] });
+  else if (url.includes("/check-runs")) jsonResponse(res, 200, {
+    total_count: headNumber === 1 && cell.competitor === "pagination cut" ? 2 : 1,
+    check_runs: [{ name: "CI", head_sha: head, status: "completed", conclusion: headNumber === 1 && cell.competitor === "failed checks" ? "failure" : "success", app: { id: 7 } }],
+  });
+  else jsonResponse(res, 200, []);
+}
+
 /** A real caller with one eligible item, nested npm dependencies, and a local publication boundary. */
 async function fixture(fn: (f: { root: string; base: string; pmRoot: string; id: string; env: NodeJS.ProcessEnv;
-  run: (names: string[], source?: string) => ReturnType<typeof bash>; git: (...args: string[]) => string }) => Promise<void>) {
+  run: (names: string[], source?: string) => ReturnType<typeof bash>; git: (...args: string[]) => string }) => Promise<void>, cell?: DecisionCase) {
   const base = mkdtempSync(join(tmpdir(), "closeout-caller-"));
   const root = join(base, "caller");
   const remote = join(base, "remote.git");
@@ -79,6 +115,11 @@ async function fixture(fn: (f: { root: string; base: string; pmRoot: string; id:
   const item = await runWithReproducibleProcessEnvironment({ PM_CLOCK: "2026-10-01T00:00:00Z", PM_SEED: "workflow" }, () => create({ title: "Verified delivery", type: "Task", author: "fixture", acceptanceCriteria: "Delivery verified" }, { pmRoot, noExtensions: true }));
   const id = item.item.id;
   await update(id, { status: "in_progress" }, { pmRoot, noExtensions: true });
+  if (cell?.selection === "single post-criteria claim") await runWithReproducibleProcessEnvironment({ PM_CLOCK: "2026-10-07T00:00:00Z", PM_SEED: "table-criteria" }, () =>
+    update(id, { acceptanceCriteria: "Criteria revised between the two merges" }, { pmRoot, noExtensions: true }));
+  if (cell?.selection === "explicit delivery tag") await update(id, { tags: "delivery-pr:https://github.com/acme/widgets/pull/2" }, { pmRoot, noExtensions: true });
+  // With no competitor, ambiguity means an explicit selector outside the selected set.
+  if (cell?.selection === "ambiguous" && cell.competitor === "none") await update(id, { tags: "delivery-pr:https://github.com/acme/widgets/pull/99" }, { pmRoot, noExtensions: true });
   const project = join(root, "tools/oracle");
   mkdirSync(join(project, "node_modules/@unbrained"), { recursive: true });
   mkdirSync(join(project, "node_modules/.bin"), { recursive: true });
@@ -156,6 +197,10 @@ esac
     AUTO_STATE: join(base, "auto-state"), ARMED_EDIT: join(base, "armed-edit"), PR_STATE: join(base, "pr-state"), PR_BODY: join(base, "pr-body"), RECEIPTS: join(base, "receipts") });
   const server = await startMockGithub((req, res) => {
     const url = req.url!;
+    if (cell) {
+      void decisionEvidence(url, res, cell, id, pmRoot, env).catch((error: Error) => res.destroy(error));
+      return;
+    }
     if (url.includes("/check-runs")) env.HEAD_LOOKUPS = String(Number(env.HEAD_LOOKUPS ?? 0) + 1);
     if (env.PROTECTION_DENIED === "true" && (url.includes("/protection/") || url.includes("/rules/branches/"))) { jsonResponse(res, 403, {}); return; }
     if (env.READ_DENIED === "true" || (env.CHECKS_DENIED === "true" && url.includes("/check-runs"))) { jsonResponse(res, 403, { message: "Resource not accessible by integration" }); return; }
@@ -451,13 +496,12 @@ for (const mode of ["undeclared", "blank", "missing", "neutral", "skipped", "pen
       const item = (await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item;
       assert.match(String(item.actual_result), mode === "metadata" ? /required checks satisfied/ : /caller-declared checks concluded success; repository required-check metadata was unavailable; successful head checks: CI/);
     } else {
-      assert.equal(report.plan[0]!.code, mode === "undeclared" || mode === "blank" || mode === "missing" ? "needs_review" : "head_checks_failed");
-      if (["undeclared", "blank", "missing"].includes(mode)) assert.equal(result.code, 0, result.out);
+      assert.equal(report.plan[0]!.code, "needs_review");
+      assert.equal(result.code, 0, result.out);
       assert.equal(readFileSync(join(f.pmRoot, "tasks", `${f.id}.toon`), "utf8"), before);
-      assert.equal(existsSync(f.env.PR_STATE!), ["undeclared", "blank", "missing"].includes(mode));
-      if (["undeclared", "blank", "missing"].includes(mode)) return;
-      unpublished(f.git);
-      assert.doesNotMatch(readFileSync(f.env.RECEIPTS!, "utf8"), /pr (create|edit)|workflow run/);
+      assert.equal(existsSync(f.env.PR_STATE!), true);
+      assert.match(readFileSync(f.env.PR_BODY!, "utf8"), /"action": "needs_review"/);
+      assert.doesNotMatch(readFileSync(f.env.PR_BODY!, "utf8"), /"action": "close"/);
     }
   }));
 }
@@ -552,3 +596,56 @@ test("confirmed unmerged references cannot block publication of a unique merged 
   assert.doesNotMatch(body, /"action": "needs_review"|"code": "incomplete_merge"/);
   assert.match(body, /"not_merged": 1/);
 }));
+
+
+for (const selection of ["explicit delivery tag", "single post-criteria claim", "ambiguous"] as const) {
+  for (const competitor of ["none", "valid", "missing merge SHA", "failed evidence fetch", "failed checks", "pagination cut"] as const) {
+    for (const peer of ["none", "retag mid-run"] as const) {
+      test(`item decision end to end: ${selection} / ${competitor} / ${peer}`, async () => fixture(async f => {
+        const result = await f.run([...setup, ...finish]);
+        const report = JSON.parse(readFileSync(join(f.base, "pm-github-closeout.json"), "utf8")) as Awaited<ReturnType<typeof runCloseout>>;
+        const item = (await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item;
+        assert.equal(f.env.PEER_RETAG_APPLIED === "true", peer === "retag mid-run");
+        // Assert publication first: the regression closed locally and stopped at the workflow gate.
+        assert.equal(result.code, 0, result.out);
+        assert.equal(existsSync(f.env.PR_STATE!), true, "the final item decision must be published");
+        const published = `refs/remotes/origin/${branch}`;
+        const itemPath = `.agents/pm/tasks/${f.id}.toon`;
+        assert.equal(f.git("show", `${published}:${itemPath}`), readFileSync(join(f.root, itemPath), "utf8").trim());
+        const body = readFileSync(f.env.PR_BODY!, "utf8");
+        const closes = selection !== "ambiguous" && (peer === "retag mid-run" ? selection === "explicit delivery tag" && competitor === "valid"
+          : selection === "explicit delivery tag" || competitor !== "failed evidence fetch");
+        assert.equal(item.status, closes ? "closed" : "in_progress", JSON.stringify(report));
+        assert.equal(report.closed, closes ? 1 : 0);
+        assert.equal(report.failed, 0);
+        const history = f.git("show", `${published}:.agents/pm/history/${f.id}.jsonl`);
+        assert.equal(history.split('"op":"close"').length - 1, closes ? 1 : 0);
+        if (closes) {
+          const chosen = peer === "retag mid-run" ? 1 : 2;
+          const provenance = JSON.parse(item.close_reason!) as { pr: number; url: string; head_sha: string; merge_commit_sha: string; merged_at: string; checks: string[] };
+          assert.deepEqual(provenance, { pr: chosen, url: `https://github.com/acme/widgets/pull/${chosen}`, head_sha: String(chosen).repeat(40),
+            merge_commit_sha: (chosen === 1 ? "a" : "b").repeat(40), merged_at: `2026-10-0${chosen === 1 ? 4 : 8}T00:00:00Z`, checks: ["CI"] });
+          assert.equal(item.completed_at, provenance.merged_at.replace("Z", ".000Z"));
+          assert.match(item.resolution!, new RegExp(`pull/${chosen} `));
+          assert.equal(item.expected_result, item.acceptance_criteria);
+          assert.ok(item.actual_result!.includes(provenance.merged_at));
+          assert.equal(report.plan.filter(row => row.action === "close").length, 1);
+          assert.ok(report.plan.every(row => row.pr === chosen ? row.action === "close" : row.action === "skip" && row.code === "duplicate_selection"));
+          assert.match(body, new RegExp(`"pr": ${chosen},\\s*"action": "close"`));
+          assert.doesNotMatch(body, /"action": "needs_review"|"action": "refuse"/);
+          assert.equal(f.git("ls-tree", "--name-only", published, ".agents/pm/closeout-review.json"), "");
+        } else {
+          const candidates = competitor === "none" ? [2] : [1, 2];
+          assert.ok(report.plan.every(row => row.action === "needs_review" && row.code === "needs_review"));
+          for (const row of report.plan) assert.deepEqual(row.candidates, candidates);
+          assert.deepEqual(report.plan.map(row => row.pr).sort(), candidates);
+          const review = JSON.parse(f.git("show", `${published}:.agents/pm/closeout-review.json`)) as { needs_review: { candidates: number[] }[] };
+          assert.deepEqual(review.needs_review.map(row => row.candidates), [candidates]);
+          assert.match(body, /"action": "needs_review"/);
+          assert.doesNotMatch(body, /"action": "close"|"action": "refuse"/);
+          assert.doesNotMatch(readFileSync(f.env.RECEIPTS!, "utf8"), /pr merge .*--auto/);
+        }
+      }, { selection, competitor, peer }));
+    }
+  }
+}
