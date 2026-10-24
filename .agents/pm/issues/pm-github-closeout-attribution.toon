@@ -1,0 +1,33 @@
+id: pm-github-closeout-attribution
+title: Hold ambiguous merged-PR delivery until attribution is verified
+description: "Follow up the completed declaration matcher with explicit item delivery links, acceptance-criteria chronology and needs_review candidates; pm-ado issue 33 and PR 32 expose incorrect durable delivery provenance."
+type: Issue
+status: in_progress
+priority: 1
+tags[3]: changelog-unreleased,closeout,"gh:unbraind/pm-ado#33"
+created_at: "2026-10-24T06:16:55.856Z"
+updated_at: "2026-10-24T06:25:37.829Z"
+assignee: codex-agent
+claim_principal: codex-agent
+author: codex-agent
+acceptance_criteria: Explicit delivery link wins; otherwise exactly one claimed merged PR after the latest criteria change may close; ambiguous items remain open with all candidates reported; completion uses the chosen merge timestamp.
+comments[4]{created_at,author,text}:
+  "2026-10-24T06:16:59.176Z",codex-agent,"Read pm-ado issue 33 and dirty PR 32. Existing pm-github-uqjf is closed and covers declarations; this follow-up replaces its latest-merge tie-break with explicit delivery attribution and acceptance-history checks. Plan: real non-git tracker regressions, function-only revert proof, focused local gates and npm/Bun CI release gates. PR 32 will be closed with cross-links after the fix PR exists; issue 33 stays open."
+  "2026-10-24T06:21:01.545Z",codex-agent,"Implemented explicit delivery-pr URL tags, immutable SDK acceptance-history cutoff, unique body/commit claims and needs_review rows retaining all candidates. Check success no longer breaks ties or falls back to old delivery. Review-only workflow runs persist a privacy-gated closeout-review.json report and open a PR without closing any item. Initial non-git selection suite passes 13/13; existing chronological tie-break assertions updated to require review. Dependency pins and gate thresholds unchanged."
+  "2026-10-24T06:24:07.508Z",codex-agent,"Pinned pm test run passed selection 13/13 with no failures or skips; test-result storage is disabled by existing project policy, so this comment retains the receipt. Independently inspected pm-ado PRs 16 and 19: 16 explicitly leaves statement enforcement open; 19 declares the item and merged at 2026-10-08T01:19:51Z. Added a review-only workflow report; held attribution also disables automatic landing after dispatching caller checks."
+  "2026-10-24T06:25:34.878Z",codex-agent,"Behavioral revert proof: replaced only runCloseout with its f4c29e8 origin/main implementation, preserving current helpers and tests. Ran node --test --test-name-pattern='ambiguous linked merged PRs|explicit delivery link selects|a claim before or equal' test/closeout-selection.test.ts. Reverted function: exit 1, 0/3 pass and 3 ERR_ASSERTION failures (ambiguous delivery closed, explicit override ignored, pre-criteria claim closed). Restored function: exit 0, 3/3 pass, no skips. Tests import TypeScript source directly; no dist rebuild is needed. Focused c8 reports closeout.ts at exact 100/100/100/100; one pre-update array-order assertion was corrected and its full attribution/selection suites now pass 25/25."
+files[6]{path,scope}:
+  .github/workflows/pm-github-closeout.yml,project
+  closeout.ts,project
+  test/closeout-attribution.test.ts,project
+  test/closeout-selection.test.ts,project
+  test/closeout-workflow.test.ts,project
+  test/closeout.test.ts,project
+tests[3]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test test/closeout-selection.test.ts,project,codex-agent,"2026-10-24T06:21:00.205Z",local_mutation,fix/closeout-delivery-attribution
+  node --test test/closeout.test.ts test/closeout-attribution.test.ts test/closeout-selection.test.ts,project,codex-agent,"2026-10-24T06:25:36.399Z",local_mutation,fix/closeout-delivery-attribution
+  node --test test/closeout-workflow.test.ts,project,codex-agent,"2026-10-24T06:25:37.785Z",local_mutation,fix/closeout-delivery-attribution
+docs[2]{path,scope}:
+  docs/explicit-closeout-attribution.md,project
+  README.md,project
+body: ""

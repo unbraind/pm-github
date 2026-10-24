@@ -17,7 +17,7 @@ const cli = join(import.meta.dirname, "../node_modules/.bin/pm");
 const repo = "fixture/project";
 const head = "a".repeat(40);
 const merge = "b".repeat(40);
-const mergedAt = "2026-10-13T12:30:00Z";
+const mergedAt = "2099-10-13T12:30:00Z";
 const bareLink = (id: string, repository = repo) => `https://github.com/${repository}/blob/main/.agents/pm/tasks/${id}.toon`;
 
 /** Explicit delivery declarations used by all positive closeout fixtures. */
@@ -42,7 +42,8 @@ function fixture(body: string | null, override?: MockGithubHandler): MockGithubH
       if (response.writableEnded) return;
     }
     const url = request.url!;
-    if (url.includes("/pulls/")) jsonResponse(response, 200, pull(body, { number: Number(url.split("/").at(-1)), html_url: `https://github.com/${repo}/pull/${url.split("/").at(-1)}` }));
+    if (url.includes("/commits?")) jsonResponse(response, 200, []);
+    else if (url.includes("/pulls/")) jsonResponse(response, 200, pull(body, { number: Number(url.split("/").at(-1)), html_url: `https://github.com/${repo}/pull/${url.split("/").at(-1)}` }));
     else if (url.includes("/rules/branches/")) jsonResponse(response, 200, []);
     else if (url.includes("/protection/")) jsonResponse(response, 200, { contexts: ["CI"], checks: [{ context: "CI", app_id: 7 }] });
     else if (url.includes("/check-runs")) jsonResponse(response, 200, { total_count: 1, check_runs: [run()] });
@@ -142,7 +143,7 @@ test("apply persists only exact GitHub reason facts; repeated selection writes z
     assert.equal(item.status, "closed");
     assert.equal(item.close_reason, JSON.stringify({ pr: 42, url: `https://github.com/${repo}/pull/42`, merge_commit_sha: merge,
       head_sha: head, merged_at: mergedAt, checks: ["CI"] }));
-    assert.equal(item.completed_at, "2026-10-13T12:30:00.000Z");
+    assert.equal(item.completed_at, "2099-10-13T12:30:00.000Z");
     assert.equal(item.resolution, `Delivered by https://github.com/${repo}/pull/42 (merge ${merge.slice(0, 12)}, head ${head.slice(0, 12)})`);
     assert.equal(item.expected_result, "Verified delivery");
     assert.equal(item.actual_result, `Merged at ${mergedAt}; required checks satisfied; successful head checks: CI`);
@@ -236,16 +237,16 @@ test("public apply reports partial results as CommandError exit 1 after remainin
         return true;
       });
       assert.equal((await get(ids[1]!, {}, { pmRoot: root, noExtensions: true })).item.status, "closed");
-      assert.equal(server.requests.filter(request => request.url.includes("/pulls/")).length, 1);
+      assert.equal(server.requests.filter(request => /\/pulls\/\d+$/.test(request.url)).length, 1);
     }));
   } finally { await unlock(); }
 }));
 
-test("equal merge times select the higher PR number before writes", async () => tracker(async (root, ids) => {
+test("equal merge times require review before writes", async () => tracker(async (root, ids) => {
   await withMockGithub(fixture(link(ids[0]!)), async () => {
     const report = await closeout(root, { pr: ["43", "42"], apply: true });
-    assert.equal(report.closed, 1);
-    assert.deepEqual(report.plan.map(row => [row.pr, row.action, row.code]), [[42, "skip", "duplicate_selection"], [43, "close", "head_checks_passed"]]);
+    assert.equal(report.closed, 0);
+    assert.deepEqual(report.plan.map(row => [row.pr, row.action, row.code]), [[42, "needs_review", "needs_review"], [43, "needs_review", "needs_review"]]);
   });
 }));
 
@@ -346,7 +347,7 @@ test("since drains every page and uses inclusive merge time rather than update t
     if (request.url!.includes("/pulls?")) {
       const page = new URL(request.url!, base).searchParams.get("page");
       jsonResponse(response, 200, page === "2" ? [{ number: 42, merged_at: mergedAt }] : [
-        { number: 40, merged_at: null }, { number: 41, merged_at: "2026-10-12T00:00:00Z" }],
+        { number: 40, merged_at: null }, { number: 41, merged_at: "2099-10-12T00:00:00Z" }],
       page === "2" ? {} : { Link: nextLinkHeader(base, "/repos/fixture/project/pulls?state=closed&page=2") });
     }
   }), async server => {
@@ -371,8 +372,8 @@ test("head check and status pagination retains all required evidence", async () 
 test("invalid selectors fail before HTTP or writes", async () => tracker(async (root) => {
   await withMockGithub(fixture(null), async server => {
     for (const options of [{}, { pr: [] }, { pr: false }, { pr: "" }, { pr: ["42", 43] }, { pr: "0" }, { pr: "1.2" }, { pr: "9007199254740992" },
-      { pr: "42", since: "2026-10-01" }, { since: "yesterday" }, { since: "2026-02-30" }, { since: "2026-10-01T12:00:00" },
-      { since: "2026-10-01T99:00:00Z" }, { since: false }, { since: "" }, { pr: "42", skip: [] }, { pr: "42", skip: true }, { pr: "42", "required-checks": ["CI", 42] }, { pr: "42", "required-checks": false }]) {
+      { pr: "42", since: "2099-10-01" }, { since: "yesterday" }, { since: "2099-02-30" }, { since: "2099-10-01T12:00:00" },
+      { since: "2099-10-01T99:00:00Z" }, { since: false }, { since: "" }, { pr: "42", skip: [] }, { pr: "42", skip: true }, { pr: "42", "required-checks": ["CI", 42] }, { pr: "42", "required-checks": false }]) {
       await assert.rejects(() => closeout(root, options), CloseoutUsageError);
     }
     for (const repository of [undefined, "invalid", "bad/repo/name", "./repo", "../repo", "fixture/.", "fixture/.."]) await assert.rejects(() => runCloseout(root, repository, { pr: "42" }, api()), CloseoutUsageError);
@@ -446,8 +447,8 @@ test("since validates selected numbers and permits an empty selection", async ()
     await withMockGithub(fixture(null, (request, response) => {
       if (request.url!.includes("/pulls?")) jsonResponse(response, 200, selected);
     }), async () => {
-      if (selected.length === 0) assert.deepEqual((await closeout(root, { since: "2026-10-13" })).plan, []);
-      else await assert.rejects(() => closeout(root, { since: "2026-10-13" }));
+      if (selected.length === 0) assert.deepEqual((await closeout(root, { since: "2099-10-13" })).plan, []);
+      else await assert.rejects(() => closeout(root, { since: "2099-10-13" }));
     });
   }
 }));
@@ -459,8 +460,8 @@ test("public command registration reuses repo resolution and shared transport", 
     assert.equal((result.result as { plan: { action: string }[] }).plan[0]!.action, "close");
     const compact = await harness.runCommand({ command: "github closeout", pmRoot: root,
       global: { json: false }, options: { pr: ["42", "43", "44"] } });
-    assert.deepEqual((compact.result as { plan: { pr: number; action: string }[] }).plan.map(row => [row.pr, row.action]), [[44, "close"]]);
-    assert.deepEqual((compact.result as { skipped: object }).skipped, { duplicate_selection: 2 });
+    assert.deepEqual((compact.result as { plan: { pr: number; action: string }[] }).plan.map(row => [row.pr, row.action]), [[42, "needs_review"], [43, "needs_review"], [44, "needs_review"]]);
+    assert.deepEqual((compact.result as { skipped: object }).skipped, {});
     const full = await harness.runCommand({ command: "github closeout", pmRoot: root,
       global: { json: false }, options: { pr: ["42", "43", "44"], full: true } });
     assert.equal((full.result as { plan: object[] }).plan.length, 3);
@@ -474,14 +475,14 @@ test("public command registration reuses repo resolution and shared transport", 
       (error: unknown) => (error as { exitCode?: number }).exitCode === 2 && /positive pull-request numbers/.test((error as Error).message));
     await assert.rejects(harness.runCommand({ command: "github closeout", pmRoot: root, options: { pr: ["42"] } }),
       (error: unknown) => (error as { exitCode?: number }).exitCode === 1 && /Invalid GitHub evidence object/.test((error as Error).message));
-    assert.equal(server.requests.filter(request => request.url.includes("/pulls/")).length, 1);
+    assert.equal(server.requests.filter(request => /\/pulls\/\d+$/.test(request.url)).length, 1);
   }));
 }));
 
 test("since stops paging once a row was last updated before the cutoff", async () => tracker(async (root, ids) => {
   await withMockGithub(fixture(link(ids[0]!), (request, response, _body, base) => {
     if (request.url!.includes("/pulls?")) {
-      jsonResponse(response, 200, [{ number: 42, merged_at: mergedAt, updated_at: mergedAt }, { number: 41, merged_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:00:00Z" }],
+      jsonResponse(response, 200, [{ number: 42, merged_at: mergedAt, updated_at: mergedAt }, { number: 41, merged_at: "2099-10-01T00:00:00Z", updated_at: "2099-10-01T00:00:00Z" }],
         { Link: nextLinkHeader(base, "/repos/fixture/project/pulls?state=closed&page=2") });
     }
   }), async server => {
@@ -492,6 +493,7 @@ test("since stops paging once a row was last updated before the cutoff", async (
 }));
 
 test("packed CLI preserves repeatable selectors, TOON/JSON shape and no-op apply", async () => tracker(async (root, ids) => {
+  for (const id of ids) await update(id, { tags: `delivery-pr:https://github.com/${repo}/pull/43` }, { pmRoot: root, noExtensions: true });
   const packageRoot = join(import.meta.dirname, "..");
   const packed = await boundedCli("npm", ["pack", "--ignore-scripts", "--foreground-scripts=false", "--json", "--pack-destination", root], packageRoot,
     { ...process.env, PM_PATH: join(packageRoot, ".agents/pm") });

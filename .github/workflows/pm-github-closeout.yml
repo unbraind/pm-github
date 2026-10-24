@@ -372,6 +372,15 @@ jobs:
             echo "::error::Closeout refused; incomplete merged-PR metadata blocks a linked local tracker item. No branch was published."
             exit 1
           fi
+          # Persist only safe attribution facts so an all-held run can still open a review PR.
+          review_file="${PM_SYNC_TRACKER}/closeout-review.json"
+          review_count="$(jq '[.plan[] | select(.action == "needs_review")] | length' "${RUNNER_TEMP}/pm-github-closeout.json")"
+          if [[ "${review_count}" != 0 ]]; then
+            jq '{needs_review: ([.plan[] | select(.action == "needs_review") | {item, action, candidates}] | unique_by(.item))}' "${RUNNER_TEMP}/pm-github-closeout.json" > "${review_file}"
+          elif [[ -f "${review_file}" ]]; then
+            rm -- "${review_file}"
+          fi
+          printf 'CLOSEOUT_REVIEW=%s\n' "${review_count}" >> "${GITHUB_ENV}"
           printf 'CLOSEOUT_CLOSED=%s\n' "$(jq -r '.closed' "${RUNNER_TEMP}/pm-github-closeout.json")" >> "${GITHUB_ENV}"
 
       - name: Run caller post-closeout script
@@ -474,7 +483,7 @@ jobs:
               gh pr close "${number}" -R "${REPOSITORY}" --comment "No delivered tracker items remain to close; closing this review PR."
             fi
           }
-          if [[ "${CLOSEOUT_CLOSED}" == 0 ]] || git diff --cached --quiet -- "${sync_scope[0]}" "${sync_scope[@]:2}"; then
+          if [[ "${CLOSEOUT_CLOSED}" == 0 && "${CLOSEOUT_REVIEW:-0}" == 0 ]] || git diff --cached --quiet -- "${sync_scope[0]}" "${sync_scope[@]:2}"; then
             # Changelog drift alone belongs to the caller's changelog check;
             # publish regenerated output only alongside tracker changes.
             if ! git diff --cached --quiet -- CHANGELOG.md; then
@@ -505,13 +514,16 @@ jobs:
               printf -- '- [%s](https://github.com/%s/blob/%s/%s) ([proposed](https://github.com/%s/blob/%s/%s))\n' "${item_id}" "${REPOSITORY}" "${DEFAULT_BRANCH}" "${changed}" "${REPOSITORY}" "${SYNC_BRANCH}" "${changed}" >> "${links_file}"
             fi
           done < <(git diff --cached --name-only -- "${sync_scope[0]}" "${sync_scope[@]:2}")
+          if [[ "${CLOSEOUT_REVIEW:-0}" != 0 ]]; then
+            printf -- '- [Delivery attribution needing review](https://github.com/%s/blob/%s/%s/closeout-review.json)\n' "${REPOSITORY}" "${SYNC_BRANCH}" "${PM_SYNC_TRACKER}" >> "${links_file}"
+          fi
           if [[ ! -s "${links_file}" ]]; then
             echo "::error::Closeout changed tracker state but no item link could be generated."
             exit 1
           fi
           # Publish only actionable decisions and counts, with no API prose.
           summary_file="${RUNNER_TEMP}/pm-github-closeout-summary.json"
-          jq '{plan: [.plan[] | select(.code != "already_terminal" and .code != "other_repository" and .code != "duplicate_selection" and .code != "explicit_skip") | {item, pr, action: (if .action == "close" then "close" else "refuse" end), code}], skipped: ([.plan[] | select(.code == "already_terminal" or .code == "other_repository" or .code == "duplicate_selection" or .code == "explicit_skip")] | group_by(.code) | map({key: .[0].code, value: length}) | from_entries)}' "${RUNNER_TEMP}/pm-github-closeout.json" > "${summary_file}"
+          jq '{plan: [.plan[] | select(.code != "already_terminal" and .code != "other_repository" and .code != "duplicate_selection" and .code != "explicit_skip") | {item, pr, action: (if .action == "skip" then "refuse" else .action end), code} + (if .candidates then {candidates} else {} end)], skipped: ([.plan[] | select(.code == "already_terminal" or .code == "other_repository" or .code == "duplicate_selection" or .code == "explicit_skip")] | group_by(.code) | map({key: .[0].code, value: length}) | from_entries)}' "${RUNNER_TEMP}/pm-github-closeout.json" > "${summary_file}"
           # Scan the public summary as added diff content before any publication.
           summary_patch="${RUNNER_TEMP}/pm-github-closeout-summary.patch"
           {
@@ -532,7 +544,7 @@ jobs:
           body_file="${RUNNER_TEMP}/pm-github-sync-pr.md"
           {
             printf '%s\n\n' "Automated pm-github merged-PR closeout for ${REPOSITORY}."
-            printf '%s\n\n' "The closeout command verified merged-PR delivery and head checks. The proposed tracker change and regenerated changelog passed the fail-closed privacy gate before anything was committed. \`${DEFAULT_BRANCH}\` is never pushed directly."
+            printf '%s\n\n' "The closeout command verified delivery and head checks for closed items; needs_review items remain open with every candidate listed below. The proposed tracker change and regenerated changelog passed the fail-closed privacy gate before anything was committed. \`${DEFAULT_BRANCH}\` is never pushed directly."
             printf '%s\n\n' "Tracker items changed:"
             cat "${links_file}"
             printf '\n%s\n\n%s\n' 'Closeout plan (routine skips counted by reason):' '```json'
@@ -624,6 +636,10 @@ jobs:
           }
           head_sha="$(git rev-parse HEAD)"
           dispatch_checks
+          if [[ "${CLOSEOUT_REVIEW:-0}" != 0 ]]; then
+            echo "::notice::Delivery attribution needs review; caller checks were dispatched and automatic landing is disabled."
+            exit 0
+          fi
           enable_auto_merge
           parked_runs="$(gh run list -R "${REPOSITORY}" --commit "${head_sha}" --status action_required --limit 100 --json url --jq '.[].url')"
           while IFS= read -r run_url; do

@@ -5,7 +5,7 @@ import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSyn
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { create, get, update } from "@unbrained/pm-cli/sdk";
+import { runWithReproducibleProcessEnvironment, create, get, update } from "@unbrained/pm-cli/sdk";
 import { jsonResponse, startMockGithub } from "./helpers/mock-github-server.ts";
 
 const repoRoot = resolve(import.meta.dirname, "..");
@@ -76,7 +76,7 @@ async function fixture(fn: (f: { root: string; base: string; pmRoot: string; id:
   command(root, "git", ["init", "--bare", remote], env);
   git("init", "-b", "trunk");
   command(root, cli, ["--pm-path", pmRoot, "init", "fixture"], env);
-  const item = await create({ title: "Verified delivery", type: "Task", author: "fixture", acceptanceCriteria: "Delivery verified" }, { pmRoot, noExtensions: true });
+  const item = await runWithReproducibleProcessEnvironment({ PM_CLOCK: "2026-10-01T00:00:00Z", PM_SEED: "workflow" }, () => create({ title: "Verified delivery", type: "Task", author: "fixture", acceptanceCriteria: "Delivery verified" }, { pmRoot, noExtensions: true }));
   const id = item.item.id;
   await update(id, { status: "in_progress" }, { pmRoot, noExtensions: true });
   const project = join(root, "tools/oracle");
@@ -151,9 +151,10 @@ esac
     if (env.PROTECTION_DENIED === "true" && (url.includes("/protection/") || url.includes("/rules/branches/"))) { jsonResponse(res, 403, {}); return; }
     if (env.READ_DENIED === "true" || (env.CHECKS_DENIED === "true" && url.includes("/check-runs"))) { jsonResponse(res, 403, { message: "Resource not accessible by integration" }); return; }
     const sha = "a".repeat(40);
-    if (url.includes("/pulls?")) jsonResponse(res, 200, env.NO_DELIVERY === "true" ? [] : [{ number: 42, merged_at: "2026-10-15T00:00:00Z", updated_at: "2026-10-15T00:00:00Z" }]);
-    else if (url.endsWith("/pulls/42")) jsonResponse(res, 200, { number: 42, body: env.NO_LINKS === "true" ? "Routine maintenance" : `Closes https://github.com/${env.FOREIGN_LINK === "true" ? "other/project" : "acme/widgets"}/blob/main/.agents/pm/tasks/${id}.toon${env.SUMMARY_ROWS === "true" ? `\nhttps://github.com/other/project/blob/main/.agents/pm/tasks/${id}.toon` : ""}${env.SUMMARY_ITEM ? `\nhttps://github.com/acme/widgets/blob/main/.agents/pm/tasks/${env.SUMMARY_ITEM}.toon` : ""}`,
-      merged: true, merged_at: "2026-10-15T00:00:00Z", merge_commit_sha: env.INCOMPLETE_MERGE === "true" ? null : "b".repeat(40), html_url: "https://github.com/acme/widgets/pull/42",
+    if (url.includes("/pulls?")) jsonResponse(res, 200, env.NO_DELIVERY === "true" ? [] : [...(env.AMBIGUOUS === "true" ? [{ number: 43, merged_at: "2026-10-16T00:00:00Z", updated_at: "2026-10-16T00:00:00Z" }] : []), { number: 42, merged_at: "2026-10-15T00:00:00Z", updated_at: "2026-10-15T00:00:00Z" }]);
+    else if (url.includes("/commits?")) jsonResponse(res, 200, []);
+    else if (/\/pulls\/(42|43)$/.test(url)) jsonResponse(res, 200, { number: Number(url.split("/").at(-1)), body: env.NO_LINKS === "true" ? "Routine maintenance" : `Closes https://github.com/${env.FOREIGN_LINK === "true" ? "other/project" : "acme/widgets"}/blob/main/.agents/pm/tasks/${id}.toon${env.SUMMARY_ROWS === "true" ? `\nhttps://github.com/other/project/blob/main/.agents/pm/tasks/${id}.toon` : ""}${env.SUMMARY_ITEM ? `\nhttps://github.com/acme/widgets/blob/main/.agents/pm/tasks/${env.SUMMARY_ITEM}.toon` : ""}`,
+      merged: true, merged_at: "2026-10-15T00:00:00Z", merge_commit_sha: env.INCOMPLETE_MERGE === "true" ? null : "b".repeat(40), html_url: `https://github.com/acme/widgets/pull/${url.split("/").at(-1)}`,
       head: { sha }, base: { ref: "trunk", repo: { full_name: "acme/widgets" } } });
     else if (url.includes("/protection/")) jsonResponse(res, 200, { contexts: ["CI"], checks: [] });
     else if (url.includes("/rules/branches/")) jsonResponse(res, 200, []);
@@ -342,7 +343,7 @@ test("behavioural revert: removing only the no-op guard opens a PR with zero clo
   const prepared = await f.run(setup);
   assert.equal(prepared.code, 0, prepared.out);
   await update(f.id, { title: "Caller observation without delivery" }, { pmRoot: f.pmRoot, noExtensions: true });
-  const mutant = workflow.replace('if [[ "${CLOSEOUT_CLOSED}" == 0 ]] || git diff --cached --quiet -- "${sync_scope[0]}" "${sync_scope[@]:2}"; then', "if false; then");
+  const mutant = workflow.replace('if [[ "${CLOSEOUT_CLOSED}" == 0 && "${CLOSEOUT_REVIEW:-0}" == 0 ]] || git diff --cached --quiet -- "${sync_scope[0]}" "${sync_scope[@]:2}"; then', "if false; then");
   assert.notEqual(mutant, workflow);
   const result = await f.run(finish, mutant);
   assert.equal(result.code, 0, result.out);
@@ -459,3 +460,20 @@ for (const [scenario, names, input] of [
     assert.equal(existsSync(join(f.root, "injected")), false);
   }));
 }
+
+
+test("ambiguous deliveries open a review-only PR listing every candidate and leave the item open", async () => fixture(async f => {
+  f.env.AMBIGUOUS = "true";
+  f.env.APP_DEADLINE = String(Math.floor(Date.now() / 1000) + 600);
+  const result = await f.run([...setup, ...finish]);
+  assert.equal(result.code, 0, result.out);
+  assert.equal((await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item.status, "in_progress");
+  const body = readFileSync(f.env.PR_BODY!, "utf8");
+  assert.match(body, /"action": "needs_review"/);
+  assert.match(body, /"candidates": \[\s*42,\s*43\s*\]/);
+  assert.match(body, /closeout-review\.json/);
+  assert.doesNotMatch(readFileSync(f.env.RECEIPTS!, "utf8"), /pr merge/);
+  assert.match(result.out, /automatic landing is disabled/);
+  const published = f.git("show", `refs/remotes/origin/${branch}:.agents/pm/closeout-review.json`);
+  assert.deepEqual(JSON.parse(published), { needs_review: [{ item: f.id, action: "needs_review", candidates: [42, 43] }] });
+}));

@@ -11,12 +11,16 @@
 | Undeclared canonical body link, including a gap report, follow-up list, or `tracked in` reference, for an otherwise eligible item | `not_delivery`: Mentioned, not delivered |
 | Tracker PR URL metadata with no body reference or declaration | No row |
 | Closing declaration for a longer ID with the same prefix | Does not deliver the shorter ID |
-| Several eligible declarations | Latest merge time wins; equal times use the higher PR number |
+| Several linked merged PRs | One explicit `delivery-pr:<canonical PR URL>` item tag wins; otherwise require exactly one claim strictly after the last acceptance-criteria edit; unresolved cases become `needs_review` with all candidates |
 | No eligible declaration | No closeout |
 
 Declaration keywords are close, fix, resolve and deliver, including their existing tense forms. Whitespace between declaration and ID is horizontal; a newline cannot join them. Canonical links retain repository, encoding, traversal and exact-ID checks. `PM:` contextual lists do not act as `PM item:` declarations.
 
-The complete selected PR set is evaluated before SDK writes. Only merged PRs with complete merge facts, passing check policy and eligible tracker items enter delivery selection. Failed checks never win. Earlier qualifying rows become `duplicate_selection`; mention-only rows retain `not_delivery`. A single selected closure supplies completed_at, resolution, actual_result, close_reason and the appended close event. The existing epic, child, terminal, explicit-skip, privacy and strict-validation safeguards remain.
+The complete selected PR set is evaluated before SDK writes. A `delivery-pr:` tag is an explicit item-owned delivery link and can supply attribution without a body declaration. Multiple tags or a tag outside the selected set cannot silently fall back. Generic `pr_url` metadata remains contextual. Without an explicit delivery link, immutable SDK history determines the last acceptance-criteria change (or item creation when no later edit exists). Exactly one linked merged PR must claim the exact item in its description or commit messages and merge strictly after that cutoff. Unrelated later edits do not move it. Unavailable history holds delivery.
+
+Passing checks do not resolve attribution. Competing claims, equal merge times and multiple post-criteria claims require review even if one has failing checks. A uniquely attributed PR must still satisfy the existing merge and check policy. The selected PR supplies completed_at, resolution, actual_result, close_reason and the close event consistently. All candidates appear in `needs_review` plan rows and the compact closeout PR body; the item stays open. For an all-held workflow run, a privacy-gated tracker `closeout-review.json` artifact provides a reviewable diff without changing any item or item history.
+
+`test/closeout-selection.test.ts` uses real SDK trackers, deterministic SDK clocks for creation and criteria edits, synthetic PR/commit metadata, `GIT_CEILING_DIRECTORIES`, and a PATH containing no git. It covers one PR, an earlier claim before changed criteria plus later implementation, ambiguity, explicit overrides, missing history, and commit claims. The historical receipts below describe earlier matcher revisions; their latest-merge behavior is superseded by this policy.
 
 ## Regression evidence
 
@@ -49,3 +53,7 @@ The additional non-git SDK regression verifies metadata-only input produces an e
 Both full release gates passed at review code/test head `2fa4571247b5f86b984c588f32b494538a2f89ee`, sequentially with isolated git identity: `npm run release:check` and `bun run release:check` each exited 0 with 963/963 tests, zero failures, cancellations or skips. Each measured exact 100/100/100/100 across all 16 authored modules: lines/statements 11037/11037, functions 299/299 and branches 3510/3510. All remaining release stages passed with unchanged pins, inventory, exclusions and thresholds. Subsequent changes contain only documentation and append-only pm receipts; runtime source and tests remain identical to this gate head.
 
 The item remains in progress for orchestrator verification; its claim is released at handoff. No pm-ado record or history is edited. No merge or package release is performed.
+
+## Acceptance-aware selection regression proof
+
+Only `runCloseout` was replaced with its `f4c29e8` implementation while retaining current helpers and tests. `node --test --test-name-pattern='ambiguous linked merged PRs|explicit delivery link selects|a claim before or equal' test/closeout-selection.test.ts` failed all three assertions (exit 1): ambiguity closed, the explicit override was ignored, and a claim at/before changed criteria closed. Restoring the function passed 3/3 (exit 0). These tests import TypeScript source directly. The restored attribution/selection suites passed 25/25; focused c8 measured exact 100/100/100/100 for `closeout.ts` without exclusions. The review-only workflow regression also passed and proved no automatic landing request.

@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Hold ambiguous merged-PR delivery until attribution is verified ([pm-github-closeout-attribution](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-closeout-attribution.toon))
 - Publish tracker sync after restoring workflow-owned setup artifacts ([pm-github-sync-setup-artifacts](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-sync-setup-artifacts.toon))
 
 ## 2026.10.23 - 2026-10-23

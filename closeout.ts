@@ -1,5 +1,5 @@
 /** Close delivered tracker items using merged pull requests and head-check evidence. */
-import { close, listAllComplete, certifyCompleteListResult, PmCliError } from "@unbrained/pm-cli/sdk";
+import { close, listAllComplete, certifyCompleteListResult, getHistoryPath, readHistoryEntries, verifyHistoryEntries, PmCliError } from "@unbrained/pm-cli/sdk";
 
 /** Existing GitHub REST transport, supplied by the extension entry point. */
 export interface CloseoutApi {
@@ -12,14 +12,15 @@ export interface CloseoutApi {
 export interface CloseoutRow {
   item: string;
   pr: number;
-  action: "close" | "skip";
+  action: "close" | "skip" | "needs_review";
+  candidates?: number[];
   reason: string;
   code: CloseoutCode;
 }
 
 /** Stable decisions used by automation and compact skip counts. */
 export type CloseoutCode = "already_terminal" | "other_repository" | "duplicate_selection" | "explicit_skip"
-  | "unknown_item" | "epic" | "active_children" | "not_delivery" | "close_failed"
+  | "needs_review" | "unknown_item" | "epic" | "active_children" | "not_delivery" | "close_failed"
   | "head_checks_passed" | "head_checks_failed" | "head_evidence_unavailable" | "required_checks_unverified" | "incomplete_merge";
 
 /** Which head-check policy was evaluated for one selected pull request. */
@@ -335,6 +336,42 @@ export function extractCloseoutItems(body: string): { item: string; repo: string
   }).map(({ repo, item, declared }) => ({ repo, item, declared }));
 }
 
+/** Read the last criteria edit from immutable SDK history; unavailable chronology cannot select delivery. */
+async function acceptanceChangedAt(pmRoot: string, id: string, createdAt: string): Promise<number> {
+  try {
+    const history = await readHistoryEntries(getHistoryPath(pmRoot, id), id);
+    if (history.length === 0 || !verifyHistoryEntries(history).ok) return Number.NaN;
+    let changedAt = Date.parse(createdAt);
+    for (const event of history) {
+      if (event.patch.some(patch => ["", "/metadata", "/metadata/acceptance_criteria"].includes(patch.path))) {
+        changedAt = Math.max(changedAt, Date.parse(event.ts));
+      }
+    }
+    return changedAt;
+  } catch { return Number.NaN; }
+}
+
+/** Extract exact item declarations from descriptions or commit messages using the same grammar. */
+function deliveryReferences(body: string, repo: string, ids: Iterable<string>) {
+  const refs = extractCloseoutItems(body);
+  const declarations = new Set<string>();
+  for (const match of body.matchAll(/^(?:[-*][ \t]+)?([a-z]+|pm-github:|PM item:)[ \t]+(\S+)[ \t]*$/gim)) {
+    const keyword = match[1]!.toLowerCase();
+    if (!CLOSING_KEYWORDS.has(keyword) && keyword !== "pm-github:" && keyword !== "pm item:") continue;
+    const id = declarationKey(match[2]!);
+    declarations.add(id);
+    if (/[.!]$/.test(id)) declarations.add(id.slice(0, -1));
+  }
+  for (const id of ids) {
+    if (declarations.has(declarationKey(id))) {
+      const ref = refs.find(ref => ref.item === id && ref.repo.toLowerCase() === repo.toLowerCase());
+      if (ref) ref.declared = true;
+      else refs.push({ item: id, repo, declared: true });
+    }
+  }
+  return refs;
+}
+
 /** Render only the allowed GitHub facts; never include body, title or comment text. */
 function closeReason(pr: PullRequest, passed: string[]): string {
   return JSON.stringify({ pr: pr.number, url: pr.html_url, merge_commit_sha: pr.merge_commit_sha,
@@ -411,27 +448,27 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
   const plan: CloseoutRow[] = [];
   const checks: CheckGate[] = [];
   const closures: { row: CloseoutRow; reason: string; at: string; resolution: string; expectedResult: string; actualResult: string }[] = [];
+  const candidates = new Map<string, { row: CloseoutRow; pr: PullRequest; declared: boolean }[]>();
   for (const number of [...new Set(numbers)].sort((a, b) => a - b)) {
     const pr = pullRequest(await payload(api, `/repos/${repo}/pulls/${number}`), repo, number);
     let gate: CheckGate = { pr: number, code: "incomplete_merge", rule: "unavailable", ok: false, passed: [], reason: "Pull request is not merged or merge evidence is incomplete." };
     if (mergeEvidence(pr)) gate = await checkCloseoutHead(api, repo, pr, declared);
     checks.push(gate);
-    const refs = extractCloseoutItems(pr.body ?? "");
-    // Scan declarations once per PR, retaining case-insensitive IDs and optional punctuation.
-    const declarations = new Set<string>();
-    for (const match of (pr.body ?? "").matchAll(/^(?:[-*][ \t]+)?([a-z]+|pm-github:|PM item:)[ \t]+(\S+)[ \t]*$/gim)) {
-      const keyword = match[1]!.toLowerCase();
-      if (!CLOSING_KEYWORDS.has(keyword) && keyword !== "pm-github:" && keyword !== "pm item:") continue;
-      const id = declarationKey(match[2]!);
-      declarations.add(id);
-      if (/[.!]$/.test(id)) declarations.add(id.slice(0, -1));
+    const refs = deliveryReferences(pr.body ?? "", repo, items.keys());
+    // Commit messages can independently claim delivery. Missing commit evidence never upgrades a mention.
+    let messages: string[] = [];
+    try {
+      if (gate.code !== "incomplete_merge") messages = (await pages(api, `/repos/${repo}/pulls/${number}/commits?per_page=100`))
+        .map(value => text(record(record(value).commit).message));
+    } catch { /* Description declarations remain usable when commits cannot be read. */ }
+    for (const ref of deliveryReferences(messages.join("\n"), repo, items.keys())) {
+      const existing = refs.find(entry => entry.item === ref.item && entry.repo.toLowerCase() === ref.repo.toLowerCase());
+      if (existing) existing.declared ||= ref.declared;
+      else refs.push(ref);
     }
     for (const item of items.values()) {
-      // Delivery must be declared in this PR body, never inferred from tracker metadata.
-      if (declarations.has(declarationKey(item.id))) {
-        const ref = refs.find(ref => ref.item === item.id && ref.repo.toLowerCase() === repo.toLowerCase());
-        if (ref) ref.declared = true;
-        else refs.push({ item: item.id, repo, declared: true });
+      if (item.tags.includes(`delivery-pr:${pr.html_url}`) && !refs.some(ref => ref.item === item.id && ref.repo.toLowerCase() === repo.toLowerCase())) {
+        refs.push({ item: item.id, repo, declared: false });
       }
     }
     for (const ref of refs) {
@@ -444,7 +481,7 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
       else if (!gate.ok) { code = gate.code; reason = gate.reason; }
       else if (items.get(ref.item)!.type === "Epic") { code = "epic"; reason = "Epics close when their children are done, not by a pull request."; }
       else if (activeChildren.has(ref.item)) { code = "active_children"; reason = `Item has ${activeChildren.get(ref.item)} non-terminal child item(s).`; }
-      else if (!ref.declared) {
+      else if (!ref.declared && !items.get(ref.item)!.tags.includes(`delivery-pr:${pr.html_url}`)) {
         code = "not_delivery";
         reason = "Mentioned, not delivered. A mention is not delivery. Declare Closes, Fixes, Resolves or Delivers, or use a structured PM item: or pm-github: declaration.";
       }
@@ -459,25 +496,43 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
           actualResult: `Merged at ${pr.merged_at!}; ${checkEvidence(gate)}`,
         });
         plan.push(row);
+        const group = candidates.get(ref.item) ?? [];
+        group.push({ row, pr, declared: ref.declared });
+        candidates.set(ref.item, group);
         continue;
       }
-      plan.push({ item: ref.item, pr: number, action: "skip", code, reason });
+      const row: CloseoutRow = { item: ref.item, pr: number, action: "skip", code, reason };
+      plan.push(row);
+      if (pr.merged && ["not_delivery", "head_checks_failed", "head_evidence_unavailable", "required_checks_unverified"].includes(code)) {
+        const group = candidates.get(ref.item) ?? [];
+        group.push({ row, pr, declared: ref.declared });
+        candidates.set(ref.item, group);
+      }
     }
   }
-  // Choose one complete, passing delivery before any SDK write. Merge chronology, not PR number,
-  // determines the winner; an equal timestamp uses the higher PR number for stable selection.
-  const deliveries = new Map<string, typeof closures[number]>();
-  for (const entry of closures) {
-    const previous = deliveries.get(entry.row.item);
-    if (!previous || Date.parse(entry.at) >= Date.parse(previous.at)) {
-      deliveries.set(entry.row.item, entry);
-    }
-  }
-  for (const entry of closures) {
-    if (deliveries.get(entry.row.item) !== entry) {
-      entry.row.action = "skip";
-      entry.row.code = "duplicate_selection";
-      entry.row.reason = "A later qualifying merged PR declares delivery for this item.";
+  // Resolve attribution before any SDK mutation; passing checks never break a delivery tie.
+  for (const [id, group] of candidates) {
+    const item = items.get(id)!;
+    const explicit = item.tags.filter(tag => tag.startsWith("delivery-pr:"));
+    const cutoff = await acceptanceChangedAt(pmRoot, id, item.created_at);
+    const eligible = explicit.length > 0
+      ? group.filter(entry => explicit.length === 1 && explicit[0] === `delivery-pr:${entry.pr.html_url}`)
+      : group.filter(entry => entry.declared && Date.parse(entry.pr.merged_at!) > cutoff);
+    const selected = eligible.length === 1 ? eligible[0] : undefined;
+    for (const entry of group) {
+      if (selected === entry) continue;
+      if (selected) {
+        if (entry.row.action === "close") {
+          entry.row.action = "skip";
+          entry.row.code = "duplicate_selection";
+          entry.row.reason = "Another merged PR uniquely supplies the delivery evidence for this item.";
+        }
+      } else if (group.length > 1 || entry.row.action === "close" || explicit.length > 0) {
+        entry.row.action = "needs_review";
+        entry.row.code = "needs_review";
+        entry.row.reason = "Delivery attribution is unresolved; set one delivery-pr:<canonical PR URL> tag or verify a unique delivery claim after the last acceptance-criteria change.";
+        entry.row.candidates = group.map(candidate => candidate.pr.number);
+      }
     }
   }
   let closed = 0;
@@ -509,7 +564,7 @@ export function compactCloseoutReport(report: Awaited<ReturnType<typeof runClose
       skipped[row.code] = (skipped[row.code] ?? 0) + 1;
       return [];
     }
-    return [{ ...row, action: row.action === "close" ? "close" : "refuse" }];
+    return [{ ...row, action: row.action === "skip" ? "refuse" : row.action }];
   });
   const prs = new Set(plan.map(row => row.pr));
   return { ...report, plan, skipped, checks: report.checks.filter(gate => prs.has(gate.pr)) };
