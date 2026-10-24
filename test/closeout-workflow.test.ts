@@ -682,7 +682,7 @@ test.after(async () => {
 const decisionCases: DecisionCase[] = [];
 for (const selection of ["explicit delivery tag", "single post-criteria claim", "ambiguous"] as const) {
   for (const competitor of ["none", "valid", "missing merge SHA", "failed evidence fetch", "failed checks", "pagination cut"] as const) {
-    for (const peer of ["none", "retag mid-run"] as const) decisionCases.push({ selection, competitor, peer, primaryClaim: "closing keyword", competitorClaim: "closing keyword" });
+    for (const peer of ["none", "retag mid-run"] as const) decisionCases.push({ selection, competitor, peer, primaryClaim: selection === "ambiguous" && competitor === "none" ? "mention-only" : "closing keyword", competitorClaim: "closing keyword" });
   }
 }
 for (const primaryClaim of claimKinds) for (const competitorClaim of claimKinds) {
@@ -695,6 +695,8 @@ for (const primaryClaim of claimKinds) for (const competitorClaim of claimKinds)
 function expectedDecision(cell: DecisionCase): { chosen?: number; candidates: number[]; context: number[]; held: boolean } {
   const { selection, competitor, peer, primaryClaim, competitorClaim } = cell;
   if (selection !== "claim kinds") {
+    // Preserve the earlier mention-only input with an unmatched selector: it is context, not ambiguity.
+    if (selection === "ambiguous" && competitor === "none") return { candidates: [], context: [2], held: false };
     const closes = selection !== "ambiguous" && (peer === "retag mid-run" ? selection === "explicit delivery tag" && competitor === "valid"
       : selection === "explicit delivery tag" || competitor !== "failed evidence fetch");
     return { chosen: closes ? peer === "retag mid-run" ? 1 : 2 : undefined, candidates: competitor === "none" ? [2] : [1, 2], context: [], held: !closes };
@@ -720,14 +722,19 @@ for (const cell of decisionCases) {
     assert.equal(f.env.PEER_RETAG_APPLIED === "true", peer === "retag mid-run");
     assert.equal(result.code, 0, result.out);
     const closes = expected.chosen !== undefined;
-    const publishes = closes || expected.held || peer === "retag mid-run";
-    assert.equal(existsSync(f.env.PR_STATE!), publishes, "only a close, hold or peer edit publishes tracker changes");
+    const publishes = closes || expected.held;
+    assert.equal(existsSync(f.env.PR_STATE!), publishes, "only a close or hold publishes tracker changes");
     assert.equal(item.status, closes ? "closed" : "in_progress", JSON.stringify(report));
     assert.equal(report.closed, closes ? 1 : 0);
     assert.equal(report.failed, 0);
     const published = publishes ? `refs/remotes/origin/${branch}` : "trunk";
     const itemPath = `.agents/pm/tasks/${f.id}.toon`;
-    assert.equal(f.git("show", `${published}:${itemPath}`), readFileSync(join(f.root, itemPath), "utf8").trim());
+    const publishedItem = f.git("show", `${published}:${itemPath}`);
+    const localItem = readFileSync(join(f.root, itemPath), "utf8").trim();
+    if (!publishes && peer === "retag mid-run") {
+      assert.notEqual(publishedItem, localItem, "a peer edit alone stays local without a closeout publication");
+      assert.deepEqual(item.tags, ["delivery-pr:https://github.com/acme/widgets/pull/1"]);
+    } else assert.equal(publishedItem, localItem);
     const history = f.git("show", `${published}:.agents/pm/history/${f.id}.jsonl`);
     assert.equal(history.split('"op":"close"').length - 1, closes ? 1 : 0);
     const body = publishes ? readFileSync(f.env.PR_BODY!, "utf8") : "";
