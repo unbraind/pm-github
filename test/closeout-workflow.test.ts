@@ -608,6 +608,8 @@ test("confirmed unmerged references cannot block publication of a unique merged 
 interface SharedDecisionFixture {
   fixture: WorkflowFixture;
   cell: DecisionCase;
+  environment: string;
+  setupFiles: { path: string; contents: Buffer }[];
   release: () => void;
   done: Promise<void>;
 }
@@ -624,7 +626,12 @@ async function decisionFixture(cell: DecisionCase): Promise<WorkflowFixture> {
     const sharedCell = { ...cell };
     pending = new Promise<SharedDecisionFixture>((resolveReady, reject) => {
       const done = fixture(async f => {
-        resolveReady({ fixture: f, cell: sharedCell, release, done });
+        const prepared = await f.run(setup);
+        assert.equal(prepared.code, 0, prepared.out);
+        const setupFiles = [join(f.pmRoot, "settings.json"), join(f.pmRoot, "history/_workspace.jsonl")]
+          .filter(existsSync).map(path => ({ path, contents: readFileSync(path) }));
+        resolveReady({ fixture: f, cell: sharedCell, release, done,
+          environment: readFileSync(f.env.GITHUB_ENV!, "utf8"), setupFiles });
         await lifetime;
       }, sharedCell);
       void done.catch(reject);
@@ -636,6 +643,9 @@ async function decisionFixture(cell: DecisionCase): Promise<WorkflowFixture> {
   const f = shared.fixture;
   // Restore the disposable input even when a previous mutation-control cell failed before publication.
   f.git("reset", "--hard", "trunk");
+  // Restore only workflow-owned setup inputs; publication restores these before committing.
+  for (const file of shared.setupFiles) writeFileSync(file.path, file.contents);
+  writeFileSync(f.env.GITHUB_ENV!, shared.environment);
   delete f.env.PEER_RETAG_APPLIED;
   // A prior cell's PR receipt must never count as publication by the current cell.
   for (const path of [f.env.PR_STATE!, f.env.PR_BODY!]) rmSync(path, { force: true });
@@ -660,7 +670,7 @@ for (const selection of ["explicit delivery tag", "single post-criteria claim", 
         // The unchanged workflow prepares a fresh tracker from trunk for each cell.
         // Other workflow controls exercise changelog/health/dispatch; this table runs
         // the real closeout command, publication gate, privacy scans and leased push.
-        const result = await f.run([...setup, "Close delivered tracker items", "Commit gated closeout changes and open review PR"]);
+        const result = await f.run(["Prepare sync branch from default branch", "Close delivered tracker items", "Commit gated closeout changes and open review PR"]);
         const report = JSON.parse(readFileSync(join(f.base, "pm-github-closeout.json"), "utf8")) as Awaited<ReturnType<typeof runCloseout>>;
         const item = (await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item;
         assert.equal(f.env.PEER_RETAG_APPLIED === "true", peer === "retag mid-run");

@@ -6,11 +6,12 @@ status: open
 priority: 2
 tags[3]: coverage,follow-up,gates
 created_at: "2026-10-14T14:32:34.672Z"
-updated_at: "2026-10-24T14:38:08.330Z"
+updated_at: "2026-10-24T15:10:00.744Z"
 author: codex-agent
-comments[2]{created_at,author,text}:
+comments[3]{created_at,author,text}:
   "2026-10-14T15:04:27.090Z",codex-agent,"Confirmed resource workaround: complete identity-isolated npm and Bun release:check each passed 587/587 tests and all 11 checks with NODE_OPTIONS=--max-old-space-size=12288. Coverage remains exact 100/100/100/100 across 12 authored modules, without source exemptions or threshold changes. The earlier default-heap npm run passed all 587 tests before c8 aggregation exhausted the heap. Default-heap CI comparison and bounded aggregation remain follow-up work; the security change does not alter coverage implementation or CI memory settings."
   "2026-10-24T14:34:24.911Z",codex-agent,"Additional measured receipt from pm-github-closeout-attribution / PR 174: CI https://github.com/unbraind/pm-github/actions/runs/40101464708 at 30b94f1 failed all four npm/Bun release jobs on Node 22/26 with JavaScript heap exhaustion during c8 aggregation at the existing 8192 MiB limit. The Node 26 test phases each passed 1337/1337, zero failures/cancellations/skips before aggregation failed. No release-gate pass is claimed. This round reduces repeated setup in the new 36-case workflow matrix (shared immutable Git/tracker baselines and only the actual closeout/publication steps); the broader bounded aggregation task remains open, with thresholds, source inventory and heap configuration unchanged."
+  "2026-10-24T15:10:00.744Z",codex-agent,"Second receipt: https://github.com/unbraind/pm-github/actions/runs/40103921945 at ad2e7cb passed 1337/1337 tests in every npm/Bun Node 22/26 job, then all four c8 aggregations exhausted the unchanged 8192 MiB heap. Sharing tracker callers alone was insufficient while package setup still repeated per cell. The next harness prepares package/scope setup once per immutable baseline; every one of the 36 cases still restores input, runs actual branch preparation, real CLI closeout, publication privacy/refusal gates and leased push, with fresh receipts and provenance/history assertions. No coverage resource or threshold change is used. The broader bounded aggregation task remains open."
 files[3]{path,scope}:
   scripts/coverage-gate.ts,project
   test/closeout-workflow.test.ts,project
