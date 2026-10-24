@@ -61,9 +61,14 @@ test.before(async () => {
 });
 test.after(() => rmSync(packedRoot, { recursive: true, force: true }));
 
+const claimKinds = ["closing keyword", "delivery tag", "commit claim", "mention-only", "link-only"] as const;
+type ClaimKind = typeof claimKinds[number];
+
 /** One cell in the end-to-end item-decision table; only external evidence is synthetic. */
 interface DecisionCase {
-  selection: "explicit delivery tag" | "single post-criteria claim" | "ambiguous";
+  selection: "explicit delivery tag" | "single post-criteria claim" | "ambiguous" | "claim kinds";
+  primaryClaim: ClaimKind;
+  competitorClaim: ClaimKind;
   competitor: "none" | "valid" | "missing merge SHA" | "failed evidence fetch" | "failed checks" | "pagination cut";
   peer: "none" | "retag mid-run";
 }
@@ -76,15 +81,21 @@ async function decisionEvidence(url: string, res: ServerResponse, cell: Decision
   const at = (day: number) => `2026-10-${String(day).padStart(2, "0")}T00:00:00Z`;
   if (url.includes("/pulls?")) {
     jsonResponse(res, 200, (cell.competitor === "none" ? [2] : [2, 1]).map(n => ({ number: n, merged_at: at(n === 2 ? 8 : 4), updated_at: at(8) })));
-  } else if (url.includes("/commits?")) jsonResponse(res, 200, []);
+  } else if (url.includes("/commits?")) {
+    const kind = number === 2 ? cell.primaryClaim : cell.competitorClaim;
+    jsonResponse(res, 200, kind === "commit claim" ? [{ commit: { message: `PM item: ${id}` } }] : []);
+  }
   else if (number) {
     if (number === 1 && cell.competitor === "failed evidence fetch") { jsonResponse(res, 403, {}); return; }
     if (number === 2 && cell.peer === "retag mid-run" && env.PEER_RETAG_APPLIED !== "true") {
       env.PEER_RETAG_APPLIED = "true";
       await update(id, { tags: "delivery-pr:https://github.com/acme/widgets/pull/1", author: "peer" }, { pmRoot, noExtensions: true });
     }
-    jsonResponse(res, 200, { number, body: `${cell.selection === "ambiguous" && cell.competitor === "none" ? "See" : "Closes"} https://github.com/acme/widgets/blob/main/.agents/pm/tasks/${id}.toon`,
-      commits: 0, merged: true, merged_at: at(number === 2 ? 8 : 4),
+    const kind = number === 2 ? cell.primaryClaim : cell.competitorClaim;
+    const link = `https://github.com/acme/widgets/blob/main/.agents/pm/tasks/${id}.toon`;
+    const body = kind === "closing keyword" ? `Closes ${link}` : kind === "mention-only" ? `See ${link}` : kind === "link-only" ? link : "Routine work";
+    jsonResponse(res, 200, { number, body,
+      commits: kind === "commit claim" ? 1 : 0, merged: true, merged_at: at(number === 2 ? 8 : 4),
       merge_commit_sha: number === 1 && cell.competitor === "missing merge SHA" ? null : (number === 1 ? "a" : "b").repeat(40),
       html_url: `https://github.com/acme/widgets/pull/${number}`, head: { sha: String(number).repeat(40) }, base: { ref: "trunk", repo: { full_name: "acme/widgets" } } });
   } else if (url.includes("/protection/")) jsonResponse(res, 200, { contexts: ["CI"], checks: [] });
@@ -124,6 +135,11 @@ async function fixture(fn: (f: WorkflowFixture) => Promise<void>, cell?: Decisio
   if (cell?.selection === "single post-criteria claim") await runWithReproducibleProcessEnvironment({ PM_CLOCK: "2026-10-07T00:00:00Z", PM_SEED: "table-criteria" }, () =>
     update(id, { acceptanceCriteria: "Criteria revised between the two merges" }, { pmRoot, noExtensions: true }));
   if (cell?.selection === "explicit delivery tag") await update(id, { tags: "delivery-pr:https://github.com/acme/widgets/pull/2" }, { pmRoot, noExtensions: true });
+  if (cell?.selection === "claim kinds") {
+    const tags = [cell.primaryClaim === "delivery tag" ? 2 : 0, cell.competitor !== "none" && cell.competitorClaim === "delivery tag" ? 1 : 0]
+      .filter(Boolean).map(n => `delivery-pr:https://github.com/acme/widgets/pull/${n}`);
+    if (tags.length) await update(id, { tags: tags.join(",") }, { pmRoot, noExtensions: true });
+  }
   // With no competitor, ambiguity means an explicit selector outside the selected set.
   if (cell?.selection === "ambiguous" && cell.competitor === "none") await update(id, { tags: "delivery-pr:https://github.com/acme/widgets/pull/99" }, { pmRoot, noExtensions: true });
   const project = join(root, "tools/oracle");
@@ -618,7 +634,7 @@ const decisionFixtures = new Map<string, Promise<SharedDecisionFixture>>();
 /** Retain real SDK/CLI/publication behavior while avoiding redundant fixture creation. */
 async function decisionFixture(cell: DecisionCase): Promise<WorkflowFixture> {
   // A missing competitor needs its own unresolved-selector baseline for the ambiguous source.
-  const key = `${cell.selection}/${cell.selection === "ambiguous" && cell.competitor === "none"}`;
+  const key = `${cell.selection}/${cell.selection === "ambiguous" && cell.competitor === "none"}/${cell.selection === "claim kinds" && cell.primaryClaim === "delivery tag"}/${cell.selection === "claim kinds" && cell.competitor !== "none" && cell.competitorClaim === "delivery tag"}`;
   let pending = decisionFixtures.get(key);
   if (!pending) {
     let release = () => {};
@@ -662,58 +678,93 @@ test.after(async () => {
 });
 
 
+/** Retain all 36 selection/peer rows and cross both claim dimensions with all six evidence states. */
+const decisionCases: DecisionCase[] = [];
 for (const selection of ["explicit delivery tag", "single post-criteria claim", "ambiguous"] as const) {
   for (const competitor of ["none", "valid", "missing merge SHA", "failed evidence fetch", "failed checks", "pagination cut"] as const) {
-    for (const peer of ["none", "retag mid-run"] as const) {
-      test(`item decision end to end: ${selection} / ${competitor} / ${peer}`, async () => {
-        const f = await decisionFixture({ selection, competitor, peer });
-        // The unchanged workflow prepares a fresh tracker from trunk for each cell.
-        // Other workflow controls exercise changelog/health/dispatch; this table runs
-        // the real closeout command, publication gate, privacy scans and leased push.
-        const result = await f.run(["Prepare sync branch from default branch", "Close delivered tracker items", "Commit gated closeout changes and open review PR"]);
-        const report = JSON.parse(readFileSync(join(f.base, "pm-github-closeout.json"), "utf8")) as Awaited<ReturnType<typeof runCloseout>>;
-        const item = (await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item;
-        assert.equal(f.env.PEER_RETAG_APPLIED === "true", peer === "retag mid-run");
-        // Assert publication first: the regression closed locally and stopped at the workflow gate.
-        assert.equal(result.code, 0, result.out);
-        assert.equal(existsSync(f.env.PR_STATE!), true, "the final item decision must be published");
-        const published = `refs/remotes/origin/${branch}`;
-        const itemPath = `.agents/pm/tasks/${f.id}.toon`;
-        assert.equal(f.git("show", `${published}:${itemPath}`), readFileSync(join(f.root, itemPath), "utf8").trim());
-        const body = readFileSync(f.env.PR_BODY!, "utf8");
-        const closes = selection !== "ambiguous" && (peer === "retag mid-run" ? selection === "explicit delivery tag" && competitor === "valid"
-          : selection === "explicit delivery tag" || competitor !== "failed evidence fetch");
-        assert.equal(item.status, closes ? "closed" : "in_progress", JSON.stringify(report));
-        assert.equal(report.closed, closes ? 1 : 0);
-        assert.equal(report.failed, 0);
-        const history = f.git("show", `${published}:.agents/pm/history/${f.id}.jsonl`);
-        assert.equal(history.split('"op":"close"').length - 1, closes ? 1 : 0);
-        if (closes) {
-          const chosen = peer === "retag mid-run" ? 1 : 2;
-          const provenance = JSON.parse(item.close_reason!) as { pr: number; url: string; head_sha: string; merge_commit_sha: string; merged_at: string; checks: string[] };
-          assert.deepEqual(provenance, { pr: chosen, url: `https://github.com/acme/widgets/pull/${chosen}`, head_sha: String(chosen).repeat(40),
-            merge_commit_sha: (chosen === 1 ? "a" : "b").repeat(40), merged_at: `2026-10-0${chosen === 1 ? 4 : 8}T00:00:00Z`, checks: ["CI"] });
-          assert.equal(item.completed_at, provenance.merged_at.replace("Z", ".000Z"));
-          assert.match(item.resolution!, new RegExp(`pull/${chosen} `));
-          assert.equal(item.expected_result, item.acceptance_criteria);
-          assert.ok(item.actual_result!.includes(provenance.merged_at));
-          assert.equal(report.plan.filter(row => row.action === "close").length, 1);
-          assert.ok(report.plan.every(row => row.pr === chosen ? row.action === "close" : row.action === "skip" && row.code === "duplicate_selection"));
-          assert.match(body, new RegExp(`"pr": ${chosen},\\s*"action": "close"`));
-          assert.doesNotMatch(body, /"action": "needs_review"|"action": "refuse"/);
-          assert.equal(f.git("ls-tree", "--name-only", published, ".agents/pm/closeout-review.json"), "");
-        } else {
-          const candidates = competitor === "none" ? [2] : [1, 2];
-          assert.ok(report.plan.every(row => row.action === "needs_review" && row.code === "needs_review"));
-          for (const row of report.plan) assert.deepEqual(row.candidates, candidates);
-          assert.deepEqual(report.plan.map(row => row.pr).sort(), candidates);
-          const review = JSON.parse(f.git("show", `${published}:.agents/pm/closeout-review.json`)) as { needs_review: { candidates: number[] }[] };
-          assert.deepEqual(review.needs_review.map(row => row.candidates), [candidates]);
-          assert.match(body, /"action": "needs_review"/);
-          assert.doesNotMatch(body, /"action": "close"|"action": "refuse"/);
-          assert.doesNotMatch(readFileSync(f.env.RECEIPTS!, "utf8"), /pr merge .*--auto/);
-        }
-      });
-    }
+    for (const peer of ["none", "retag mid-run"] as const) decisionCases.push({ selection, competitor, peer, primaryClaim: "closing keyword", competitorClaim: "closing keyword" });
   }
+}
+for (const primaryClaim of claimKinds) for (const competitorClaim of claimKinds) {
+  for (const competitor of ["none", "valid", "missing merge SHA", "failed evidence fetch", "failed checks", "pagination cut"] as const) {
+    decisionCases.push({ selection: "claim kinds", competitor, peer: "none", primaryClaim, competitorClaim });
+  }
+}
+
+/** Expected winners are defined from the table inputs, independently of the closeout implementation. */
+function expectedDecision(cell: DecisionCase): { chosen?: number; candidates: number[]; context: number[]; held: boolean } {
+  const { selection, competitor, peer, primaryClaim, competitorClaim } = cell;
+  if (selection !== "claim kinds") {
+    const closes = selection !== "ambiguous" && (peer === "retag mid-run" ? selection === "explicit delivery tag" && competitor === "valid"
+      : selection === "explicit delivery tag" || competitor !== "failed evidence fetch");
+    return { chosen: closes ? peer === "retag mid-run" ? 1 : 2 : undefined, candidates: competitor === "none" ? [2] : [1, 2], context: [], held: !closes };
+  }
+  const primary = !["mention-only", "link-only"].includes(primaryClaim);
+  const other = competitor !== "none" && (!["mention-only", "link-only"].includes(competitorClaim) || competitor === "failed evidence fetch");
+  const tags = [primaryClaim === "delivery tag" ? 2 : 0, competitor !== "none" && competitorClaim === "delivery tag" ? 1 : 0].filter(Boolean);
+  const candidates = [...(other ? [1] : []), ...(primary ? [2] : [])];
+  const context = [...(competitor !== "none" && !other ? [1] : []), ...(!primary ? [2] : [])];
+  const selected = tags.length === 1 ? tags[0] : tags.length === 0 && candidates.length === 1 ? candidates[0] : undefined;
+  const chosen = selected === 2 || (selected === 1 && competitor === "valid") ? selected : undefined;
+  return { chosen, candidates, context, held: candidates.length > 0 && chosen === undefined };
+}
+
+for (const cell of decisionCases) {
+  const { selection, competitor, peer, primaryClaim, competitorClaim } = cell;
+  const expected = expectedDecision(cell);
+  test(`item decision end to end: ${selection} / ${competitor} / ${peer} / primary=${primaryClaim} / competitor=${competitorClaim}`, async () => {
+    const f = await decisionFixture(cell);
+    const result = await f.run(["Prepare sync branch from default branch", "Close delivered tracker items", "Commit gated closeout changes and open review PR"]);
+    const report = JSON.parse(readFileSync(join(f.base, "pm-github-closeout.json"), "utf8")) as Awaited<ReturnType<typeof runCloseout>>;
+    const item = (await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item;
+    assert.equal(f.env.PEER_RETAG_APPLIED === "true", peer === "retag mid-run");
+    assert.equal(result.code, 0, result.out);
+    const closes = expected.chosen !== undefined;
+    const publishes = closes || expected.held || peer === "retag mid-run";
+    assert.equal(existsSync(f.env.PR_STATE!), publishes, "only a close, hold or peer edit publishes tracker changes");
+    assert.equal(item.status, closes ? "closed" : "in_progress", JSON.stringify(report));
+    assert.equal(report.closed, closes ? 1 : 0);
+    assert.equal(report.failed, 0);
+    const published = publishes ? `refs/remotes/origin/${branch}` : "trunk";
+    const itemPath = `.agents/pm/tasks/${f.id}.toon`;
+    assert.equal(f.git("show", `${published}:${itemPath}`), readFileSync(join(f.root, itemPath), "utf8").trim());
+    const history = f.git("show", `${published}:.agents/pm/history/${f.id}.jsonl`);
+    assert.equal(history.split('"op":"close"').length - 1, closes ? 1 : 0);
+    const body = publishes ? readFileSync(f.env.PR_BODY!, "utf8") : "";
+    assert.deepEqual(report.plan.filter(row => row.code === "not_delivery").map(row => row.pr).sort(), expected.context);
+    for (const row of report.plan.filter(row => row.code === "not_delivery")) {
+      assert.equal(row.action, "skip");
+      assert.equal(row.candidates, undefined);
+      assert.equal(row.missing_evidence, undefined);
+      if (publishes) assert.match(body, new RegExp(`"pr": ${row.pr},\\s*"action": "skip",\\s*"code": "not_delivery"`));
+    }
+    if (closes) {
+      const chosen = expected.chosen!;
+      const provenance = JSON.parse(item.close_reason!) as { pr: number; url: string; head_sha: string; merge_commit_sha: string; merged_at: string; checks: string[] };
+      assert.deepEqual(provenance, { pr: chosen, url: `https://github.com/acme/widgets/pull/${chosen}`, head_sha: String(chosen).repeat(40),
+        merge_commit_sha: (chosen === 1 ? "a" : "b").repeat(40), merged_at: `2026-10-0${chosen === 1 ? 4 : 8}T00:00:00Z`, checks: ["CI"] });
+      assert.equal(item.completed_at, provenance.merged_at.replace("Z", ".000Z"));
+      assert.match(item.resolution!, new RegExp(`pull/${chosen} `));
+      assert.equal(item.expected_result, item.acceptance_criteria);
+      assert.ok(item.actual_result!.includes(provenance.merged_at));
+      assert.deepEqual(report.plan.filter(row => row.code !== "not_delivery").sort((a, b) => a.pr - b.pr).map(row => [row.pr, row.action, row.code]),
+        expected.candidates.map(pr => [pr, pr === chosen ? "close" : "skip", pr === chosen ? "head_checks_passed" : "duplicate_selection"]));
+      assert.match(body, new RegExp(`"pr": ${chosen},\\s*"action": "close"`));
+      assert.doesNotMatch(body, /"action": "needs_review"|"action": "refuse"/);
+      assert.equal(f.git("ls-tree", "--name-only", published, ".agents/pm/closeout-review.json"), "");
+    } else if (expected.held) {
+      const held = report.plan.filter(row => row.code !== "not_delivery").sort((a, b) => a.pr - b.pr);
+      assert.deepEqual(held.map(row => [row.pr, row.action, row.code, row.candidates]),
+        expected.candidates.map(pr => [pr, "needs_review", "needs_review", expected.candidates]));
+      for (const row of held) assert.ok(row.missing_evidence?.every(gap => expected.candidates.includes(gap.pr)) ?? true);
+      const review = JSON.parse(f.git("show", `${published}:.agents/pm/closeout-review.json`)) as { needs_review: { candidates: number[] }[] };
+      assert.deepEqual(review.needs_review.map(row => row.candidates), [expected.candidates]);
+      assert.match(body, /"action": "needs_review"/);
+      assert.doesNotMatch(body, /"action": "close"|"action": "refuse"/);
+    } else {
+      assert.ok(report.plan.every(row => row.action === "skip" && row.code === "not_delivery"));
+      assert.equal(f.git("ls-tree", "--name-only", published, ".agents/pm/closeout-review.json"), "");
+    }
+    if (!closes) assert.doesNotMatch(readFileSync(f.env.RECEIPTS!, "utf8"), /pr merge .*--auto/);
+  });
 }

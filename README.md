@@ -48,6 +48,13 @@ PR body, including links in follow-up lists (`PM:`), can produce `not_delivery`
 rows for otherwise eligible items with the reason "Mentioned, not delivered".
 Tracker PR URL metadata with no body reference or declaration produces no row.
 
+A merged PR is a delivery candidate only when it claims the item through an explicit
+`delivery-pr:` tag, a closing declaration, or a commit claim naming the item.
+A fully inspected mention-only or link-only PR is context: it remains listed as
+`skip` / `not_delivery`, never enters the candidate set, and its merge/check gaps
+cannot hold another delivery. Unreadable PR or commit evidence remains unresolved
+because it may hide a claim; a known candidate's incomplete evidence still holds.
+
 Closeout never breaks a delivery tie by PR number or merge order. Prefer one explicit
 item tag linking the delivery PR, for example:
 

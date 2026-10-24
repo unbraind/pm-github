@@ -389,6 +389,12 @@ function deliveryReferences(body: string, repo: string, ids: Iterable<string>) {
   return refs;
 }
 
+/** Classify delivery once: only claims are candidates; unreadable claims remain unresolved. */
+function deliveryRole(declared: boolean, tagged: boolean, commitsReadable: boolean): "candidate" | "unresolved" | "context" {
+  if (declared || tagged) return "candidate";
+  return commitsReadable ? "context" : "unresolved";
+}
+
 /** Render only the allowed GitHub facts; never include body, title or comment text. */
 function closeReason(pr: PullRequest, passed: string[]): string {
   return JSON.stringify({ pr: pr.number, url: pr.html_url, merge_commit_sha: pr.merge_commit_sha,
@@ -544,6 +550,7 @@ async function closeoutAttempt(pmRoot: string, repo: string | undefined, options
       }
     }
     for (const ref of refs) {
+      const role = deliveryRole(ref.declared, items.get(ref.item)?.tags.includes(`delivery-pr:${pr.html_url}`) === true, commitsReadable);
       let reason: string;
       let code: CloseoutCode;
       if (ref.repo.toLowerCase() !== repo.toLowerCase()) { code = "other_repository"; reason = "Link points to another repository."; }
@@ -551,13 +558,14 @@ async function closeoutAttempt(pmRoot: string, repo: string | undefined, options
       else if (skip.has(ref.item)) { code = "explicit_skip"; reason = "Explicitly excluded by --skip."; }
       else if (TERMINAL_STATUSES.includes(items.get(ref.item)!.status)) { code = "already_terminal"; reason = "Item is already closed or canceled."; }
       else if (pr.merged === false) { code = "not_merged"; reason = "Pull request is confirmed unmerged and cannot deliver this item."; }
-      else if (!gate.ok) { code = gate.code; reason = gate.reason; }
       else if (items.get(ref.item)!.type === "Epic") { code = "epic"; reason = "Epics close when their children are done, not by a pull request."; }
       else if (activeChildren.has(ref.item)) { code = "active_children"; reason = `Item has ${activeChildren.get(ref.item)} non-terminal child item(s).`; }
-      else if (!ref.declared && !items.get(ref.item)!.tags.includes(`delivery-pr:${pr.html_url}`)) {
+      else if (role === "context") {
         code = "not_delivery";
-        reason = "Mentioned, not delivered. A mention is not delivery. Declare Closes, Fixes, Resolves or Delivers, or use a structured PM item: or pm-github: declaration.";
+        reason = "Mentioned, not delivered. A mention is not delivery. This fully inspected PR has no delivery claim and is context only.";
       }
+      else if (!gate.ok) { code = gate.code; reason = gate.reason; }
+      else if (role === "unresolved") { code = "head_evidence_unavailable"; reason = "Commit delivery evidence unavailable or incomplete."; }
       else {
         reason = gate.reason;
         const row: CloseoutRow = { item: ref.item, pr: number, action: "close", code: gate.code, reason };
@@ -576,7 +584,7 @@ async function closeoutAttempt(pmRoot: string, repo: string | undefined, options
       }
       const row: CloseoutRow = { item: ref.item, pr: number, action: "skip", code, reason };
       plan.push(row);
-      if (pr.merged !== false && items.has(ref.item) && ref.repo.toLowerCase() === repo.toLowerCase()
+      if (role !== "context" && pr.merged !== false && items.has(ref.item) && ref.repo.toLowerCase() === repo.toLowerCase()
         && !skip.has(ref.item) && !TERMINAL_STATUSES.includes(items.get(ref.item)!.status)
         && items.get(ref.item)!.type !== "Epic" && !activeChildren.has(ref.item)) {
         const group = candidates.get(ref.item) ?? [];
@@ -678,13 +686,13 @@ async function closeoutAttempt(pmRoot: string, repo: string | undefined, options
             await reselect(entry.row.item, entry.row.pr);
             continue;
           }
-          reportItemDecision(plan.filter(row => row.item === entry.row.item), { kind: "blocking_hold",
+          reportItemDecision(plan.filter(row => row.item === entry.row.item && row.code !== "not_delivery"), { kind: "blocking_hold",
             reason: "Item revision changed again after one delivery re-selection; hold for review.", missing: [] });
           continue;
         }
         failed++;
         const reason = closeoutFailureReason(error);
-        reportItemDecision(plan.filter(row => row.item === entry.row.item), { kind: "blocking_hold", reason,
+        reportItemDecision(plan.filter(row => row.item === entry.row.item && row.code !== "not_delivery"), { kind: "blocking_hold", reason,
           missing: [{ pr: entry.row.pr, code: "close_failed", reason }] });
       }
     }
@@ -707,7 +715,7 @@ export function compactCloseoutReport(report: Awaited<ReturnType<typeof runClose
       skipped[row.code] = (skipped[row.code] ?? 0) + 1;
       return [];
     }
-    return [{ ...row, action: row.action === "skip" ? "refuse" : row.action }];
+    return [{ ...row, action: row.action === "skip" && row.code !== "not_delivery" ? "refuse" : row.action }];
   });
   const prs = new Set(plan.map(row => row.pr));
   return { ...report, plan, skipped, checks: report.checks.filter(gate => prs.has(gate.pr)) };

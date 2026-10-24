@@ -6,10 +6,10 @@ status: in_progress
 priority: 1
 tags[3]: changelog-unreleased,closeout,"gh:unbraind/pm-ado#33"
 created_at: "2026-10-24T06:16:55.856Z"
-updated_at: "2026-10-24T15:42:25.657Z"
+updated_at: "2026-10-24T17:30:04.353Z"
 author: codex-agent
 acceptance_criteria: Explicit delivery link wins; otherwise exactly one claimed merged PR after the latest criteria change may close; ambiguous items remain open with all candidates reported; completion uses the chosen merge timestamp.
-comments[40]{created_at,author,text}:
+comments[46]{created_at,author,text}:
   "2026-10-24T06:16:59.176Z",codex-agent,"Read pm-ado issue 33 and dirty PR 32. Existing pm-github-uqjf is closed and covers declarations; this follow-up replaces its latest-merge tie-break with explicit delivery attribution and acceptance-history checks. Plan: real non-git tracker regressions, function-only revert proof, focused local gates and npm/Bun CI release gates. PR 32 will be closed with cross-links after the fix PR exists; issue 33 stays open."
   "2026-10-24T06:21:01.545Z",codex-agent,"Implemented explicit delivery-pr URL tags, immutable SDK acceptance-history cutoff, unique body/commit claims and needs_review rows retaining all candidates. Check success no longer breaks ties or falls back to old delivery. Review-only workflow runs persist a privacy-gated closeout-review.json report and open a PR without closing any item. Initial non-git selection suite passes 13/13; existing chronological tie-break assertions updated to require review. Dependency pins and gate thresholds unchanged."
   "2026-10-24T06:24:07.508Z",codex-agent,"Pinned pm test run passed selection 13/13 with no failures or skips; test-result storage is disabled by existing project policy, so this comment retains the receipt. Independently inspected pm-ado PRs 16 and 19: 16 explicitly leaves statement enforcement open; 19 declares the item and merged at 2026-10-08T01:19:51Z. Added a review-only workflow report; held attribution also disables automatic landing after dispatching caller checks."
@@ -50,6 +50,12 @@ comments[40]{created_at,author,text}:
   "2026-10-24T15:10:02.206Z",codex-agent,"Prepared-baseline matrix local run passed 36/36, zero failures/cancellations/skips, in about 100 seconds. Setup now runs once for four immutable baseline callers; each case restores its input and prepared workflow-owned setup/environment, clears PR receipts, and executes the real Prepare sync branch, Close delivered tracker items and Commit gated closeout changes steps. The real publication privacy/refusal gates and leased push remain inside those unchanged steps. Repeating the runtime-only revert against the prepared harness fails 0/2 passed at the two expected workflow gates (exit 1); runtime was restored byte-for-byte and rebuilt. Final PM-linked matrix/restored controls are running with isolated HOME/Git configuration. Production source and gate configuration remain identical to 30b94f1."
   "2026-10-24T15:12:48.722Z",codex-agent,"Final prepared-baseline PM receipt: 36/36 matrix tests pass with zero failures/cancellations/skips; all 12 closed-and-published and 24 open-and-published-hold expectations remain asserted. PM-linked restored publication controls pass 2/2; runtime-only revert fails 0/2 at the expected gates, exit 1. The matrix runs actual package/scope setup once per four immutable baselines and restores workflow-owned setup/environment plus independent tracker input before every actual branch-preparation, closeout and publication attempt. Fresh receipts prohibit stale publication from satisfying a case. Production source, coverage script, package files and workflows remain unchanged from 30b94f1; typecheck, test typecheck, lint and docstrings pass. Both earlier CI runs passed all 1337 tests in all four jobs but failed coverage aggregation, recorded on pm-github-vhi6. No gate resource, inventory, exclusion or threshold is relaxed. Release claim before push; final exact-head full-gate evidence remains read-only CI and will be retained in PR 174 and handoff."
   "2026-10-24T15:42:24.111Z",codex-agent,"The prepared 36-cell matrix and runtime-only revert proof remain unchanged and passing. CI cff0f1c established the complete npm Node 22 gate at the old heap, while Node 26 again passed all 1337 tests and failed aggregation. To complete the requested full-gate evidence, only c8's merge heap ceiling is raised to 12288 MiB on the existing public 16 GB runners. There is no coverage threshold, source inventory, ignore list, dependency or workflow change. The real coverage-gate suite passes 9/9 via PM, including full/partial receipt and flag-routing controls; typecheck, test typecheck, lint, docstrings and zero duplication pass. Release both claims before push; final exact-head CI URL/counts will be retained in PR 174 and handoff. Broader bounded aggregation remains tracked by pm-github-vhi6 and neither item is closed."
+  "2026-10-24T17:16:39.286Z",codex-agent,"Round 4: correct candidacy to require an explicit delivery tag, a closing declaration, or a commit claim. Fully inspected mention/link-only PRs are context even when checks fail; unreadable claim evidence remains unresolved. Extend the existing publication decision table with primary and competitor claim kinds, retaining its 36 original cells and exact expected outcomes. Remote branch was current and already contains origin/main."
+  "2026-10-24T17:22:14.236Z",codex-agent,"Round-4 fix-only revert proof: restored only closeout.ts from pre-round head 4dd53552f825b3b42959ae96b9e61b27fe96e900; retained every new test and workflow change. Exact command: node --test --test-name-pattern='fully inspected context|fully inspected mentions' test/closeout-selection.test.ts. Reverted: 0/7 passed, 7 assertion failures, exit 1 (valid delivery held or context reported as candidates). Restored closeout.ts byte-for-byte; the same command via the PM runner passes 7/7, exit 0, zero failures/cancellations/skips. Tests import TypeScript source directly; no load failure is counted. The 36 earlier publication table rows pass unchanged; the 150 additional claim-kind rows are running. Isolated tracker health passes; inherited global CLI version skew is absent under isolated configuration."
+  "2026-10-24T17:25:37.405Z",codex-agent,"Local round-4 checks: typecheck, build, test typecheck, lint, docstrings (206 declarations), zero duplication and privacy passed. Isolated strict tracker health passed with two pre-existing advisory findings. The 186-row decision table expects 71 closed-and-published deliveries, 89 published holds and 26 context-only no-op runs. Every old table row remains. CLI and workflow summaries retain context as skip/not_delivery, without promoting context during selection or SDK refusal."
+  "2026-10-24T17:26:03.220Z",codex-agent,"PM-linked focused c8 command passed 293/293, zero failures/cancellations/skips, exact 100/100/100/100 for closeout.ts: node node_modules/c8/bin/c8.js --100 --include=closeout.ts --reporter=text --reporter=json --reports-dir=coverage/closeout-revision --temp-directory=coverage/closeout-revision-v8 node --test test/closeout.test.ts test/closeout-attribution.test.ts test/closeout-selection.test.ts test/closeout-revision.test.ts. Existing PM policy disables result storage; this comment preserves the receipt."
+  "2026-10-24T17:27:17.956Z",codex-agent,"Final round-4 revert proof adds the review's exact numbering: fully inspected context PR 2 with failing CI cannot block delivery PR 1. Replaced only closeout.ts with 4dd53552f825b3b42959ae96b9e61b27fe96e900, kept all tests/workflow changes, ran node --test --test-name-pattern='fully inspected context|fully inspected mentions' test/closeout-selection.test.ts: 0/8 passed, 8 ERR_ASSERTION failures, exit 1. Restored byte-for-byte; same command via pm test --run --only-last --progress passes 8/8, exit 0, zero failures/cancellations/skips. No load failures counted."
+  "2026-10-24T17:30:02.705Z",codex-agent,"Round-4 publication table passed 186/186, zero failures/cancellations/skips/TODOs: node --test --test-name-pattern='item decision end to end' test/closeout-workflow.test.ts. All 36 earlier rows retained, plus 150 rows crossing both five-kind claim dimensions and six evidence states. Outcomes: 71 closures, 89 holds, 26 context-only no-op runs. Exact row actions, codes, candidates, context, tracker/history bytes, chosen provenance and publication summaries all passed. Local release-gate evidence is focused only; full npm/Bun release gates will be taken from CI."
 files[12]{path,scope}:
   .github/workflows/ci.yml,project
   .github/workflows/pm-github-closeout.yml,project
@@ -63,7 +69,7 @@ files[12]{path,scope}:
   test/closeout-workflow.test.ts,project
   test/closeout.test.ts,project
   test/coverage-gate.test.ts,project
-tests[11]:
+tests[12]:
   - command: node --test test/closeout-selection.test.ts
     scope: project
     provenance:
@@ -145,6 +151,14 @@ tests[11]:
     provenance:
       author: codex-agent
       created_at: "2026-10-24T15:39:12.100Z"
+      source_kind: local_mutation
+      source_ref: fix/closeout-delivery-attribution
+  - command: "node --test --test-name-pattern=\"fully inspected context|fully inspected mentions\" test/closeout-selection.test.ts"
+    scope: project
+    timeout_seconds: 300
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-24T17:20:07.036Z"
       source_kind: local_mutation
       source_ref: fix/closeout-delivery-attribution
 docs[2]{path,scope}:

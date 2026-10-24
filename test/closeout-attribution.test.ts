@@ -70,8 +70,7 @@ test("mention only remains open even with tracker PR metadata", async () => {
   const mention = "Leaves pm-ado-5w3m open; follow-up gap tracked in https://github.com/unbraind/pm-ado/blob/main/.agents/pm/issues/pm-ado-5w3m.toon";
   const { report, item, history } = await scenario(true, [mention, mention]);
   assert.equal(report.closed, 0);
-  assert.deepEqual(report.plan.map(row => row.code), ["needs_review", "needs_review"]);
-  assert.deepEqual(report.plan[0]!.candidates, [16, 19]);
+  assert.deepEqual(report.plan.map(row => [row.action, row.code, row.candidates]), [["skip", "not_delivery", undefined], ["skip", "not_delivery", undefined]]);
   assert.equal(item.status, "in_progress");
   assert.ok(!history.includes('"op":"close"'));
 });
@@ -132,8 +131,7 @@ test("competing delivery claims require review with every linked candidate", asy
   const mention = "See https://github.com/unbraind/pm-ado/blob/main/.agents/pm/issues/pm-ado-5w3m.toon";
   const { report, item } = await scenario(false, ["Closes pm-ado-5w3m", "pm-github: pm-ado-5w3m", mention]);
   assert.equal(report.closed, 0);
-  assert.ok(report.plan.every(row => row.action === "needs_review"));
-  assert.deepEqual(report.plan[0]!.candidates, [16, 19, 20]);
+  assert.deepEqual(report.plan.map(row => [row.pr, row.action, row.code, row.candidates]), [[16, "needs_review", "needs_review", [16, 19]], [19, "needs_review", "needs_review", [16, 19]], [20, "skip", "not_delivery", undefined]]);
   assert.equal(item.status, "in_progress");
 });
 
@@ -187,8 +185,8 @@ test("many items and PRs preserve declaration boundaries, casing, punctuation an
     assert.equal(report.plan.length, 38);
 
     assert.deepEqual(report.plan.filter(row => row.action === "close").map(row => `${row.pr}:${row.item}`).sort(), expected.sort());
-    assert.deepEqual(report.plan.filter(row => row.code === "needs_review").map(row => [row.pr, row.item]), [[1, ids[25]], [1, ids[24]], [2, ids[25]], [2, ids[24]], ...verbs.slice(2).map((_, i) => [i + 3, ids[25]])]);
-    assert.deepEqual(report.plan.filter(row => row.item === ids[25]).map(row => [row.pr, row.code]), verbs.map((_, i) => [i + 1, "needs_review"]));
+    assert.deepEqual(report.plan.filter(row => row.code === "needs_review").map(row => [row.pr, row.item]), [[1, ids[24]], [2, ids[24]]]);
+    assert.deepEqual(report.plan.filter(row => row.item === ids[25]).map(row => [row.pr, row.code]), verbs.map((_, i) => [i + 1, "not_delivery"]));
     for (const id of ids) assert.equal((await get(id, {}, sdk)).item.status, "open");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

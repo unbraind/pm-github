@@ -253,3 +253,28 @@ for (const gap of ["commits-fetch", "invalid-commits", "commits-pagination", "co
     }
   });
 }
+
+for (const gap of ["merge-sha", "missing-checks", "failed-checks", "required-metadata", "checks-fetch", "checks-pagination"] as const) {
+  test(`fully inspected context cannot hold a unique delivery: ${gap}`, async () => {
+    const { report, item } = await selection({ dates: [8, 9], gap, mentionPr: 1 });
+    assert.equal(report.closed, 1);
+    assert.equal(item.status, "closed");
+    assert.deepEqual(report.plan.map(row => [row.pr, row.action, row.code, row.candidates]), [[1, "skip", "not_delivery", undefined], [2, "close", "head_checks_passed", undefined]]);
+    assert.deepEqual(compactCloseoutReport(report).plan.map(row => [row.pr, row.action, row.code]), [[1, "skip", "not_delivery"], [2, "close", "head_checks_passed"]]);
+  });
+}
+
+test("fully inspected mentions are context even without any delivery candidate", async () => {
+  const { report, item } = await selection({ dates: [8, 9], body: "mention", failure: 1 });
+  assert.equal(report.closed, 0);
+  assert.equal(item.status, "in_progress");
+  assert.deepEqual(report.plan.map(row => [row.action, row.code, row.candidates]), [["skip", "not_delivery", undefined], ["skip", "not_delivery", undefined]]);
+});
+
+test("fully inspected context PR 2 with failing CI cannot block delivery PR 1", async () => {
+  const { report, item } = await selection({ dates: [8, 9], mentionPr: 2, failure: 2 });
+  assert.equal(report.closed, 1);
+  assert.equal(item.status, "closed");
+  assert.deepEqual(report.plan.map(row => [row.pr, row.action, row.code, row.candidates]), [[1, "close", "head_checks_passed", undefined], [2, "skip", "not_delivery", undefined]]);
+  assert.equal((JSON.parse(item.close_reason!) as { pr: number }).pr, 1);
+});
