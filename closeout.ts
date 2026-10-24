@@ -1,5 +1,5 @@
 /** Close delivered tracker items using merged pull requests and head-check evidence. */
-import { close, listAllComplete, certifyCompleteListResult, getHistoryPath, readHistoryEntries, verifyHistoryEntries, PmCliError } from "@unbrained/pm-cli/sdk";
+import { close, hashDocument, locateItem, readLocatedItem, readSettings, resolveItemTypeRegistry, runWithActiveExtensions, setActiveExtensionHooks, listAllComplete, certifyCompleteListResult, getHistoryPath, readHistoryEntries, verifyHistoryEntries, PmCliError, EXIT_CODE, type ItemDocument } from "@unbrained/pm-cli/sdk";
 
 /** Existing GitHub REST transport, supplied by the extension entry point. */
 export interface CloseoutApi {
@@ -354,11 +354,11 @@ export function extractCloseoutItems(body: string): { item: string; repo: string
 }
 
 /** Read the last criteria edit from immutable SDK history; unavailable chronology cannot select delivery. */
-async function acceptanceChangedAt(pmRoot: string, id: string, createdAt: string): Promise<number> {
+async function acceptanceChangedAt(pmRoot: string, id: string, document: ItemDocument): Promise<number> {
   try {
     const history = await readHistoryEntries(getHistoryPath(pmRoot, id), id);
-    if (history.length === 0 || !verifyHistoryEntries(history).ok) return Number.NaN;
-    let changedAt = Date.parse(createdAt);
+    if (history.length === 0 || !verifyHistoryEntries(history, document).ok) return Number.NaN;
+    let changedAt = Date.parse(document.metadata.created_at);
     for (const event of history) {
       if (event.patch.some(patch => ["", "/metadata", "/metadata/acceptance_criteria"].includes(patch.path))) {
         changedAt = Math.max(changedAt, Date.parse(event.ts));
@@ -429,8 +429,18 @@ export function checkEvidence(gate: CheckGate): string {
   return `no readable required checks, so every completed head check run had to succeed, be neutral or be skipped; ${successes}`;
 }
 
-/** Plan all selected PRs before closing eligible items through the real SDK. */
-export async function runCloseout(pmRoot: string, repo: string | undefined, options: Record<string, unknown>, api: CloseoutApi) {
+/** Deterministic scheduling observer; it never replaces SDK reads or writes. */
+export type CloseoutObserver = (boundary: "listed" | "snapshot" | "history" | "selection" | "before_close" | "locked") => Promise<void>;
+
+/** Plan selected PRs and apply only decisions whose exact item snapshot still matches. */
+export function runCloseout(pmRoot: string, repo: string | undefined, options: Record<string, unknown>, api: CloseoutApi, observer?: CloseoutObserver) {
+  return closeoutAttempt(pmRoot, repo, options, api, true, observer);
+}
+
+/** Re-select a conflicted item once; each attempt installs a lock-scoped SDK precondition. */
+async function closeoutAttempt(pmRoot: string, repo: string | undefined, options: Record<string, unknown>, api: CloseoutApi, retry: boolean, observer?: CloseoutObserver, onlyItem?: string): Promise<{
+  command: string; repo: string; dry_run: boolean; plan: CloseoutRow[]; checks: CheckGate[]; closed: number; failed: number;
+}> {
   if (!repo || !/^(?!\.{1,2}\/)[A-Za-z0-9_.-]+\/(?!\.{1,2}$)[A-Za-z0-9_.-]+$/.test(repo)) throw new CloseoutUsageError("closeout requires --repo owner/repo or PM_GITHUB_REPO.");
   const numbers = usage(() => repeated(options, "pr")).map(value => {
     if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) throw new CloseoutUsageError("--pr requires positive pull-request numbers.");
@@ -456,10 +466,25 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
     }
   }
   const corpus = certifyCompleteListResult(await listAllComplete({}, { pmRoot, noExtensions: true }));
+  await observer?.("listed");
+  const settings = await readSettings(pmRoot);
+  const types = resolveItemTypeRegistry(settings).type_to_folder;
+  const snapshots = new Map<string, string>();
+  const documents = new Map<string, ItemDocument>();
   const items = new Map(corpus.items.map(item => [item.id, item]));
+  // Selection and its guard must use the same authoritative document, including collections and body.
+  for (const id of items.keys()) {
+    const located = await locateItem(pmRoot, id, settings.id_prefix, settings.item_format, types);
+    if (!located) throw new Error("Closeout item snapshot unavailable.");
+    const { document } = await readLocatedItem(located, { schema: settings.schema });
+    snapshots.set(id, hashDocument(document));
+    documents.set(id, document);
+    items.set(id, document.metadata);
+  }
+  await observer?.("snapshot");
   // Containers close when their children are done, never because a pull request mentions them.
   const activeChildren = new Map<string, number>();
-  for (const item of corpus.items) {
+  for (const item of items.values()) {
     const parent = (item as { parent?: unknown }).parent;
     if (typeof parent === "string" && !TERMINAL_STATUSES.includes(item.status)) activeChildren.set(parent, (activeChildren.get(parent) ?? 0) + 1);
   }
@@ -559,7 +584,8 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
   for (const [id, group] of candidates) {
     const item = items.get(id)!;
     const explicit = item.tags.filter(tag => tag.startsWith("delivery-pr:"));
-    const cutoff = await acceptanceChangedAt(pmRoot, id, item.created_at);
+    const cutoff = await acceptanceChangedAt(pmRoot, id, documents.get(id)!);
+    await observer?.("history");
     const plausible = group.filter(entry => !Number.isFinite(mergeTime(entry.pr.merged_at)) || mergeTime(entry.pr.merged_at) > cutoff);
     const eligible = explicit.length > 0
       ? group.filter(entry => explicit.length === 1 && explicit[0] === `delivery-pr:${entry.pr.html_url}`)
@@ -591,25 +617,77 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
       }
     }
   }
+  await observer?.("selection");
   let closed = 0;
   let failed = 0;
+  const handled = new Set<string>();
+  const dependentConflicts = new Map<string, number>();
+  /** Replace stale decisions with one fresh selection, retaining a reason when linkage disappeared. */
+  async function reselect(id: string, pr: number): Promise<void> {
+    handled.add(id);
+    const fresh = await closeoutAttempt(pmRoot, repo, options, api, false, observer, id);
+    checks.splice(0, checks.length, ...fresh.checks);
+    const replacement = fresh.plan;
+    if (!replacement.some(row => row.item === id)) replacement.push({ item: id, pr, action: "needs_review", code: "needs_review",
+      candidates: [pr], reason: "Item revision changed; fresh selection found no delivery evidence. Hold for review." });
+    const replaced = new Set(replacement.map(row => row.item));
+    const retained = plan.filter(row => !replaced.has(row.item));
+    plan.splice(0, plan.length, ...retained, ...replacement);
+    closed += fresh.closed;
+    failed += fresh.failed;
+  }
   if (apply) {
     for (const entry of closures) {
-      if (entry.row.action !== "close") continue;
+      if (entry.row.action !== "close" || (onlyItem !== undefined && entry.row.item !== onlyItem)) continue;
       try {
-        await close(entry.row.item, entry.reason, { author: "pm-github", completedAt: entry.at,
-          resolution: entry.resolution, expectedResult: entry.expectedResult, actualResult: entry.actualResult,
-        }, { pmRoot, noExtensions: true });
+        await observer?.("before_close");
+        // The pinned SDK has no public close(expectedRevision). Its transactional hook runs
+        // inside the same per-item lock as lifecycle validation, persistence and history.
+        await runWithActiveExtensions({ path: pmRoot, noExtensions: true }, async () => {
+          setActiveExtensionHooks({ beforeCommand: [], afterCommand: [], onRead: [], onWrite: [], onIndex: [],
+            beforeMutation: [{ layer: "project", name: "closeout-revision", run: async context => {
+              await observer?.("locked");
+              // SDK close may also auto-unblock dependents. Every resulting write needs its own snapshot.
+              const before = context.before!;
+              const id = before.metadata.id;
+              if (hashDocument(before) !== snapshots.get(id)) {
+                if (id !== entry.row.item) dependentConflicts.set(id, entry.row.pr);
+                throw new PmCliError("Closeout item revision changed.", 1, { code: "closeout_revision_changed" });
+              }
+            } }],
+          });
+          await close(entry.row.item, entry.reason, { author: "pm-github", completedAt: entry.at,
+            resolution: entry.resolution, expectedResult: entry.expectedResult, actualResult: entry.actualResult,
+          }, { pmRoot, noExtensions: true });
+        });
         closed++;
+        handled.add(entry.row.item);
       } catch (error: unknown) {
+        if (error instanceof PmCliError && (error.code === "closeout_revision_changed"
+          || (error.code === undefined && error.exitCode === EXIT_CODE.CONFLICT))) {
+          if (retry) {
+            await reselect(entry.row.item, entry.row.pr);
+            continue;
+          }
+          const affected = plan.filter(row => row.item === entry.row.item);
+          for (const row of affected) Object.assign(row, { action: "needs_review", code: "needs_review",
+            candidates: affected.map(candidate => candidate.pr),
+            reason: "Item revision changed again after one delivery re-selection; hold for review." });
+          continue;
+        }
         failed++;
-        entry.row.action = "skip";
-        entry.row.code = "close_failed";
-        entry.row.reason = closeoutFailureReason(error);
+        Object.assign(entry.row, { action: "skip", code: "close_failed", reason: closeoutFailureReason(error) });
       }
     }
+    for (const [id, pr] of dependentConflicts) {
+      if (handled.has(id)) continue;
+      if (retry) await reselect(id, pr);
+      else plan.push({ item: id, pr, action: "needs_review", code: "needs_review", candidates: [pr],
+        reason: "Dependent item revision changed during re-selection; automatic unblock held for review." });
+    }
   }
-  return { command: "github closeout", repo, dry_run: !apply, plan, checks, closed, failed };
+  return { command: "github closeout", repo, dry_run: !apply,
+    plan: onlyItem === undefined ? plan : plan.filter(row => row.item === onlyItem || dependentConflicts.has(row.item)), checks, closed, failed };
 }
 
 /** Keep actionable decisions and their checks while counting routine skips by stable code. */
