@@ -21,6 +21,7 @@ interface SelectionOptions {
   commits?: "claim" | "mention" | "invalid" | "error";
   history?: "missing" | "invalid" | "unverified";
   failure?: number;
+  mentionPr?: number;
 }
 
 /** Run selection with git absent from PATH and inspect all durable completion evidence. */
@@ -62,7 +63,7 @@ async function selection(options: SelectionOptions) {
       }
       const value = endpoint.includes("/pulls/") ? {
         number, merged: true, merged_at: at(options.dates[number - 1]!), merge_commit_sha: "b".repeat(40), html_url: prUrl(number),
-        body: options.body === "none" ? "Routine work" : `${options.body === "mention" ? "See" : "Closes"} ${reference}`,
+        body: options.body === "none" ? "Routine work" : `${options.body === "mention" || options.mentionPr === number ? "See" : "Closes"} ${reference}`,
         head: { sha: number.toString(16).padStart(2, "0").repeat(20) }, base: { ref: "main", repo: { full_name: repo } },
       } : endpoint.includes("/protection/") ? { contexts: ["CI"], checks: [] }
         : endpoint.includes("/check-runs") ? { total_count: 1, check_runs: [{ name: "CI", head_sha: headNumber.toString(16).padStart(2, "0").repeat(20),
@@ -156,4 +157,18 @@ test("commit claims can supply unique delivery, while mentions and unavailable c
     assert.equal(report.closed, 0);
     assert.equal(report.plan[0]!.code, "not_delivery");
   }
+});
+
+
+test("unreadable later commit claims never permit fallback to an earlier description claim", async () => {
+  const { report } = await selection({ dates: [4, 8], mentionPr: 2, commits: "error" });
+  assert.equal(report.closed, 0);
+  assert.ok(report.plan.every(row => row.code === "needs_review"));
+  assert.deepEqual(report.plan[0]!.candidates, [1, 2]);
+});
+
+test("unreadable commits before changed criteria cannot supply another qualifying claim", async () => {
+  const { report } = await selection({ dates: [4, 8], criteriaDay: 7, mentionPr: 1, commits: "error" });
+  assert.equal(report.closed, 1);
+  assert.equal(report.plan.find(row => row.action === "close")!.pr, 2);
 });

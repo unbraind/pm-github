@@ -34,7 +34,7 @@ async function scenario(linked: boolean, bodies?: string[], facts: Partial<Recor
       const n = Number(endpoint.split("/").at(-1));
       const evidenceNumber = endpoint.includes("/commits/") ? Number.parseInt(endpoint.split("/commits/")[1]!.slice(0, 2), 16) - 64 : n;
       const evidenceHead = (evidenceNumber + 64).toString(16).repeat(20);
-      const value = endpoint.includes("/pulls/") ? { number: n, body: (bodies?.[[16, 19, 20].indexOf(n)] ?? recorded.find(p => p.number === n)!.body).replaceAll("pm-ado-5w3m", item.id),
+      const value = endpoint.includes("/commits?") ? [] : endpoint.includes("/pulls/") ? { number: n, body: (bodies?.[[16, 19, 20].indexOf(n)] ?? recorded.find(p => p.number === n)!.body).replaceAll("pm-ado-5w3m", item.id),
         merged: true, merged_at: facts[n]?.at ?? (n === 16 ? "2026-10-04T12:58:08Z" : "2026-10-08T01:19:51Z"), merge_commit_sha: n.toString(16).repeat(20),
         html_url: url(n), head: { sha: evidenceHead }, base: { ref: "main", repo: { full_name: repo } } }
         : endpoint.includes("/protection/") ? { contexts: ["CI"], checks: [] }
@@ -173,7 +173,7 @@ test("many items and PRs preserve declaration boundaries, casing, punctuation an
     });
     const api: CloseoutApi = { base: "https://api.github.com", next: () => undefined, get: async endpoint => {
       const n = Number(endpoint.split("/").at(-1));
-      const value = endpoint.includes("/pulls/") ? { number: n, body: bodies[n - 1], merged: true,
+      const value = endpoint.includes("/commits?") ? [] : endpoint.includes("/pulls/") ? { number: n, body: bodies[n - 1], merged: true,
         merged_at: "2099-10-08T01:19:51Z", merge_commit_sha: "b".repeat(40), html_url: url(n),
         head: { sha: head }, base: { ref: "main", repo: { full_name: repo } } }
         : endpoint.includes("/protection/") ? { contexts: ["CI"], checks: [] }

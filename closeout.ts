@@ -448,7 +448,7 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
   const plan: CloseoutRow[] = [];
   const checks: CheckGate[] = [];
   const closures: { row: CloseoutRow; reason: string; at: string; resolution: string; expectedResult: string; actualResult: string }[] = [];
-  const candidates = new Map<string, { row: CloseoutRow; pr: PullRequest; declared: boolean }[]>();
+  const candidates = new Map<string, { row: CloseoutRow; pr: PullRequest; declared: boolean; commitsReadable: boolean }[]>();
   for (const number of [...new Set(numbers)].sort((a, b) => a - b)) {
     const pr = pullRequest(await payload(api, `/repos/${repo}/pulls/${number}`), repo, number);
     let gate: CheckGate = { pr: number, code: "incomplete_merge", rule: "unavailable", ok: false, passed: [], reason: "Pull request is not merged or merge evidence is incomplete." };
@@ -457,9 +457,13 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
     const refs = deliveryReferences(pr.body ?? "", repo, items.keys());
     // Commit messages can independently claim delivery. Missing commit evidence never upgrades a mention.
     let messages: string[] = [];
+    let commitsReadable = false;
     try {
-      if (gate.code !== "incomplete_merge") messages = (await pages(api, `/repos/${repo}/pulls/${number}/commits?per_page=100`))
-        .map(value => text(record(record(value).commit).message));
+      if (gate.code !== "incomplete_merge") {
+        messages = (await pages(api, `/repos/${repo}/pulls/${number}/commits?per_page=100`))
+          .map(value => text(record(record(value).commit).message));
+        commitsReadable = true;
+      }
     } catch { /* Description declarations remain usable when commits cannot be read. */ }
     for (const ref of deliveryReferences(messages.join("\n"), repo, items.keys())) {
       const existing = refs.find(entry => entry.item === ref.item && entry.repo.toLowerCase() === ref.repo.toLowerCase());
@@ -497,7 +501,7 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
         });
         plan.push(row);
         const group = candidates.get(ref.item) ?? [];
-        group.push({ row, pr, declared: ref.declared });
+        group.push({ row, pr, declared: ref.declared, commitsReadable });
         candidates.set(ref.item, group);
         continue;
       }
@@ -505,7 +509,7 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
       plan.push(row);
       if (pr.merged && ["not_delivery", "head_checks_failed", "head_evidence_unavailable", "required_checks_unverified"].includes(code)) {
         const group = candidates.get(ref.item) ?? [];
-        group.push({ row, pr, declared: ref.declared });
+        group.push({ row, pr, declared: ref.declared, commitsReadable });
         candidates.set(ref.item, group);
       }
     }
@@ -518,7 +522,8 @@ export async function runCloseout(pmRoot: string, repo: string | undefined, opti
     const eligible = explicit.length > 0
       ? group.filter(entry => explicit.length === 1 && explicit[0] === `delivery-pr:${entry.pr.html_url}`)
       : group.filter(entry => entry.declared && Date.parse(entry.pr.merged_at!) > cutoff);
-    const selected = eligible.length === 1 ? eligible[0] : undefined;
+    const unknownClaims = explicit.length === 0 && group.some(entry => !entry.declared && !entry.commitsReadable && Date.parse(entry.pr.merged_at!) > cutoff);
+    const selected = eligible.length === 1 && !unknownClaims ? eligible[0] : undefined;
     for (const entry of group) {
       if (selected === entry) continue;
       if (selected) {

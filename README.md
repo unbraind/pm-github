@@ -61,7 +61,7 @@ linked merged PR must declare the item in its description or commit messages and
 merge strictly after the last acceptance-criteria edit in the item's SDK history.
 Creation is the cutoff when no later criteria edit exists; comments and unrelated
 updates do not move it. Missing or unverifiable history cannot establish chronology.
-A failed check on that unique PR never permits fallback to an earlier delivery.
+Unreadable commits on an otherwise qualifying mention also hold selection: they may hide another claim. A failed check on the unique PR never permits fallback to an earlier delivery.
 
 Unresolved attribution produces `needs_review` rows listing every linked candidate
 PR number, leaving the item and its history unchanged. Multiple or unmatched explicit
