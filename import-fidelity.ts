@@ -2,8 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { decodeHTML } from "entities";
 import {
-  acquireLock, appendHistoryEntry, canonicalDocument, createHistoryEntry, getHistoryPath,
-  locateItem, normalizeItemId, readLocatedItem, readSettings, resolveItemTypeRegistry, resolvePmRoot, runActiveOnWriteHooks, serializeItemDocument, writeFileAtomic,
+  canonicalDocument, createHistoryEntry, mutateItem, normalizeItemId, readSettings, resolvePmRoot,
 } from "@unbrained/pm-cli/sdk";
 import { CommandError, fetchJSON, githubApiBase, githubGraphQL, parseNextLink, parseProvenanceTag, type GhIssue, type PmItem } from "./index.ts";
 
@@ -437,7 +436,7 @@ export function normalizeImportValue(field: string, value: unknown): unknown {
 }
 
 /**
- * Finalize source metadata through public SDK lock, serialization and append-only history primitives.
+ * Finalize source metadata through the SDK's fenced item/history mutation boundary.
  * High-level create/update reserve native timestamps. This import adapter appends a real
  * before/after event instead of editing past history; retrying identical metadata is a no-op.
  * Cross-provider owners retain their creation/completion dates, content and release.
@@ -446,35 +445,29 @@ export async function persistImportFidelity(pmRoot: string, id: string, fidelity
   pmRoot = resolvePmRoot(process.cwd(), pmRoot);
   const settings = await readSettings(pmRoot);
   id = normalizeItemId(id, settings.id_prefix);
-  const unlock = await acquireLock(pmRoot, id, settings.locks.ttl_seconds, "pm-github", false,
-    settings.governance.force_required_for_stale_lock, settings.locks.wait_ms);
-  try {
-    const located = await locateItem(pmRoot, id, settings.id_prefix, settings.item_format, resolveItemTypeRegistry(settings).type_to_folder);
-    if (!located) throw new CommandError(`Imported item ${id} is missing during lifecycle finalization.`);
-    const { document, raw } = await readLocatedItem(located);
-    const before = canonicalDocument(document);
-    for (const [field, value] of Object.entries(importFidelityFields(fidelity, linkOnly))) {
-      if (normalizeFields && JSON.stringify(normalizeImportValue(field, document.metadata[field])) === JSON.stringify(normalizeImportValue(field, value))) continue;
-      if (value === undefined) delete document.metadata[field];
-      else document.metadata[field] = value;
-    }
-    if (document.metadata.closed_at && Date.parse(document.metadata.closed_at) < Date.parse(document.metadata.created_at)) {
-      throw new CommandError(`GitHub issue #${fidelity.github_number} needs a source closure date before its lifecycle can be imported safely.`);
-    }
-    if (JSON.stringify(before) === JSON.stringify(canonicalDocument(document))) return;
-    // SDK bulk rollback addresses history by native updated_at. Keep that clock
-    // equal to the appended event timestamp; source time lives in github_updated_at.
-    const now = new Date().toISOString();
-    document.metadata.updated_at = now;
-    const after = canonicalDocument(document);
-    const history = createHistoryEntry({ nowIso: now, author: "pm-github", op: "import", before, after,
-      message: `Preserve GitHub source lifecycle for issue #${fidelity.github_number}` });
-    await writeFileAtomic(located.itemPath, serializeItemDocument(after, { format: located.item_format }));
-    try { await appendHistoryEntry(getHistoryPath(pmRoot, id), history); }
-    catch (error) { await writeFileAtomic(located.itemPath, raw); throw error; }
-    const hookContext = { scope: "project" as const, item_id: id, item_type: after.metadata.type,
-      before, after, changed_fields: history.patch.map(patch => patch.path) };
-    await runActiveOnWriteHooks({ ...hookContext, path: located.itemPath, op: "import" });
-    await runActiveOnWriteHooks({ ...hookContext, path: getHistoryPath(pmRoot, id), op: "import:history" });
-  } finally { await unlock(); }
+  await mutateItem({ pmRoot, settings, id, author: "pm-github", op: "import", skipNoop: true,
+    message: `Preserve GitHub source lifecycle for issue #${fidelity.github_number}`,
+    mutate: document => {
+      const before = canonicalDocument(document);
+      for (const [field, value] of Object.entries(importFidelityFields(fidelity, linkOnly))) {
+        if (normalizeFields && JSON.stringify(normalizeImportValue(field, document.metadata[field])) === JSON.stringify(normalizeImportValue(field, value))) continue;
+        if (value === undefined) delete document.metadata[field];
+        else document.metadata[field] = value;
+      }
+      if (document.metadata.closed_at && Date.parse(document.metadata.closed_at) < Date.parse(document.metadata.created_at)) {
+        throw new CommandError(`GitHub issue #${fidelity.github_number} needs a source closure date before its lifecycle can be imported safely.`);
+      }
+      return {
+        /** Project exact hook fields after the SDK enriches its live document. */
+        get changedFields(): string[] {
+          // The SDK sets its native clock and format after this callback returns.
+          // Read lazily so hook fields match the event that is actually appended;
+          // an empty SDK patch also supplies skipNoop without a local comparison.
+          const after = canonicalDocument(document);
+          return createHistoryEntry({ nowIso: after.metadata.updated_at, author: "pm-github", op: "import", before, after })
+            .patch.map(patch => patch.path);
+        },
+      };
+    },
+  });
 }

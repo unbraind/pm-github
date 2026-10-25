@@ -200,6 +200,14 @@ Gated imports (`github import --gate`, including the scheduled sync workflow)
 also require a git repository so the proposed publication can be checked. They
 refuse before writing when the tracker is outside one; plain imports still work.
 
+Import lifecycle finalization uses the pm SDK's item mutation boundary, retaining
+GitHub source dates and both import write hooks. Tracker ownership, workflow,
+history-stream and transactional extension guards now apply to these writes too;
+a refusal leaves the item and history unchanged. The SDK supplies missing-item
+diagnostics (not-found exit code 3), maintains its derived index, and uses its
+native TOON storage format when updating legacy documents.
+See [SDK adoption evidence](docs/sdk-adoption-1025.md).
+
 ## Revalidate GitHub blockers
 
 **Compatibility:** pm-github now requires PM CLI 2026.10.5 or newer for complete

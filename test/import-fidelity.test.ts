@@ -434,7 +434,7 @@ test("finalization appends history, is a true no-op on retry, restores files on 
   const before = readFileSync(historyPath, "utf8");
   await persistImportFidelity(pmRoot, item.id, fidelity, false);
   assert.equal(readFileSync(historyPath, "utf8"), before);
-  await assert.rejects(persistImportFidelity(pmRoot, "fixture-missing", fidelity, false), /missing during lifecycle/);
+  await assert.rejects(persistImportFidelity(pmRoot, "fixture-missing", fidelity, false), /Item fixture-missing not found/);
   const backup = `${historyPath}.fixture-backup`;
   renameSync(historyPath, backup);
   mkdirSync(historyPath);
