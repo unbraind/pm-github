@@ -204,8 +204,9 @@ Import lifecycle finalization uses the pm SDK's item mutation boundary, retainin
 GitHub source dates and both import write hooks. Tracker ownership, workflow,
 history-stream and transactional extension guards now apply to these writes too;
 a refusal leaves the item and history unchanged. The SDK supplies missing-item
-diagnostics, maintains its derived index, and uses its native TOON storage format
-when updating legacy documents. See [SDK adoption evidence](docs/sdk-adoption-1025.md).
+diagnostics (not-found exit code 3), maintains its derived index, and uses its
+native TOON storage format when updating legacy documents.
+See [SDK adoption evidence](docs/sdk-adoption-1025.md).
 
 ## Revalidate GitHub blockers
 

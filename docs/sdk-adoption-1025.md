@@ -37,10 +37,13 @@ that retry preserves bytes and emits no further import hooks.
 
 Intentional SDK differences, asserted separately on each tracker:
 
-- A transactional `beforeMutation` guard now refuses before either durable write.
-- Strict ownership now refuses a conflicting assignee before either durable write.
+- A transactional `beforeMutation` guard now refuses before either durable write,
+  with SDK conflict exit code 4 and the guard's structured refusal code.
+- Strict ownership now refuses a conflicting assignee before either durable write,
+  with SDK conflict exit code 4.
 - A missing item uses the SDK's `Item … not found` diagnostic rather than the
-  import adapter's custom missing-during-finalization message. Both write nothing.
+  import adapter's custom missing-during-finalization message. Its exit code is
+  now SDK not-found code 3 instead of generic code 1. Both write nothing.
 - SDK derived-index maintenance emits its own lock create/release observations.
   These runtime lock events are excluded from durable/import-hook equality;
   both `import` and `import:history` payloads remain exactly compared.
@@ -60,3 +63,19 @@ still passes, confirming that it checks retained compatibility. Restoring the
 SDK implementation passes **3/3**, without SDK mocks and without git.
 The tracker records the command and result; full package gates retain all four
 100 percent coverage thresholds.
+
+## Gate evidence
+
+The local `npm run release:check` passed with an isolated home and Git identity:
+**1,498 passed, zero failed/cancelled/skipped**, exact **100/100/100/100** across
+**19 authored modules**, zero production vulnerabilities, and passing privacy,
+duplication, packaging, changelog and publish-attestation checks.
+The native Bun targeted regressions passed **3/3** as well.
+
+CI's npm and Bun release-gate steps passed on Node 22 and 26 for source commit
+`cd75897ec50399a996be8680b7830bd5836f4004`:
+[source CI run](https://github.com/unbraind/pm-github/actions/runs/40208204021).
+The [PR checks](https://github.com/unbraind/pm-github/pull/180/checks) carry the
+current head's complete matrix and additional native Bun acceptance results.
+Independent review remains pending; unavailable, skipped and neutral automated
+review responses do not count as approval.

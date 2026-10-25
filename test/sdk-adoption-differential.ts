@@ -65,7 +65,7 @@ function replay(build: string, snapshot: string, id: string, scenario: string): 
     let error = null;
     try {
       await persistImportFidelity(pmRoot, scenario === 'missing' ? 'missing-fixture' : id.slice(settings.id_prefix.length), fidelity, scenario === 'link');
-    } catch (caught) { error = caught.message; }
+    } catch (caught) { error = { message: caught.message, code: caught.code ?? null, exit_code: caught.exitCode ?? null }; }
     const after = snapshot();
     const firstWrites = structuredClone(writes);
     if (error === null) {
@@ -102,16 +102,22 @@ for (let index = 0; index < inputs.length; index += 2) {
     delete after.lockOps;
     if (scenario === "guard" || scenario === "ownership") {
       assert.equal(before.error, null);
-      assert.match(String(after.error), scenario === "guard" ? /Lifecycle import denied/ : /assigned to fixture-owner/);
+      assert.match(String((after.error as Record<string, unknown>).message), scenario === "guard" ? /Lifecycle import denied/ : /assigned to fixture-owner/);
+      assert.equal((after.error as Record<string, unknown>).exit_code, 4);
+      assert.equal((after.error as Record<string, unknown>).code, scenario === "guard" ? "fixture_refusal" : null);
       assert.deepEqual(after.after, after.before, "SDK refusals must precede item/history writes");
       assert.deepEqual(after.writes, []);
-      console.log(`${id} ${scenario}: intentional SDK policy refusal; zero durable writes`);
+      console.log(`${id} ${scenario}: intentional SDK policy refusal ${JSON.stringify(after.error)}; zero durable writes`);
     } else if (scenario === "missing") {
-      assert.match(String(before.error), /missing during lifecycle/);
-      assert.match(String(after.error), /not found/);
+      assert.match(String((before.error as Record<string, unknown>).message), /missing during lifecycle/);
+      assert.match(String((after.error as Record<string, unknown>).message), /not found/);
+      assert.equal((before.error as Record<string, unknown>).exit_code, 1);
+      assert.equal((after.error as Record<string, unknown>).exit_code, 3);
+      assert.equal((before.error as Record<string, unknown>).code, null);
+      assert.equal((after.error as Record<string, unknown>).code, null);
       assert.deepEqual(before.after, before.before);
       assert.deepEqual(after.after, after.before);
-      console.log(`${id} missing: intentional SDK not-found diagnostic; zero durable writes`);
+      console.log(`${id} missing: intentional SDK diagnostic ${JSON.stringify(before.error)} -> ${JSON.stringify(after.error)}; zero durable writes`);
     } else {
       assert.deepEqual(after, before, `${id} ${scenario}: exact durable bytes and import hook payloads`);
       console.log(`${id} ${scenario}: identical item/history bytes, import hook payloads and no-op retry`);
