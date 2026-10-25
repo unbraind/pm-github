@@ -457,16 +457,17 @@ export async function persistImportFidelity(pmRoot: string, id: string, fidelity
       if (document.metadata.closed_at && Date.parse(document.metadata.closed_at) < Date.parse(document.metadata.created_at)) {
         throw new CommandError(`GitHub issue #${fidelity.github_number} needs a source closure date before its lifecycle can be imported safely.`);
       }
-      if (JSON.stringify(before) === JSON.stringify(canonicalDocument(document))) return { changedFields: [] };
-      // SDK bulk rollback addresses history by native updated_at. Keep that clock
-      // equal to the appended event timestamp; source time lives in github_updated_at.
-      const now = new Date().toISOString();
-      document.metadata.updated_at = now;
-      const after = canonicalDocument(document);
-      // Preserve the import hook's established JSON-pointer projection. The SDK
-      // owns the actual event, clock, append, rollback, index refresh and hooks.
-      return { changedFields: createHistoryEntry({ nowIso: now, author: "pm-github", op: "import", before, after })
-        .patch.map(patch => patch.path) };
+      return {
+        /** Project exact hook fields after the SDK enriches its live document. */
+        get changedFields(): string[] {
+          // The SDK sets its native clock and format after this callback returns.
+          // Read lazily so hook fields match the event that is actually appended;
+          // an empty SDK patch also supplies skipNoop without a local comparison.
+          const after = canonicalDocument(document);
+          return createHistoryEntry({ nowIso: after.metadata.updated_at, author: "pm-github", op: "import", before, after })
+            .patch.map(patch => patch.path);
+        },
+      };
     },
   });
 }

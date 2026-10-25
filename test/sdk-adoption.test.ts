@@ -92,3 +92,35 @@ test("SDK finalization preserves both import write hooks and JSON-pointer fields
   assert.equal(writes.length, 2);
   assert.equal(readFileSync(getHistoryPath(pmRoot, item.id), "utf8"), history);
 }));
+
+test("import hook fields match the actual history patch when the clock advances after mutation", async () => tracker(async pmRoot => {
+  const item = (await create({ title: "Clock-boundary lifecycle", type: "Task" }, { pmRoot })).item;
+  const RealDate = Date;
+  let clock = Date.parse(item.updated_at!);
+  /** Freeze Date until a queued source-read observation advances the clock. */
+  class ClockDate extends RealDate {
+    /** Preserve explicit date parsing while controlling no-argument clock reads. */
+    constructor(value?: string | number) { super(value ?? clock); }
+    /** Return the same controlled instant for SDK lock and clock checks. */
+    static now(): number { return clock; }
+  }
+  const registry = hooks();
+  const writes: Parameters<ExtensionHookRegistry["onWrite"][number]["run"]>[0][] = [];
+  registry.onWrite.push({ layer: "project", name: "clock-observer", run: context => {
+    if (context.op === "import" || context.op === "import:history") writes.push(context);
+  } });
+  setActiveExtensionHooks(registry);
+  globalThis.Date = ClockDate as unknown as DateConstructor;
+  try {
+    const advancing = { ...fidelity, get github_created_at(): string {
+      // The source is read synchronously. This tick runs at the next await,
+      // between the SDK callback and its final native updated_at assignment.
+      queueMicrotask(() => { clock++; });
+      return fidelity.github_created_at;
+    } };
+    await persistImportFidelity(pmRoot, item.id, advancing, false);
+    const entry = (await readHistorySnapshot(getHistoryPath(pmRoot, item.id), item.id)).entries.at(-1)!;
+    assert.equal(writes.length, 2);
+    for (const context of writes) assert.deepEqual(context.changed_fields, entry.patch.map(patch => patch.path));
+  } finally { globalThis.Date = RealDate; }
+}));

@@ -6,7 +6,7 @@ or provider chronology rewrite is required.
 
 | Audit finding | Replacement or disposition | Evidence |
 | --- | --- | --- |
-| `import-fidelity.ts:445-454` manual lock followed by item/history persistence | `mutateItem` owns locking, persistence, append rollback, index refresh and hooks. The mutation callback retains GitHub lifecycle fields, normalization, chronology validation and no-op detection. `createHistoryEntry` only projects the established JSON-pointer hook fields; it does not persist an event. | `test/sdk-adoption.test.ts`, `test/import-fidelity.test.ts`, differential replay below |
+| `import-fidelity.ts:445-454` manual lock followed by item/history persistence | `mutateItem` owns locking, native clock, no-op handling, persistence, append rollback, index refresh and hooks. The mutation callback retains GitHub lifecycle fields, normalization and chronology validation. A lazy `createHistoryEntry` projection supplies exact JSON-pointer hook fields after SDK clock/format enrichment; it does not persist an event. | `test/sdk-adoption.test.ts`, `test/import-fidelity.test.ts`, differential replay below |
 | Same finding: assess `commitItemMutations` for ordinary conditional fields | Already used by `index.ts`'s atomic import path. Its update step forwards ordinary update options; it has no document callback for exact reserved native lifecycle timestamp edits. Lifecycle finalization must remain a single `mutateItem` boundary rather than splitting its fields across another transaction. No missing SDK API blocks this adoption. | Existing atomic import, compensation and retry tests in `test/import-fidelity.test.ts` |
 | `closeout.ts:357-368` acceptance chronology | Already uses `readHistoryEntries`, `getHistoryPath` and `verifyHistoryEntries`. Remaining chronology and attribution are GitHub domain rules, explicitly excluded by the audit from unused history APIs. | Existing closeout tests; no code replacement |
 
@@ -57,25 +57,31 @@ lifetimes, release retention and existing import hooks remain domain contracts.
 ## Behavioral revert proof
 
 Restoring only `persistImportFidelity` and its imports to origin/main makes
-`node --test test/sdk-adoption.test.ts` fail **2/3** cases: transactional guard
-and strict-ownership refusal both become missing rejections. The hook/retry case
-still passes, confirming that it checks retained compatibility. Restoring the
-SDK implementation passes **3/3**, without SDK mocks and without git.
+`node --test test/sdk-adoption.test.ts` fail **2/4** cases: transactional guard
+and strict-ownership refusal both become missing rejections. The result is
+**2 passed / 2 failed**: hook/retry and clock-boundary
+compatibility both still pass on the original manual implementation. Restoring
+the SDK implementation passes **4/4**, without SDK mocks and without git.
 The tracker records the command and result; full package gates retain all four
 100 percent coverage thresholds.
 
+The initial eager SDK field projection also has a separate behavioral revert
+proof: it passes **3/4** and fails the clock-boundary case by omitting
+`/metadata/updated_at` from the hook fields while the appended patch includes it.
+The regression controls Date and queues a tick after the synchronous source
+read, using the real SDK and tracker. A lazy field projection reads the SDK's
+live document after enrichment, so both write hooks match the actual patch;
+the SDK supplies the clock and empty-patch no-op handling completely.
+
 ## Gate evidence
 
-The local `npm run release:check` passed with an isolated home and Git identity:
-**1,498 passed, zero failed/cancelled/skipped**, exact **100/100/100/100** across
-**19 authored modules**, zero production vulnerabilities, and passing privacy,
-duplication, packaging, changelog and publish-attestation checks.
-The native Bun targeted regressions passed **3/3** as well.
-
-CI's npm and Bun release-gate steps passed on Node 22 and 26 for source commit
-`cd75897ec50399a996be8680b7830bd5836f4004`:
-[source CI run](https://github.com/unbraind/pm-github/actions/runs/40208204021).
+Local typecheck, test typecheck, lint, docstring and duplication checks accompany
+the **4/4 Node and native Bun targeted regressions** and **14/14 differential
+scenarios**. Historical 1,498-test full-gate receipts in the tracker predate the
+added clock regression and are not the final-head certificate.
 The [PR checks](https://github.com/unbraind/pm-github/pull/180/checks) carry the
-current head's complete matrix and additional native Bun acceptance results.
+current head's npm/Bun release gates on Node 22/26 and additional native Bun
+acceptance results, at unchanged **100/100/100/100** thresholds over the complete
+authored source inventory. The PR body records the final counts and run URL.
 Independent review remains pending; unavailable, skipped and neutral automated
 review responses do not count as approval.
