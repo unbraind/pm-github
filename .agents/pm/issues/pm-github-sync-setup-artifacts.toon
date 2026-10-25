@@ -2,12 +2,17 @@ id: pm-github-sync-setup-artifacts
 title: Publish tracker sync after restoring workflow-owned setup artifacts
 description: "Reusable sync setup can change merge attributes and the managed extension registry before its publication scope gate. Bound setup ownership to a clean baseline, remove only workflow-produced setup changes before the scope gate, preserve fail-closed rejection of caller edits, and verify nonempty import and repeat-import idempotency in synthetic callers."
 type: Issue
-status: in_progress
+status: closed
 priority: 1
 tags[4]: changelog-unreleased,"gh:unbraind/pm-github#168",sync,workflow
 created_at: "2026-10-24T05:12:10.201Z"
-updated_at: "2026-10-24T05:25:36.320Z"
+updated_at: "2026-10-24T23:10:59.553Z"
+closed_at: "2026-10-24T21:45:45.339Z"
+completed_at: "2026-10-24T06:01:04.000Z"
 author: codex-agent
+resolution: Restores workflow-owned setup artifacts before tracker publication and proves only authorized tracker/changelog changes are published.
+expected_result: "Reusable sync setup can change merge attributes and the managed extension registry before its publication scope gate. Bound setup ownership to a clean baseline, remove only workflow-produced setup changes before the scope gate, preserve fail-closed rejection of caller edits, and verify nonempty import and repeat-import idempotency in synthetic callers."
+actual_result: "https://github.com/unbraind/pm-github/pull/173, merged 2026-10-24T06:01:04Z, merge f4c29e8391462d03be4c3303e8309ece7864c025: Restores workflow-owned setup artifacts before tracker publication and proves only authorized tracker/changelog changes are published."
 comments[6]{created_at,author,text}:
   "2026-10-24T05:12:14.891Z",codex-agent,"Issue #168 reviewed. Setup currently writes attributes and the managed-extension registry, but restoration covers only settings and workspace history and runs after the first scope gate. Plan: explicitly bound setup lifetime and restore only clean-baseline workflow artifacts before caller scripts and the publication gate; test absent/outdated attributes, tracked/untracked registries, nonempty plus identical repeat imports, and unrelated edits. Run targeted tests, typecheck and lint locally; use npm and Bun CI release gates for complete evidence."
   "2026-10-24T05:15:54.262Z",codex-agent,"Read all four hosted job logs through the jobs API: ADO, Gantt and Lint reject setup-written attributes; Slack rejects attributes plus the managed registry. The fix now brackets setup with a file-level clean check (index, working tree, and ignored untracked files) and immediate restoration before any import or caller script. Closeout shares the same vulnerable setup sequence, so it receives the identical boundary. Existing publication scope and privacy gates remain unchanged."
@@ -52,4 +57,5 @@ tests[4]:
       source_ref: fix/sync-scope-gate-setup-artifacts
 docs[1]{path,scope}:
   README.md,project
+close_reason: "https://github.com/unbraind/pm-github/pull/173, merged 2026-10-24T06:01:04Z, merge f4c29e8391462d03be4c3303e8309ece7864c025: Restores workflow-owned setup artifacts before tracker publication and proves only authorized tracker/changelog changes are published."
 body: ""
