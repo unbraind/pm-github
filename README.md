@@ -187,10 +187,90 @@ for missed deliveries or unavailable webhooks. Back up the ignored durable
 [CLI and typed SDK example](docs/webhook-inbox.md) for deployment, crash recovery,
 retention and supported-event details.
 
+## Issue-form completion contracts
+
+`pm github form` reads one explicitly selected repository issue form through the
+GitHub Contents API. It compiles requirements before export; it never writes to
+GitHub or changes an item. Select a revision explicitly (prefer a commit SHA for
+reproducibility). Requirements follow [GitHub's form schema](https://docs.github.com/en/communities/using-templates-to-encourage-useful-issues-and-pull-requests/syntax-for-githubs-form-schema).
+
+```sh
+pm github form --repo unbraind/pm-cli \
+  --form .github/ISSUE_TEMPLATE/feature-request.yml --form-ref main \
+  --form-bindings docs/issue-form-bindings.json --compile --json
+
+pm github form --repo unbraind/pm-cli \
+  --form .github/ISSUE_TEMPLATE/feature-request.yml --form-ref main \
+  --item pm-123 --form-bindings docs/issue-form-bindings.json \
+  --form-answers docs/issue-form-answers.json --json
+
+pm github export --repo unbraind/pm-cli --ids pm-123 \
+  --form .github/ISSUE_TEMPLATE/feature-request.yml --form-ref main \
+  --form-bindings docs/issue-form-bindings.json \
+  --form-answers docs/issue-form-answers.json --dry-run --json
+```
+
+The [bindings example](docs/issue-form-bindings.json) maps form IDs to current
+native item fields; the [answers example](docs/issue-form-answers.json) supplies
+the dropdown selection. Explicit answers override bindings. Native text fields
+(including custom fields) and string arrays are read through the SDK, without
+coercion. Numbers, objects and nested arrays refuse as answers. Status bindings
+are literal text; this feature does not infer lifecycle meaning. Required text
+must contain non-whitespace content. Text supports `required` and `min_length`
+(Unicode code points, after CRLF/CR normalization); dropdowns support `required`,
+exact option membership, uniqueness and single/multiple selection. Defaults and
+placeholders do not count as confirmed answers. Markdown elements are display
+context and are omitted from the issue body. Fields without IDs use `field-N`,
+where N is their one-based position in the form body.
+
+Unknown keys, validators or element types refuse explicitly as `unsupported_form`.
+This includes checkboxes, uploads, rendered/code textareas, dropdown defaults,
+assignees, project routing and issue types. Duplicate IDs, labels or options
+also refuse. The supported top-level keys are `name`, `description`, `title`,
+`labels`, and `body`; `title` is a UI preset and the native pm title remains the
+exported title. Form labels augment exported labels. Missing/invalid answers
+produce `incomplete_answers`, exit 2, and **one** checklist of at most 20 repairs
+plus an omitted count. A batch validates all selected items before any POST or
+PATCH, so one incomplete item yields zero remote writes. Pass the same form
+flags to `export --apply` only after reviewing the preview. Without `--form`,
+export retains its existing behavior. This does not repair export identity,
+retry or idempotency defects, and a form check is not an approval for later use.
+
+Normal form output is compact host-rendered TOON (`--json` selects JSON): contract,
+binding names, counts and repair evidence, without item contents or answer values.
+`--compile` returns the contract even before answers are supplied. Limits are
+128 KiB YAML/JSON files; 100 elements, map entries or choices; 200 characters per
+label/choice; 32,768 characters per answer; `min_length` 0..32,768; 64 KiB UTF-8
+rendered issue body. Arrays must be dense and numeric validators finite integers.
+Input and output size refusals use `invalid_form_input`; inaccessible forms and
+items use `form_unavailable` and `item_unavailable`. Remedies use the host SDK's
+structured error context (`nextSteps` and `why`).
+
+The typed SDK exports `IssueFormInput`, `IssueFormContract`, `IssueFormReport`,
+`IssueFormRefusalCode`, `compileIssueForm(input)`,
+`completeIssueForm(pmRoot, input)` and `readRepositoryIssueForm(selection, reader, apiBase)`:
+
+```ts
+import { completeIssueForm, type IssueFormInput } from "pm-github";
+
+const input: IssueFormInput = {
+  repo: "owner/repo", ref: "commit-sha", path: ".github/ISSUE_TEMPLATE/bug.yml",
+  yaml: selectedRepositoryFormYaml,
+  item: "pm-123", bindings: { problem: "description" },
+  answers: { version: "stable" },
+};
+const { report, body } = await completeIssueForm(pmRoot, input);
+// report.ok is completion evidence for this read; body is the validated export text.
+```
+
+There are no saved plans, leases, idempotency keys, or retries in the completion
+adapter. Every call re-reads native state, and the semantic form digest is only
+a source identifier. Imports and sync do not use this opt-in export adapter.
+
 ## Without git
 
 With an explicit repository, GitHub import, export, refresh, sync, project commands,
-blocker checks, closeout and webhook receive/reconcile work in a plain pm tracker
+blocker checks, issue-form compilation/completion, closeout and webhook receive/reconcile work in a plain pm tracker
 without a git executable.
 `pm github identity` also works there, entirely offline and without credentials.
 The provider commands still require their normal GitHub access and credentials. Privacy scanning

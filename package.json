@@ -126,6 +126,8 @@
     "minTokens": 50
   },
   "dependencies": {
-    "entities": "8.1.0"
+    "entities": "8.1.0",
+    "yaml": "2.9.1",
+    "zod": "4.6.7"
   }
 }

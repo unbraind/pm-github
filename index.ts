@@ -24,6 +24,9 @@ import type {
   SearchProviderQueryContext,
 } from "@unbrained/pm-cli/sdk/authoring";
 import { CloseoutUsageError, compactCloseoutReport, runCloseout } from "./closeout.ts";
+import { compileIssueForm, completeIssueForm, readRepositoryIssueForm, refuseIssueForm, type IssueFormCompletion } from "./issue-forms.ts";
+export { compileIssueForm, completeIssueForm, readRepositoryIssueForm } from "./issue-forms.ts";
+export type { IssueFormInput, IssueFormSelection, IssueFormContract, IssueFormReport, IssueFormCompletion, IssueFormRefusalCode, FormField, FormRepair, IssueFormReader } from "./issue-forms.ts";
 import {
   AmbiguousCitationError, buildImportFidelity, fetchImportTimeline, importFidelityFields, matchImportedIssue, persistImportFidelity, readImportReleases, selectImportContextIndex, validateImportLifetime,
   type AmbiguousCitationPlan, type CitationCandidate, type ImportFidelity,
@@ -4367,14 +4370,14 @@ export function applyOutcomeError(
 // stdout in JSON mode (pm renders the return value). Used by both the
 // `registerExporter("github", ...)` entry point and the `pm github export`
 // command so the surface stays consistent.
-/**
- * Shared handler for the `pm github export` exporter and command.
- *
- * Export is SAFE BY DEFAULT: it previews the create/update plan and writes
- * nothing unless the user opts in with `--apply` (plus a token and `--repo`).
- * Items already linked to an issue in `--repo` are upserted rather than
- * duplicated; `--label-map` translates pm tags to GitHub labels.
- */
+/** Resolve explicit CLI selection and files through the package's read-only REST client. */
+async function selectedIssueForm(ctx: CommandHandlerContext) {
+  const token = resolveGitHubToken();
+  return readRepositoryIssueForm({ repo: optionString(ctx.options, "repo") ?? "", ref: optionString(ctx.options, "form-ref", "formRef") ?? "", path: optionString(ctx.options, "form") ?? "" },
+    url => fetchJSON(url, token), githubApiBase(), { answers: optionString(ctx.options, "form-answers", "formAnswers"), bindings: optionString(ctx.options, "form-bindings", "formBindings") });
+}
+
+/** Re-read all selected form answers before constructing or applying the export. */
 async function runExport(ctx: CommandHandlerContext) {
   const options = ctx.options;
   const jsonMode = ctx.global.json === true;
@@ -4392,7 +4395,21 @@ async function runExport(ctx: CommandHandlerContext) {
   }
 
   const selected = requireRequestedItems(readPmItems(ctx.pm_root), scopedIds);
+  const completions: IssueFormCompletion[] = [];
+  if (optionProvided(options, "form")) {
+    const source = await selectedIssueForm(ctx);
+    compileIssueForm(source);
+    for (const item of selected) completions.push(await completeIssueForm(ctx.pm_root, { ...source, item: item.id }));
+    const repairs = completions.flatMap(completion => completion.report.checklist.map(repair => ({ ...repair, field: `${completion.report.item}:${repair.field}` })));
+    if (repairs.length) refuseIssueForm("incomplete_answers", repairs, completions.reduce((sum, completion) => sum + completion.report.omitted, 0));
+  } else if (["form-ref", "formRef", "form-answers", "formAnswers", "form-bindings", "formBindings"].some(flag => optionProvided(options, flag))) {
+    refuseIssueForm("invalid_form_input", [{ field: "form", reason: "selection", remedy: "Pass --form with --repo and --form-ref to enforce an issue-form contract." }]);
+  }
   const plan = buildExportPlan(selected, repo, labelMap);
+  for (const [index, completion] of completions.entries()) {
+    plan[index]!.payload.body = completion.body;
+    plan[index]!.payload.labels = [...new Set([...plan[index]!.payload.labels, ...completion.report.contract.labels])];
+  }
   const creates = plan.filter((e) => e.action === "create").length;
   const updates = plan.filter((e) => e.action === "update").length;
 
@@ -6650,6 +6667,10 @@ const IMPORT_FLAGS = [
 ];
 
 const EXPORT_FLAGS = [
+  { long: "--form", value_name: "path", description: "Enforce a selected repository issue form before any export writes" },
+  { long: "--form-ref", value_name: "revision", description: "Explicit repository revision containing the selected form" },
+  { long: "--form-answers", value_name: "json", description: "JSON map of form answer IDs to strings or string arrays" },
+  { long: "--form-bindings", value_name: "json", description: "JSON map of form answer IDs to native pm field names" },
   { long: "--repo", value_name: "owner/repo", description: "Target GitHub repo (required for --apply; enables upsert of linked issues)" },
   { long: "--ids", value_name: "pm-1,pm-2", description: "Only export these pm item IDs (comma-separated)" },
   { long: "--apply", description: "Write to GitHub (default is a safe dry-run preview)" },
@@ -6837,6 +6858,22 @@ export default defineExtension({
         "--label-map takes from=to pairs, e.g. --label-map bug=kind/bug,enhancement=kind/enhancement.",
         "Use --ids <pm-1,pm-2> to scope export; unknown IDs fail fast.",
       ],
+    });
+
+    api.registerCommand({
+      name: "github form",
+      description: "Compile and check an explicitly selected repository issue form against current SDK item state. Read-only; returns a compact contract and bounded repair checklist.",
+      flags: [...EXPORT_FLAGS.filter(flag => ["--repo", "--form", "--form-ref", "--form-answers", "--form-bindings"].includes(flag.long)),
+        { long: "--compile", description: "Only compile requirements, validators and bindings; do not check completion" },
+        { long: "--item", value_name: "id", description: "Read current native pm fields through the SDK for explicit bindings" }],
+      examples: ["pm github form --repo owner/repo --form .github/ISSUE_TEMPLATE/bug.yml --form-ref main --item pm-1 --form-bindings bindings.json --json"],
+      async run(ctx: CommandHandlerContext) {
+        const source = await selectedIssueForm(ctx);
+        if (ctx.options.compile === true) return compileIssueForm(source);
+        const completion = await completeIssueForm(ctx.pm_root, { ...source, item: optionString(ctx.options, "item") });
+        if (!completion.report.ok) refuseIssueForm("incomplete_answers", completion.report.checklist, completion.report.omitted);
+        return completion.report;
+      },
     });
 
     // -----------------------------------------------------------------------

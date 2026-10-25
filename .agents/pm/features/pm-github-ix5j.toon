@@ -1,0 +1,31 @@
+id: pm-github-ix5j
+title: Validate selected GitHub issue forms before export
+description: "Acceptance: compile explicitly selected repository issue forms into required dropdown/text answers, supported validators and explicit pm-field bindings; refuse unsupported constructs; missing answers produce zero remote writes and one bounded repair checklist. Provide typed SDK and CLI, compact TOON/JSON, docs and example, non-git real public tracker validation, seeded model-based tests and unchanged npm/Bun CI release gates."
+type: Feature
+status: in_progress
+priority: 2
+tags[3]: export,issue-forms,validation
+created_at: "2026-10-25T22:35:34.611Z"
+updated_at: "2026-10-25T22:53:19.948Z"
+author: codex-agent
+acceptance_criteria: All required dropdown and text inputs accounted for; unsupported constructs explicitly refused; missing required answers yield zero remote writes and one bounded repair checklist; typed SDK/CLI and compact output; docs/example; non-git public tracker proof; seeded properties; npm and Bun release gates unchanged.
+comments[7]{created_at,author,text}:
+  "2026-10-25T22:36:13.527Z",codex-agent,"Overlap rechecked against installed core SDK schema/completion APIs, the CLI example importer, and sibling GitHub/Jira/Linear/presets implementations: core validates native items; Projects v2 fields describe board columns. No repository issue-form completion adapter found. Implement a read-only form preflight and export guard; existing export identity/idempotency defects remain outside scope. No journal, outbox, status interpretation or shared mutable state will be added."
+  "2026-10-25T22:44:24.760Z",codex-agent,"Implemented a strict bounded issue-form boundary, typed compiler/completion SDK, current-state native SDK reads, compact CLI and batch export guard. Supported text/dropdown validators are explicit; unsupported constructs refuse. An initial zero-write test exposed SDK get context-usage journaling, so completion now uses SDK locateItem/readLocatedItem and avoids that write. Targeted schema, HTTP and no-git tests cover the corrected boundary; seeded model validation is running."
+  "2026-10-25T22:48:23.158Z",codex-agent,"Validation: six targeted tests passed, including 500 seeded model sequences with real SDK state readback, old-request replay, CRLF/whitespace variants, parent relationships and five custom active statuses. Targeted c8 measured 100/100/100/100 for the new adapter. Behavioral revert proof: replacing only runExport with origin/main causes the registered exporter refusal regression to fail with Missing expected rejection; restored implementation passes. Additional deterministic extreme-validator/output-count fuzz is included."
+  "2026-10-25T22:48:24.371Z",codex-agent,"Real-data proof: read-only non-git copy of public pm-github tracker at fcd9f93e28e85b170506ceac507d82a911173683; public pm-cli feature-request form at 829af6fe147978757f0f06693391d3288736e7f7. Certified read: 152 items, 5 form fields (3 required); 68 ready, 84 incomplete, 100 required-answer repairs. All 152 replays identical; entire snapshot fingerprint unchanged, zero tracker/remote writes. Maximum compact report: JSON 1580 bytes, TOON 1660 bytes. Both git and gh absent from PATH during the read-only proof. Existing import/sync paths and export identity/idempotency semantics are outside this adapter."
+  "2026-10-25T22:51:40.201Z",codex-agent,"Installed CLI acceptance now exercises TOON/JSON compilation, native bindings, explicit answers and --apply refusal with actual Commander flag normalization. Corrected kebab/camel option handling found by that test. Follow-up pm-github-fqjp records the pre-existing custom terminal-status mapping in legacy export/sync; no new status interpretation, journal, claim, outbox or shared mutable completion state is introduced."
+  "2026-10-25T22:52:30.701Z",codex-agent,"Final local checks passed: typecheck, build, test typecheck, lint, docstrings (19 files/217 declarations), zero-duplication gate (20 authored modules), and eight targeted tests via the linked pm test command. The tests include 500 model sequences plus 500 extreme-validator/output-count fuzz cases and installed TOON/JSON CLI checks. Full npm and Bun release:check are delegated to the unchanged CI matrix on Node 22/26 because the shared host is saturated; final run URL and exact counts will be recorded in the PR."
+  "2026-10-25T22:53:18.859Z",codex-agent,Final targeted run passed 8/8 tests with no skips (500 model sequences plus 500 boundary fuzz cases). Changelog generation/check passed. Strict tracked-project health passes with isolated CI-style user configuration; the default host profile reports an unrelated global extension host-version skew. Existing main history streams remain byte-identical prefixes; only the two new item histories are added. Claims released for orchestrator verification.
+files[4]{path,scope}:
+  index.ts,project
+  issue-forms.ts,project
+  test/issue-form-real-data.ts,project
+  test/issue-forms.test.ts,project
+tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  node --test test/issue-forms.test.ts,project,600,codex-agent,"2026-10-25T22:45:30.627Z",local_mutation,feat/issue-form-completion-contracts
+docs[3]{path,scope}:
+  docs/issue-form-answers.json,project
+  docs/issue-form-bindings.json,project
+  README.md,project
+body: ""
