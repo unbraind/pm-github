@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { openSync, readSync, closeSync, fstatSync, constants } from "node:fs";
 import { parseDocument } from "yaml";
 import { z } from "zod";
+import { emptyRecord, ownValue } from "./own-record.ts";
 import { createPmCliExpectedError, readSettings, resolveItemTypeRegistry, getActiveExtensionRegistrations, locateItem, readLocatedItem } from "@unbrained/pm-cli/sdk";
 
 /** Stable refusals carry a bounded repair list in the SDK error context. */
@@ -36,7 +37,7 @@ export interface IssueFormCompletion { report: IssueFormReport; body: string }
 
 const text = z.string().max(32768);
 const short = z.string().min(1).max(200).regex(/^[^\r\n]+$/);
-const key = z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/).refine(value => !["__proto__", "constructor", "prototype"].includes(value));
+const key = z.string().regex(/^[\p{L}\p{N}_-]{1,100}$/u);
 const denseStrings = z.array(text).max(100);
 const answer = z.union([text, denseStrings]);
 const validators = z.strictObject({ required: z.boolean().optional(), min_length: z.number().int().min(0).max(32768).optional() });
@@ -49,6 +50,10 @@ const fields = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("markdown"), attributes: z.strictObject({ value: text }) }),
 ]);
 const form = z.strictObject({ name: short, description: text, title: text.optional(), labels: z.array(short).max(100).optional(), body: z.array(fields).min(1).max(100) });
+/** Preserve every own JSON key, including __proto__, before validating named entries. */
+function namedEntries(value: unknown): unknown {
+  return value !== null && typeof value === "object" && Object.prototype.toString.call(value) === "[object Object]" ? new Map(Object.entries(value)) : value;
+}
 /** Parse bounded YAML with aliases disabled before the single strict request schema runs. */
 function yamlValue(value: unknown): unknown {
   if (typeof value !== "string" || Buffer.byteLength(value) > 131072) return undefined;
@@ -63,8 +68,8 @@ const requestSchema = z.strictObject({
   ref: z.string().min(1).max(200).regex(/^[a-zA-Z0-9_./-]+$/),
   path: z.string().regex(/^\.github\/ISSUE_TEMPLATE\/[a-zA-Z0-9_-][a-zA-Z0-9_.-]{0,99}\.ya?ml$/),
   yaml: z.preprocess(yamlValue, form),
-  answers: z.record(key, answer).refine(value => Object.keys(value).length <= 100).default({}),
-  bindings: z.record(key, key).refine(value => Object.keys(value).length <= 100).default({}),
+  answers: z.preprocess(namedEntries, z.map(key, answer).refine(value => value.size <= 100)).default(() => new Map()),
+  bindings: z.preprocess(namedEntries, z.map(key, key).refine(value => value.size <= 100)).default(() => new Map()),
   item: key.optional(),
 });
 
@@ -96,9 +101,9 @@ function compile(request: z.infer<typeof requestSchema>): IssueFormContract {
     }
     compiled.push({ id, label: field.attributes.label, type: field.type, required: field.validations?.required ?? false,
       min_length: field.validations?.min_length ?? 0, multiple: field.type === "dropdown" && (field.attributes.multiple ?? false),
-      options, binding: request.bindings[id] ?? null });
+      options, binding: request.bindings.get(id) ?? null });
   }
-  for (const id of [...Object.keys(request.answers), ...Object.keys(request.bindings)]) {
+  for (const id of [...request.answers.keys(), ...request.bindings.keys()]) {
     if (!compiled.some(field => field.id === id)) refuseIssueForm("invalid_form_input", [{ field: id, reason: "unknown_field", remedy: "Use only answer IDs listed by the compiled contract." }]);
   }
   return { repo: request.repo, ref: request.ref, path: request.path,
@@ -111,7 +116,7 @@ export function compileIssueForm(value: unknown): IssueFormContract { return com
 export async function completeIssueForm(pmRoot: string, value: unknown): Promise<IssueFormCompletion> {
   const request = input(value);
   const contract = compile(request);
-  let native: Record<string, unknown> = {};
+  let native: Record<string, unknown> = emptyRecord();
   if (request.item !== undefined) {
     try {
       const settings = await readSettings(pmRoot);
@@ -119,7 +124,7 @@ export async function completeIssueForm(pmRoot: string, value: unknown): Promise
       const located = await locateItem(pmRoot, request.item, settings.id_prefix, settings.item_format, registry.type_to_folder);
       if (!located) throw new Error("missing item");
       const { document } = await readLocatedItem(located, { schema: settings.schema });
-      native = { ...document.metadata, body: document.body };
+      native = Object.assign(emptyRecord<unknown>(), document.metadata, { body: document.body });
     }
     catch { refuseIssueForm("item_unavailable", [{ field: "item", reason: "sdk_read", remedy: "Select an existing unambiguous item readable through the pm SDK." }]); }
   }
@@ -127,8 +132,8 @@ export async function completeIssueForm(pmRoot: string, value: unknown): Promise
   const sections: string[] = [];
   let answered = 0;
   for (const field of contract.fields) {
-    const bound = field.binding !== null && Object.hasOwn(native, field.binding) ? native[field.binding] : undefined;
-    const value = request.answers[field.id] ?? bound;
+    const bound = field.binding !== null ? ownValue(native, field.binding) : undefined;
+    const value = request.answers.get(field.id) ?? bound;
     let reason = "";
     const parsed = answer.safeParse(value);
     let rendered = "";

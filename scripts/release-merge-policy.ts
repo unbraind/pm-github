@@ -1,3 +1,4 @@
+import { ownValue } from "../own-record.ts";
 /** Measured CI waits and conservative release-base refresh guards. */
 import { execFileSync, spawnSync } from "node:child_process";
 
@@ -46,7 +47,7 @@ export function assertSafeReleaseAdvance(base: string, main: string, directory =
       if (!paths.includes(path)) continue;
       const previous = JSON.parse(gitFact(directory, ["show", `${parent}:${path}`])) as { version?: string; packages?: Record<string, { version?: string }> };
       const next = JSON.parse(gitFact(directory, ["show", `${commit}:${path}`])) as typeof previous;
-      if (previous.version !== next.version || previous.packages?.[""]?.version !== next.packages?.[""]?.version) {
+      if (previous.version !== next.version || ownValue(previous.packages, "")?.version !== ownValue(next.packages, "")?.version) {
         throw new Error("Main changed the package release version; retry release preparation.");
       }
     }

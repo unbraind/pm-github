@@ -223,6 +223,12 @@ placeholders do not count as confirmed answers. Markdown elements are display
 context and are omitted from the issue body. Fields without IDs use `field-N`,
 where N is their one-based position in the form body.
 
+IDs accept Unicode letters/numbers, `_` and `-` (1..100 characters). Names such as
+`toString`, `constructor`, `__proto__`, `hasOwnProperty` and `valueOf` are ordinary
+IDs, choices and binding names. Answer and binding maps preserve every own key;
+inherited properties never supply answers or defaults. Invalid answer objects
+refuse by value shape, without rejecting these names or changing prototypes.
+
 Unknown keys, validators or element types refuse explicitly as `unsupported_form`.
 This includes checkboxes, uploads, rendered/code textareas, dropdown defaults,
 assignees, project routing and issue types. Duplicate IDs, labels or options

@@ -1,3 +1,4 @@
+import { ownValue } from "./own-record.ts";
 /** Refresh an explicit local GitHub mirror through the importer's existing mapping and transaction. */
 import { mkdtemp, cp, rm, chmod, readdir, lstat } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -73,7 +74,7 @@ async function fetchRefreshBatch(repo: string, targets: readonly RefreshTarget[]
     const alias = `i${target.number}`;
     const error = response.errors?.find(error => !error.path || (error.path[0] === "repository" && (error.path.length === 1 || error.path[1] === alias)));
     let reason: RefreshEntry["reason"];
-    const node = response.data!.repository?.[alias];
+    const node = ownValue(response.data!.repository, alias);
     if (error && error.type !== "NOT_FOUND") reason = error.type === "FORBIDDEN" ? "inaccessible" : "api_error";
     else if (response.data!.repository === null || node === null) reason = "not_found_or_inaccessible";
     else if (node === undefined) reason = "incomplete_response";
@@ -113,7 +114,7 @@ export function refreshChanges(entry: PreparedGithubImport): RefreshChange[] {
   const desired = { ...importFidelityFields(entry.fidelity!, Boolean(entry.linkOnly)),
     ...(entry.linkOnly ? {} : { title: entry.title, status: entry.status }), tags: entry.tags };
   return Object.entries(desired).flatMap(([field, value]) => {
-    const old = entry.match![field] ?? null;
+    const old = ownValue(entry.match, field) ?? null;
     const next = value ?? null;
     const equal = JSON.stringify(normalizeImportValue(field, old)) === JSON.stringify(normalizeImportValue(field, next));
     return equal ? [] : [{ field, old, new: next }];

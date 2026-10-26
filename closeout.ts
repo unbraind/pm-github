@@ -1,3 +1,4 @@
+import { ownValue } from "./own-record.ts";
 /** Close delivered tracker items using merged pull requests and head-check evidence. */
 import { close, hashDocument, locateItem, readLocatedItem, readSettings, resolveItemTypeRegistry, runWithActiveExtensions, setActiveExtensionHooks, listAllComplete, certifyCompleteListResult, getHistoryPath, readHistoryEntries, verifyHistoryEntries, PmCliError, EXIT_CODE, type ItemDocument } from "@unbrained/pm-cli/sdk";
 
@@ -80,8 +81,9 @@ function isoDate(value: string): string {
 
 /** Normalize repeatable flags without silently dropping malformed members. */
 function repeated(options: Record<string, unknown>, key: string): string[] {
-  if (options[key] === undefined) return [];
-  const values = Array.isArray(options[key]) ? options[key] : [options[key]];
+  const value = ownValue(options, key);
+  if (value === undefined) return [];
+  const values = Array.isArray(value) ? value : [value];
   if (values.length === 0 || values.some(value => typeof value !== "string" || value.trim() === "")) throw new Error(`--${key} requires a value.`);
   return [...new Set((values as string[]).map(value => value.trim()))];
 }
@@ -473,9 +475,9 @@ async function closeoutAttempt(pmRoot: string, repo: string | undefined, options
   });
   const since = options.since === undefined ? undefined : usage(() => isoDate(text(options.since)));
   if ((numbers.length === 0) === (since === undefined)) throw new CloseoutUsageError("Select either repeatable --pr <n> or --since <ISO date>.");
-  const declared = usage(() => requiredContexts(options["required-checks"] ?? options.requiredChecks));
+  const declared = usage(() => requiredContexts(ownValue(options, "required-checks") ?? options.requiredChecks));
   const skip = new Set(usage(() => repeated(options, "skip")));
-  const apply = options.apply === true && options["dry-run"] !== true && options.dryRun !== true;
+  const apply = options.apply === true && ownValue(options, "dry-run") !== true && options.dryRun !== true;
   if (since !== undefined) {
     // Rows arrive newest-updated first and a merge never postdates its PR's update, so a row updated
     // before the cutoff proves no later row can have merged at or after it.
@@ -709,14 +711,15 @@ async function closeoutAttempt(pmRoot: string, repo: string | undefined, options
 
 /** Keep actionable decisions and their checks while counting routine skips by stable code. */
 export function compactCloseoutReport(report: Awaited<ReturnType<typeof runCloseout>>) {
-  const skipped: Partial<Record<CloseoutCode, number>> = {};
+  const skipped = new Map<CloseoutCode, number>();
   const plan = report.plan.flatMap(row => {
     if (["already_terminal", "other_repository", "duplicate_selection", "explicit_skip", "not_merged"].includes(row.code)) {
-      skipped[row.code] = (skipped[row.code] ?? 0) + 1;
+      skipped.set(row.code, (skipped.get(row.code) ?? 0) + 1);
       return [];
     }
     return [{ ...row, action: row.action === "skip" && row.code !== "not_delivery" ? "refuse" : row.action }];
   });
   const prs = new Set(plan.map(row => row.pr));
-  return { ...report, plan, skipped, checks: report.checks.filter(gate => prs.has(gate.pr)) };
+  const counts: Partial<Record<CloseoutCode, number>> = Object.fromEntries(skipped);
+  return { ...report, plan, skipped: counts, checks: report.checks.filter(gate => prs.has(gate.pr)) };
 }

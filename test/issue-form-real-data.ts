@@ -31,17 +31,17 @@ let repairs = 0;
 let replayed = 0;
 const jsonBytes: number[] = [];
 const toonBytes: number[] = [];
-const reasons: Record<string, number> = {};
+const reasons = new Map<string, number>();
 for (const item of complete.items) {
   const result = await completeIssueForm(root, { ...request, item: item.id });
   jsonBytes.push(Buffer.byteLength(JSON.stringify(result.report)));
   toonBytes.push(Buffer.byteLength(encode(result.report)));
   if (result.report.ok) ready++; else incomplete++;
   repairs += result.report.checklist.length + result.report.omitted;
-  for (const entry of result.report.checklist) reasons[entry.reason] = (reasons[entry.reason] ?? 0) + 1;
+  for (const entry of result.report.checklist) reasons.set(entry.reason, (reasons.get(entry.reason) ?? 0) + 1);
   assert.deepEqual(await completeIssueForm(root, { ...request, item: item.id }), result);
   replayed++;
 }
 assert.equal(digest(root), before);
 console.log(JSON.stringify({ items: complete.items.length, fields: contract.fields.length, required: contract.fields.filter(field => field.required).length,
-  ready, incomplete, repairs, reasons, replayed, max_json_bytes: Math.max(0, ...jsonBytes), max_toon_bytes: Math.max(0, ...toonBytes), tracker_writes: 0, remote_writes: 0, source_unchanged: true }));
+  ready, incomplete, repairs, reasons: Object.fromEntries(reasons), replayed, max_json_bytes: Math.max(0, ...jsonBytes), max_toon_bytes: Math.max(0, ...toonBytes), tracker_writes: 0, remote_writes: 0, source_unchanged: true }));

@@ -1,3 +1,4 @@
+import { ownValue } from "./own-record.ts";
 // pm-github — GitHub Issues + Projects v2 sync for pm-cli
 //
 // Capabilities (see manifest.json):
@@ -489,7 +490,7 @@ export function computeBackoffMs(
   nowMs: number = Date.now(),
 ): number {
   const get = (k: string): string | undefined => {
-    const v = headers[k] ?? headers[k.toLowerCase()];
+    const v = ownValue(headers, k) ?? ownValue(headers, k.toLowerCase());
     return Array.isArray(v) ? v[0] : v;
   };
   const cap = 60_000;
@@ -538,10 +539,10 @@ export function parseRateLimit(
   // Node lowercases response header names, but be defensive: scan
   // case-insensitively so a mixed-case key (e.g. from a different runtime or a
   // mocked response) is still found.
-  const lower: Record<string, string | string[] | undefined> = {};
-  for (const [hk, hv] of Object.entries(headers)) lower[hk.toLowerCase()] = hv;
+  const lower = new Map<string, string | string[] | undefined>();
+  for (const [hk, hv] of Object.entries(headers)) lower.set(hk.toLowerCase(), hv);
   const get = (k: string): string | undefined => {
-    const v = lower[k.toLowerCase()];
+    const v = lower.get(k.toLowerCase());
     return Array.isArray(v) ? v[0] : v;
   };
   const num = (s: string | undefined): number | undefined => {
@@ -599,10 +600,10 @@ export function isRetryableStatus(status: number, headers: Record<string, string
   if (status >= 500) return true;
   // Secondary/primary rate limit surfaces as 403 with remaining=0.
   if (status === 403) {
-    const v = headers["x-ratelimit-remaining"] ?? headers["X-RateLimit-Remaining"];
+    const v = ownValue(headers, "x-ratelimit-remaining") ?? ownValue(headers, "X-RateLimit-Remaining");
     const remaining = Array.isArray(v) ? v[0] : v;
     if (remaining === "0") return true;
-    if (headers["retry-after"] ?? headers["Retry-After"]) return true;
+    if (ownValue(headers, "retry-after") ?? ownValue(headers, "Retry-After")) return true;
   }
   return false;
 }
@@ -669,7 +670,7 @@ export function mapState(state: string, stateReason?: string | null): string {
 // key depending on runtime normalization, so check every candidate.
 export function optionEnabled(options: Record<string, unknown>, ...keys: string[]): boolean {
   return keys.some((k) => {
-    const v = options[k];
+    const v = ownValue(options, k);
     return v === true || v === "true" || v === "1";
   });
 }
@@ -678,7 +679,7 @@ export function optionEnabled(options: Record<string, unknown>, ...keys: string[
 // (kebab- or camel-case) keys; returns undefined when none are set.
 export function optionString(options: Record<string, unknown>, ...keys: string[]): string | undefined {
   for (const k of keys) {
-    const v = options[k];
+    const v = ownValue(options, k);
     if (typeof v === "string" && v.trim().length > 0) return v.trim();
   }
   return undefined;
@@ -755,7 +756,7 @@ export function applyLabelMap(
 export function optionCsv(options: Record<string, unknown>, ...keys: string[]): string[] {
   const rawChunks: string[] = [];
   for (const k of keys) {
-    const v = options[k];
+    const v = ownValue(options, k);
     if (typeof v === "string") {
       rawChunks.push(v);
       continue;
@@ -1063,7 +1064,7 @@ export function decodeCompletePmItems(parsed: unknown): PmItem[] {
       "Refusing unverifiable pm list --all output: read_output.requested_dimensions must include include, amount, and cost.",
     );
   }
-  if ("output_budget_truncation" in parsed || "output_budget_exceeded" in parsed) {
+  if (Object.hasOwn(parsed, "output_budget_truncation") || Object.hasOwn(parsed, "output_budget_exceeded")) {
     throw new CommandError(
       "Refusing unverifiable pm list --all output: a budget truncation or omission disclosure was present.",
     );
@@ -1242,7 +1243,7 @@ export function searchDocumentToItem(document: ItemDocument | PmItem | null | un
   if (!document || typeof document !== "object") return undefined;
   const wrapped = (document as ItemDocument).metadata;
   if (wrapped && typeof wrapped === "object") return wrapped as PmItem;
-  return "id" in document ? (document as PmItem) : undefined;
+  return Object.hasOwn(document, "id") ? (document as PmItem) : undefined;
 }
 
 /**
@@ -5149,12 +5150,12 @@ export async function fetchBlockerReferenceStates(
         states.set(entry.ref.key, { ...entry.ref, state: "error", error: "GitHub rejected blocker state access." });
         continue;
       }
-      const repoBlock = response.data?.[entry.repoAlias];
-      if (repoBlock === undefined || (repoBlock !== null && (repoBlock[entry.issueAlias] === undefined || repoBlock[entry.pullAlias] === undefined))) {
+      const repoBlock = ownValue(response.data, entry.repoAlias);
+      if (repoBlock === undefined || (repoBlock !== null && (ownValue(repoBlock, entry.issueAlias) === undefined || ownValue(repoBlock, entry.pullAlias) === undefined))) {
         states.set(entry.ref.key, { ...entry.ref, state: "error", error: "Incomplete GitHub blocker state response." });
         continue;
       }
-      states.set(entry.ref.key, mapBlockerReferenceNode(entry.ref, repoBlock?.[entry.issueAlias], repoBlock?.[entry.pullAlias]));
+      states.set(entry.ref.key, mapBlockerReferenceNode(entry.ref, ownValue(repoBlock, entry.issueAlias), ownValue(repoBlock, entry.pullAlias)));
     }
   }
   return states;

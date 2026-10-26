@@ -1,3 +1,4 @@
+import { ownValue } from "./own-record.ts";
 // pm-github — GitHub Projects v2 support (pure logic layer).
 //
 // GitHub Projects v2 is a GraphQL-only API, structurally different from the REST
@@ -274,7 +275,7 @@ export function resolveOptionForStatus(
     return undefined;
   }
 
-  const candidates = DEFAULT_STATUS_CANDIDATES[status] ?? DEFAULT_STATUS_CANDIDATES.open;
+  const candidates = ownValue(DEFAULT_STATUS_CANDIDATES, status) ?? DEFAULT_STATUS_CANDIDATES.open;
   for (const cand of candidates) {
     const hit = byName.get(normalizeName(cand));
     if (hit) return hit;

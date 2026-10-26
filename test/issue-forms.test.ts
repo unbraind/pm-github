@@ -69,6 +69,133 @@ test("compile accounts for every text/dropdown and explicit binding without git 
   assert.deepEqual(fallback.labels, []);
 });
 
+test("prototype-name IDs and bindings are allowed; optional toString omitted still exports", async () => tracker(async (root, directory) => {
+  const before = Object.getOwnPropertyDescriptors(Object.prototype);
+  const names = ["toString", "constructor", "__proto__", "hasOwnProperty", "valueOf", "prototype", "café", "東京"];
+  const yaml = stringify({ name: "Own names", description: "Names are data", body: [
+    { type: "input", id: "title", attributes: { label: "Title" }, validations: { required: true } },
+    ...names.map(id => ({ type: "input", id, attributes: { label: id } })),
+  ] });
+  const answerMap = new Map([["title", "Complete"]]);
+  const contract = compileIssueForm(request({ yaml }));
+  assert.deepEqual(contract.fields.map(field => field.id), ["title", ...names]);
+  assert.ok(contract.fields.every(field => field.binding === null));
+  assert.equal((await completeIssueForm(root, request({ yaml, answers: Object.fromEntries(answerMap) }))).report.ok, true);
+  for (const name of names) {
+    const own = Object.fromEntries([["title", "Complete"], [name, name]]);
+    const report = await completeIssueForm(root, request({ yaml, answers: own, bindings: Object.fromEntries([[name, name]]) }));
+    assert.equal(report.report.ok, true, name);
+    assert.equal(report.report.answered, 2, name);
+    assert.equal(report.report.contract.fields.find(field => field.id === name)!.binding, name);
+  }
+  const inherited = Object.create({ title: "Not an own answer" }) as Record<string, string>;
+  assert.equal((await completeIssueForm(root, request({ yaml, answers: inherited }))).report.ok, false);
+  const requiredProto = stringify({ name: "Required", description: "Own answer", body: [
+    { type: "input", id: "__proto__", attributes: { label: "Required" }, validations: { required: true } },
+  ] });
+  assert.equal((await completeIssueForm(root, request({ yaml: requiredProto, answers: JSON.parse('{"__proto__":"Own answer"}') }))).report.ok, true);
+  for (const answers of [JSON.parse('{"__proto__":{"polluted":true}}'), JSON.parse('{"__proto__":[{"polluted":true}]}'),
+    JSON.parse('{"constructor":{"prototype":{"polluted":true}}}')]) {
+    await assert.rejects(completeIssueForm(root, request({ yaml: requiredProto, answers })), refused("invalid_form_input"));
+  }
+  for (const answers of [null, [], "invalid", new Date(0)]) {
+    await assert.rejects(completeIssueForm(root, request({ yaml: requiredProto, answers })), refused("invalid_form_input"));
+  }
+  assert.equal((await completeIssueForm(root, request({ yaml: requiredProto, answers: new Map([["__proto__", "Own map value"]]) }))).report.ok, true);
+  const item = (await create({ title: "Optional prototype fields", type: "Task" }, { pmRoot: root })).item;
+  const answerFile = join(directory, "own-answers.json");
+  writeFileSync(answerFile, JSON.stringify(Object.fromEntries(answerMap)));
+  await withMockGithub((req, res) => jsonResponse(res, req.method === "GET" ? 200 : 201, req.method === "GET"
+    ? { type: "file", path: selection.path, encoding: "base64", content: Buffer.from(yaml).toString("base64") } : { number: 1 }), async server => {
+    await captureStderr(() => harness.then(h => h.runExporter({ exporter: "github", pmRoot: root, global: { json: true },
+      options: { repo: selection.repo, form: selection.path, formRef: "main", formAnswers: answerFile, ids: item.id, apply: true } })));
+    assert.equal(server.requests.filter(request => request.method === "POST").length, 1);
+  });
+  assert.deepEqual(Object.getOwnPropertyDescriptors(Object.prototype), before);
+}));
+
+test("500 random forms match a Map reference model for prototype and Unicode names with zero-write required refusals", async () => tracker(async (root, directory) => {
+  const prototype = Object.getOwnPropertyDescriptors(Object.prototype);
+  const pool = ["title", "body", "description", "toString", "constructor", "__proto__", "hasOwnProperty", "valueOf", "prototype", "café", "東京", "Δelta", "ordinary-name"];
+  const item = (await create({ title: "Native title", body: "Native body", type: "Task" }, { pmRoot: root })).item;
+  const native = new Map(Object.entries((await get(item.id, { depth: "full" }, { pmRoot: root })).item));
+  const answersFile = join(directory, "random-answers.json");
+  const bindingsFile = join(directory, "random-bindings.json");
+  const observed = new Map<string, Set<string>>();
+  const observedOptions = new Set<string>();
+  let seed = 0x0a11ce26;
+  const next = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed >>> 8; };
+  let yaml = "";
+  let missingRequiredCases = 0;
+  await withMockGithub((req, res) => jsonResponse(res, req.method === "GET" ? 200 : 201, req.method === "GET"
+    ? { type: "file", path: selection.path, encoding: "base64", content: Buffer.from(yaml).toString("base64") } : { number: 1 }), async server => {
+    const h = await harness;
+    for (let sequence = 0; sequence < 500; sequence++) {
+      const ids = [...pool];
+      for (let index = ids.length - 1; index > 0; index--) {
+        const other = next() % (index + 1);
+        [ids[index], ids[other]] = [ids[other]!, ids[index]!];
+      }
+      const reference = new Map<string, { type: "input" | "textarea" | "dropdown"; required: boolean; options: string[] }>();
+      const answerMap = new Map<string, string>();
+      const bindingMap = new Map<string, string>();
+      for (const id of ids.slice(0, 1 + next() % pool.length)) {
+        const type = (["input", "textarea", "dropdown"] as const)[next() % 3]!;
+        const required = next() % 2 === 0;
+        const state = (["answered", "omitted", "blank"] as const)[next() % 3]!;
+        const options = type === "dropdown" ? [...new Set([pool[next() % pool.length]!, id, pool[next() % pool.length]!])] : [];
+        for (const option of options) observedOptions.add(option);
+        reference.set(id, { type, required, options });
+        if (state === "answered") answerMap.set(id, type === "dropdown" ? options[next() % options.length]! : pool[next() % pool.length]!);
+        else if (state === "blank") answerMap.set(id, "");
+        if (next() % 3 === 0) bindingMap.set(id, pool[next() % pool.length]!);
+        const seen = observed.get(id) ?? new Set<string>();
+        seen.add(`${required}:${state}`);
+        observed.set(id, seen);
+      }
+      yaml = stringify({ name: "Random form", description: "Map reference", body: [...reference].map(([id, field]) => ({
+        type: field.type, id, attributes: { label: id, ...(field.type === "dropdown" ? { options: field.options } : {}) }, validations: { required: field.required },
+      })) });
+      const input = request({ yaml, item: item.id, answers: Object.fromEntries(answerMap), bindings: Object.fromEntries(bindingMap) });
+      const expectedFields = [...reference].map(([id, field]) => ({ id, label: id, type: field.type, required: field.required,
+        min_length: 0, multiple: false, options: field.options, binding: bindingMap.get(id) ?? null }));
+      let expected = true;
+      let answered = 0;
+      let missingRequired = false;
+      for (const [id, field] of reference) {
+        const binding = bindingMap.get(id);
+        const value = answerMap.has(id) ? answerMap.get(id) : binding === undefined ? undefined : native.get(binding);
+        const present = typeof value === "string" && value.trim().length > 0;
+        const valid = value === undefined || value === null ? !field.required : typeof value === "string"
+          && (field.type === "dropdown" ? field.options.includes(value) : !field.required || present);
+        if (!valid) expected = false;
+        if (valid && present) answered++;
+        if (field.required && !present) missingRequired = true;
+      }
+      assert.deepEqual(compileIssueForm(input).fields, expectedFields, `seed=0x0a11ce26 sequence=${sequence}`);
+      const result = await completeIssueForm(root, input);
+      assert.equal(result.report.ok, expected, `seed=0x0a11ce26 sequence=${sequence}`);
+      assert.equal(result.report.answered, answered, `seed=0x0a11ce26 sequence=${sequence}`);
+      if (missingRequired) {
+        missingRequiredCases++;
+        writeFileSync(answersFile, JSON.stringify(Object.fromEntries(answerMap)));
+        writeFileSync(bindingsFile, JSON.stringify(Object.fromEntries(bindingMap)));
+        await assert.rejects(h.runExporter({ exporter: "github", pmRoot: root, global: { json: true }, options: {
+          repo: selection.repo, form: selection.path, formRef: "main", formAnswers: answersFile, formBindings: bindingsFile, ids: item.id, apply: true,
+        } }), refused("incomplete_answers"));
+        assert.equal(server.requests.filter(request => request.method !== "GET").length, 0);
+      }
+      assert.deepEqual(Object.getOwnPropertyDescriptors(Object.prototype), prototype);
+    }
+  });
+  assert.ok(missingRequiredCases > 0);
+  console.info(`prototype-form-property: 500 forms; ${missingRequiredCases} required-answer refusals; zero remote writes`);
+  for (const option of pool) assert.ok(observedOptions.has(option), `unobserved option ${option}`);
+  for (const id of pool) for (const required of [false, true]) for (const state of ["answered", "omitted", "blank"]) {
+    assert.ok(observed.get(id)!.has(`${required}:${state}`), `${id}:${required}:${state}`);
+  }
+}));
+
 test("strict boundary refuses unsupported constructs, YAML aliases, ambiguity and extreme domains", () => {
   const invalidForms = [null, "", "body: [", "a: 1\na: 2", "a: &a [1]\nb: *a", "x".repeat(131073),
     ...["checkboxes", "upload", "unknown"].map(type => stringify({ ...definition, body: [{ type, attributes: { label: "Unsupported" } }] })),
@@ -84,7 +211,7 @@ test("strict boundary refuses unsupported constructs, YAML aliases, ambiguity an
   ];
   for (const yaml of invalidForms) assert.throws(() => compileIssueForm(request({ yaml })), refused("unsupported_form"));
   for (const extra of [{ repo: "../escape/repo" }, { path: "../bug.yml" }, { ref: "" }, { unknown: true }, { answers: { absent: "value" } },
-    { bindings: { absent: "title" } }, { bindings: { summary: "__proto__" } }, { answers: { summary: Array(2) } }, { answers: { summary: [Infinity] } },
+    { bindings: { absent: "title" } }, { answers: { summary: Array(2) } }, { answers: { summary: [Infinity] } },
     { answers: Object.fromEntries(Array.from({ length: 101 }, (_, i) => [`f${i}`, "a"])) },
     { bindings: Object.fromEntries(Array.from({ length: 101 }, (_, i) => [`f${i}`, "title"])) },
   ]) assert.throws(() => compileIssueForm(request(extra)), refused("invalid_form_input"));
