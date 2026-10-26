@@ -114,6 +114,25 @@ test("prototype-name IDs and bindings are allowed; optional toString omitted sti
   assert.deepEqual(Object.getOwnPropertyDescriptors(Object.prototype), before);
 }));
 
+test("SDK-native form export reads a real tracker without pm or git executables", async () => tracker(async (root, directory) => {
+  const item = (await create({ title: "SDK-native selection", type: "Task" }, { pmRoot: root })).item;
+  const yaml = stringify({ name: "SDK", description: "Read without a child CLI", body: [
+    { type: "input", id: "summary", attributes: { label: "Summary" }, validations: { required: true } },
+  ] });
+  const bindingsFile = join(directory, "sdk-bindings.json");
+  writeFileSync(bindingsFile, JSON.stringify({ summary: "title" }));
+  await withMockGithub((_req, res) => jsonResponse(res, 200, { type: "file", path: selection.path, encoding: "base64", content: Buffer.from(yaml).toString("base64") }), async server => {
+    await withEnv({ PATH: directory }, async () => {
+      const output = await (await harness).runExporter({ exporter: "github", pmRoot: root, global: { json: true }, options: {
+        repo: selection.repo, form: selection.path, formRef: "main", formBindings: bindingsFile, ids: item.id,
+      } });
+      const result = output.result as { plan: Array<{ payload: { body: string } }> };
+      assert.equal(result.plan[0]!.payload.body, "### Summary\n\nSDK-native selection");
+    });
+    assert.ok(server.requests.every(request => request.method === "GET"));
+  });
+}));
+
 test("500 random forms match a Map reference model for prototype and Unicode names with zero-write required refusals", async () => tracker(async (root, directory) => {
   const prototype = Object.getOwnPropertyDescriptors(Object.prototype);
   const pool = ["title", "body", "description", "toString", "constructor", "__proto__", "hasOwnProperty", "valueOf", "prototype", "café", "東京", "Δelta", "ordinary-name"];

@@ -4395,7 +4395,10 @@ async function runExport(ctx: CommandHandlerContext) {
     );
   }
 
-  const selected = requireRequestedItems(readPmItems(ctx.pm_root), scopedIds);
+  const items = optionProvided(options, "form")
+    ? decodeCompletePmItems(certifyCompleteListResult(await listAllComplete({ includeBody: true }, { pmRoot: ctx.pm_root })))
+    : readPmItems(ctx.pm_root);
+  const selected = requireRequestedItems(items, scopedIds);
   const completions: IssueFormCompletion[] = [];
   if (optionProvided(options, "form")) {
     const source = await selectedIssueForm(ctx);
