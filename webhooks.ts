@@ -123,7 +123,7 @@ export async function acceptGithubWebhook(pmRoot: string, input: GithubWebhookDe
   const issue = object(payload.issue);
   const source = object(payload.repository);
   if (typeof payload.action !== "string" || !payload.action.trim() || typeof source.full_name !== "string" || source.full_name.toLowerCase() !== repo ||
-    !Number.isSafeInteger(issue.number) || Number(issue.number) < 1 || "pull_request" in issue) {
+    !Number.isSafeInteger(issue.number) || Number(issue.number) < 1 || Object.hasOwn(issue, "pull_request")) {
     throw new WebhookRefusal("invalid_event", "Supply an issue event from the explicitly selected repository; pull requests and ambiguous identities are unsupported.");
   }
   const record: InboxRecord = { version: 1, repo, delivery: input.delivery, digest: hash(input.payload), number: Number(issue.number) };

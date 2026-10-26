@@ -1,3 +1,4 @@
+import { ownValue } from "../own-record.ts";
 /**
  * Behavioral coverage for the privacy gate script.
  *
@@ -210,8 +211,8 @@ test("privacy gate exempts exactly the manifest-registered fixture blobs", () =>
       readFileSync(join(repoRoot, "test", "fixtures", "privacy-gate", "manifest.json"), "utf8"),
     ) as Record<string, { justification: string }>;
     const oid = gitBlobOid(content);
-    assert.ok(manifest[oid], "fixture must be registered in the checked-in manifest");
-    assert.match(manifest[oid]?.justification ?? "", /Synthetic review fixture/);
+    assert.ok(ownValue(manifest, oid), "fixture must be registered in the checked-in manifest");
+    assert.match(ownValue(manifest, oid)?.justification ?? "", /Synthetic review fixture/);
 
     // With no exemption map, the content is flagged...
     assert.deepEqual(scanBlob(oid, content, new Map()).map((f) => f.rule), ["host-path"]);

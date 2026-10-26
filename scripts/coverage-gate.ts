@@ -1,3 +1,4 @@
+import { ownValue } from "../own-record.ts";
 /**
  * Require exact coverage of every authored TypeScript and JavaScript source.
  *
@@ -80,7 +81,7 @@ export function runCoverageGate(root: string, runner: CoverageRunner = spawnSync
   try {
     const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { coverageGate?: CoverageConfig };
     const config = manifest.coverageGate;
-    if (!config || JSON.stringify(config.sources) !== '["."]' || DIMENSIONS.some(dimension => config.thresholds[dimension] !== 100) || (config.ignore?.length ?? 0) !== 0 || (config.skipDirs?.length ?? 0) !== 0) {
+    if (!config || JSON.stringify(config.sources) !== '["."]' || DIMENSIONS.some(dimension => ownValue(config.thresholds, dimension) !== 100) || (config.ignore?.length ?? 0) !== 0 || (config.skipDirs?.length ?? 0) !== 0) {
       throw new Error("Coverage requires four 100 percent thresholds and no source exemptions.");
     }
     const sources = [...new Set(config.sources.flatMap(source => collectCoverageSources(root, source)))];
@@ -110,7 +111,7 @@ export function runCoverageGate(root: string, runner: CoverageRunner = spawnSync
     if (sources.some(file => !lcovFiles.has(file))) throw new Error("LCOV receipt omits an authored source.");
     for (const receipt of Object.values(summary)) {
       if (DIMENSIONS.some(dimension => {
-        const count = receipt[dimension];
+        const count = ownValue(receipt, dimension);
         return !count || !Number.isInteger(count.total) || count.total < 0 || count.covered !== count.total || count.skipped !== 0;
       })) throw new Error("Coverage receipt is incomplete or contains skipped source.");
     }
