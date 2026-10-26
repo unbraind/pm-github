@@ -1,3 +1,4 @@
+import { ownValue } from "./own-record.ts";
 // pm-github — fail-closed privacy gate over a proposed tracker change.
 //
 // GitHub issue bodies are untrusted text: anyone who can open an issue can put a
@@ -503,7 +504,7 @@ export function scanLineForRuleHits(line: string, trackerLine = false): RuleHit[
       offsets.push(index);
       index++;
     } else if (line[index] === "\\" && /[\\/nrt]/.test(line[index + 1] ?? "")) {
-      decoded += ({ n: "\n", r: "\r", t: "\t" } as Record<string, string>)[line[index + 1]!] ?? line[index + 1]!;
+      decoded += ownValue({ n: "\n", r: "\r", t: "\t" }, line[index + 1]!) ?? line[index + 1]!;
       offsets.push(index);
       index++;
     } else {
@@ -993,7 +994,8 @@ function scanChangeFile(change: ChangeFile): Array<GateFinding & { matched: stri
               // Pointers are scanned like data: the host-path rules are anchored
               // to host roots, so `/metadata/...` and `/body` pointers never match,
               // and a secret embedded in a field key is still caught.
-              if (typeof record[key] === "string") values.push({ text: record[key], field: key });
+              const value = ownValue(record, key);
+              if (typeof value === "string") values.push({ text: value, field: key });
             }
           }
           if (patch && Object.hasOwn(record, "value")) {

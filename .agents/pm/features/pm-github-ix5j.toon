@@ -1,0 +1,56 @@
+id: pm-github-ix5j
+title: Validate selected GitHub issue forms before export
+description: "Acceptance: compile explicitly selected repository issue forms into required dropdown/text answers, supported validators and explicit pm-field bindings; refuse unsupported constructs; missing answers produce zero remote writes and one bounded repair checklist. Provide typed SDK and CLI, compact TOON/JSON, docs and example, non-git real public tracker validation, seeded model-based tests and unchanged npm/Bun CI release gates."
+type: Feature
+status: in_progress
+priority: 2
+tags[3]: export,issue-forms,validation
+created_at: "2026-10-25T22:35:34.611Z"
+updated_at: "2026-10-26T06:56:21.729Z"
+author: codex-agent
+acceptance_criteria: All required dropdown and text inputs accounted for; unsupported constructs explicitly refused; missing required answers yield zero remote writes and one bounded repair checklist; typed SDK/CLI and compact output; docs/example; non-git public tracker proof; seeded properties; npm and Bun release gates unchanged; package-wide external-name lookups use own-property semantics without name denylists; prototype and Unicode IDs and choices match a Map model across 500 random forms; Object.prototype unchanged and every missing-required export has zero remote writes; answer-lookup behavioral revert fails the property test.
+comments[15]{created_at,author,text}:
+  "2026-10-25T22:36:13.527Z",codex-agent,"Overlap rechecked against installed core SDK schema/completion APIs, the CLI example importer, and sibling GitHub/Jira/Linear/presets implementations: core validates native items; Projects v2 fields describe board columns. No repository issue-form completion adapter found. Implement a read-only form preflight and export guard; existing export identity/idempotency defects remain outside scope. No journal, outbox, status interpretation or shared mutable state will be added."
+  "2026-10-25T22:44:24.760Z",codex-agent,"Implemented a strict bounded issue-form boundary, typed compiler/completion SDK, current-state native SDK reads, compact CLI and batch export guard. Supported text/dropdown validators are explicit; unsupported constructs refuse. An initial zero-write test exposed SDK get context-usage journaling, so completion now uses SDK locateItem/readLocatedItem and avoids that write. Targeted schema, HTTP and no-git tests cover the corrected boundary; seeded model validation is running."
+  "2026-10-25T22:48:23.158Z",codex-agent,"Validation: six targeted tests passed, including 500 seeded model sequences with real SDK state readback, old-request replay, CRLF/whitespace variants, parent relationships and five custom active statuses. Targeted c8 measured 100/100/100/100 for the new adapter. Behavioral revert proof: replacing only runExport with origin/main causes the registered exporter refusal regression to fail with Missing expected rejection; restored implementation passes. Additional deterministic extreme-validator/output-count fuzz is included."
+  "2026-10-25T22:48:24.371Z",codex-agent,"Real-data proof: read-only non-git copy of public pm-github tracker at fcd9f93e28e85b170506ceac507d82a911173683; public pm-cli feature-request form at 829af6fe147978757f0f06693391d3288736e7f7. Certified read: 152 items, 5 form fields (3 required); 68 ready, 84 incomplete, 100 required-answer repairs. All 152 replays identical; entire snapshot fingerprint unchanged, zero tracker/remote writes. Maximum compact report: JSON 1580 bytes, TOON 1660 bytes. Both git and gh absent from PATH during the read-only proof. Existing import/sync paths and export identity/idempotency semantics are outside this adapter."
+  "2026-10-25T22:51:40.201Z",codex-agent,"Installed CLI acceptance now exercises TOON/JSON compilation, native bindings, explicit answers and --apply refusal with actual Commander flag normalization. Corrected kebab/camel option handling found by that test. Follow-up pm-github-fqjp records the pre-existing custom terminal-status mapping in legacy export/sync; no new status interpretation, journal, claim, outbox or shared mutable completion state is introduced."
+  "2026-10-25T22:52:30.701Z",codex-agent,"Final local checks passed: typecheck, build, test typecheck, lint, docstrings (19 files/217 declarations), zero-duplication gate (20 authored modules), and eight targeted tests via the linked pm test command. The tests include 500 model sequences plus 500 extreme-validator/output-count fuzz cases and installed TOON/JSON CLI checks. Full npm and Bun release:check are delegated to the unchanged CI matrix on Node 22/26 because the shared host is saturated; final run URL and exact counts will be recorded in the PR."
+  "2026-10-25T22:53:18.859Z",codex-agent,Final targeted run passed 8/8 tests with no skips (500 model sequences plus 500 boundary fuzz cases). Changelog generation/check passed. Strict tracked-project health passes with isolated CI-style user configuration; the default host profile reports an unrelated global extension host-version skew. Existing main history streams remain byte-identical prefixes; only the two new item histories are added. Claims released for orchestrator verification.
+  "2026-10-26T05:20:46.924Z",codex-agent,"Review blocker acknowledged: inherited Object.prototype names can masquerade as omitted issue-form answers or bindings. Reopened implementation work on the existing feature item. Audit every authored package lookup and external-key accumulator, allow prototype-name IDs rather than denylisting them, add Map-reference randomized completion/export tests and a targeted behavioral revert proof. No finished feature work will be redone."
+  "2026-10-26T05:42:33.637Z",codex-agent,"Class fix: answer/binding maps now validate as Map entries from own JSON keys, preserving valid __proto__/constructor IDs instead of denylisting them. Native snapshots use null-prototype records and own reads. Package-wide computed-access and accumulator audit converted options, headers, status candidates, GraphQL aliases, closeout counters, timeline/identity/native fields, privacy scanning fields and operational JSON counters. Test helper environment snapshots and real-data counters also use Map. Audit and exclusions are documented in docs/own-property-audit.md."
+  "2026-10-26T05:42:38.513Z",codex-agent,"Property proof: 500 seeded random forms passed against an independent Map model, including prototype/Unicode IDs and option values, required/optional fields, answered/omitted/blank values and bindings. Every missing-required case invoked the real exporter with --apply against a recording HTTP server and produced zero writes; Object.prototype descriptors remained unchanged. Fixed optional toString omission successfully exported to the fake server. Behavioral revert: changing only the answer lookup back to Object.fromEntries(request.answers)[field.id] (the original inherited record semantics, adapted to the new internal Map representation) makes the 500-form property test fail with answered-count 0 versus 1; exit 1. Restored Map.get lookup passes. Targeted helper/projects/release-policy/coverage tests passed 76/76."
+  "2026-10-26T05:52:58.219Z",codex-agent,"Additional validation: 12 targeted tests passed under c8 with exact 100/100/100/100 for issue-forms.ts and own-record.ts. Prototype-name inputs are allowed; malformed __proto__/constructor.prototype answer objects refuse by value type. The refreshed filesystem-read-only public snapshot still reports 152 items, 68 ready, 84 incomplete, 100 repairs, 152 identical replays, zero tracker/remote writes, unchanged fingerprint, and 1580/1660 maximum JSON/TOON bytes. No finished feature scope was reimplemented."
+  "2026-10-26T05:58:12.397Z",codex-agent,"Final adapter regression selection passed 237/237 (handlers, lifecycle fidelity, identity, refresh, closeout). An additional targeted Bun check exposed environment assignment losing an own __proto__ key in the test helper; shared setOwnValue now defines own data properties for both metadata updates and environment writes/restoration. All four own-property tests pass under Node and local Bun, with typecheck, lint and docstrings passing (20 files, 220 declarations). No prototype-name rejection was added."
+  "2026-10-26T06:02:27.801Z",codex-agent,Final shared helper (including own data-property setter) is measured at 100/100/100/100 by targeted c8; Node and local Bun each pass all four own-property tests. Package duplication gate passes with 21 authored modules and zero duplicated lines. Full npm/Bun release evidence will be attached to PR 182 for the pushed head; old-head CI remains historical evidence only.
+  "2026-10-26T06:35:26.737Z",codex-agent,"CI run 40277552386: all 1513 tests passed with zero failures/skips, then c8 aggregation exhausted the existing 12 GiB heap. The generated required-answer cases invoke actual export, whose legacy selector starts a separate SDK CLI process per case, producing redundant dependency coverage profiles. Use the already-adopted certified SDK complete-list capability in process for form-scoped export selection; retain the existing unselected export path and every generated case, source include, threshold and heap setting. The failed head is not acceptance evidence."
+  "2026-10-26T06:56:20.630Z",codex-agent,"Coverage recovery keeps all generated cases and unchanged gates: form-scoped export now uses certified complete SDK listing in process, avoiding redundant child CLI coverage profiles. The fixed optional toString export, no-pm/no-git SDK selection regression and 500 Map-model forms pass under Node and Bun; 430 missing-required cases each produced zero remote writes. Full targeted c8 run: 15 passed, zero failed/skipped; issue-forms.ts and own-record.ts each exact 100/100/100/100. Behavioral revert of only the SDK selector to child CLI fails the no-executable test with pm list-all ENOENT; restored selector passes. Original answer-lookup revert proof remains recorded. The previous full CI run passed 1513 tests before aggregation exhausted its unchanged 12 GiB heap and is not passing gate evidence."
+files[19]{path,scope}:
+  closeout.ts,project
+  gate.ts,project
+  identity.ts,project
+  import-fidelity.ts,project
+  index.ts,project
+  issue-forms.ts,project
+  own-record.ts,project
+  projects.ts,project
+  refresh.ts,project
+  scripts/coverage-gate.ts,project
+  scripts/release-merge-policy.ts,project
+  test/helpers/mock-github-server.ts,project
+  test/issue-form-real-data.ts,project
+  test/issue-forms.test.ts,project
+  test/own-property.test.ts,project
+  test/privacy-gate.test.ts,project
+  test/refresh.test.ts,project
+  test/release-merge-policy.test.ts,project
+  webhooks.ts,project
+tests[2]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  node --test test/issue-forms.test.ts,project,600,codex-agent,"2026-10-25T22:45:30.627Z",local_mutation,feat/issue-form-completion-contracts
+  node --test test/own-property.test.ts,project,120,codex-agent,"2026-10-26T05:42:41.756Z",local_mutation,feat/issue-form-completion-contracts
+docs[4]{path,scope}:
+  docs/issue-form-answers.json,project
+  docs/issue-form-bindings.json,project
+  docs/own-property-audit.md,project
+  README.md,project
+body: ""
