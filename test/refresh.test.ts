@@ -204,7 +204,7 @@ test("missing, transferred and forbidden issues have typed reports and no writes
 }));
 
 test("100-item batches and limits only request selected linked numbers; since uses upstream timestamps", async () => tracker(async (_directory, pmRoot) => {
-  const nodes: Record<string, ReturnType<typeof node>> = {};
+  const nodes: Record<string, ReturnType<typeof node>> = Object.create(null);
   const settings = await readSettings(pmRoot);
   for (let number = 1; number <= 101; number++) {
     const id = `${settings.id_prefix}batch-${number}`;

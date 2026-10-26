@@ -1,3 +1,4 @@
+import { ownValue } from "./own-record.ts";
 /** Offline identity diagnosis and explicitly approved, single-item provenance repairs. */
 import { createHash } from "node:crypto";
 import { join } from "node:path";
@@ -44,11 +45,11 @@ function graph(items: readonly IdentityItem[]): { nodes: IdentityNode[]; edges: 
   const edges: IdentityEdge[] = [];
   for (const item of items) {
     const id = item.id!;
-    const providers = [...new Set(Object.keys(item).filter(key => /^(linear|jira|ado)_(?:.*_)?(?:id|key|url|identifier)$/i.test(key) && Boolean(item[key]) && (typeof item[key] !== "string" || item[key].trim() !== "")).map(key => key.split("_")[0]!.toLowerCase()))].sort();
+    const providers = [...new Set(Object.entries(item).filter(([key, value]) => /^(linear|jira|ado)_(?:.*_)?(?:id|key|url|identifier)$/i.test(key) && Boolean(value) && (typeof value !== "string" || value.trim() !== "")).map(([key]) => key.split("_")[0]!.toLowerCase()))].sort();
     const claims: IdentityEdge[] = [];
     for (const tag of item.tags) if (/^gh:[^/\s]+\/[^#\s]+#[1-9]\d*$/i.test(tag)) claims.push({ item: id, identity: identity(tag), source: "tag", strength: "claim" });
     for (const source of ["external_ref", "github_url"]) {
-      const value = item[source];
+      const value = ownValue(item, source);
       if (typeof value === "string" && value.trim()) claims.push({ item: id, identity: identity(value), source, strength: "claim" });
     }
     const declared = /^GitHub issue(?:\s*:\s+|\s+)(https?:\/\/\S+)/i.exec(item.description);

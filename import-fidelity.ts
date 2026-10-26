@@ -1,3 +1,4 @@
+import { ownValue, setOwnValue } from "./own-record.ts";
 /** Source lifecycle, release-window and cross-provider identity rules for issue imports. */
 import { spawnSync } from "node:child_process";
 import { decodeHTML } from "entities";
@@ -316,9 +317,10 @@ function latestClosure(events: readonly unknown[], closedAt: string | null | und
     .filter(event => graphql ? event.__typename === "ClosedEvent" : event.event === "closed");
   const key = graphql ? "createdAt" : "created_at";
   return candidates.filter(event => {
-    const delta = typeof event[key] === "string" && closedAt ? Date.parse(event[key]) - Date.parse(closedAt) : NaN;
+    const date = ownValue(event, key);
+    const delta = typeof date === "string" && closedAt ? Date.parse(date) - Date.parse(closedAt) : NaN;
     return Number.isFinite(delta) && delta >= 0 && delta <= 5_000;
-  }).sort((left, right) => Date.parse(String(left[key])) - Date.parse(String(right[key]))).at(-1);
+  }).sort((left, right) => Date.parse(String(ownValue(left, key))) - Date.parse(String(ownValue(right, key)))).at(-1);
 }
 
 /** Fetch every timeline page; only closure-specific events may supply resolution evidence. */
@@ -375,9 +377,11 @@ export function importCloseReason(issue: GhIssue, events: readonly unknown[]): s
   ];
   for (const event of graphEvents) {
     const closer = event.__typename === "ClosedEvent" ? event.closer : event.subject;
-    if (closer && typeof closer === "object" && "url" in closer && typeof closer.url === "string" && /^https:\/\/github\.com\/[^/]+\/[^/]+\/(pull\/\d+|commit\/[a-f0-9]{40})$/.test(closer.url)) {
-      const title = "title" in closer ? closer.title : "messageHeadline" in closer ? closer.messageHeadline : undefined;
-      return `${base}; ${event.__typename === "ClosedEvent" ? "closing" : "linked"} ${closer.url.includes("/pull/") ? "PR" : "commit"} ${closer.url}${typeof title === "string" ? ` (${JSON.stringify(title)})` : ""}`;
+    const fields = closer && typeof closer === "object" ? closer as Record<string, unknown> : undefined;
+    const url = ownValue(fields, "url");
+    if (typeof url === "string" && /^https:\/\/github\.com\/[^/]+\/[^/]+\/(pull\/\d+|commit\/[a-f0-9]{40})$/.test(url)) {
+      const title = Object.hasOwn(fields!, "title") ? ownValue(fields, "title") : ownValue(fields, "messageHeadline");
+      return `${base}; ${event.__typename === "ClosedEvent" ? "closing" : "linked"} ${url.includes("/pull/") ? "PR" : "commit"} ${url}${typeof title === "string" ? ` (${JSON.stringify(title)})` : ""}`;
     }
   }
   const connected = records.find(event => event.event === "connected" && typeof event.url === "string" && /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(event.url));
@@ -450,9 +454,9 @@ export async function persistImportFidelity(pmRoot: string, id: string, fidelity
     mutate: document => {
       const before = canonicalDocument(document);
       for (const [field, value] of Object.entries(importFidelityFields(fidelity, linkOnly))) {
-        if (normalizeFields && JSON.stringify(normalizeImportValue(field, document.metadata[field])) === JSON.stringify(normalizeImportValue(field, value))) continue;
+        if (normalizeFields && JSON.stringify(normalizeImportValue(field, ownValue(document.metadata, field))) === JSON.stringify(normalizeImportValue(field, value))) continue;
         if (value === undefined) delete document.metadata[field];
-        else document.metadata[field] = value;
+        else setOwnValue(document.metadata, field, value);
       }
       if (document.metadata.closed_at && Date.parse(document.metadata.closed_at) < Date.parse(document.metadata.created_at)) {
         throw new CommandError(`GitHub issue #${fidelity.github_number} needs a source closure date before its lifecycle can be imported safely.`);

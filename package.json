@@ -54,7 +54,7 @@
     "@unbrained/pm-cli": "2026.10.20",
     "c8": "12.0.0",
     "eslint": "10.13.0",
-    "jscpd": "5.4.1",
+    "jscpd": "5.4.2",
     "pm-changelog": "2026.10.20",
     "pm-ops": "2026.10.20",
     "typescript": "7.0.2"
@@ -126,6 +126,8 @@
     "minTokens": 50
   },
   "dependencies": {
-    "entities": "8.1.0"
+    "entities": "8.1.0",
+    "yaml": "2.9.1",
+    "zod": "4.6.7"
   }
 }

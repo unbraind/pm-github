@@ -187,6 +187,7 @@ function merging(scenario: string) {
   try {
     mkdirSync(join(repo.root, "scripts"));
     copyFileSync(new URL("../scripts/release-merge-policy.ts", import.meta.url), join(repo.root, "scripts/release-merge-policy.ts"));
+    copyFileSync(new URL("../own-record.ts", import.meta.url), join(repo.root, "own-record.ts"));
     const origin = join(repo.root, "origin.git");
     repo.git("init", "--bare", origin);
     repo.git("remote", "add", "origin", origin);
