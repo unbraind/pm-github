@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Use the pm SDK for GitHub import lifecycle persistence ([pm-github-d26g](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-d26g.toon))
+
 ## 2026.10.25 - 2026-10-25
 
 ### Fixed
