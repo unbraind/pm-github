@@ -3,6 +3,34 @@
 Validation date: 2026-10-27. Final-head release status, receipts and run links are
 recorded in [PR 188](https://github.com/unbraind/pm-github/pull/188).
 
+Round 4 closes declared SDK compatibility across the whole extension. The
+published table decoder first appears in 2026.10.9, but the existing transaction
+revision `match` contract first appears in 2026.10.17. The enforced manifest floor
+and peer/development ranges therefore share **2026.10.17**; the exact development
+lock stays on main's integrity-checked 2026.10.23 resolution. The generated
+unreleased changelog entry discloses that breaking minimum.
+
+The permanent packed minimum consumer passes **1/1 under Node** and **1/1 under
+native Bun 1.3.14**, independently installing the exact minimum from npm. It
+links the whole extension, type-checks all 80 named SDK imports across 11
+production/operational modules and all shipped declarations, and exercises a
+real plain tracker with no git executable. The runtime checks include preview,
+approval, SDK-encoded tables, host-compacted empty reports and literal native
+comma tags. Vendor declaration skipping cannot hide a missing type in the
+package's own emitted declarations. The test is in both unchanged release gate
+inventories. Reverting only the floor and matching ranges to 2026.10.5 fails
+at whole-extension linking on the missing decoder export; 2026.10.15 fails the
+source audit on missing transaction `match`. Restoring 2026.10.17 passes the
+same test. These negative proofs run only in disposable copies.
+See [the published minimum evidence](sdk-minimum.md).
+
+The round-4 artifact passes all five CLI install modes and standalone Node/Bun
+SDK checks on CLI 2026.10.26 and Bun 1.3.14. It is **289,955 bytes**, SHA-256
+`6659a34b1975072975b25b81994acd3591aec3f1dad99f118cff1000aaf3c089`.
+The fresh public measurement is unchanged: 155 scanned items, 12 provider
+labels, one stored tag plus two declared example policies, three affected rows
+and 1,146 JSON bytes. All source tracker bytes remain unchanged.
+
 Round 3 current-pin verification follows main's Dependabot update to SDK
 2026.10.23 (`d717d7b`, merged via `ccaf148`). The linked model file passes
 3/3 tests: 500 provider-label sets and 500 native-array sequences, with actual

@@ -1,15 +1,17 @@
 id: pm-github-2e38
-title: Preview exact GitHub label migration impacts
+title: "Preview exact GitHub label migration impacts (BREAKING: PM CLI 2026.10.17 minimum)"
 description: "Plan provider label renames and explicit consolidations across stored tags, declared import filters and local mappings, with exact identity evidence, bounded output and stale-plan refusal."
 type: Feature
 status: in_progress
 priority: 2
-tags[3]: labels,migration,planning
+tags[4]: changelog-unreleased,labels,migration,planning
 created_at: "2026-10-27T06:17:55.248Z"
-updated_at: "2026-10-27T16:29:01.348Z"
+updated_at: "2026-10-27T18:25:00.899Z"
+assignee: codex-agent
+claim_principal: codex-agent
 author: codex-agent
 acceptance_criteria: "Same display intent never merges labels by inference; 1000 items yield complete counts and bounded affected rows; stale provider label IDs invalidate application plans; typed SDK and CLI, strict boundaries, non-git read-only validation and seeded state properties."
-comments[29]{created_at,author,text}:
+comments[38]{created_at,author,text}:
   "2026-10-27T06:18:14.443Z",codex-agent,"Overlap rechecked against installed core SDK bulk mutations and sibling pm-linear/pm-jira docs. Core edits local tags; github identity explores competing ownership; Linear negotiates team schema. None previews a GitHub label policy across exact provider IDs, stored tag occurrences, declared import filters and export mappings. Scope: read-only plans plus fresh revalidation; no new importer, exporter, sync writer, journal, resolver or remote mutation. Existing importer stores label names rather than label IDs, so name matches are reported as unverified occurrences requiring an explicit choice, never inferred consolidation. Acceptance covers distinct same-intent IDs, complete 1000-item counts with bounded rows, stale IDs/revisions, strict input/output schemas, real non-git SDK state and packed consumers. Registry reports CLI 2026.10.27; repo pin remains 2026.10.20 per queue rule."
   "2026-10-27T06:29:10.429Z",codex-agent,"Implementation adds a read-only typed planner and github labels plan command. Exact node IDs and expected provider names select identities; SDK toImportTags finds native normalized occurrences without merging provider IDs. Choices cover tag/filter/mapping policy; complete counts accompany bounded rows. Revalidation reads fresh catalogs and current SDK revisions rather than replaying saved mutations. The 1000-item read-only non-git fixture passes. Targeted boundary tests cover sparse/extreme inputs, same-intent IDs, stale deleted/recreated labels and revision changes; seeded 500-sequence model checks are being completed. No stateful writer/journal/import/export/sync path is introduced."
   "2026-10-27T06:34:03.464Z",codex-agent,"Behavioral revert proof: independently replacing SDK-native tag conversion with exact provider spelling, disabling current approval/revision comparison, and removing the row cap each makes its targeted regression fail (exit 1). Restoring the code passes. Targeted tests: 7/7 including 500 seeded operation sequences; targeted planner coverage is 100 percent statements, branches, functions and lines. Public non-git read-only tracker at main 2b71f73: 155 items scanned, 12 provider labels, one affected item/tag and two declared policy examples (one filter, one mapping), 3 rows, 1078 JSON bytes; byte identity preserved. Isolated packed installation acceptance is in progress."
@@ -39,24 +41,38 @@ comments[29]{created_at,author,text}:
   "2026-10-27T16:11:28.456Z",codex-agent,"Merged origin/main d717d7b via ccaf148 after Dependabot advanced the shared toolchain. The pinned pm CLI/SDK is now 2026.10.23 through that main merge; no independent pin change was made. Main changed no tracker item/history files, and branch history remains append-only. Packed CLI 2026.10.26 and isolated Bun 1.3.14 passed all five actual install modes, plus standalone Node/Bun SDK comma/refresh checks, before this dependency update. The linked SDK model run passed 3/3 (500 label sets and 500 native-array sequences); repeating focused checks and current-pin acceptance after the merge. A new wire fixture incorrectly used an explicitly undefined property, which TOON encodes as null, to simulate host omission. It now actually deletes the field as the host does, and additionally proves explicit null rows refuse. This corrects the producer fixture without broadening the validator."
   "2026-10-27T16:23:16.212Z",codex-agent,"Final verification after main merge and pinned SDK 2026.10.23: linked model tests pass 3/3 with 500 random provider-label sets plus 500 native-array sequences, all compared against actual SDK writes and read-back. Focused planner/helper/wire tests pass 13/13 with exact 100/100/100/100 targeted coverage for labels.ts and import-tags.ts, including 500 SDK wire permutations. Plain/atomic owner cases pass 2/2; linked Projects interleaving passes 1/1 with 500 native comma atoms and all six response boundaries. Packed CLI 2026.10.26 acceptance passes all five actual consumers plus permanent Node/Bun SDK checks using isolated Bun 1.3.14. Public snapshot d717d7b: 155 items, 12 labels, one stored tag plus two declared example policies, 3 rows and 1146 JSON bytes; source bytes unchanged. Captured artifact 289696 bytes, SHA-256 a10eaf5857d2e84fdcfcd871c417dcf392d7ae73a59898b817cc8044686be171. Typecheck, test compilation, lint, docstrings and duplication pass (24 modules, 12613 lines, zero duplicated lines). Empty-row default has its own failing revert and restored passing test, making 12 round-3 sites. Local strict health passes history/integrity with no pending merge receipts but still reports SDK/host skew 23:27. No supplied code findings remain; CI release gates and external re-review are still required. No merge or package release performed."
   "2026-10-27T16:28:59.891Z",codex-agent,"Source commit 3413e8c is pushed. CI https://github.com/unbraind/pm-github/actions/runs/40540938703 and CodeQL https://github.com/unbraind/pm-github/actions/runs/40540938676 are queued; all four npm/Bun Node 22/26 release jobs are pending (0/4 completed). No current full-gate test-count or all-source coverage claim is made. The source privacy gate passes across 7474 Git objects with approved identities and no secret or host-path matches; changelog generation/check and append-only prefix checks pass. The final receipt releases this claim and changes pm records only, leaving product/tests identical to the validated source. PR 188 carries the final exact-head run links/status for the bounded CI handoff. Current-pin models pass 3/3, focused planner tests 13/13, owner tests 2/2, Projects interleaving 1/1, all five packed consumers and both standalone Node/Bun SDK checks. No merge or package release."
-files[16]{path,scope}:
+  "2026-10-27T17:19:04.432Z",codex-agent,"Round 4 accepts the declared-compatibility blocker. General rule: every imported SDK export must exist in the top-level enforced pm_min_version and the npm peer floor; testing only the newer development pin cannot prove compatibility. Origin/main is already merged and the worktree starts clean. Verifying the first published decoder release from npm tarballs, auditing all runtime and type imports against that SDK, aligning manifest/peer/dev declarations as instructed, and adding a real packed minimum-SDK type/import gate to CI. Existing migration, native-tag, wire and state-model evidence is retained; no replay of finished feature work."
+  "2026-10-27T17:31:56.872Z",codex-agent,"Published-tarball proof: decodePmTableRows is absent in all SDK releases 2026.10.5 through 2026.10.8 and present in 2026.10.9 through the public index -> output -> output/table-rows export chain. The enforced manifest floor and peer/development minimum ranges are now 2026.10.9. npm ci retains the existing exact integrity-locked 2026.10.23 development resolution, avoiding any older writer over already-created tracker history; the independent packed consumer installs exactly 2026.10.9 from npm. Compatibility tests now additionally bind both ranges to the lockfile and verify exact version plus integrity, preserving reproducibility while honoring the requested development minimum range. The pending feature is tagged changelog-unreleased and its title explicitly discloses the breaking floor; it remains unclosed."
+  "2026-10-27T17:35:14.756Z",codex-agent,"The real minimum-SDK audit caught a second compatibility requirement that a decoder-only check misses: compiling every production and operational TypeScript module against published SDK 2026.10.9 fails at identity.ts because BulkItemUpdateMutation has no match field. Dropping that field would remove the existing under-lock expected-revision guard, so it is not an acceptable fix. The first decoder release is 2026.10.9, but the effective package floor must also support its existing transaction-match contract. Auditing published tarballs for the first joint release; the new packed consumer correctly failed rather than masking the incompatibility with the development SDK."
+  "2026-10-27T17:40:21.977Z",codex-agent,"Published transaction tarballs establish 2026.10.17 as the first SDK with BulkItemUpdateMutation.match; releases 2026.10.9 through 2026.10.15 lack it, and 2026.10.16 was not published. Thus 2026.10.17 is the first joint contract supporting the decoder and the existing revision guard. A decoder-only floor of 2026.10.9, suggested by the review note, is insufficient for this package: the all-source typecheck demonstrated that fact without weakening or deleting the match guard. Manifest, peer and development minimum ranges are now 2026.10.17; the development SDK remains exactly locked at 2026.10.23. All 80 named SDK imports across 11 production/operational modules and the sdk, sdk/authoring and sdk/graph entry points are covered by the real-source minimum typecheck."
+  "2026-10-27T18:10:45.132Z",codex-agent,"Declared-compatibility validation now passes against the exact published minimum SDK 2026.10.17 under Node (1/1) and native Bun 1.3.14 (1/1). Each physical packed consumer links the entire extension before any command, checks every production and operational TypeScript SDK import, checks all shipped declarations as ambient sources, and exercises preview, approval, JSON/TOON table restoration and literal native comma tags in a plain tracker with no git executable. The consumer installs from npm independently of the development lock; no SDK mocks or development dependency links are used."
+  "2026-10-27T18:18:54.048Z",codex-agent,"Behavioral revert proof, declared-compatibility class: in a disposable package copy, changing only the enforced floor and matching dependency ranges to 2026.10.5 makes the new packed-consumer test fail while linking the installed extension: decodePmTableRows is not exported. Changing only those declarations to 2026.10.15 links successfully but fails the full source audit because BulkItemUpdateMutation has no match field. This proves the test catches both missing runtime exports and unsupported SDK options rather than merely asserting a version literal. The fixed 2026.10.17 declarations are restored in the disposable copy for the final positive run; the reviewed worktree is never reverted."
+  "2026-10-27T18:22:23.167Z",codex-agent,"Round-4 audit and local checks: all named SDK imports across the root production modules and operational scripts are checked against the new minimum, including sdk, sdk/authoring and sdk/graph. No other stale compatibility declaration was found; older version references in historical proof fixtures remain execution evidence. npm run typecheck, npm run build:test, npm run lint, npm run docstring and npm run duplication pass: 23 files and 236 documented declarations, 24 authored modules and 12613 lines, zero duplicated lines. PR reviews and inline comments expose no additional actionable non-blocking findings; unavailable automated reviews are not approval evidence. Full npm/Bun release checks stay in CI with unchanged thresholds and at most two test workers."
+  "2026-10-27T18:24:16.973Z",codex-agent,"Round-4 results: the restored 2026.10.17 floor passes the same packed test after both negative-floor reverts; disposable copies are cleaned. Fresh node test/label-migration-real-data.ts passes all five packed project-local/npx/bunx/npm-global/Bun-global consumers and standalone Node/Bun SDK checks on CLI 2026.10.26 and isolated Bun 1.3.14. Public read-only non-git snapshot d717d7b85e6009c5a4bb803952140e61856dd041: 155 scanned items, 12 provider labels, one affected stored item/tag, one declared example filter and one declared example mapping, three affected rows and 1146 JSON bytes; every source byte is unchanged. One captured pack is 289955 bytes, SHA256 6659a34b1975072975b25b81994acd3591aec3f1dad99f118cff1000aaf3c089. Manifest, lock, compatibility tests, new packed-consumer test and published-minimum docs are linked. No new migration writer or shared concurrency state is introduced."
+  "2026-10-27T18:25:00.898Z",codex-agent,"Final focused metadata run: node --test --test-concurrency=2 test/compatibility-floor.test.ts test/package-metadata.test.ts passes 8/8. The last fetch confirms the PR branch has no missing origin/main commits (13 ahead, zero behind). History is an exact byte-prefix extension of the prior branch item; this feature item is absent from main. Changelog generation/check and changed-content privacy checks pass. The source fix is ready to commit and push for exact-head npm/Bun CI; no local full release suite is run on the saturated host."
+files[21]{path,scope}:
+  CHANGELOG.md,project
   import-fidelity.ts,project
   import-tags.ts,project
   index.ts,project
   issue-forms.ts,project
   label-names.ts,project
   labels.ts,project
+  manifest.json,project
+  package-lock.json,project
   package.json,project
   projects.ts,project
   refresh.ts,project
   scripts/coverage-gate.ts,project
+  test/compatibility-floor.test.ts,project
   test/coverage-gate.test.ts,project
   test/import-fidelity.test.ts,project
   test/label-import-model.test.ts,project
   test/label-migration-real-data.ts,project
   test/labels.test.ts,project
+  test/minimum-sdk-consumer.test.ts,project
   test/project-sync.test.ts,project
-tests[11]:
+tests[12]:
   - command: node --test --test-concurrency=2 test/labels.test.ts
     scope: project
     provenance:
@@ -144,9 +160,18 @@ tests[11]:
       created_at: "2026-10-27T15:39:07.986Z"
       source_kind: local_mutation
       source_ref: feat/label-migration-impact-plans
-docs[4]{path,scope}:
+  - command: "npm run test:minimum-sdk"
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-27T17:50:00.208Z"
+      source_kind: local_mutation
+      source_ref: feat/label-migration-impact-plans
+docs[5]{path,scope}:
   docs/label-migration-validation.md,project
   docs/label-migration.json,project
   docs/label-migrations.md,project
+  docs/sdk-minimum.md,project
   README.md,project
 body: ""

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Preview exact GitHub label migration impacts (BREAKING: PM CLI 2026.10.17 minimum) ([pm-github-2e38](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-2e38.toon))
+
 ## 2026.10.26 - 2026-10-26
 
 ### Changed

@@ -325,9 +325,15 @@ See [SDK adoption evidence](docs/sdk-adoption-1025.md).
 
 ## Revalidate GitHub blockers
 
-**Compatibility:** pm-github now requires PM CLI 2026.10.5 or newer for complete
-SDK reads and structured command exit statuses. Older hosts refuse installation
-or activation through the matching peer dependency and manifest floor.
+**Compatibility:** pm-github requires PM CLI 2026.10.17 or newer. Lossless table
+decoding first appeared in 2026.10.9, while the transaction `match` guard used
+by identity repair first appeared in 2026.10.17. The declared minimum must
+support both. Older hosts refuse installation or activation through matching
+peer/development minimum ranges and the top-level manifest floor. Development
+keeps an exact, integrity-locked SDK resolution. CI separately installs the exact
+minimum from npm, type-checks all production and operational SDK imports, then
+loads and exercises the packed artifact in a non-git tracker. See the
+[published SDK evidence](docs/sdk-minimum.md).
 
 `pm github blockers` reads a certified complete tracker and checks every blocked
 item, plus non-terminal items with an external GitHub `blocked_by` dependency.

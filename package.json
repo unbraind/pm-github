@@ -41,17 +41,18 @@
     "privacy": "node scripts/privacy-gate.ts",
     "lint": "eslint .",
     "duplication": "node scripts/duplication-gate.ts",
-    "test:bun": "bun_status=0; for test_file in test/*.test.ts; do bun test --timeout 600000 \"$test_file\" || bun_status=1; done; exit \"$bun_status\""
+    "test:bun": "bun_status=0; for test_file in test/*.test.ts; do bun test --timeout 600000 \"$test_file\" || bun_status=1; done; exit \"$bun_status\"",
+    "test:minimum-sdk": "npm run build && node --test --test-concurrency=1 test/minimum-sdk-consumer.test.ts"
   },
   "peerDependencies": {
-    "@unbrained/pm-cli": ">=2026.10.5"
+    "@unbrained/pm-cli": ">=2026.10.17"
   },
   "devDependencies": {
     "@babel/eslint-parser": "8.0.7",
     "@babel/plugin-syntax-typescript": "8.0.3",
     "@toon-format/toon": "4.4.0",
     "@types/node": "26.6.5",
-    "@unbrained/pm-cli": "2026.10.23",
+    "@unbrained/pm-cli": ">=2026.10.17",
     "c8": "12.0.0",
     "eslint": "10.13.0",
     "jscpd": "5.4.2",
