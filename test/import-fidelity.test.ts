@@ -600,7 +600,8 @@ test("local edits invalidate a completed journal while interrupted reconciliatio
   assert.equal(item.closed_at, issue.closed_at);
   const before = readFileSync(getHistoryPath(pmRoot, id), "utf8");
   const retry = await importing(pmRoot, issue, true);
-  assert.equal(retry.transactionId, interruptedId);
+  assert.equal(retry.unchanged, true);
+  assert.equal(retry.transactionId, undefined);
   assert.equal(readFileSync(getHistoryPath(pmRoot, id), "utf8"), before);
   assert.equal((await listItems(pmRoot)).length, 1);
 }));

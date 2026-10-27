@@ -3,7 +3,7 @@ import { ownValue, setOwnValue } from "./own-record.ts";
 import { spawnSync } from "node:child_process";
 import { decodeHTML } from "entities";
 import {
-  canonicalDocument, createHistoryEntry, mutateItem, normalizeItemId, readSettings, resolvePmRoot,
+  canonicalDocument, createHistoryEntry, mutateItem, normalizeItemId, normalizeStatusInput, parseTags, readSettings, resolvePmRoot, toNonEmptyImportString,
 } from "@unbrained/pm-cli/sdk";
 import { CommandError, fetchJSON, githubApiBase, githubGraphQL, parseNextLink, parseProvenanceTag, type GhIssue, type PmItem } from "./index.ts";
 
@@ -432,9 +432,17 @@ export function importFidelityFields(fidelity: ImportFidelity, linkOnly: boolean
   };
 }
 
-/** Compare source instants and tag sets without treating their serialized representation as a change. */
+/** Compare source fields using SDK status/tag/assignment semantics and document body formatting. */
 export function normalizeImportValue(field: string, value: unknown): unknown {
-  if (field === "tags") return [...new Set(value as string[] ?? [])].sort();
+  if (field === "tags") return parseTags(typeof value === "string" ? value : JSON.stringify(value ?? []));
+  if (field === "status") return normalizeStatusInput(value) ?? value;
+  // Match the SDK document writer: leading newlines and trailing body space
+  // are formatting, while leading indentation remains meaningful content.
+  if (field === "body" && typeof value === "string") return value.replace(/^\n+/, "").trimEnd();
+  if (field === "assignee" || field === "sprint") {
+    const text = toNonEmptyImportString(value) ?? "";
+    return text === "none" ? "" : text;
+  }
   if (/^(?:github_)?(?:created|updated|closed|completed)_at$/.test(field) && typeof value === "string" && Number.isFinite(Date.parse(value))) return Date.parse(value);
   return value;
 }

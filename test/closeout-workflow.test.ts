@@ -227,7 +227,9 @@ esac
     if (env.PROTECTION_DENIED === "true" && (url.includes("/protection/") || url.includes("/rules/branches/"))) { jsonResponse(res, 403, {}); return; }
     if (env.READ_DENIED === "true" || (env.CHECKS_DENIED === "true" && url.includes("/check-runs"))) { jsonResponse(res, 403, { message: "Resource not accessible by integration" }); return; }
     const sha = "a".repeat(40);
-    if (url.includes("/pulls?")) jsonResponse(res, 200, env.NO_DELIVERY === "true" ? [] : [...(env.AMBIGUOUS === "true" ? [{ number: 43, merged_at: "2026-10-16T00:00:00Z", updated_at: "2026-10-16T00:00:00Z" }] : []), { number: 42, merged_at: env.UNMERGED_COMPETITOR === "true" ? null : "2026-10-15T00:00:00Z", updated_at: "2026-10-15T00:00:00Z" }]);
+    if (env.NUMERIC_PAGINATION === "true" && url === "/repos/acme/widgets") jsonResponse(res, 200, { id: 17, full_name: "acme/widgets" });
+    else if (env.NUMERIC_PAGINATION === "true" && url.startsWith("/repos/acme/widgets/pulls?")) jsonResponse(res, 200, [], { Link: `<${server.baseUrl}/repositories/17/pulls?page=2>; rel="next"` });
+    else if (url.includes("/pulls?")) jsonResponse(res, 200, env.NO_DELIVERY === "true" ? [] : [...(env.AMBIGUOUS === "true" ? [{ number: 43, merged_at: "2026-10-16T00:00:00Z", updated_at: "2026-10-16T00:00:00Z" }] : []), { number: 42, merged_at: env.UNMERGED_COMPETITOR === "true" ? null : "2026-10-15T00:00:00Z", updated_at: "2026-10-15T00:00:00Z" }]);
     else if (url.includes("/commits?")) jsonResponse(res, 200, []);
     else if (/\/pulls\/(42|43)$/.test(url)) jsonResponse(res, 200, { number: Number(url.split("/").at(-1)), body: env.NO_LINKS === "true" ? "Routine maintenance" : `Closes https://github.com/${env.FOREIGN_LINK === "true" ? "other/project" : "acme/widgets"}/blob/main/.agents/pm/tasks/${id}.toon${env.SUMMARY_ROWS === "true" ? `\nhttps://github.com/other/project/blob/main/.agents/pm/tasks/${id}.toon` : ""}${env.SUMMARY_ITEM ? `\nhttps://github.com/acme/widgets/blob/main/.agents/pm/tasks/${env.SUMMARY_ITEM}.toon` : ""}`,
       merged: !(env.UNMERGED_COMPETITOR === "true" && url.endsWith("/42")), commits: 0, merged_at: env.UNMERGED_COMPETITOR === "true" && url.endsWith("/42") ? null : "2026-10-15T00:00:00Z", merge_commit_sha: env.INCOMPLETE_MERGE === "true" ? null : "b".repeat(40), html_url: `https://github.com/acme/widgets/pull/${url.split("/").at(-1)}`,
@@ -336,6 +338,14 @@ test("schedule without repository payload resolves trunk; clean closeout opens o
   assert.ok(receipts.includes(`--title ${title}`));
 }));
 
+test("scheduled closeout follows verified numeric pagination with declared checks and publishes delivery", async () => fixture(async f => {
+  Object.assign(f.env, { NUMERIC_PAGINATION: "true", PROTECTION_DENIED: "true", REQUIRED_CHECKS: "CI" });
+  const result = await f.run([...setup, ...finish]);
+  assert.equal(result.code, 0, result.out);
+  assert.equal((await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item.status, "closed");
+  assert.equal(existsSync(f.env.PR_STATE!), true);
+}));
+
 test("malicious tracker acceptance criteria fails the final privacy gate before any remote write", async () => fixture(async f => {
   const prepared = await f.run(setup);
   assert.equal(prepared.code, 0, prepared.out);
@@ -361,7 +371,8 @@ test("permission-limited read token fails closed with a clear diagnostic", async
   f.env.READ_DENIED = "true";
   const result = await f.run([...setup, ...finish]);
   assert.notEqual(result.code, 0);
-  assert.match(result.out, /Closeout refused; check token read access/);
+  assert.match(result.out, /::error::GitHub GET \/repos\/acme\/widgets\/pulls failed.*HTTP 403/);
+  assert.equal(result.out.match(/::error::/g)?.length, 1);
   unpublished(f.git);
   assert.equal((await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item.status, "in_progress");
   Object.assign(f.env, { READ_DENIED: "false", CHECKS_DENIED: "true" });
@@ -369,6 +380,47 @@ test("permission-limited read token fails closed with a clear diagnostic", async
   assert.equal(checks.code, 0, checks.out);
   assert.match(readFileSync(f.env.PR_BODY!, "utf8"), /missing_evidence/);
   assert.equal((await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item.status, "in_progress");
+}));
+
+test("SDK close validation keeps its full JSON receipt and reports the exact item and field", async () => fixture(async f => {
+  const prepared = await f.run(setup);
+  assert.equal(prepared.code, 0, prepared.out);
+  await update(f.id, { tags: "requires-review" }, { pmRoot: f.pmRoot, noExtensions: true });
+  const policy = { id: "review-required", description: "Private policy prose", effect: "refuse",
+    subject: { tags: ["requires-review"], operations: ["close"] }, rule: { kind: "require_fields", fields: ["reviewer"] } };
+  command(f.root, cli, ["--path", f.pmRoot, "schema", "policy-put", policy.id, "--definition", JSON.stringify(policy)], f.env);
+  command(f.root, cli, ["--path", f.pmRoot, "schema", "policy-mode", "refuse"], f.env);
+  const result = await f.run(finish);
+  assert.equal(result.code, 1, result.out);
+  assert.match(result.out, /::error::Closeout refused item .*PR #42:.*Supply required fields: reviewer/);
+  assert.equal(result.out.match(/::error::/g)?.length, 1);
+  assert.ok(!result.out.includes("Private policy prose"));
+  assert.equal((JSON.parse(readFileSync(join(f.base, "pm-github-closeout.json"), "utf8")) as { failed: number }).failed, 1);
+  unpublished(f.git);
+}));
+
+test("workflow refusal reporter emits one precise annotation and withholds private receipt values", async () => fixture(async f => {
+  const prepared = await f.run(setup);
+  assert.equal(prepared.code, 0, prepared.out);
+  const report = join(f.base, "failure.json");
+  const error = join(f.base, "failure.err");
+  const diff = join(f.base, "repeat.patch");
+  const secret = "ghp_" + "A".repeat(36);
+  for (const [payload, patch, expected] of [
+    [{ plan: [{ item: f.id, pr: 42, missing_evidence: [{ code: "close_failed", reason: "SDK close refused: workflow_policy_refused. Supply required fields: reviewer." }] }] }, "", /item .*PR #42:.*reviewer/],
+    [{ findings: [{ item_id: "github-issue-1", field: "body", rule: "absolute-host-path" }] }, "", /item github-issue-1, field body, rule absolute-host-path/],
+    [{ reason: secret }, "", /diagnostic blocked by the privacy gate/],
+    [{}, `diff --git a/.agents/pm/tasks/${f.id}.toon b/.agents/pm/tasks/${f.id}.toon\n-updated_at: before\n+updated_at: after`, /field updated_at/],
+  ] as const) {
+    writeFileSync(report, JSON.stringify(payload)); writeFileSync(error, ""); writeFileSync(diff, patch);
+    const result = await bash('source "${RUNNER_TEMP}/pm-github-sync-scope.sh"\nreport_workflow_failure "$FAILURE_REPORT" "$FAILURE_ERROR" "$FAILURE_DIFF"', f.root,
+      { ...f.env, FAILURE_REPORT: report, FAILURE_ERROR: error, FAILURE_DIFF: diff });
+    assert.equal(result.code, 0, result.out);
+    assert.equal(result.out.match(/::error::/g)?.length, 1, result.out);
+    assert.match(result.out, expected);
+    assert.ok(!result.out.includes(secret));
+    unpublished(f.git);
+  }
 }));
 
 test("PR-write and dispatch restrictions fail clearly and never alter the default branch", async () => {

@@ -240,6 +240,18 @@ jobs:
           export PM_SYNC_TRACKER
           printf 'PM_SYNC_TRACKER=%s\n' "${PM_SYNC_TRACKER}" >> "${GITHUB_ENV}"
           cat > "${RUNNER_TEMP}/pm-github-sync-scope.sh" <<'SCOPE'
+          report_workflow_failure() {
+            local report_file="$1" error_file="$2" diff_file="${3:-/dev/null}"
+            local diagnostic="${RUNNER_TEMP}/pm-github-diagnostic.json"
+            local patch="${RUNNER_TEMP}/pm-github-diagnostic.patch"
+            pm github workflow-diagnostic --report "${report_file}" --error-file "${error_file}" --diff "${diff_file}" --json > "${diagnostic}"
+            { printf '%s\n' '--- /dev/null' '+++ b/workflow-diagnostic.txt' '@@ -0,0 +1 @@'; jq -r '"+" + (.reason | gsub("[\\r\\n]"; " "))' "${diagnostic}"; } > "${patch}"
+            if pm github gate --diff "${patch}" --json > "${RUNNER_TEMP}/pm-github-diagnostic-gate.json" 2> "${RUNNER_TEMP}/pm-github-diagnostic-gate.err"; then
+              jq -r '"::error::" + (.reason | gsub("%"; "%25") | gsub("\\r"; "%0D") | gsub("\\n"; "%0A"))' "${diagnostic}"
+            else
+              echo "::error::Failure diagnostic blocked by the privacy gate; review source content before retrying. No branch was published."
+            fi
+          }
           mapfile -t sync_scope < <(printf '%s\n' \
             ":(top,literal)${PM_SYNC_TRACKER}" \
             ':(top,literal)CHANGELOG.md' \
@@ -388,7 +400,11 @@ jobs:
           set -euo pipefail
           adopt_args=()
           if [[ "${ADOPT_CITED:-false}" == true ]]; then adopt_args+=(--adopt-cited); fi
-          pm github import "${REPOSITORY}" --state all --atomic --gate --dry-run --with-comments "${adopt_args[@]}"
+          source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
+          if ! pm github import "${REPOSITORY}" --state all --atomic --gate --dry-run --with-comments "${adopt_args[@]}" --json > "${RUNNER_TEMP}/pm-github-import.json" 2> "${RUNNER_TEMP}/pm-github-import.err"; then
+            report_workflow_failure "${RUNNER_TEMP}/pm-github-import.json" "${RUNNER_TEMP}/pm-github-import.err"
+            exit 1
+          fi
 
       # The gate step. A finding (or unreadable scan input) fails this step, so
       # the job never reaches the commit/push below with a leak in the change.
@@ -400,7 +416,11 @@ jobs:
           set -euo pipefail
           adopt_args=()
           if [[ "${ADOPT_CITED:-false}" == true ]]; then adopt_args+=(--adopt-cited); fi
-          pm github import "${REPOSITORY}" --state all --atomic --gate --with-comments "${adopt_args[@]}"
+          source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
+          if ! pm github import "${REPOSITORY}" --state all --atomic --gate --with-comments "${adopt_args[@]}" --json > "${RUNNER_TEMP}/pm-github-import.json" 2> "${RUNNER_TEMP}/pm-github-import.err"; then
+            report_workflow_failure "${RUNNER_TEMP}/pm-github-import.json" "${RUNNER_TEMP}/pm-github-import.err"
+            exit 1
+          fi
 
       - name: Verify repeat import is a no-op
         env:
@@ -416,9 +436,21 @@ jobs:
           fi
           adopt_args=()
           if [[ "${ADOPT_CITED:-false}" == true ]]; then adopt_args+=(--adopt-cited); fi
-          pm github import "${REPOSITORY}" --state all --atomic --gate --with-comments "${adopt_args[@]}"
-          git diff --exit-code -- "${sync_scope[0]}" "${sync_scope[@]:2}"
-          [[ -z "$(git ls-files --others --exclude-standard -- "${sync_scope[0]}" "${sync_scope[@]:2}")" ]]
+          source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
+          if ! pm github import "${REPOSITORY}" --state all --atomic --gate --with-comments "${adopt_args[@]}" --json > "${RUNNER_TEMP}/pm-github-import.json" 2> "${RUNNER_TEMP}/pm-github-import.err"; then
+            report_workflow_failure "${RUNNER_TEMP}/pm-github-import.json" "${RUNNER_TEMP}/pm-github-import.err"
+            exit 1
+          fi
+          if ! git diff --exit-code -- "${sync_scope[0]}" "${sync_scope[@]:2}" > "${RUNNER_TEMP}/pm-github-repeat.patch"; then
+            report_workflow_failure /dev/null /dev/null "${RUNNER_TEMP}/pm-github-repeat.patch"
+            exit 1
+          fi
+          git ls-files --others --exclude-standard -- "${sync_scope[0]}" "${sync_scope[@]:2}" > "${RUNNER_TEMP}/pm-github-repeat-untracked"
+          if [[ -s "${RUNNER_TEMP}/pm-github-repeat-untracked" ]]; then
+            sed 's|^|diff --git a/|' "${RUNNER_TEMP}/pm-github-repeat-untracked" > "${RUNNER_TEMP}/pm-github-repeat.patch"
+            report_workflow_failure /dev/null /dev/null "${RUNNER_TEMP}/pm-github-repeat.patch"
+            exit 1
+          fi
           pm github gate --json
 
       - name: Run caller post-import script

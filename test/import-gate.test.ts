@@ -594,14 +594,13 @@ test("clean flow: gated import passes, health stays strict, the push reaches the
         "the clean gated change reaches the remote",
       );
 
-      // The identical plan resumes its completed journal without new writes.
-      // Recovered counts describe the durable batch, rather than new updates.
+      // An identical source projection needs no new transaction or item writes.
       const second = await runGatedImport(root, { atomic: true, gate: true });
       assert.strictEqual(second.imported, 0);
       assert.strictEqual(second.updated, 0);
-      assert.strictEqual(second.recovered, true);
-      assert.strictEqual(second.recoveredItems, 2);
-      assert.strictEqual(second.transactionId, first.transactionId);
+      assert.strictEqual(second.unchanged, true);
+      assert.strictEqual(second.recovered, false);
+      assert.strictEqual(second.transactionId, undefined);
       assert.strictEqual(git(["diff", "--name-only", "--", ".agents/pm"]).stdout.trim(), "");
       assert.strictEqual((second.gate as ImportGateReceipt).verdict, "pass");
 
@@ -1168,7 +1167,8 @@ test("the executable reusable workflow never publishes each adversarial fixture"
         const result = await executeWorkflow(workflowShell(WORKFLOW_IMPORT_SEQUENCE), root, { ...env,
           PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE });
         assert.notEqual(result.code, 0, "the actual shell must stop at the gate");
-        assert.ok(result.stderr.includes(fixture.rule), "the expected privacy rule rejects this fixture");
+        assert.ok(result.stdout.includes(fixture.rule), "the expected privacy rule appears in the single failure annotation");
+        assert.equal(result.stdout.match(/::error::/g)?.length, 1);
         for (const sensitive of [GH_TOKEN, HIGH_ENTROPY_SECRET, PERSONAL_EMAIL, HOME_PATH]) {
           assert.ok(!result.stdout.includes(sensitive) && !result.stderr.includes(sensitive));
         }
@@ -1853,7 +1853,8 @@ for (const adoptCited of [undefined, "false", "true"]) {
           "Gated GitHub to pm import", "Verify repeat import is a no-op"]), root,
         { ...env, ADOPT_CITED: adoptCited, PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE });
         assert.equal(result.code, 0, result.stdout + result.stderr);
-        assert.match(result.stderr, adoptCited === "true" ? /#1 adopt:/ : /#1 import:/);
+        const receipt = JSON.parse(fs.readFileSync(path.join(base, "pm-github-import.json"), "utf8")) as { plan: { action: string }[] };
+        assert.equal(receipt.plan[0]!.action, "update");
         const actual = (await get(local.id, {}, { pmRoot })).item;
         if (adoptCited === "true") assert.equal(actual.github_url, "https://github.com/acme/widgets/issues/1");
         else assert.deepEqual(actual, before);

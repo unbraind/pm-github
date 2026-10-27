@@ -98,7 +98,7 @@ export function runCoverageGate(root: string, runner: CoverageRunner = spawnSync
     const result = runner(node, [COVERAGE_HEAP_FLAG, c8, "--100", "--all", "--exclude-after-remap", "--extension=.ts", "--extension=.js",
       `--reports-dir=${reports}`, `--temp-directory=${join(reports, "v8")}`,
       "--reporter=text", "--reporter=lcov", "--reporter=json-summary", "--reporter=json",
-      ...sources.map(file => `--include=${file}`), node, "--test", ...config.tests],
+      ...sources.map(file => `--include=${file}`), node, "--test", "--test-concurrency=2", ...config.tests],
       { cwd: root, stdio: "inherit", env: coverageEnv });
     if (result.error || result.status !== 0) {
       rmSync(join(reports, "lcov.info"), { force: true });

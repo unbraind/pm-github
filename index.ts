@@ -25,11 +25,12 @@ import type {
   SearchProviderQueryContext,
 } from "@unbrained/pm-cli/sdk/authoring";
 import { CloseoutUsageError, compactCloseoutReport, runCloseout } from "./closeout.ts";
+import { readWorkflowFailure } from "./workflow-diagnostic.ts";
 import { compileIssueForm, completeIssueForm, readRepositoryIssueForm, refuseIssueForm, type IssueFormCompletion } from "./issue-forms.ts";
 export { compileIssueForm, completeIssueForm, readRepositoryIssueForm } from "./issue-forms.ts";
 export type { IssueFormInput, IssueFormSelection, IssueFormContract, IssueFormReport, IssueFormCompletion, IssueFormRefusalCode, FormField, FormRepair, IssueFormReader } from "./issue-forms.ts";
 import {
-  AmbiguousCitationError, buildImportFidelity, fetchImportTimeline, importFidelityFields, matchImportedIssue, persistImportFidelity, readImportReleases, selectImportContextIndex, validateImportLifetime,
+  AmbiguousCitationError, buildImportFidelity, fetchImportTimeline, importFidelityFields, matchImportedIssue, normalizeImportValue, persistImportFidelity, readImportReleases, selectImportContextIndex, validateImportLifetime,
   type AmbiguousCitationPlan, type CitationCandidate, type ImportFidelity,
 } from "./import-fidelity.ts";
 import { refreshChanges, runRefresh } from "./refresh.ts";
@@ -632,7 +633,7 @@ async function request(
       attempt++;
       continue;
     }
-    throw new Error(`GitHub API returned HTTP ${res.status}`);
+    throw new Error(`GitHub API returned HTTP ${res.status} for ${method} ${new URL(url).pathname}`);
   }
 }
 
@@ -3174,6 +3175,15 @@ export async function prepareGithubImport(
   };
 }
 
+/** Recognize a complete source projection without treating the SDK mutation clock as content. */
+export function importEntryUnchanged(entry: PreparedGithubImport): boolean {
+  if (!entry.match?.id || !entry.fidelity || refreshChanges(entry).length !== 0) return false;
+  if (entry.linkOnly) return true;
+  const fields: Record<string, unknown> = { type: entry.itemType, description: entry.description, body: entry.body,
+    ...(entry.assignee ? { assignee: entry.assignee } : {}), ...(entry.milestone ? { sprint: entry.milestone } : {}) };
+  return Object.entries(fields).every(([field, value]) => normalizeImportValue(field, ownValue(entry.match, field) ?? "") === normalizeImportValue(field, value));
+}
+
 /** Receipts from the gated import's completeness check. */
 export interface ImportPlanCompletenessReceipts {
   /** Number of issues the fetch delivered after filtering. */
@@ -3639,7 +3649,13 @@ export async function runImport(
       };
     }
 
-    const result = await (dependencies.commitAtomic ?? importGithubAtomic)(pmRoot, repo, prepared);
+    // Mixed create/update batches can select a fresh journal after the first
+    // apply. Replaying an otherwise identical SDK UPDATE advances updated_at.
+    // Never hide an interrupted journal behind the unchanged-state shortcut.
+    const unchanged = prepared.every(importEntryUnchanged) && (await listUnfinishedGithubImports(pmRoot)).length === 0;
+    const result = unchanged ? { transactionId: undefined, recovered: false, recoveredItems: undefined, imported: 0, updated: 0,
+      itemIds: new Map(prepared.map(entry => [entry.issueNumber, entry.match!.id!])) }
+      : await (dependencies.commitAtomic ?? importGithubAtomic)(pmRoot, repo, prepared);
     if (opts.gate) verifyImportedProvenance(await readImportItems(), prepared, repo);
     // Planned native comments are part of the verified plan: a contended lock,
     // a refused add, or a committed entry whose created id is missing from the
@@ -3661,7 +3677,8 @@ export async function runImport(
       }
     }
     failClosedOnPlanDivergence(opts.gate, skipped, skipped, commentWriteFailures);
-    if (result.recovered) {
+    if (unchanged) console.error("Atomic import unchanged; no item transaction was needed.");
+    else if (result.recovered) {
       console.error(
         `Atomic import recovered transaction ${result.transactionId} covering ${result.recoveredItems ?? prepared.length} item(s).`,
       );
@@ -3681,6 +3698,7 @@ export async function runImport(
     const gateReceipt = opts.gate ? gateImportWrites(pmRoot) : undefined;
     return {
       transactionId: result.transactionId,
+      ...(unchanged ? { unchanged: true } : {}),
       recovered: result.recovered,
       imported: result.imported,
       updated: result.updated - (result.recovered ? 0 : adoptionCount),
@@ -7187,6 +7205,20 @@ export default defineExtension({
       },
     });
 
+    // Receipts stay private until the workflow scans the selected diagnostic.
+    api.registerCommand({
+      name: "github workflow-diagnostic",
+      description: "Select one actionable refusal from private workflow receipts. Privacy-scan before publishing the result.",
+      flags: [
+        { long: "--report", value_name: "file", description: "Command JSON stdout receipt" },
+        { long: "--error-file", value_name: "file", description: "Command stderr receipt" },
+        { long: "--diff", value_name: "file", description: "Repeat-import tracker diff" },
+      ],
+      async run(ctx: CommandHandlerContext) {
+        return readWorkflowFailure(optionString(ctx.options, "report"), optionString(ctx.options, "error-file", "errorFile"), optionString(ctx.options, "diff"));
+      },
+    });
+
     // Closeout uses the existing repository resolution and REST transport.
     api.registerCommand({
       name: "github closeout",
@@ -7209,7 +7241,11 @@ export default defineExtension({
           const report = await runCloseout(ctx.pm_root, resolveSearchRepo(ctx.options), ctx.options, {
             base: githubApiBase(), get: url => fetchJSON(url, token), next: parseNextLink,
           });
-          if (report.failed > 0) throw new CommandError(JSON.stringify({ ...report, error: "pm github closeout: some closes failed" }), EXIT_CODE.GENERIC_FAILURE);
+          if (report.failed > 0) {
+            // Preserve the full private receipt before the host formats or budgets its error message.
+            if (ctx.global.json === true) process.stdout.write(`${JSON.stringify(report)}\n`);
+            throw new CommandError(JSON.stringify({ ...report, error: "pm github closeout: some closes failed" }), EXIT_CODE.GENERIC_FAILURE);
+          }
           return ctx.global.json === true || ctx.options.full === true ? report : compactCloseoutReport(report);
         } catch (error) {
           // A plain Error would make the host re-run the handler (repeating GitHub reads and remaining closes).
