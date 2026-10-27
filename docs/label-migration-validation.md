@@ -3,6 +3,23 @@
 Validation date: 2026-10-27. Final-head release status, receipts and run links are
 recorded in [PR 188](https://github.com/unbraind/pm-github/pull/188).
 
+Round 3 current-pin verification follows main's Dependabot update to SDK
+2026.10.23 (`d717d7b`, merged via `ccaf148`). The linked model file passes
+3/3 tests: 500 provider-label sets and 500 native-array sequences, with actual
+SDK mutation and read-back references. Focused planner/helper/wire tests pass
+13/13 with 100/100/100/100 targeted coverage for `labels.ts` and `import-tags.ts`.
+Plain/atomic owner regressions pass 2/2; the linked Projects interleaving test
+passes 1/1 with 500 retained native atoms and all six response boundaries.
+Typecheck, test compilation, lint, docstrings and duplication pass (23 files,
+236 declarations; 24 authored modules, 12,613 lines, zero duplicated lines).
+All five packed CLI modes and standalone Node/Bun SDK checks pass on host CLI
+2026.10.26 and isolated Bun 1.3.14. The single captured artifact is 289,696 bytes,
+SHA-256 `a10eaf5857d2e84fdcfcd871c417dcf392d7ae73a59898b817cc8044686be171`.
+Twelve independent round-3 site reversions fail their regressions, including
+empty-row compaction; disposable copies restore the fixed implementation.
+The final-head CI links and pending gate counts are maintained in PR 188;
+previous-round run receipts below are historical evidence.
+
 Round 2 source validation is recorded on commit `1054723`.
 [CI 40513381730](https://github.com/unbraind/pm-github/actions/runs/40513381730)
 had all four npm/Bun Node 22/26 jobs queued at this receipt, and
@@ -34,9 +51,11 @@ remain serial. No thresholds or source exclusions changed.
 
 Review round 2 closes the preview/import normalization class. The import-owned
 `githubLabelsToTags` function uses the SDK's CSV parser, shared by prepared
-imports, native writes, tag/provenance validation, refresh comparisons and label
-plans. The earlier array-parser call preserved embedded commas and could miss
-both tags produced by importing `one,two`. Tag rows now expose the raw
+imports, provider-derived writes, tag/provenance validation and label plans.
+The earlier array-parser call on provider names preserved embedded commas and
+could miss both tags produced by importing `one,two`. Round 3 corrects the
+round-2 overreach of also CSV-parsing stored native tags; that representation
+must remain an SDK-normalized array of individual tag atoms. Tag rows now expose the raw
 destination plus its complete `after_tags` expansion, including zero-tag
 destinations and Unicode case expansion. Provider policy-name matching remains
 separate from native tag conversion; catalog IDs and expected names stay exact.
@@ -125,7 +144,7 @@ files read-only, and never modifies the source repository or provider labels.
 | Measurement | Result |
 | --- | --- |
 | Public tracker | `unbraind/pm-github` |
-| Snapshot revision | `f90f86faa9c976392f1d1262fd0b3204de2007e4` |
+| Snapshot revision | `d717d7b85e6009c5a4bb803952140e61856dd041` |
 | Scanned items, including terminal/custom statuses | 155 |
 | Current provider label identities | 12 |
 | Affected stored items / tag occurrences | 1 / 1 |
@@ -144,9 +163,49 @@ layout and real executable symlinks. Each of the five consumers (project-local,
 npx, bunx/native Bun, npm-global and Bun-global) passes JSON, TOON and approval
 revalidation against an independent non-git read-only public tracker copy.
 Every copy retains byte-identical native source files. Acceptance uses host CLI
-2026.10.26 and an isolated Bun 1.3.14 matching CI; the repo's SDK pin is unchanged.
+2026.10.26 and an isolated Bun 1.3.14 matching CI; the dev SDK pin is main's
+2026.10.23, adopted through the merge without an independent version bump.
 
 Offline validation depends on a fresh, complete caller-provided catalog. A
 successful approval check is point-in-time evidence, not a lock held across a
 later external mutation. Review automation that is unavailable, quota limited
 or skipped supplies no approval evidence.
+
+Review round 3 separates the operands by their actual field domains. Provider
+label names use the shared CSV converter; persisted native tags use the SDK's
+array normalizer without comma splitting. Planner rows now name only tag atoms
+present in SDK read-back. Refresh compares that native state with the writer's
+converted desired state, so `["one,two"]` differs from `["one","two"]`.
+Preparation keeps retained owner tags outside label conversion. Atomic and plain
+link-only/citation writes add only new provider-derived tags and leave existing
+native atoms in place; SDK additive inputs themselves accept CSV, so retained
+comma atoms must never be resubmitted as additions either.
+
+The native-tag model adds 500 seeded sequences with literal commas, spaces,
+case variants, collisions and partial overlaps. Each seeds native metadata
+through the SDK, reads it back, previews migration and refresh, executes the
+real full-import mutation independently of the refresh decision, and reads the
+result through the SDK. Predicted identities/counts equal the intersection of
+the two SDK states; refresh selection/output equals the actual write delta.
+The earlier legacy-array fixture is corrected to expect only existing native
+identities; no legacy record is refused or rewritten by a read-only preview.
+
+The same native-field audit covers Projects import and push binding. Their
+writers add only missing provenance through `nativeTagAdditions`; retained
+native arrays never become CSV. A real non-git fixture with no git executable
+seeds 500 random comma-containing native atoms. Peer mutations at all six
+provider-response boundaries (two import, four push) remain present in final
+SDK read-back, and the successful push is reported as successful.
+
+Packed zero-impact reports also exercise host omission of empty `rows`.
+The producer-derived schema restores that empty array, while complete-count
+and continuation checks still reject missing rows on an unfinished page.
+All 500 SDK wire permutations now include compact terminal pages and must-refuse
+truncated pages in JSON and TOON. The SDK itself handles undefined legacy tag
+fields; no second empty-tag default or CSV conversion is applied to native data.
+
+The final SDK wire fixture physically removes omitted fields before TOON
+encoding, matching the host producer. An explicitly undefined property encodes
+as null in TOON; explicit null `rows` remains in the must-refuse corpus rather
+than being accepted as an empty list. The final 500-wire run passes with both
+compact terminal pages and truncated-page refusals.

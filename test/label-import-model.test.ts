@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { decode, encode } from "@toon-format/toon";
-import { init, create, update, get, normalizeItemId, readSettings } from "@unbrained/pm-cli/sdk";
+import { init, create, update, get, normalizeItemId, readSettings, mutateItem } from "@unbrained/pm-cli/sdk";
 import { buildAtomicImportMutations, githubLabelsToTags, parseImportOptions, planGithubLabelMigration,
   prepareGithubImport, validateGithubLabelMigrationReport, verifyImportIdempotency, type GhIssue, type PmItem } from "../index.ts";
 import { refreshChanges } from "../refresh.ts";
@@ -31,7 +31,13 @@ test("shared importer conversion covers legacy refresh deltas and every native m
         { items: [match], releases: [], timeline: async () => [] }))!;
       assert.deepEqual(prepared.tags, expected.tags);
       assert.deepEqual(githubLabelsToTags(raw), expected.tags);
-      assert.deepEqual(normalizeImportValue("tags", raw), expected.tags);
+      await mutateItem({ pmRoot: root, settings, id: match.id, author: "fixture", op: "update", mutate: document => {
+        document.metadata.tags = raw;
+        return { changedFields: ["tags"] };
+      } });
+      const nativeReference = (await get(match.id, {}, { pmRoot: root })).item;
+      assert.deepEqual(normalizeImportValue("tags", raw), nativeReference.tags);
+      assert.notDeepEqual(nativeReference.tags, expected.tags, "native array atoms and provider CSV labels have distinct domains");
       const legacy = { ...prepared, tags: raw };
       assert.deepEqual(refreshChanges(legacy).find(change => change.field === "tags")!.new, expected.tags);
       assert.ok(!refreshChanges({ ...legacy, match: { ...match, tags: expected.tags } }).some(change => change.field === "tags"));
@@ -51,6 +57,21 @@ test("shared importer conversion covers legacy refresh deltas and every native m
       const linkedMutation = linked.mutations[0]!;
       if (linkedMutation.op !== "update") throw new Error("Expected link-only update");
       assert.deepEqual((linkedMutation.options as Record<string, unknown>).addTags, expected.tags);
+      for (const linkOnly of [true, false]) {
+        const before = (await get(match.id, {}, { pmRoot: root })).item;
+        const retained = { ...prepared, match: before, tags: [...before.tags!, "fresh"], linkOnly,
+          identity: { via: linkOnly ? "provider-link" : "citation" } };
+        const retainedPlan = buildAtomicImportMutations(repo, retained, settings.id_prefix, normalizeItemId);
+        const mutation = retainedPlan.mutations[0]!;
+        if (mutation.op !== "update") throw new Error("Expected retained-owner update");
+        await update(match.id, { ...mutation.options, ...scope }, { pmRoot: root });
+        const actual = (await get(match.id, {}, { pmRoot: root })).item;
+        assert.ok(actual.tags!.includes("one,two"));
+        assert.ok(!actual.tags!.includes("two"), "retaining a native comma atom must not invent an additional tag");
+        assert.equal(mutation.options.tags, undefined, "existing native state must not travel through a CSV replacement");
+        assert.ok((mutation.options.addTags as string[]).every(tag => !tag.includes(",")));
+        assert.ok(!refreshChanges({ ...retained, match: actual }).some(change => change.field === "tags"));
+      }
       verifyImportIdempotency([], [{ ...legacy, match: undefined }], repo);
       verifyImportIdempotency([], [{ ...legacy, identity: { via: "citation" } }], repo);
     });
@@ -88,7 +109,7 @@ test("500 random label sets predict the importer's actual SDK tag changes and ap
         const actual = (await get(native.id, {}, { pmRoot: root })).item;
         current.set(native.id, actual);
         assert.deepEqual(entry.tags, actual.tags, "the importer preview must expose exactly the tags its writer produces");
-        assert.deepEqual(normalizeImportValue("tags", names), actual.tags!.filter(tag => tag !== provenance));
+        assert.deepEqual(normalizeImportValue("tags", actual.tags), actual.tags);
         assert.deepEqual(refreshChanges({ ...entry, tags: [...names, provenance] }).find(change => change.field === "tags")!.new,
           actual.tags, "refresh previews expose the writer's complete normalized tags even for replayed raw plans");
         const refresh = { ...entry, match: actual };
@@ -137,6 +158,74 @@ test("500 random label sets predict the importer's actual SDK tag changes and ap
           (error: unknown) => (error as { code: string }).code === "stale_plan");
       }
       assert.deepEqual(githubLabelsToTags([",,,"]), []);
+    });
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("500 native tag arrays keep literal identities and refresh decisions equal SDK import writes", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "pm-native-label-model-"));
+  const root = join(directory, "tracker");
+  try {
+    await withEnv({ PM_PATH: root, PM_AUTHOR: "fixture", GIT_CEILING_DIRECTORIES: dirname(directory), PATH: directory }, async () => {
+      await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { pmRoot: root, cwd: directory, noExtensions: true });
+      const scope = { parent: "none", clearDeps: true, unset: ["sprint", "release", "goal", "objective"] };
+      const target = (await create({ title: "Native witness", type: "Task", ...scope }, { pmRoot: root })).item;
+      const settings = await readSettings(root);
+      const repo = "fixture/repo";
+      const provenance = `gh:${repo}#1`;
+      const issue: GhIssue = { number: 1, title: "Native witness", body: "", state: "open", labels: [], assignee: null, milestone: null,
+        created_at: "2026-01-01T00:00:00Z", updated_at: "2026-02-01T00:00:00Z", html_url: `https://github.com/${repo}/issues/1` };
+      let seed = 0x3c0a5e;
+      /** Deterministic choices include equal native sets and comma atoms with unequal CSV expansions. */
+      function random(bound: number) { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return (seed >>> 0) % bound; }
+      const words = ["one", "two", "Bug Fix", "kind/BUG", "scope:One", "constructor", "__proto__", "İ"];
+      for (let sequence = 0; sequence < 500; sequence++) {
+        const first = sequence === 0 ? "one" : words[random(words.length)]!;
+        const second = sequence === 0 ? "two" : words[random(words.length)]!;
+        const name = `${first},${second}`;
+        const variants = [[name], [` ${first.toUpperCase()} , ${second} `], [first.toUpperCase(), ` ${second} `], [name, first]];
+        const stored = variants[sequence % variants.length]!;
+        await mutateItem({ pmRoot: root, settings, id: target.id, author: "fixture", op: "update", mutate: document => {
+          document.metadata.tags = [...stored, provenance];
+          return { changedFields: ["tags"] };
+        } });
+        const before = (await get(target.id, {}, { pmRoot: root })).item;
+        const source = { id: "SOURCE", name };
+        const input = { repo, sources: [source], change: { kind: "rename", name: "replacement,next" } as const,
+          filters: [], mappings: [], choices: { tags: "review", filters: "keep", mappings: "keep" } as const };
+        const readCatalog = async () => ({ complete: true, labels: [source] });
+        const report = await planGithubLabelMigration(root, input, { readCatalog });
+        if (sequence === 0) assert.equal((await planGithubLabelMigration(root, input, { readCatalog, approval: report.approval })).checked, true);
+        const entry = (await prepareGithubImport({ ...issue, labels: [{ name }] }, repo, parseImportOptions({}), undefined, before,
+          undefined, { items: [before], releases: [], timeline: async () => [] }))!;
+        const delta = refreshChanges(entry).find(change => change.field === "tags");
+        const refreshPlan = buildAtomicImportMutations(repo, entry, settings.id_prefix, normalizeItemId, true);
+        const fullPlan = buildAtomicImportMutations(repo, entry, settings.id_prefix, normalizeItemId);
+        const mutation = fullPlan.mutations[0]!;
+        if (mutation.op !== "update") throw new Error("Expected existing-target SDK import");
+        // Execute the full import independently of the refresh's changed-field decision.
+        await update(target.id, { ...mutation.options, ...scope }, { pmRoot: root });
+        const actual = (await get(target.id, {}, { pmRoot: root })).item;
+        const changed = JSON.stringify(before.tags) !== JSON.stringify(actual.tags);
+        if (sequence === 0) await assert.rejects(planGithubLabelMigration(root, input, { readCatalog, approval: report.approval }),
+          (error: unknown) => (error as { code: string }).code === "stale_plan");
+        assert.equal(Boolean(delta), changed, `refresh must compare actual native state ${sequence}`);
+        if (delta) assert.deepEqual(delta.new, actual.tags, `refresh output ${sequence}`);
+        const refreshMutation = refreshPlan.mutations[0]!;
+        if (refreshMutation.op !== "update") throw new Error("Expected refresh update");
+        assert.equal(Object.hasOwn(refreshMutation.options, "tags"), changed, `refresh write selection ${sequence}`);
+        const desired = new Set(actual.tags!.filter(tag => tag !== provenance));
+        const affected = before.tags!.filter(tag => desired.has(tag));
+        assert.deepEqual(report.rows.map(row => row.before).sort(), [...affected].sort(), `native identities ${sequence}`);
+        assert.ok(report.rows.every(row => before.tags!.includes(row.local_tag!)), "every emitted identity must exist in SDK state");
+        assert.equal(report.counts.tags, affected.length);
+        assert.equal(report.counts.items, affected.length ? 1 : 0);
+        assert.equal(report.counts.total, affected.length);
+        assert.equal(report.counts.review, affected.length);
+        assert.deepEqual(validateGithubLabelMigrationReport(decode(encode(report))), report);
+        assert.deepEqual(validateGithubLabelMigrationReport(JSON.parse(JSON.stringify(report))), report);
+        assert.ok(!refreshChanges({ ...entry, match: actual }).some(change => change.field === "tags"), "replayed import reads current native state");
+      }
     });
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });

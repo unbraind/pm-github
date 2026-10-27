@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { openSync, closeSync, fstatSync, readSync, constants } from "node:fs";
 import { z } from "zod";
-import { createPmCliExpectedError, decodePmTableRows } from "@unbrained/pm-cli/sdk";
+import { createPmCliExpectedError, decodePmTableRows, toImportTags } from "@unbrained/pm-cli/sdk";
 import { readRefreshItems } from "./refresh.ts";
 import { githubLabelNameKey } from "./label-names.ts";
 import { githubLabelsToTags } from "./import-tags.ts";
@@ -48,7 +48,7 @@ const rowSchema = z.discriminatedUnion("kind", [
 const reportSchema = z.strictObject({ ok: z.literal(true), repo: requestSchema.shape.repo, approval: z.string().regex(/^[a-f0-9]{64}$/),
   checked: z.boolean(), sources: z.array(label).max(20), destination: label,
   counts: z.strictObject({ scanned: count, items: count, tags: count, filters: count, mappings: count, review: count, total: count }),
-  offset: count, next: count.nullable().default(null), rows: z.array(rowSchema).max(100) });
+  offset: count, next: count.nullable().default(null), rows: z.array(rowSchema).max(100).default([]) });
 const rowKeys = z.enum([...new Set(rowSchema.options.flatMap(schema => Object.keys(schema.shape)))]);
 const tableReportSchema = reportSchema.omit({ rows: true }).extend({
   rows: z.array(z.record(z.string().refine(key => rowKeys.options.includes(key)), z.union([z.string().max(131072), count, z.boolean(), z.null()]))).max(100),
@@ -186,7 +186,7 @@ export async function planGithubLabelMigration(pmRoot: string, input: GithubLabe
       const parsed = parseProvenanceTag(tag);
       return parsed?.repo === request.repo.toLowerCase() && Number.isSafeInteger(parsed.number) && parsed.number > 0 && tag.length <= 240;
     }))].sort(order);
-    const localTags = new Set(githubLabelsToTags(item.tags!));
+    const localTags = new Set(toImportTags(item.tags!));
     for (const { source, tags } of sourceTags) for (const tag of tags) if (localTags.has(tag)) {
       affected = true;
       add({ kind: "tags", id: item.id!, source: source.id, before: tag, after: destination.name, after_tags: destinationTags, local_tag: tag, choice: request.choices.tags,

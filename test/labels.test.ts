@@ -122,6 +122,11 @@ test("importer CSV tag semantics cover preview, approval, destination expansion 
   const emptyCatalog = async () => ({ complete: true, labels: [emptySource] });
   const noTags = await planGithubLabelMigration(root, emptyInput, { readCatalog: emptyCatalog });
   assert.equal(noTags.counts.tags, 0);
+  assert.deepEqual(validateGithubLabelMigrationReport({ ...noTags, rows: undefined, next: undefined }), noTags,
+    "host compaction may omit empty rows on a completed page");
+  assert.throws(() => validateGithubLabelMigrationReport({ ...report, rows: undefined }), code("invalid_output"));
+  const terminal = await planGithubLabelMigration(root, input, { readCatalog, page: { offset: report.counts.total } });
+  assert.deepEqual(validateGithubLabelMigrationReport({ ...terminal, rows: undefined, next: undefined }), terminal);
   assert.equal((await planGithubLabelMigration(root, emptyInput, { readCatalog: emptyCatalog, approval: noTags.approval })).checked, true);
   for (const invalid of [null, new Array(1), [Infinity], ["x".repeat(601)], [" "]]) {
     assert.throws(() => validateGithubLabelMigrationReport({ ...report, rows: [{ ...report.rows[0], after_tags: invalid } ] }), code("invalid_output"));
@@ -142,8 +147,12 @@ test("importer CSV tag semantics cover preview, approval, destination expansion 
   const raw = (await get(legacy.id, {}, { pmRoot: root })).item;
   assert.ok(raw.tags!.includes("one,two"), "the SDK reads earlier array-producer data without CSV splitting it");
   const legacyReport = await planGithubLabelMigration(root, input, { readCatalog });
-  assert.deepEqual(legacyReport.rows.filter(row => row.id === legacy.id).map(row => row.before), ["one", "two"],
-    "both the source label and stored representation use the importer's converter");
+  assert.deepEqual(legacyReport.rows.filter(row => row.id === legacy.id).map(row => row.before), ["one"],
+    "only the existing native atom matches; the literal comma tag is not split into invented identities");
+  for (const json of [false, true]) {
+    const cli = (await harness.runCommand({ command: "github labels plan", pmRoot: root, args: [], options: { input: file, catalog: catalogFile }, global: { json } })).result;
+    assert.deepEqual(validateGithubLabelMigrationReport(json ? JSON.parse(JSON.stringify(cli)) : decode(encode(cli))), legacyReport);
+  }
   const unicode = { id: "UNICODE", name: "İ".repeat(200) };
   await item(root, "Expanded native tag", [unicode.name]);
   const expanded = await planGithubLabelMigration(root, { ...input, sources: [unicode] }, { readCatalog: async () => ({ complete: true, labels: [unicode] }) });
@@ -387,9 +396,11 @@ test("registered CLI returns compact host-renderable reports and typed input ref
 test("500 SDK table wire permutations preserve producer rows, absent fields and JSON-looking strings", async () => tracker(async root => {
   await item(root, "Wire witness", ["one,two"]);
   const csv = { id: "CSV", name: "one,two" };
-  const report = await planGithubLabelMigration(root, request({ sources: [csv], change: { kind: "rename", name: "null,[1],constructor" },
-    filters: [{ id: "filter", labels: ["ONE,TWO"] }], mappings: [{ id: "mapping", from: "[1]", to: "one,two" }] }),
-    { readCatalog: async () => ({ complete: true, labels: [csv] }) });
+  const input = request({ sources: [csv], change: { kind: "rename", name: "null,[1],constructor" },
+    filters: [{ id: "filter", labels: ["ONE,TWO"] }], mappings: [{ id: "mapping", from: "[1]", to: "one,two" }] });
+  const readCatalog = async () => ({ complete: true, labels: [csv] });
+  const report = await planGithubLabelMigration(root, input, { readCatalog });
+  const terminal = await planGithubLabelMigration(root, input, { readCatalog, page: { offset: report.counts.total } });
   let seed = 0xc0dec123;
   /** Replayable integer choices vary sparse rows and their SDK encoding metadata. */
   function random(bound: number) { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return (seed >>> 0) % bound; }
@@ -408,6 +419,13 @@ test("500 SDK table wire permutations preserve producer rows, absent fields and 
     const expected = { ...report, rows };
     assert.deepEqual(validateGithubLabelMigrationReport(JSON.parse(JSON.stringify(wire))), expected);
     assert.deepEqual(validateGithubLabelMigrationReport(decode(encode(wire))), expected);
+    const compactTerminal: Record<string, unknown> = { ...terminal };
+    if (random(2)) delete compactTerminal.rows;
+    if (random(2)) delete compactTerminal.next;
+    assert.deepEqual(validateGithubLabelMigrationReport(JSON.parse(JSON.stringify(compactTerminal))), terminal);
+    assert.deepEqual(validateGithubLabelMigrationReport(decode(encode(compactTerminal))), terminal);
+    assert.throws(() => validateGithubLabelMigrationReport({ ...terminal, rows: null }), code("invalid_output"));
+    assert.throws(() => validateGithubLabelMigrationReport({ ...report, rows: undefined, next: random(2) ? undefined : 0 }), code("invalid_output"));
     if (table.encoding.absent.length) absentWire = wire;
     const extreme = [-1, NaN, Infinity, -Infinity, 2 ** 53, 0.5][sequence % 6]!;
     assert.throws(() => validateGithubLabelMigrationReport({ ...wire,

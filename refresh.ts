@@ -1,5 +1,5 @@
 import { ownValue } from "./own-record.ts";
-import { githubLabelsToTags } from "./import-tags.ts";
+import { importTagValues } from "./import-tags.ts";
 /** Refresh an explicit local GitHub mirror through the importer's existing mapping and transaction. */
 import { mkdtemp, cp, rm, chmod, readdir, lstat } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -113,7 +113,7 @@ async function fetchRefreshBatch(repo: string, targets: readonly RefreshTarget[]
 /** Compare only refresh-owned fields; use the same source lifecycle projection as import finalization. */
 export function refreshChanges(entry: PreparedGithubImport): RefreshChange[] {
   const desired = { ...importFidelityFields(entry.fidelity!, Boolean(entry.linkOnly)),
-    ...(entry.linkOnly ? {} : { title: entry.title, status: entry.status }), tags: githubLabelsToTags(entry.tags) };
+    ...(entry.linkOnly ? {} : { title: entry.title, status: entry.status }), tags: importTagValues(entry) };
   return Object.entries(desired).flatMap(([field, value]) => {
     const old = ownValue(entry.match, field) ?? null;
     const next = value ?? null;

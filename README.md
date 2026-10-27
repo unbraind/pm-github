@@ -292,8 +292,10 @@ both commands are read-only. Filters/mappings must be explicitly inventoried.
 Provider policy names match without case (`bug`, `BUG`, `BuG`); node IDs stay
 distinct. Exports and issue-form label composition use the same comparison,
 keeping the first spelling of each effective provider label.
-Stored tag impacts use the importer's exported `githubLabelsToTags` conversion:
-`one,two` produces both `one` and `two`. Tag rows retain the destination label
+Provider label names use the importer's exported `githubLabelsToTags` conversion:
+a label named `one,two` produces tags `one` and `two`. Stored native tag elements
+use only SDK array-tag normalization: a literal `one,two` remains one tag and
+matches neither `one` nor `two`. Tag rows retain the destination label
 in `after` and expose its complete native expansion in `after_tags`, including
 an empty array when the destination produces no tags. Approval checks use the
 same conversion and refuse unresolved tag choices across every affected row.

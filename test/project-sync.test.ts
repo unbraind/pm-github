@@ -7,6 +7,7 @@ import test, { type TestContext } from "node:test";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension from "../index.ts";
 import { projectItemTag } from "../projects.ts";
+import { init as sdkInit, create as sdkCreate, get as sdkGet, readSettings, mutateItem } from "@unbrained/pm-cli/sdk";
 import { captureStderr, jsonResponse, withEnv, withMockGithub } from "./helpers/mock-github-server.ts";
 import type { MockGithubHandler } from "./helpers/mock-github-server.ts";
 import { nodeScenario } from "./helpers/node-scenario.ts";
@@ -330,5 +331,67 @@ test("project push refuses a missing identity from the real attachment response"
   }), async () => {
     const { stderr } = await captureStderr(() => assert.rejects(sync(root, { push: true, apply: true }), /failed/));
     assert.match(stderr.join("\n"), /returned no item id/);
+  });
+});
+
+
+test("project writers preserve 500 native comma atoms through import and sync without git", async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pm-project-native-tags-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const bin = path.join(root, "bin");
+  fs.mkdirSync(bin);
+  fs.symlinkSync(process.execPath, path.join(bin, "node"));
+  fs.symlinkSync(path.join(import.meta.dirname, "../node_modules/.bin/pm"), path.join(bin, "pm"));
+  const pmRoot = path.join(root, "tracker");
+  await sdkInit("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { pmRoot, cwd: root, noExtensions: true });
+  const settings = await readSettings(pmRoot);
+  const scope = { parent: "none", clearDeps: true, unset: ["sprint", "release", "goal", "objective"] };
+  const imported = (await sdkCreate({ title: "Existing issue", type: "Task", ...scope }, { pmRoot })).item;
+  const pushed = (await sdkCreate({ title: "Native draft", type: "Task", ...scope }, { pmRoot })).item;
+  let seed = 0x3c0ffee;
+  const native = Array.from({ length: 500 }, (_, index) => {
+    seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;
+    const words = ["One", "TWO", "Bug Fix", "scope:One", "constructor", "İ"];
+    return ` ${words[(seed >>> 0) % words.length]}, Tag ${index} `;
+  });
+  for (const target of [imported, pushed]) await mutateItem({ pmRoot, settings, id: target.id, author: "fixture", op: "update", mutate: document => {
+    document.metadata.tags = [...native, ...(target.id === imported.id ? ["gh:acme/widgets#7"] : [])];
+    return { changedFields: ["tags"] };
+  } });
+  const beforeImport = (await sdkGet(imported.id, {}, { pmRoot })).item;
+  const beforePush = (await sdkGet(pushed.id, {}, { pmRoot })).item;
+  await withEnv({ PATH: bin, GIT_CEILING_DIRECTORIES: path.dirname(root), PM_AUTHOR: "fixture", GITHUB_TOKEN: "fixture" + "-token", GH_TOKEN: undefined }, async () => {
+    const node: BoardNode = { id: "native-import", fieldValueByName: { name: "Todo", optionId: "todo" }, content: {
+      __typename: "Issue", title: "Existing issue", number: 7, state: "OPEN", body: "",
+      repository: { name: "widgets", owner: { login: "acme" }, nameWithOwner: "acme/widgets" },
+    } };
+    const expected = new Map([[imported.id, beforeImport.tags!], [pushed.id, beforePush.tags!]]);
+    const boundaries = new Map([[imported.id, 0], [pushed.id, 0]]);
+    /** Inject a peer's native mutation at every provider-response boundary, including after local planning. */
+    function interleaved(id: string, handler: MockGithubHandler): MockGithubHandler {
+      return async (...args) => {
+        const step = boundaries.get(id)! + 1;
+        boundaries.set(id, step);
+        await mutateItem({ pmRoot, settings, id, author: "peer", op: "update", mutate: document => {
+          document.metadata.tags = [...document.metadata.tags, `peer, step ${step}`];
+          return { changedFields: ["tags"] };
+        } });
+        expected.set(id, (await sdkGet(id, {}, { pmRoot })).item.tags!);
+        await handler(...args);
+      };
+    }
+    await withMockGithub(interleaved(imported.id, board([node])), async () => {
+      await (await harness).runCommand({ command: "github project import", args: ["acme/5"], options: {}, pmRoot, global: { json: true } });
+    });
+    const afterImport = (await sdkGet(imported.id, {}, { pmRoot })).item;
+    assert.deepEqual(new Set(afterImport.tags), new Set([...expected.get(imported.id)!, projectItemTag(REF, "native-import")]));
+    await withMockGithub(interleaved(pushed.id, board([], (_req, res) => jsonResponse(res, 200, { data: { addProjectV2DraftIssue: { projectItem: { id: "native-push" } } } }))), async () => {
+      const result = await sync(pmRoot, { apply: true, push: true, ids: pushed.id });
+      assert.equal((result.result as { pushed: number }).pushed, 1);
+    });
+    const afterPush = (await sdkGet(pushed.id, {}, { pmRoot })).item;
+    assert.deepEqual(new Set(afterPush.tags), new Set([...expected.get(pushed.id)!, projectItemTag(REF, "native-push")]));
+    assert.equal(boundaries.get(imported.id), 2);
+    assert.equal(boundaries.get(pushed.id), 4);
   });
 });

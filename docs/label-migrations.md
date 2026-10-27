@@ -127,16 +127,21 @@ newlines in names, duplicate IDs and out-of-domain pagination. Names and IDs are
 1..200 characters; repositories have two 1..100 character components. Limits:
 20 sources, 10,000 catalog labels, 1,000 filters with 100 labels each, and 1,000
 mappings. Provider label spelling is significant and is never normalized into an
-identity. Tag occurrences and approval revalidation call the importer's own
-exported `githubLabelsToTags(names)` function, which joins the importer CSV
-representation and delegates to the SDK's string tag parser. Preparation,
-create/update/link-only writes and refresh read-back comparisons call this same
-function. Commas, case, whitespace and native prefix rules therefore agree with
-what import actually writes. Raw names/IDs stay bounded at 200 characters;
+identity. Provider label names call the importer's exported
+`githubLabelsToTags(names)` function, which joins the importer CSV representation
+and delegates to the SDK's string tag parser. Stored native tag elements instead
+use the SDK's array-tag normalization without CSV splitting. Thus a provider
+label `one,two` produces two tags, but stored `["one,two"]` is one native tag and
+differs from `["one", "two"]`. Planning and approval checks use that intersection;
+refresh compares the writer's desired native tag set with the stored native set.
+Link-only and citation updates retain native atoms in place and add only new
+provider-derived tags, avoiding a CSV round trip of existing state. Raw names/IDs stay bounded at 200 characters;
 emitted native tags allow up to 600 characters for SDK Unicode expansion, and
 `after_tags` contains at most 200 entries. Two provider IDs may point to the same native tag
 and remain separate unverified occurrences. Producers and validators share the
-same output schema; all numeric
+same output schema. The host may omit empty `rows` and terminal `next`; schema
+defaults restore them only when complete-count and continuation checks still
+prove a completed page. Missing rows on an unfinished page refuse. All numeric
 decisions use integers or exact `BigInt` sums.
 
 | Refusal code | Remedy |

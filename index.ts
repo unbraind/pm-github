@@ -1,6 +1,6 @@
 import { ownValue } from "./own-record.ts";
 import { uniqueGithubLabelNames } from "./label-names.ts";
-import { githubLabelsToTags } from "./import-tags.ts";
+import { githubLabelsToTags, importTagOptions, importTagValues, nativeTagAdditions } from "./import-tags.ts";
 export { githubLabelsToTags } from "./import-tags.ts";
 // pm-github — GitHub Issues + Projects v2 sync for pm-cli
 //
@@ -63,6 +63,7 @@ import {
   normalizeItemId as sdkNormalizeItemId,
   readSettings as sdkReadSettings,
   resolvePmRoot as sdkResolvePmRoot,
+  toImportTags,
   writeFileAtomic,
   getHistoryPath as sdkGetHistoryPath,
   readHistorySnapshot as sdkReadHistorySnapshot,
@@ -1465,14 +1466,14 @@ export function buildAtomicImportMutations(
   const changed = updateOnly ? new Set(refreshChanges(entry).map(change => change.field)) : undefined;
   const audit = updateOnly ? { comment: [`Refreshed linked GitHub issue ${repo.toLowerCase()}#${entry.issueNumber}`] } : {};
   if (entry.linkOnly && entry.match?.id) {
-    return { itemId: entry.match.id, mutations: [{ op: "update", id: entry.match.id, options: { ...(!changed || changed.has("tags") ? { addTags: githubLabelsToTags(entry.tags) } : {}), ...audit } }] };
+    return { itemId: entry.match.id, mutations: [{ op: "update", id: entry.match.id, options: { ...(!changed || changed.has("tags") ? importTagOptions(entry) : {}), ...audit } }] };
   }
   const sharedOptions: Record<string, unknown> = {
     title: entry.title,
     type: entry.itemType,
     description: entry.description,
     body: entry.body,
-    tags: githubLabelsToTags(entry.tags).join(","),
+    ...importTagOptions(entry),
     ...(entry.assignee ? { assignee: entry.assignee } : {}),
     ...(entry.milestone ? { sprint: entry.milestone } : {}),
     ...(entry.status === "canceled" ? { closeReason: entry.fidelity?.github_close_reason ?? `GitHub issue #${entry.issueNumber} closed` } : {}),
@@ -1530,7 +1531,7 @@ export function buildAtomicImportMutations(
   const updateOptions: Record<string, unknown> = {
     ...(updateOnly ? {
       ...(changed!.has("title") ? { title: entry.title } : {}),
-      ...(changed!.has("tags") ? { tags: githubLabelsToTags(entry.tags).join(",") } : {}),
+      ...(changed!.has("tags") ? importTagOptions(entry) : {}),
       ...(changed!.has("status") && sharedOptions.closeReason !== undefined ? { closeReason: sharedOptions.closeReason } : {}),
     } : sharedOptions), ...(!changed || changed.has("status") ? statusOptions : {}), ...audit,
   };
@@ -3157,7 +3158,7 @@ export async function prepareGithubImport(
       (issue.state_reason ? ` · state reason ${issue.state_reason}` : "") +
       ` · created ${issue.created_at} · updated ${issue.updated_at}`,
     body: writeCommentsToBody ? composeBody(issue, comments) : (issue.body || ""),
-    tags: githubLabelsToTags([...(identity.linkOnly || identity.via === "citation" ? match!.tags ?? [] : []), ...labels, tag, ...(ghAuthorTag ? [ghAuthorTag] : [])]),
+    tags: toImportTags([...(identity.linkOnly || identity.via === "citation" ? match!.tags ?? [] : []), ...githubLabelsToTags([...labels, tag, ...(ghAuthorTag ? [ghAuthorTag] : [])])]),
     assignee: issue.assignee?.login,
     milestone: issue.milestone?.title,
     comments,
@@ -3281,10 +3282,10 @@ export function verifyImportIdempotency(
   for (const entry of prepared) {
     if (entry.match?.id) {
       matchedIds.push(entry.match.id);
-      if (entry.identity?.via === "citation" && !githubLabelsToTags(entry.tags).includes(provenanceTag(repo, entry.issueNumber))) untaggedNewEntries++;
+      if (entry.identity?.via === "citation" && !importTagValues(entry).includes(provenanceTag(repo, entry.issueNumber))) untaggedNewEntries++;
       continue;
     }
-    if (!githubLabelsToTags(entry.tags).includes(provenanceTag(repo, entry.issueNumber))) untaggedNewEntries++;
+    if (!importTagValues(entry).includes(provenanceTag(repo, entry.issueNumber))) untaggedNewEntries++;
   }
   const conflictingTargets = matchedIds.length - new Set(matchedIds).size;
   if (duplicateTags.size > 0 || untaggedNewEntries > 0 || conflictingTargets > 0) {
@@ -3708,7 +3709,6 @@ export async function runImport(
       match,
       description,
       body,
-      tags,
       comments,
       syncAnnotations,
     } = prepared;
@@ -3740,7 +3740,9 @@ export async function runImport(
 
     if (prepared.linkOnly) {
       const ownerId = match!.id!;
-      const linked = pmRun(["--path", pmRoot, "update", ownerId, "--add-tags", githubLabelsToTags(tags).join(",")]);
+      const nativeTags = importTagOptions(prepared);
+      const linked = nativeTags.addTags!.length
+        ? pmRun(["--path", pmRoot, "update", ownerId, "--add-tags", nativeTags.addTags!.join(",")]) : { ok: true };
       if (!linked.ok) throw new CommandError(`Could not link GitHub issue #${issue.number} to its existing owner.`);
       await persistImportFidelity(pmRoot, ownerId, prepared.fidelity!, true);
       if (prepared.identity?.via === "citation") adopted++;
@@ -3750,12 +3752,13 @@ export async function runImport(
     if (match?.id) {
       // Idempotent update — never duplicate. Status transitions go through the
       // proper command (close requires a reason; reopen via update --status).
+      const nativeTags = importTagOptions(prepared);
       const updArgs = [
         "--path", pmRoot, "update", match.id,
         "--title", title,
         "--description", description,
         "--body", body,
-        "--tags", githubLabelsToTags(tags).join(","),
+        ...(nativeTags.tags !== undefined ? ["--tags", nativeTags.tags] : nativeTags.addTags!.length ? ["--add-tags", nativeTags.addTags!.join(",")] : []),
         "--message", `Re-imported from GitHub #${issue.number}`,
       ];
       if (assignee) updArgs.push("--assignee", assignee);
@@ -3810,7 +3813,7 @@ export async function runImport(
       "--status", createStatus,
       "--description", description,
       "--body", body,
-      "--tags", githubLabelsToTags(tags).join(","),
+      "--tags", importTagOptions(prepared).tags!,
       "--message", `Imported from GitHub #${issue.number}`,
     ];
     if (status === "canceled") createArgs.push("--close-reason", prepared.fidelity!.github_close_reason);
@@ -6283,11 +6286,12 @@ async function runProjectImport(ctx: CommandHandlerContext) {
       continue;
     }
     if (entry.action === "update" && entry.pmId) {
+      const addedTags = nativeTagAdditions(pmItems.find(item => item.id === entry.pmId)!.tags!, entry.tags);
       const updArgs = [
         "--path", ctx.pm_root, "update", entry.pmId,
         "--title", entry.title,
         "--description", description,
-        "--tags", entry.tags.join(","),
+        ...(addedTags.length ? ["--add-tags", addedTags.join(",")] : []),
         "--message", `Re-imported from GitHub project ${ref.owner}/${ref.number}`,
       ];
       if (entry.body) updArgs.push("--body", entry.body);
@@ -6396,10 +6400,10 @@ async function applyPushEntry(
     if (pm?.id) {
       const tag = projectItemTag(ref, itemId!);
       const existingTags = pm.tags!;
-      if (!existingTags.includes(tag)) {
+      if (nativeTagAdditions(existingTags, [tag]).length) {
         const upd = pmRun([
           "--path", pmRoot, "update", pm.id,
-          "--tags", [...existingTags, tag].join(","),
+          "--add-tags", tag,
           "--message", `Linked to GitHub project ${ref.owner}/${ref.number}`,
         ]);
         if (!upd.ok) return { changed: true, error: `linked but tag write failed — ${upd.stderr}` };

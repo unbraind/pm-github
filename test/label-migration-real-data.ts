@@ -1,7 +1,7 @@
 /** Opt-in public tracker and packed installation acceptance. Never reads private or hosted data. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, readFileSync, chmodSync, rmSync, copyFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, readFileSync, chmodSync, rmSync, copyFileSync, cpSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -12,7 +12,18 @@ import { decode } from "@toon-format/toon";
 const packageRoot = join(import.meta.dirname, "..");
 const scratch = mkdtempSync(join(tmpdir(), "pm-label-public-"));
 const copies: string[] = [];
-const environment = { ...process.env, NPM_CONFIG_USERCONFIG: "/dev/null", PM_AUTHOR: "fixture", GIT_CEILING_DIRECTORIES: dirname(scratch) };
+const environment: NodeJS.ProcessEnv = { ...process.env, NPM_CONFIG_USERCONFIG: "/dev/null", PM_AUTHOR: "fixture", GIT_CEILING_DIRECTORIES: dirname(scratch) };
+for (const key of Object.keys(environment)) if (/TOKEN|SECRET|PASSWORD|CREDENTIAL|API_?KEY|^NPM_MEDIA_SERVER$|^npm_config_.*auth/i.test(key) || (/^npm_config_userconfig$/i.test(key) && key !== "NPM_CONFIG_USERCONFIG")) delete environment[key];
+/** Register the actual installed artifact without changing its dependency layout. */
+function installedExtension(root: string, extensionPath: string): void {
+  mkdirSync(join(root, "extensions"), { recursive: true });
+  const installed = join(root, "extensions/pm-github");
+  mkdirSync(installed);
+  copyFileSync(join(extensionPath, "package.json"), join(installed, "package.json"));
+  const manifest = JSON.parse(readFileSync(join(extensionPath, "manifest.json"), "utf8")) as Record<string, unknown>;
+  writeFileSync(join(installed, "manifest.json"), JSON.stringify({ ...manifest, entry: "./entry.js" }));
+  writeFileSync(join(installed, "entry.js"), `export { default } from ${JSON.stringify(pathToFileURL(join(extensionPath, "dist/index.js")).href)};\n`);
+}
 /** Keep malformed public wire evidence visible without dumping a minified SDK stack. */
 function validatedWire(value: unknown) {
   try { return validateGithubLabelMigrationReport(value); }
@@ -50,17 +61,7 @@ function publicCopy(name: string, extensionPath?: string): string {
   assert.equal(spawnSync("tar", ["-x", "-C", directory], { input: archive.stdout }).status, 0);
   const root = join(directory, ".agents/pm");
   copies.push(root);
-  if (extensionPath) {
-    mkdirSync(join(root, "extensions"), { recursive: true });
-    const installed = join(root, "extensions/pm-github");
-    mkdirSync(installed);
-    copyFileSync(join(extensionPath, "package.json"), join(installed, "package.json"));
-    const manifest = JSON.parse(readFileSync(join(extensionPath, "manifest.json"), "utf8")) as Record<string, unknown>;
-    writeFileSync(join(installed, "manifest.json"), JSON.stringify({ ...manifest, entry: "./entry.js" }));
-    // A normal physical extension entry imports the actual installed artifact in place,
-    // retaining npm/Bun's real dependency layout and global executable symlinks.
-    writeFileSync(join(installed, "entry.js"), `export { default } from ${JSON.stringify(pathToFileURL(join(extensionPath, "dist/index.js")).href)};\n`);
-  }
+  if (extensionPath) installedExtension(root, extensionPath);
   for (const entry of trackerEntries(root)) chmodSync(entry.path, entry.directory ? 0o555 : 0o444);
   chmodSync(root, 0o555);
   return root;
@@ -109,6 +110,8 @@ try {
   run("npm", ["run", "build"]);
   const packed = JSON.parse(run("npm", ["pack", "--ignore-scripts", "--foreground-scripts=false", "--json", "--pack-destination", scratch])) as [{ filename: string }];
   const tarball = join(scratch, packed[0].filename);
+  const packedBytes = readFileSync(tarball);
+  console.log(JSON.stringify({ packed_sha256: createHash("sha256").update(packedBytes).digest("hex"), packed_bytes: packedBytes.length }));
   const tooling = join(scratch, "tooling");
   run("npm", ["install", "--no-audit", "--no-fund", "--prefix", tooling, "--no-package-lock", "--no-save", "bun@1.3.14"]);
   const bun = join(tooling, "node_modules/.bin/bun");
@@ -128,9 +131,9 @@ try {
     { BUN_INSTALL_GLOBAL_DIR: bunGlobal, BUN_INSTALL_BIN: bunBin });
   const sdkProof = join(local, "sdk-proof.ts");
   writeFileSync(sdkProof, `import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { encodePmTableRows } from "@unbrained/pm-cli/sdk";
-import { planGithubLabelMigration, validateGithubLabelMigrationReport, type GithubLabelMigrationInput } from ${JSON.stringify(pathToFileURL(join(local, "node_modules/pm-github/dist/index.js")).href)};
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { init, create, get, mutateItem, readSettings, update, normalizeItemId, encodePmTableRows } from "@unbrained/pm-cli/sdk";
+import { planGithubLabelMigration, validateGithubLabelMigrationReport, prepareGithubImport, parseImportOptions, buildAtomicImportMutations, type GithubLabelMigrationInput } from ${JSON.stringify(pathToFileURL(join(local, "node_modules/pm-github/dist/index.js")).href)};
 const input = JSON.parse(readFileSync(${JSON.stringify(requestFile)}, "utf8")) as GithubLabelMigrationInput;
 const catalog: unknown = JSON.parse(readFileSync(${JSON.stringify(catalogFile)}, "utf8"));
 const report = await planGithubLabelMigration(${JSON.stringify(root)}, input, { readCatalog: async () => catalog, page: { limit: 5 } });
@@ -147,7 +150,41 @@ try {
   if (descriptor) Object.defineProperty(Object.prototype, "after_tags", descriptor);
   else Reflect.deleteProperty(Object.prototype, "after_tags");
 }
-console.log(JSON.stringify({ runtime: process.versions.bun ? "Bun" : "Node", sdk: "2026.10.26", table_codec: true, own_padding: true, scanned: report.counts.scanned, affected: report.counts.total }));
+const runtime = process.versions.bun ? "bun" : "node";
+const nativeRoot = ${JSON.stringify(join(local, "native-proof-"))} + runtime;
+mkdirSync(nativeRoot);
+await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { pmRoot: nativeRoot, cwd: nativeRoot, noExtensions: true });
+const scope = { parent: "none", clearDeps: true, unset: ["sprint", "release", "goal", "objective"] };
+const target = (await create({ title: "Literal native comma", type: "Task", ...scope }, { pmRoot: nativeRoot })).item;
+const settings = await readSettings(nativeRoot);
+/** Seed native array state through the SDK without routing it through command CSV options. */
+async function seedNative() {
+  await mutateItem({ pmRoot: nativeRoot, settings, id: target.id, author: "fixture", op: "update", mutate: document => {
+    document.metadata.tags = [" BUG, bug "];
+    return { changedFields: ["tags"] };
+  } });
+}
+await seedNative();
+const nativeBefore = (await get(target.id, {}, { pmRoot: nativeRoot })).item;
+assert.deepEqual(nativeBefore.tags, ["bug, bug"]);
+const csvInput = JSON.parse(readFileSync(${JSON.stringify(csvRequestFile)}, "utf8")) as GithubLabelMigrationInput;
+const csvCatalog: unknown = JSON.parse(readFileSync(${JSON.stringify(csvCatalogFile)}, "utf8"));
+const nativePlan = await planGithubLabelMigration(nativeRoot, csvInput, { readCatalog: async () => csvCatalog });
+assert.equal(nativePlan.counts.tags, 0);
+assert.equal((await planGithubLabelMigration(nativeRoot, csvInput, { readCatalog: async () => csvCatalog, approval: nativePlan.approval })).checked, true);
+const issue = { number: 1, title: nativeBefore.title, body: "", state: "open" as const, labels: [{ name: "bug, BUG" }],
+  assignee: null, milestone: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-02-01T00:00:00Z", html_url: "https://github.com/unbraind/pm-github/issues/1" };
+const entry = (await prepareGithubImport(issue, csvInput.repo, parseImportOptions({}), undefined, nativeBefore, undefined,
+  { items: [nativeBefore], releases: [], timeline: async () => [] }))!;
+const refresh = buildAtomicImportMutations(csvInput.repo, entry, settings.id_prefix, normalizeItemId, true).mutations[0]!;
+if (refresh.op !== "update") throw new Error("Expected native refresh update");
+assert.equal(typeof refresh.options.tags, "string", "literal comma state must require a refresh tag write");
+await update(target.id, { ...refresh.options, ...scope }, { pmRoot: nativeRoot });
+const actual = (await get(target.id, {}, { pmRoot: nativeRoot })).item;
+assert.ok(actual.tags!.includes("bug") && !actual.tags!.includes("bug, bug"));
+await seedNative();
+writeFileSync(${JSON.stringify(join(local, "native-report-"))} + runtime + ".json", JSON.stringify(await planGithubLabelMigration(nativeRoot, csvInput, { readCatalog: async () => csvCatalog })));
+console.log(JSON.stringify({ runtime: process.versions.bun ? "Bun" : "Node", sdk: "2026.10.26", table_codec: true, own_padding: true, native_comma: true, refresh_delta: true, scanned: report.counts.scanned, affected: report.counts.total }));
 `);
   for (const runtime of [process.execPath, bun]) console.log(run(runtime, [sdkProof], local, { PM_PATH: root }).trim());
   assert.equal(fingerprint(root), before);
@@ -174,7 +211,22 @@ console.log(JSON.stringify({ runtime: process.versions.bun ? "Bun" : "Node", sdk
     assert.deepEqual(validatedWire(decode(run(consumer.binary, [...consumer.prefix, ...csvArgs], local))), csvReport);
     assert.match(run(consumer.binary, [...consumer.prefix, ...csvArgs, "--approve", csv.approval, "--json"], local, {}, 2), /unresolved_choices/);
     assert.equal(fingerprint(tracker), original);
-    console.log(JSON.stringify({ consumer: consumer.name, cli: "2026.10.26", json: true, toon: true, revalidated: true, csv_refused: true, unchanged_tracker: true }));
+    const nativeTracker = join(scratch, `native-consumer-${consumer.name}`);
+    cpSync(join(local, "native-proof-node"), nativeTracker, { recursive: true });
+    copies.push(nativeTracker);
+    installedExtension(nativeTracker, consumer.extension);
+    for (const entry of trackerEntries(nativeTracker)) chmodSync(entry.path, entry.directory ? 0o555 : 0o444);
+    chmodSync(nativeTracker, 0o555);
+    const nativeBefore = fingerprint(nativeTracker);
+    const expectedNative = validatedWire(JSON.parse(readFileSync(join(local, "native-report-node.json"), "utf8")));
+    const nativeArgs = ["--path", nativeTracker, "github", "labels", "plan", "--input", csvRequestFile, "--catalog", csvCatalogFile];
+    const native = validatedWire(JSON.parse(run(consumer.binary, [...consumer.prefix, ...nativeArgs, "--json"], local)));
+    assert.deepEqual(native, expectedNative);
+    assert.equal(native.counts.tags, 0);
+    assert.deepEqual(validatedWire(decode(run(consumer.binary, [...consumer.prefix, ...nativeArgs], local))), expectedNative);
+    assert.equal(validatedWire(JSON.parse(run(consumer.binary, [...consumer.prefix, ...nativeArgs, "--approve", native.approval, "--json"], local))).checked, true);
+    assert.equal(fingerprint(nativeTracker), nativeBefore);
+    console.log(JSON.stringify({ consumer: consumer.name, cli: "2026.10.26", json: true, toon: true, revalidated: true, csv_refused: true, native_comma: true, unchanged_tracker: true }));
   }
 } catch (error) {
   console.error(error instanceof Error ? error.message : "Public packed acceptance failed");
