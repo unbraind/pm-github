@@ -268,7 +268,7 @@ export function resolveOptionForStatus(
     if (o && typeof o.name === "string") byName.set(normalizeName(o.name), o);
   }
 
-  const overrideName = override && [...override].find(([key]) => canonicalGithubStatus(key, statuses) === status)?.[1];
+  const overrideName = override && [...override].find(([key]) => normalizeName(canonicalGithubStatus(key, statuses)) === normalizeName(status))?.[1];
   if (overrideName) {
     const hit = byName.get(normalizeName(overrideName));
     if (hit) return hit;

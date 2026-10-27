@@ -38,11 +38,13 @@ test("workspace path and alias property matches SDK writers across fidelity and 
   const native = (await create({ title: "Native", type: "probe", status: "busy-now", tags: "gh:fixture/project#1" }, { pmRoot: workspace, noExtensions: true })).item;
   assert.equal(native.type, "Investigation");
   assert.equal(native.status, "working");
+  const defaulted = (await create({ title: "SDK default status", type: "probe" }, { pmRoot: workspace, noExtensions: true })).item;
   const before = durable(root);
   for (const [alias, canonical] of Object.entries(resolveItemTypeRegistry(SETTINGS_DEFAULTS).alias_to_type)) assert.equal(normalizeImportValue("type", alias), canonical);
   for (const path of [workspace, root, relative(process.cwd(), workspace), relative(process.cwd(), root)]) {
     const resolved = await readGithubWorkspace(path);
     assert.equal(resolved.pmRoot, root);
+    assert.equal(canonicalGithubStatus(undefined, resolved.statuses), defaulted.status);
     const names = await readImportTypeNames(path);
     for (const [alias, canonical] of Object.entries(resolved.types.alias_to_type)) for (const spelling of [alias, alias.toUpperCase(), ` ${alias} `]) {
       assert.equal(normalizeImportValue("type", spelling, names), canonical);

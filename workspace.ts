@@ -13,13 +13,13 @@ export async function readGithubWorkspace(pmPath: string) {
 }
 
 /** Canonicalize configured aliases using the host's own status input normalizer. */
-export function canonicalGithubStatus(value: string, registry = defaultStatuses): string {
-  return normalizeStatusInput(value, registry) ?? value;
+export function canonicalGithubStatus(value: string | undefined, registry = defaultStatuses): string {
+  return normalizeStatusInput(value, registry) ?? value ?? registry.open_status;
 }
 
 /** Classify native statuses by configured lifecycle roles for provider transitions. */
 export function githubStatusKind(value: string | undefined, registry = defaultStatuses): string {
-  const status = canonicalGithubStatus(value ?? registry.open_status, registry);
+  const status = canonicalGithubStatus(value, registry);
   if (registry.terminal_done_statuses.has(status)) return "closed";
   if (registry.terminal_canceled_statuses.has(status)) return "canceled";
   if (isTerminalStatus(status, registry)) return "closed";

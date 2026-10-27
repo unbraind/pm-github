@@ -3795,11 +3795,11 @@ export async function runImport(
         continue;
       }
       // Reconcile status separately.
-      if (canonicalGithubStatus(status, workspace.statuses) === canonicalGithubStatus("canceled", workspace.statuses) && canonicalGithubStatus(match.status ?? workspace.statuses.open_status, workspace.statuses) !== canonicalGithubStatus("canceled", workspace.statuses)) {
+      if (canonicalGithubStatus(status, workspace.statuses) === canonicalGithubStatus("canceled", workspace.statuses) && canonicalGithubStatus(match.status, workspace.statuses) !== canonicalGithubStatus("canceled", workspace.statuses)) {
         const cancel = pmRun(["--path", pmRoot, "update", match.id, "--status", "canceled", "--close-reason", prepared.fidelity!.github_close_reason]);
         if (!cancel.ok) throw new CommandError(`Could not cancel GitHub issue #${issue.number}.`);
       }
-      if (canonicalGithubStatus(status, workspace.statuses) === canonicalGithubStatus("closed", workspace.statuses) && canonicalGithubStatus(match.status ?? workspace.statuses.open_status, workspace.statuses) !== canonicalGithubStatus("closed", workspace.statuses)) {
+      if (canonicalGithubStatus(status, workspace.statuses) === canonicalGithubStatus("closed", workspace.statuses) && canonicalGithubStatus(match.status, workspace.statuses) !== canonicalGithubStatus("closed", workspace.statuses)) {
         // Close through `pm close` so the reason is real provenance; pass the
         // source completion time as --completed-at when GitHub recorded one.
         const close = pmRun([...githubCloseArgs(match.id), ...(githubStatusIsTerminal(match.status, workspace.statuses) ? ["--force"] : [])]);
