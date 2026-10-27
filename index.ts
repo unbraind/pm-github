@@ -1,6 +1,6 @@
 import { ownValue } from "./own-record.ts";
 import { uniqueGithubLabelNames } from "./label-names.ts";
-import { githubLabelsToTags, importTagOptions, importTagValues, nativeTagAdditions } from "./import-tags.ts";
+import { githubLabelsToTags, importTagArguments, importTagOptions, importTagValues, nativeTagAdditions } from "./import-tags.ts";
 export { githubLabelsToTags } from "./import-tags.ts";
 // pm-github — GitHub Issues + Projects v2 sync for pm-cli
 //
@@ -3740,9 +3740,9 @@ export async function runImport(
 
     if (prepared.linkOnly) {
       const ownerId = match!.id!;
-      const nativeTags = importTagOptions(prepared);
-      const linked = nativeTags.addTags!.length
-        ? pmRun(["--path", pmRoot, "update", ownerId, "--add-tags", nativeTags.addTags!.join(",")]) : { ok: true };
+      const nativeTags = importTagArguments(prepared);
+      const linked = nativeTags.length
+        ? pmRun(["--path", pmRoot, "update", ownerId, ...nativeTags]) : { ok: true };
       if (!linked.ok) throw new CommandError(`Could not link GitHub issue #${issue.number} to its existing owner.`);
       await persistImportFidelity(pmRoot, ownerId, prepared.fidelity!, true);
       if (prepared.identity?.via === "citation") adopted++;
@@ -3752,13 +3752,13 @@ export async function runImport(
     if (match?.id) {
       // Idempotent update — never duplicate. Status transitions go through the
       // proper command (close requires a reason; reopen via update --status).
-      const nativeTags = importTagOptions(prepared);
+      const nativeTags = importTagArguments(prepared);
       const updArgs = [
         "--path", pmRoot, "update", match.id,
         "--title", title,
         "--description", description,
         "--body", body,
-        ...(nativeTags.tags !== undefined ? ["--tags", nativeTags.tags] : nativeTags.addTags!.length ? ["--add-tags", nativeTags.addTags!.join(",")] : []),
+        ...nativeTags,
         "--message", `Re-imported from GitHub #${issue.number}`,
       ];
       if (assignee) updArgs.push("--assignee", assignee);

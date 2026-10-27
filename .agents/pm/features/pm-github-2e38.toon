@@ -6,12 +6,12 @@ status: in_progress
 priority: 2
 tags[4]: changelog-unreleased,labels,migration,planning
 created_at: "2026-10-27T06:17:55.248Z"
-updated_at: "2026-10-27T18:25:00.899Z"
+updated_at: "2026-10-27T18:47:25.975Z"
 assignee: codex-agent
 claim_principal: codex-agent
 author: codex-agent
 acceptance_criteria: "Same display intent never merges labels by inference; 1000 items yield complete counts and bounded affected rows; stale provider label IDs invalidate application plans; typed SDK and CLI, strict boundaries, non-git read-only validation and seeded state properties."
-comments[38]{created_at,author,text}:
+comments[42]{created_at,author,text}:
   "2026-10-27T06:18:14.443Z",codex-agent,"Overlap rechecked against installed core SDK bulk mutations and sibling pm-linear/pm-jira docs. Core edits local tags; github identity explores competing ownership; Linear negotiates team schema. None previews a GitHub label policy across exact provider IDs, stored tag occurrences, declared import filters and export mappings. Scope: read-only plans plus fresh revalidation; no new importer, exporter, sync writer, journal, resolver or remote mutation. Existing importer stores label names rather than label IDs, so name matches are reported as unverified occurrences requiring an explicit choice, never inferred consolidation. Acceptance covers distinct same-intent IDs, complete 1000-item counts with bounded rows, stale IDs/revisions, strict input/output schemas, real non-git SDK state and packed consumers. Registry reports CLI 2026.10.27; repo pin remains 2026.10.20 per queue rule."
   "2026-10-27T06:29:10.429Z",codex-agent,"Implementation adds a read-only typed planner and github labels plan command. Exact node IDs and expected provider names select identities; SDK toImportTags finds native normalized occurrences without merging provider IDs. Choices cover tag/filter/mapping policy; complete counts accompany bounded rows. Revalidation reads fresh catalogs and current SDK revisions rather than replaying saved mutations. The 1000-item read-only non-git fixture passes. Targeted boundary tests cover sparse/extreme inputs, same-intent IDs, stale deleted/recreated labels and revision changes; seeded 500-sequence model checks are being completed. No stateful writer/journal/import/export/sync path is introduced."
   "2026-10-27T06:34:03.464Z",codex-agent,"Behavioral revert proof: independently replacing SDK-native tag conversion with exact provider spelling, disabling current approval/revision comparison, and removing the row cap each makes its targeted regression fail (exit 1). Restoring the code passes. Targeted tests: 7/7 including 500 seeded operation sequences; targeted planner coverage is 100 percent statements, branches, functions and lines. Public non-git read-only tracker at main 2b71f73: 155 items scanned, 12 provider labels, one affected item/tag and two declared policy examples (one filter, one mapping), 3 rows, 1078 JSON bytes; byte identity preserved. Isolated packed installation acceptance is in progress."
@@ -50,6 +50,10 @@ comments[38]{created_at,author,text}:
   "2026-10-27T18:22:23.167Z",codex-agent,"Round-4 audit and local checks: all named SDK imports across the root production modules and operational scripts are checked against the new minimum, including sdk, sdk/authoring and sdk/graph. No other stale compatibility declaration was found; older version references in historical proof fixtures remain execution evidence. npm run typecheck, npm run build:test, npm run lint, npm run docstring and npm run duplication pass: 23 files and 236 documented declarations, 24 authored modules and 12613 lines, zero duplicated lines. PR reviews and inline comments expose no additional actionable non-blocking findings; unavailable automated reviews are not approval evidence. Full npm/Bun release checks stay in CI with unchanged thresholds and at most two test workers."
   "2026-10-27T18:24:16.973Z",codex-agent,"Round-4 results: the restored 2026.10.17 floor passes the same packed test after both negative-floor reverts; disposable copies are cleaned. Fresh node test/label-migration-real-data.ts passes all five packed project-local/npx/bunx/npm-global/Bun-global consumers and standalone Node/Bun SDK checks on CLI 2026.10.26 and isolated Bun 1.3.14. Public read-only non-git snapshot d717d7b85e6009c5a4bb803952140e61856dd041: 155 scanned items, 12 provider labels, one affected stored item/tag, one declared example filter and one declared example mapping, three affected rows and 1146 JSON bytes; every source byte is unchanged. One captured pack is 289955 bytes, SHA256 6659a34b1975072975b25b81994acd3591aec3f1dad99f118cff1000aaf3c089. Manifest, lock, compatibility tests, new packed-consumer test and published-minimum docs are linked. No new migration writer or shared concurrency state is introduced."
   "2026-10-27T18:25:00.898Z",codex-agent,"Final focused metadata run: node --test --test-concurrency=2 test/compatibility-floor.test.ts test/package-metadata.test.ts passes 8/8. The last fetch confirms the PR branch has no missing origin/main commits (13 ahead, zero behind). History is an exact byte-prefix extension of the prior branch item; this feature item is absent from main. Changelog generation/check and changed-content privacy checks pass. The source fix is ready to commit and push for exact-head npm/Bun CI; no local full release suite is run on the saturated host."
+  "2026-10-27T18:32:27.128Z",codex-agent,"CI follow-up discovered during round 4: the prior receipt head completed all tests with zero failures, but all four release gates failed the unchanged 100% branch threshold at 99.97%. The uncovered path is duplicate tag-option-to-CLI formatting in the plain full-update branch; the empty additive case is exercised in the separate link-only branch. I am factoring both CLI paths through one import-owned formatter so replace/add/empty decisions have one boundary and the existing real-SDK owner regressions cover every branch. No threshold, source inventory or test is removed. Prior CI receipt: https://github.com/unbraind/pm-github/actions/runs/40541580890; current compatibility source CI is https://github.com/unbraind/pm-github/actions/runs/40560437533."
+  "2026-10-27T18:35:01.534Z",codex-agent,"The shared plain-CLI tag formatter is now covered at 100/100/100/100 by four focused real-SDK regressions (plain citation adoption/reimport, plain and atomic retained owner imports with a replay, and the shared import conversion test). The formatter reuses importTagOptions; replacement/additive/empty decisions no longer diverge between CLI branches. Both existing update paths call it. New-item creation remains a complete replacement from the same options producer; Projects and atomic paths already consume SDK options without native-to-CSV round trips. Typecheck, test compilation, lint, docstrings and duplication pass again: 237 documented declarations, 12620 authored lines, zero duplicated lines. A fresh minimum-consumer check and captured-pack acceptance are running because the shipped source changed."
+  "2026-10-27T18:37:49.024Z",codex-agent,"Formatter behavioral mutation proof: changing only the shared formatter from additive --add-tags to replacement --tags in a disposable copy makes the plain retained-owner SDK regression fail with persisted-corpus provenance refusal. This is an observed state failure: replacement removes the retained provenance/native atoms. Restoring the formatter makes the identical regression pass (1/1). The four focused regressions also pass with complete helper coverage. The final production source passes npm run test:minimum-sdk through linked pm test --run --progress (1/1), including source and published declaration compilation at exact SDK 2026.10.17."
+  "2026-10-27T18:47:25.966Z",codex-agent,"Final formatter source receipts: linked pm test --run --match node_modules/.bin/c8 --progress passes four tests and 100/100/100/100 helper coverage. The final source passes linked npm run test:minimum-sdk (1/1). Refreshed node test/label-migration-real-data.ts passes all five physical CLI consumers and standalone Node/Bun SDK consumers using one 290159-byte captured artifact, SHA256 e79bc740ffa2daa5e58c3df509161843b21b96d55e65737bcd5731aafffe08c5. Public counts stay 155 items, 12 labels, one stored tag plus two declared policies, three rows and 1146 JSON bytes, with unchanged source bytes. The last fetch reports 14 ahead and zero behind main. A final native-Bun exact-minimum rerun is in progress before handoff; all release thresholds and existing tests remain unchanged."
 files[21]{path,scope}:
   CHANGELOG.md,project
   import-fidelity.ts,project
@@ -72,7 +76,7 @@ files[21]{path,scope}:
   test/labels.test.ts,project
   test/minimum-sdk-consumer.test.ts,project
   test/project-sync.test.ts,project
-tests[12]:
+tests[13]:
   - command: node --test --test-concurrency=2 test/labels.test.ts
     scope: project
     provenance:
@@ -166,6 +170,13 @@ tests[12]:
     provenance:
       author: codex-agent
       created_at: "2026-10-27T17:50:00.208Z"
+      source_kind: local_mutation
+      source_ref: feat/label-migration-impact-plans
+  - command: "node_modules/.bin/c8 --include=import-tags.ts --report-dir=coverage/round4-format --reporter=text --reporter=json node --test --test-concurrency=2 --test-name-pattern=\"provider-only descriptor|shared importer conversion|plain citation adopts\" test/import-fidelity.test.ts test/label-import-model.test.ts test/cited-issue-adoption.test.ts"
+    scope: project
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-27T18:37:05.470Z"
       source_kind: local_mutation
       source_ref: feat/label-migration-impact-plans
 docs[5]{path,scope}:

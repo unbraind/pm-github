@@ -28,3 +28,10 @@ export function importTagOptions(entry: PreparedGithubImport): { tags?: string; 
   }
   return { tags: tags.join(",") };
 }
+
+/** Encode the shared import tag options once for every plain CLI mutation, including an empty additive update. */
+export function importTagArguments(entry: PreparedGithubImport): string[] {
+  const options = importTagOptions(entry);
+  if (options.tags !== undefined) return ["--tags", options.tags];
+  return options.addTags!.length ? ["--add-tags", options.addTags!.join(",")] : [];
+}

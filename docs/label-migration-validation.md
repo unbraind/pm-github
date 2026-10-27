@@ -25,11 +25,21 @@ same test. These negative proofs run only in disposable copies.
 See [the published minimum evidence](sdk-minimum.md).
 
 The round-4 artifact passes all five CLI install modes and standalone Node/Bun
-SDK checks on CLI 2026.10.26 and Bun 1.3.14. It is **289,955 bytes**, SHA-256
-`6659a34b1975072975b25b81994acd3591aec3f1dad99f118cff1000aaf3c089`.
+SDK checks on CLI 2026.10.26 and Bun 1.3.14. It is **290,159 bytes**, SHA-256
+`e79bc740ffa2daa5e58c3df509161843b21b96d55e65737bcd5731aafffe08c5`.
 The fresh public measurement is unchanged: 155 scanned items, 12 provider
 labels, one stored tag plus two declared example policies, three affected rows
 and 1,146 JSON bytes. All source tracker bytes remain unchanged.
+
+The preceding receipt's full CI later completed: each of the four jobs passed 1,536
+tests but failed the unchanged 100% branch threshold at 99.97%, identifying
+one duplicated plain-import tag formatter branch. Both plain update paths now
+share `importTagArguments`, which consumes `importTagOptions` and handles
+replacement, additive and empty inputs at one boundary. Four existing real-SDK
+regressions pass with **100/100/100/100** coverage for the import-owned helper.
+No regression, source inventory or threshold is removed. Static checks pass
+again: 23 files / 237 declarations and 24 authored modules / 12,620 lines,
+with zero duplicated lines. The final-head CI remains the complete gate proof.
 
 Round 3 current-pin verification follows main's Dependabot update to SDK
 2026.10.23 (`d717d7b`, merged via `ccaf148`). The linked model file passes
