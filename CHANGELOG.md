@@ -34,7 +34,6 @@
 - Derive release merge wait from CI duration and refresh a safe main advance once ([pm-github-release-merge-wait](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-release-merge-wait.toon))
 - A publish spelled through a package runner was invisible to the attestation gate, so an unattested one read as clean ([pm-github-5igz](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-5igz.toon))
 - PM CLI filtered native Bun tests falsely report an empty run ([pm-github-2ao1](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-2ao1.toon))
-- Track pm-changelog rendering closed historical incidents as Fixed ([pm-github-n0mm](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-n0mm.toon))
 - Stabilize the watchdog startup probe under concurrent coverage ([pm-github-sah1](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-sah1.toon))
 - Explain privacy matches and distinguish bare-root regex literals during gated sync ([pm-github-xhtp](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-xhtp.toon))
 - The changelog gate stamps an untagged version with the current date, so its verdict flips every midnight with no commit ([pm-github-m8vj](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-m8vj.toon))
@@ -49,11 +48,6 @@
 - Closeout changelog generation attributes new deliveries to an old package release ([pm-github-lfcf](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-lfcf.toon))
 - The release job authenticated with a stored npm token that expired, so publishing stopped while every other gate stayed green ([pm-github-m8u2](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-m8u2.toon))
 - A release run bumped and committed a new version every night while publishing was impossible, because the only externally-failable step runs last ([pm-github-yq1d](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-yq1d.toon))
-- The daily release cannot build a changelog once the tracker outgrows the default output budget ([pm-github-ypi5](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-ypi5.toon))
-
-### Security
-
-- Gate historical identities and host-path privacy across every Git object ([pm-github-zqad](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-zqad.toon))
 
 ### Other
 
@@ -62,6 +56,11 @@
 - Certify pm-github on PM CLI/SDK 2026.10.4 and consolidate pending dependency updates ([pm-github-julo](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-julo.toon))
 - Audit copied fleet release workflows for canonical generation and one daily publication ([pm-github-sagl](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-sagl.toon))
 - Adopt the released gated sync caller in fleet repositories ([pm-github-aiok](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-aiok.toon))
+
+### Closed
+
+- Closed: Gate historical identities and host-path privacy across every Git object ([pm-github-zqad](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-zqad.toon))
+- Closed: The daily release cannot build a changelog once the tracker outgrows the default output budget ([pm-github-ypi5](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-ypi5.toon))
 
 ## 2026.10.16 - 2026-10-16
 
@@ -97,12 +96,15 @@
 ### Fixed
 
 - Bound native Bun CLI repeats of a completed public atomic import ([pm-github-hptv](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-hptv.toon))
-- Root CI runs skip the read-only-directory comment-sync fixtures visibly instead of failing them ([pm-github-rap0](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-rap0.toon))
 
 ### Other
 
 - Reach exact all-source coverage and include every operational script ([pm-github-9cjx](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-9cjx.toon))
 - Auto-merge green Dependabot updates and group the pm toolchain into one daily PR ([pm-github-u9df](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-u9df.toon))
+
+### Closed
+
+- Closed: Root CI runs skip the read-only-directory comment-sync fixtures visibly instead of failing them ([pm-github-rap0](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-rap0.toon))
 
 ## 2026.9.26 - 2026-09-26
 
@@ -178,21 +180,23 @@
 
 ## 2026.8.31 - 2026-08-31
 
-### Fixed
+### Closed
 
-- Pin pm-changelog 2026.8.30 before the next release ([pm-github-g9g0](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-g9g0.toon))
-- Regenerate the changelog after the release tag was created ([pm-github-5wzr](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-5wzr.toon))
+- Closed: Pin pm-changelog 2026.8.30 before the next release ([pm-github-g9g0](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-g9g0.toon))
+- Closed: Regenerate the changelog after the release tag was created ([pm-github-5wzr](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-5wzr.toon))
 
 ## 2026.8.29 - 2026-08-29
 
 ### Fixed
 
-- Validate pm CLI development dependency bump ([pm-github-j8zh](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-j8zh.toon))
-- The publish-attestation gate misses a publish routed through an unquoted shell variable ([pm-github-tko1](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-tko1.toon))
-- True round-trip GitHub sync: search provider, validate diagnostics, safe-by-default export, fix activation ([pm-github-9dqy](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-9dqy.toon))
 - A failed provenance publish silently falls back to an unattested one ([pm-github-i5b8](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-i5b8.toon))
 - Fix release publish ordering ahead of protected main push ([pm-github-v2kt](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-v2kt.toon))
 - BREAKING: pm-github now requires pm CLI 2026.8.20 or newer; older hosts may fail installation or runtime validation ([pm-github-iswq](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-iswq.toon))
+
+### Closed
+
+- Closed: Validate pm CLI development dependency bump ([pm-github-j8zh](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-j8zh.toon))
+- Closed: The publish-attestation gate misses a publish routed through an unquoted shell variable ([pm-github-tko1](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-tko1.toon))
 
 ## 2026.8.18 - 2026-08-18
 
@@ -223,12 +227,15 @@
 ### Fixed
 
 - Propagate the docstring gate entry guard fix ([pm-github-wb4q](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-wb4q.toon))
-- Converge changelog generation and verification on replace mode ([pm-github-8f60](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-8f60.toon))
 - The mandatory docstring gate could skip its own scan and still exit zero ([pm-github-wxob](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-wxob.toon))
 
 ### Other
 
 - Adopt the canonical pm-ops docstring gate ([pm-github-pbxd](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-pbxd.toon))
+
+### Closed
+
+- Closed: Converge changelog generation and verification on replace mode ([pm-github-8f60](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-8f60.toon))
 
 ## 2026.8.7 - 2026-08-07
 
@@ -238,13 +245,13 @@
 
 ## 2026.8.4 - 2026-08-04
 
-### Fixed
-
-- Fix terminal transitions for pm-cli 2026.8.3 close_reason enforcement ([pm-github-rwq9](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-rwq9.toon))
-
 ### Other
 
 - Resolve pm-changelog to the release that derives release dates in UTC ([pm-github-9m6j](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-9m6j.toon))
+
+### Closed
+
+- Closed: Fix terminal transitions for pm-cli 2026.8.3 close_reason enforcement ([pm-github-rwq9](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-rwq9.toon))
 
 ## 2026.7.30 - 2026-07-30
 
@@ -278,28 +285,24 @@
 
 ## 2026.7.26 - 2026-07-26
 
-### Fixed
-
-- Documented install command fails: pm install github.com/unbraind/pm-github cannot resolve an entry file ([pm-github-q6ql](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-q6ql.toon))
-
 ### Other
 
 - Enable governance duplicate-detection advisory mode and adopt pm-cli 2026.7.25 ([pm-github-suxt](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-suxt.toon))
 
+### Closed
+
+- Closed: Documented install command fails: pm install github.com/unbraind/pm-github cannot resolve an entry file ([pm-github-q6ql](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-q6ql.toon))
+
 ## 2026.7.25 - 2026-07-25
-
-### Added
-
-- Search pm items in any public GitHub repo (gh-authenticated, semantic search) ([pm-github-r8y0](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-r8y0.toon))
-
-### Fixed
-
-- Import dies with an unexplained pm list-all failed on any tracker over 1 MiB, and non-atomic --dry-run previews every issue as a create ([pm-github-tn92](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-tn92.toon))
-- CHANGELOG omits the shipped --link-deps feature and mislabels 2026.7.23 work as Unreleased ([pm-github-px45](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-px45.toon))
 
 ### Other
 
 - Adopt --respect-item-release in changelog scripts and bump pm-changelog to 2026.7.24 ([pm-github-w7m7](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-w7m7.toon))
+
+### Closed
+
+- Closed: Import dies with an unexplained pm list-all failed on any tracker over 1 MiB, and non-atomic --dry-run previews every issue as a create ([pm-github-tn92](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-tn92.toon))
+- Closed: CHANGELOG omits the shipped --link-deps feature and mislabels 2026.7.23 work as Unreleased ([pm-github-px45](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-px45.toon))
 
 ## 2026.7.23 - 2026-07-23
 
@@ -307,9 +310,9 @@
 
 - Import --link-deps: map GitHub issue-body dependency references (Blocked by/Depends on/Blocks \#N) into pm dependency edges + emit ordering-cycle advisory via collectNewOrderingCycleWarnings ([pm-github-hdai](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-hdai.toon))
 
-### Fixed
+### Closed
 
-- Recommend pm merge reconcile (2026.7.22) over raw history-repair in Multi-agent merge safety docs ([pm-github-wpit](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-wpit.toon))
+- Closed: Recommend pm merge reconcile (2026.7.22) over raw history-repair in Multi-agent merge safety docs ([pm-github-wpit](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-wpit.toon))
 
 ## 2026.7.21 - 2026-07-21
 
@@ -348,11 +351,6 @@
 - GitHub Projects v2 bidirectional sync (import/sync/list/fields) ([pm-github-y27r](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-y27r.toon))
 - Full pm ecosystem production pass for pm-github ([pm-github-9eei](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-9eei.toon))
 
-### Fixed
-
-- Export --apply aborts the whole batch on the first failed item ([pm-github-q3lk](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-q3lk.toon))
-- export --apply exits 0 even when every item fails to write ([pm-github-77wj](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-77wj.toon))
-
 ### Security
 
 - Resolve final Projects v2 review findings ([pm-github-0g3p](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-0g3p.toon))
@@ -360,6 +358,11 @@
 ### Other
 
 - Full-cycle hardening wave: pm-github ([pm-github-mdcw](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-mdcw.toon))
+
+### Closed
+
+- Closed: Export --apply aborts the whole batch on the first failed item ([pm-github-q3lk](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-q3lk.toon))
+- Closed: export --apply exits 0 even when every item fails to write ([pm-github-77wj](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-77wj.toon))
 
 ## 2026.7.11 - 2026-07-11
 
@@ -413,7 +416,6 @@
 
 ### Fixed
 
-- True round-trip GitHub sync: search provider, validate diagnostics, safe-by-default export, fix activation ([pm-github-4elt](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-4elt.toon))
 - FIX: add 'preflight' to manifest capabilities (activation-breaking bug) ([pm-github-qndb](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-qndb.toon))
 
 ### Other
@@ -425,7 +427,6 @@
 - Export: dry-run default + upsert existing issues by provenance ([pm-github-fv0x](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-fv0x.toon))
 - github search provider (search capability) ([pm-github-5sbx](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-5sbx.toon))
 - github validate diagnostics command ([pm-github-rroh](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-rroh.toon))
-- preflight capability: validate token/gh auth + repo reachability before mutating github commands ([pm-github-jget](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-jget.toon))
 - pm github sync: push pm status -\> GitHub close/reopen, guarded by token+--repo+--dry-run ([pm-github-yted](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-yted.toon))
 - renderers capability: register 'github' output format (pm items as GitHub-issue markdown) ([pm-github-vvov](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-vvov.toon))
 - Rate-limit/backoff handling (Retry-After / X-RateLimit-Reset) + useful afterCommand hook ([pm-github-rx1q](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-rx1q.toon))
