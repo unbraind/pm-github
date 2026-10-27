@@ -1,10 +1,11 @@
+import { readGithubWorkspace } from "./workspace.ts";
 /** Read-only GitHub issue-form contracts; no cached approvals or remote writes. */
 import { createHash } from "node:crypto";
 import { openSync, readSync, closeSync, fstatSync, constants } from "node:fs";
 import { parseDocument } from "yaml";
 import { z } from "zod";
 import { emptyRecord, ownValue } from "./own-record.ts";
-import { createPmCliExpectedError, readSettings, resolveItemTypeRegistry, getActiveExtensionRegistrations, locateItem, readLocatedItem } from "@unbrained/pm-cli/sdk";
+import { createPmCliExpectedError, locateItem, readLocatedItem } from "@unbrained/pm-cli/sdk";
 
 /** Stable refusals carry a bounded repair list in the SDK error context. */
 export type IssueFormRefusalCode = "invalid_form_input" | "unsupported_form" | "form_unavailable" | "item_unavailable" | "incomplete_answers";
@@ -113,14 +114,15 @@ function compile(request: z.infer<typeof requestSchema>): IssueFormContract {
 export function compileIssueForm(value: unknown): IssueFormContract { return compile(input(value)); }
 
 /** Validate current SDK state, never saved input, before rendering an export body. */
-export async function completeIssueForm(pmRoot: string, value: unknown): Promise<IssueFormCompletion> {
+export async function completeIssueForm(pmPath: string, value: unknown): Promise<IssueFormCompletion> {
   const request = input(value);
   const contract = compile(request);
   let native: Record<string, unknown> = emptyRecord();
   if (request.item !== undefined) {
     try {
-      const settings = await readSettings(pmRoot);
-      const registry = resolveItemTypeRegistry(settings, getActiveExtensionRegistrations());
+      const workspace = await readGithubWorkspace(pmPath);
+      const pmRoot = workspace.pmRoot;
+      const { settings, types: registry } = workspace;
       const located = await locateItem(pmRoot, request.item, settings.id_prefix, settings.item_format, registry.type_to_folder);
       if (!located) throw new Error("missing item");
       const { document } = await readLocatedItem(located, { schema: settings.schema });

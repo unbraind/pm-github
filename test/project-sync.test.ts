@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
+import { schemaAddStatus, getHistoryPath, create as sdkCreate, update as sdkUpdate } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension from "../index.ts";
 import { projectItemTag } from "../projects.ts";
@@ -161,6 +162,36 @@ test("project sync applies draft and issue additions, status writes, and preserv
   assert.ok(after.find(i => i.id === issueId)?.tags?.includes(projectItemTag(REF, "new-issue")));
   for (const item of after) for (const tag of retained) assert.ok(item.tags!.includes(tag));
   assert.deepEqual(new Set(after.find(i => i.id === linkedId)?.tags), new Set([projectItemTag(REF, "linked"), ...retained]));
+});
+
+test("project import applies configured terminal aliases with SDK lifecycle fidelity and stable pull previews", async t => {
+  const root = tracker(t);
+  await schemaAddStatus("verified", { alias: ["settled"], role: ["terminal", "terminal_done"] }, { pmRoot: root, noExtensions: true });
+  const id = create(root, "Linked", [projectItemTag(REF, "linked")]);
+  const nodes = [draft("linked"), draft("created")];
+  await withMockGithub(board(nodes), async () => {
+    const ext = await harness;
+    await withEnv({ GITHUB_TOKEN: "fixture", GH_TOKEN: undefined }, () => ext.runCommand({ command: "github project import", args: ["acme/5"],
+      options: { "status-map": ["settled=Done"] }, pmRoot: root, global: { json: true } }));
+    const written = items(root);
+    assert.equal(written.length, 2);
+    assert.ok(written.some(item => item.id === id));
+    const client = { pmRoot: root, noExtensions: true };
+    const createdOracle = (await sdkCreate({ title: "SDK create oracle", type: "Task", status: "settled", closeReason: "SDK verification" }, client)).item;
+    const activeOracle = (await sdkCreate({ title: "SDK update oracle", type: "Task" }, client)).item;
+    const updatedOracle = (await sdkUpdate(activeOracle.id, { status: "settled", closeReason: "SDK verification" }, client)).item;
+    for (const item of written) {
+      assert.equal(item.status, "verified");
+      const oracle = item.id === id ? updatedOracle : createdOracle;
+      assert.equal(typeof item.close_reason, typeof oracle.close_reason, "Configured terminal metadata must match the real SDK write contract.");
+      if (oracle.close_reason !== undefined) assert.match(item.close_reason!, /GitHub project/);
+    }
+    const histories = written.map(item => fs.readFileSync(getHistoryPath(root, item.id), "utf8"));
+    for (const history of histories) assert.match(history, /GitHub project/);
+    const preview = await sync(root, { pull: true, "status-map": ["SETTLED=Done"] });
+    assert.deepEqual(preview.result, { dryRun: true, project: "acme/5", push: undefined, pull: { actionable: 0, statusSkipped: 0 } });
+    for (const [index, item] of written.entries()) assert.equal(fs.readFileSync(getHistoryPath(root, item.id), "utf8"), histories[index]);
+  });
 });
 
 test("project import preserves literal tags when replacing an existing tag set", async t => {

@@ -49,6 +49,27 @@ page and stops before evaluating PRs; it makes no tracker writes.
 
 ## Other refusal classes
 
+### Workspace resolution and lifecycle registries
+
+A workspace argument above `.agents/pm` must be resolved before reading settings.
+The previous type lookup read the workspace directory as a tracker and silently
+received defaults, losing aliases such as `probe` → `Investigation`. A second
+identical mixed closed import then updated both items and their history again.
+
+The shared workspace reader now uses public SDK resolution, settings and registry
+APIs. Import/fidelity comparisons, immutable-history context selection, refresh,
+sync/export, project mappings, blocker selection, closeout, issue forms and
+changelog filtering use canonical names or configured lifecycle roles. Refresh
+derives its read registry inside the disposable tracker copy. Webhook storage
+uses SDK initialization checks rather than opening a settings file by path.
+
+Real nested non-git fixtures exercise workspace, tracker and relative paths,
+custom type/status aliases and unchanged item/history bytes. Packed npm/native
+Bun consumers cover JSON/TOON imports and custom terminal sync/export previews.
+Four function-only behavioral reverts independently fail the workspace byte,
+status-normalization, terminal-role and history-context properties; restoration
+passes the targeted tests. No raw settings fallback or SDK mock is used.
+
 ### Canonical values and lossless tag transport
 
 Re-review found two additional repeat-import cases: `--type issue` is persisted

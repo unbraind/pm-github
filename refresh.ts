@@ -1,9 +1,10 @@
+import { readGithubWorkspace, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
 /** Refresh an explicit local GitHub mirror through the importer's existing mapping and transaction. */
 import { mkdtemp, cp, rm, chmod, readdir, lstat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
-import { listAllComplete, certifyCompleteListResult, previewItemMutations } from "@unbrained/pm-cli/sdk";
+import { listAllComplete, certifyCompleteListResult, previewItemMutations, resolvePmRoot } from "@unbrained/pm-cli/sdk";
 import {
   CommandError, EXIT_CODE, decodeCompletePmItems, githubGraphQLResponse, importGithubAtomic,
   listUnfinishedGithubImports, parseImportOptions, parseProvenanceTag, prepareGithubImport, readGithubImportPlan,
@@ -110,19 +111,20 @@ async function fetchRefreshBatch(repo: string, targets: readonly RefreshTarget[]
 }
 
 /** Compare only refresh-owned fields; use the same source lifecycle projection as import finalization. */
-export function refreshChanges(entry: PreparedGithubImport): RefreshChange[] {
+export function refreshChanges(entry: PreparedGithubImport, statuses?: GithubStatusRegistry): RefreshChange[] {
   const desired = { ...importFidelityFields(entry.fidelity!, Boolean(entry.linkOnly)),
     ...(entry.linkOnly ? {} : { title: entry.title, status: entry.status }), tags: entry.tags };
   return Object.entries(desired).flatMap(([field, value]) => {
     const old = ownValue(entry.match, field) ?? null;
     const next = value ?? null;
-    const equal = JSON.stringify(normalizeImportValue(field, old)) === JSON.stringify(normalizeImportValue(field, next));
+    const equal = JSON.stringify(normalizeImportValue(field, old, undefined, statuses)) === JSON.stringify(normalizeImportValue(field, next, undefined, statuses));
     return equal ? [] : [{ field, old, new: next }];
   });
 }
 
 /** Isolate SDK-derived cache writes for offline diagnostics, previews and no-op applies. @internal */
-export async function readRefreshItems(pmRoot: string): Promise<PmItem[]> {
+async function readRefreshState(pmRoot: string) {
+  pmRoot = resolvePmRoot(process.cwd(), pmRoot);
   const scratch = await mkdtemp(join(tmpdir(), "pm-github-refresh-read-"));
   try {
     if (!(await lstat(pmRoot)).isDirectory()) throw new CommandError("Offline tracker reads need an ordinary tracker directory; replace a linked root with a regular copy.");
@@ -134,21 +136,29 @@ export async function readRefreshItems(pmRoot: string): Promise<PmItem[]> {
       if (!entry.isDirectory() && !entry.isFile()) throw new CommandError("Offline tracker reads refuse linked or special files; use an ordinary tracker copy.");
       await chmod(join(entry.parentPath, entry.name), entry.isDirectory() ? 0o700 : 0o600);
     }
-    return decodeCompletePmItems(certifyCompleteListResult(await listAllComplete({ includeBody: true }, { pmRoot: root, cwd: root, noExtensions: true })));
+    const workspace = await readGithubWorkspace(root);
+    const items = decodeCompletePmItems(certifyCompleteListResult(await listAllComplete({ includeBody: true }, { pmRoot: root, cwd: root, noExtensions: true })));
+    return { items, workspace };
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }
 }
+
+/** Read a complete isolated tracker corpus without exposing the temporary workspace. @internal */
+export async function readRefreshItems(pmRoot: string): Promise<PmItem[]> { return (await readRefreshState(pmRoot)).items; }
 
 /** Build a zero-create refresh plan, then commit changed existing targets with import transactions. */
 export async function runRefresh(repoArg: string | undefined, pmRoot: string, options: Record<string, unknown>, scope?: { numbers: readonly number[] }) {
   if (!repoArg || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repoArg)) throw new CommandError("Usage: pm github refresh <owner/repo> [--dry-run] [--since <date|relative>] [--limit N] [--atomic]", EXIT_CODE.USAGE);
   const repo = repoArg.toLowerCase();
   const opts = parseImportOptions(options);
+  pmRoot = resolvePmRoot(process.cwd(), pmRoot);
   /** Selected targets bounded by the caller's --limit, in ascending order. */
   const bounded = (candidates: readonly RefreshTarget[]): RefreshTarget[] =>
     (opts.limit === undefined ? [...candidates] : candidates.slice(0, opts.limit)).filter(target => scope === undefined || scope.numbers.includes(target.number));
-  let items = await readRefreshItems(pmRoot);
+  const state = await readRefreshState(pmRoot);
+  const workspace = state.workspace;
+  let items = state.items;
   let all = selectRefreshTargets(items, repo);
   let targets = bounded(all);
   const token = resolveGitHubToken();
@@ -199,7 +209,7 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
   let unchanged = 0;
   let missing = 0;
   let filtered = 0;
-  const context = { items, releases: readImportReleases(pmRoot), timeline: fetchImportTimeline };
+  const context = { statuses: workspace.statuses, items, releases: readImportReleases(pmRoot), timeline: fetchImportTimeline };
   for (let offset = 0; offset < targets.length; offset += 100) {
     const batch = await fetchRefreshBatch(repo, targets.slice(offset, offset + 100), token);
     for (const result of batch) {
@@ -209,7 +219,7 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
         const issue = result.issue!;
         if (opts.since && Date.parse(issue.updated_at) < Date.parse(opts.since)) { filtered++; continue; }
         const entry = (await prepareGithubImport(issue, repo, opts, token, result.target.item, undefined, context))!;
-        row.changes = refreshChanges(entry);
+        row.changes = refreshChanges(entry, workspace.statuses);
         if (row.changes.length) prepared.push(entry);
         else unchanged++;
       }

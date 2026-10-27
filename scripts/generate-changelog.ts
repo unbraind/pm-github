@@ -1,3 +1,4 @@
+import { readGithubWorkspace, canonicalGithubStatus } from "../workspace.ts";
 /** Generate canonical PM release history plus explicitly tagged pending work. */
 import { spawnSync, type SpawnSyncOptionsWithStringEncoding, type SpawnSyncReturns } from "node:child_process";
 import { createRequire } from "node:module";
@@ -21,8 +22,9 @@ export type ChangelogRunner = (command: string, args: readonly string[], options
  */
 export async function generateChangelog(root: string, args: readonly string[], runner: ChangelogRunner = spawnSync): Promise<number> {
   try {
-    const corpus = await listAllComplete({}, { cwd: root, pmRoot: resolve(root, ".agents/pm"), noExtensions: true });
-    const items = corpus.items.filter(item => item.status === "closed" || item.tags?.includes("changelog-unreleased"));
+    const workspace = await readGithubWorkspace(root);
+    const corpus = await listAllComplete({}, { cwd: root, pmRoot: workspace.pmRoot, noExtensions: true });
+    const items = corpus.items.filter(item => workspace.statuses.terminal_done_statuses.has(canonicalGithubStatus(item.status, workspace.statuses)) || item.tags?.includes("changelog-unreleased"));
     const cli = resolve(dirname(createRequire(import.meta.url).resolve("pm-changelog/package.json")), "dist/cli.js");
     const result = runner("node", [cli, "--stdin", "--pm-root", ".agents/pm", "--status", [...new Set(["closed", ...items.map(item => item.status)])].join(","),
       "--mode", "replace", "--output", "CHANGELOG.md", "--all-release-tags", "--release-version-from-package",

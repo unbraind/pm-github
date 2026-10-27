@@ -1,3 +1,4 @@
+import { readGithubWorkspace, canonicalGithubStatus, githubStatusKind, githubStatusIsTerminal, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
 // pm-github — GitHub Issues + Projects v2 sync for pm-cli
 //
@@ -30,7 +31,7 @@ import { compileIssueForm, completeIssueForm, readRepositoryIssueForm, refuseIss
 export { compileIssueForm, completeIssueForm, readRepositoryIssueForm } from "./issue-forms.ts";
 export type { IssueFormInput, IssueFormSelection, IssueFormContract, IssueFormReport, IssueFormCompletion, IssueFormRefusalCode, FormField, FormRepair, IssueFormReader } from "./issue-forms.ts";
 import {
-  AmbiguousCitationError, buildImportFidelity, fetchImportTimeline, importFidelityFields, matchImportedIssue, normalizeImportValue, persistImportFidelity, readImportReleases, readImportTypeNames, selectImportContextIndex, serializeImportTags, validateImportLifetime,
+  AmbiguousCitationError, buildImportFidelity, fetchImportTimeline, importFidelityFields, matchImportedIssue, normalizeImportValue, persistImportFidelity, readImportReleases, selectImportContextIndex, serializeImportTags, validateImportLifetime,
   type AmbiguousCitationPlan, type CitationCandidate, type ImportFidelity,
 } from "./import-fidelity.ts";
 import { refreshChanges, runRefresh } from "./refresh.ts";
@@ -1464,9 +1465,11 @@ export function buildAtomicImportMutations(
   idPrefix: string,
   normalizeItemId: (input: string, prefix: string) => string,
   updateOnly = false,
+  statuses?: GithubStatusRegistry,
 ): { itemId: string; mutations: BulkItemMutation[] } {
   if (updateOnly && !entry.match?.id) throw new CommandError("Refresh refuses an unlinked target; no item may be created.");
-  const changed = updateOnly ? new Set(refreshChanges(entry).map(change => change.field)) : undefined;
+  const closing = canonicalGithubStatus(entry.status, statuses) === canonicalGithubStatus("closed", statuses);
+  const changed = updateOnly ? new Set(refreshChanges(entry, statuses).map(change => change.field)) : undefined;
   const audit = updateOnly ? { comment: [`Refreshed linked GitHub issue ${repo.toLowerCase()}#${entry.issueNumber}`] } : {};
   if (entry.linkOnly && entry.match?.id) {
     return { itemId: entry.match.id, mutations: [{ op: "update", id: entry.match.id, options: { ...(!changed || changed.has("tags") ? { addTags: entry.tags.map(tag => serializeImportTags([tag])) } : {}), ...audit } }] };
@@ -1479,14 +1482,14 @@ export function buildAtomicImportMutations(
     tags: serializeImportTags(entry.tags),
     ...(entry.assignee ? { assignee: entry.assignee } : {}),
     ...(entry.milestone ? { sprint: entry.milestone } : {}),
-    ...(entry.status === "canceled" ? { closeReason: entry.fidelity?.github_close_reason ?? `GitHub issue #${entry.issueNumber} closed` } : {}),
+    ...((!closing && githubStatusIsTerminal(entry.status, statuses)) ? { closeReason: entry.fidelity?.github_close_reason ?? `GitHub issue #${entry.issueNumber} closed` } : {}),
   };
 
   // Explicit terminal reconciliation also handles canceled -> completed. The
   // supported force option permits that source-authoritative repeat closure;
   // finalization restores the real dates before the transaction commits.
-  const statusOptions = entry.status === "closed"
-    ? entry.fidelity ? { status: "closed", closeReason: entry.fidelity.github_close_reason, force: true } : {}
+  const statusOptions = closing
+    ? entry.fidelity ? { status: entry.status, closeReason: entry.fidelity.github_close_reason, force: true } : {}
     : { status: entry.status };
   const managedItemId = deriveAtomicItemId(
     repo,
@@ -1502,7 +1505,7 @@ export function buildAtomicImportMutations(
   // create step treats an existing stable id as already applied; update then
   // makes later content-bearing transactions refresh the item normally.
   if (!updateOnly && (!entry.match?.id || entry.match.id === managedItemId)) {
-    const createStatus = entry.status === "closed" ? "open" : entry.status;
+    const createStatus = closing ? "open" : entry.status;
     const mutations: BulkItemMutation[] = [{
       op: "create",
       id: managedItemId,
@@ -1515,7 +1518,7 @@ export function buildAtomicImportMutations(
         ...statusOptions,
       },
     }];
-    if (entry.status === "closed" && !entry.fidelity) {
+    if (closing && !entry.fidelity) {
       mutations.push({
         op: "close",
         id: managedItemId,
@@ -1543,7 +1546,7 @@ export function buildAtomicImportMutations(
     id: itemId,
     options: updateOptions,
   }];
-  if (entry.status === "closed" && !entry.fidelity) {
+  if (closing && !entry.fidelity) {
     mutations.push({
       op: "close",
       id: itemId,
@@ -1560,12 +1563,12 @@ export function buildAtomicImportMutations(
  * The importer's desired-state and compensation writes leave retries stable;
  * local edits and later state cycles invalidate completed journals.
  */
-async function importContextVersions(pmRoot: string, entries: readonly PreparedGithubImport[]): Promise<string[]> {
+async function importContextVersions(pmRoot: string, entries: readonly PreparedGithubImport[], statuses?: GithubStatusRegistry): Promise<string[]> {
   const versions: string[] = [];
   for (const entry of entries) {
     if (!entry.fidelity || !entry.match?.id) continue;
     const snapshot = await sdkReadHistorySnapshot(sdkGetHistoryPath(pmRoot, entry.match.id), entry.match.id);
-    const context = snapshot.entries[selectImportContextIndex(snapshot.entries, entry.status)];
+    const context = snapshot.entries[selectImportContextIndex(snapshot.entries, entry.status, statuses)];
     if (context) versions.push(`${entry.match.id}:${crypto.createHash("sha256").update(JSON.stringify(context)).digest("hex")}`);
   }
   return versions;
@@ -1780,6 +1783,7 @@ export async function importGithubAtomic(
     readSettings,
   } = await resolveAtomicSdkFunctions(opts);
 
+  const workspace = await readGithubWorkspace(pmRoot);
   let idPrefix = "pm-";
   try {
     const settings = await readSettings(pmRoot);
@@ -1795,11 +1799,11 @@ export async function importGithubAtomic(
   // by the stable GitHub issue number so a retry whose API page/order changed
   // supplies the exact same plan as well as the same transaction id.
   for (const entry of [...entries].sort((a, b) => a.issueNumber - b.issueNumber)) {
-    const planned = buildAtomicImportMutations(repo, entry, idPrefix, normalizeItemId, opts.updateOnly);
+    const planned = buildAtomicImportMutations(repo, entry, idPrefix, normalizeItemId, opts.updateOnly, workspace.statuses);
     itemIds.set(entry.issueNumber, planned.itemId);
     mutations.push(...planned.mutations);
   }
-  const transactionId = deriveAtomicTransactionId(repo, entries, mutations, await importContextVersions(pmRoot, entries));
+  const transactionId = deriveAtomicTransactionId(repo, entries, mutations, await importContextVersions(pmRoot, entries, workspace.statuses));
   // Update-only transactions derive their steps from the CURRENT item state,
   // so a retry after a partial apply would fingerprint a different plan and
   // orphan the journal behind a fresh transaction id. Persist the exact plan
@@ -3118,7 +3122,7 @@ export async function prepareGithubImport(
   token: string | undefined,
   match: PmItem | undefined,
   fetchIssueComments: ImportRunDependencies["fetchIssueComments"] = fetchComments,
-  fidelityContext: { items: PmItem[]; releases: ReturnType<typeof readImportReleases>; timeline: typeof fetchImportTimeline },
+  fidelityContext: { items: PmItem[]; releases: ReturnType<typeof readImportReleases>; timeline: typeof fetchImportTimeline; statuses?: GithubStatusRegistry },
 ): Promise<PreparedGithubImport | undefined> {
   const title = issue.title.trim();
   if (!title) return undefined;
@@ -3128,7 +3132,7 @@ export async function prepareGithubImport(
   const timeline = await fidelityContext.timeline(issue, repo, token);
   const fidelity = buildImportFidelity(issue, fidelityContext.releases, timeline);
   const targetStatus = mapState(issue.state, issue.state_reason);
-  const conflict = match?.status && match.status !== targetStatus && (["closed", "canceled"].includes(match.status) || issue.state === "closed")
+  const conflict = match?.status && canonicalGithubStatus(match.status, fidelityContext.statuses) !== canonicalGithubStatus(targetStatus, fidelityContext.statuses) && (githubStatusIsTerminal(match.status, fidelityContext.statuses) || issue.state === "closed")
     ? { local: match.status, github: issue.state, rule: identity.linkOnly ? "preserve-provider-owner" : "github-source-wins" } : undefined;
   const kind = issue.pull_request ? "PR" : "issue";
   const labels = issue.labels.map((label) => label.name).filter(Boolean);
@@ -3176,12 +3180,12 @@ export async function prepareGithubImport(
 }
 
 /** Recognize a complete source projection without treating the SDK mutation clock as content. */
-export function importEntryUnchanged(entry: PreparedGithubImport, types?: ReadonlyMap<string, string>): boolean {
-  if (!entry.match?.id || !entry.fidelity || refreshChanges(entry).length !== 0) return false;
+export function importEntryUnchanged(entry: PreparedGithubImport, types?: ReadonlyMap<string, string>, statuses?: GithubStatusRegistry): boolean {
+  if (!entry.match?.id || !entry.fidelity || refreshChanges(entry, statuses).length !== 0) return false;
   if (entry.linkOnly) return true;
   const fields: Record<string, unknown> = { type: entry.itemType, description: entry.description, body: entry.body,
     ...(entry.assignee ? { assignee: entry.assignee } : {}), ...(entry.milestone ? { sprint: entry.milestone } : {}) };
-  return Object.entries(fields).every(([field, value]) => normalizeImportValue(field, ownValue(entry.match, field) ?? "", types) === normalizeImportValue(field, value, types));
+  return Object.entries(fields).every(([field, value]) => normalizeImportValue(field, ownValue(entry.match, field) ?? "", types, statuses) === normalizeImportValue(field, value, types, statuses));
 }
 
 /** Receipts from the gated import's completeness check. */
@@ -3403,13 +3407,13 @@ function gateImportWrites(pmRoot: string): ImportGateReceipt {
  * throws {@link CommandError} (with a semantic exit code) on failure.
  *
  * @param repoArg - The `owner/repo` to import from.
- * @param pmRoot - Workspace root or pm data dir.
+ * @param pmPath - Workspace root or pm data dir.
  * @param opts - Normalized import options.
  * @param deps - Injectable collaborators (token resolver, fetchers, etc.) for tests.
  */
 export async function runImport(
   repoArg: string | undefined,
-  pmRoot: string,
+  pmPath: string,
   opts: ImportOptions,
   dependencies: ImportRunDependencies = {},
 ) {
@@ -3460,7 +3464,7 @@ export async function runImport(
     console.error("No issues found.");
     // Even a no-op gated import must prove the workspace is gateable (a Git work
     // tree the scanner can read), so the empty-change gate scan runs here too.
-    const emptyGateReceipt = opts.gate && !opts.dryRun ? gateImportWrites(pmRoot) : undefined;
+    const emptyGateReceipt = opts.gate && !opts.dryRun ? gateImportWrites(pmPath) : undefined;
     if (opts.dryRun && (opts.atomic || missingIssues.length > 0)) {
       return {
         dryRun: true,
@@ -3482,6 +3486,8 @@ export async function runImport(
   // reported "would import N, skip 0" where the real run performs updates for
   // already-linked issues. A preview that overstates creates reads as "this will
   // duplicate my whole tracker" and is the one thing --dry-run exists to rule out.
+  const workspace = await readGithubWorkspace(pmPath);
+  const pmRoot = workspace.pmRoot;
   /** Read the complete raw corpus in-process, retaining all provider metadata and bodies. */
   const readImportItems = async (): Promise<PmItem[]> => {
     if (dependencies.readItems) return dependencies.readItems(pmRoot);
@@ -3490,7 +3496,7 @@ export async function runImport(
   };
   const existingItems = await readImportItems();
   const existing = indexByProvenance(existingItems);
-  const fidelityContext = { items: existingItems, releases: readImportReleases(pmRoot),
+  const fidelityContext = { statuses: workspace.statuses, items: existingItems, releases: readImportReleases(pmRoot),
     timeline: dependencies.fetchIssueTimeline ?? (dependencies.fetchIssues ? async () => [] : fetchImportTimeline) };
 
   let imported = 0;
@@ -3652,8 +3658,8 @@ export async function runImport(
     // Mixed create/update batches can select a fresh journal after the first
     // apply. Replaying an otherwise identical SDK UPDATE advances updated_at.
     // Never hide an interrupted journal behind the unchanged-state shortcut.
-    const typeNames = await readImportTypeNames(pmRoot);
-    const unchanged = prepared.every(entry => importEntryUnchanged(entry, typeNames)) && (await listUnfinishedGithubImports(pmRoot)).length === 0;
+    const typeNames = new Map(Object.entries(workspace.types.alias_to_type));
+    const unchanged = prepared.every(entry => importEntryUnchanged(entry, typeNames, workspace.statuses)) && (await listUnfinishedGithubImports(pmRoot)).length === 0;
     const result = unchanged ? { transactionId: undefined, recovered: false, recoveredItems: undefined, imported: 0, updated: 0,
       itemIds: new Map(prepared.map(entry => [entry.issueNumber, entry.match!.id!])) }
       : await (dependencies.commitAtomic ?? importGithubAtomic)(pmRoot, repo, prepared);
@@ -3789,20 +3795,20 @@ export async function runImport(
         continue;
       }
       // Reconcile status separately.
-      if (status === "canceled" && match.status !== "canceled") {
+      if (canonicalGithubStatus(status, workspace.statuses) === canonicalGithubStatus("canceled", workspace.statuses) && canonicalGithubStatus(match.status ?? workspace.statuses.open_status, workspace.statuses) !== canonicalGithubStatus("canceled", workspace.statuses)) {
         const cancel = pmRun(["--path", pmRoot, "update", match.id, "--status", "canceled", "--close-reason", prepared.fidelity!.github_close_reason]);
         if (!cancel.ok) throw new CommandError(`Could not cancel GitHub issue #${issue.number}.`);
       }
-      if (status === "closed" && match.status !== "closed") {
+      if (canonicalGithubStatus(status, workspace.statuses) === canonicalGithubStatus("closed", workspace.statuses) && canonicalGithubStatus(match.status ?? workspace.statuses.open_status, workspace.statuses) !== canonicalGithubStatus("closed", workspace.statuses)) {
         // Close through `pm close` so the reason is real provenance; pass the
         // source completion time as --completed-at when GitHub recorded one.
-        const close = pmRun([...githubCloseArgs(match.id), ...(match.status === "canceled" ? ["--force"] : [])]);
+        const close = pmRun([...githubCloseArgs(match.id), ...(githubStatusIsTerminal(match.status, workspace.statuses) ? ["--force"] : [])]);
         if (!close.ok) {
           console.error(`#${issue.number}: close reconciliation failed — ${close.stderr}`);
           skipped++;
           continue;
         }
-      } else if (status === "open" && (match.status === "closed" || match.status === "canceled")) {
+      } else if (canonicalGithubStatus(status, workspace.statuses) === canonicalGithubStatus("open", workspace.statuses) && githubStatusIsTerminal(match.status, workspace.statuses)) {
         const reopen = pmRun(["--path", pmRoot, "update", match.id, "--status", "open", "--message", `GitHub issue #${issue.number} reopened`]);
         if (!reopen.ok) {
           console.error(`#${issue.number}: reopen reconciliation failed — ${reopen.stderr}`);
@@ -3823,8 +3829,8 @@ export async function runImport(
     // `require_close_reason` rejects `pm create --status closed`. Create the
     // item open, then close it through `pm close` with the source's real
     // completion timestamp (`closed_at`) as --completed-at provenance.
-    const createStatus = status === "closed" ? "open" : status;
-    const mustClose = status === "closed";
+    const createStatus = canonicalGithubStatus(status, workspace.statuses) === canonicalGithubStatus("closed", workspace.statuses) ? "open" : status;
+    const mustClose = canonicalGithubStatus(status, workspace.statuses) === canonicalGithubStatus("closed", workspace.statuses);
     const createArgs = [
       "--path", pmRoot, "create",
       "--title", title,
@@ -3835,7 +3841,7 @@ export async function runImport(
       "--tags", serializeImportTags(tags),
       "--message", `Imported from GitHub #${issue.number}`,
     ];
-    if (status === "canceled") createArgs.push("--close-reason", prepared.fidelity!.github_close_reason);
+    if (canonicalGithubStatus(status, workspace.statuses) === canonicalGithubStatus("canceled", workspace.statuses)) createArgs.push("--close-reason", prepared.fidelity!.github_close_reason);
     if (assignee) createArgs.push("--assignee", assignee);
     if (milestone) createArgs.push("--sprint", milestone);
     // --json lets a following close (or annotations sync) address the freshly
@@ -3997,8 +4003,8 @@ function failClosedOnPlanDivergence(
 // Sync core — push pm status changes back to GitHub (close / reopen)
 // ---------------------------------------------------------------------------
 
-function pmStatusToGithubState(status: string | undefined): "open" | "closed" {
-  return status === "closed" || status === "canceled" ? "closed" : "open";
+function pmStatusToGithubState(status: string | undefined, statuses?: GithubStatusRegistry): "open" | "closed" {
+  return githubStatusIsTerminal(status, statuses) ? "closed" : "open";
 }
 
 /**
@@ -4036,7 +4042,7 @@ function requireRequestedItems<TItem extends PmItem>(items: TItem[], requested: 
 
 // Build the pm → GitHub issue sync plan: for each pm item linked to `repo`, emit
 // a create-or-update entry keyed by the issue's provenance tag.
-export function planSync(items: PmItem[], repo: string): SyncPlanEntry[] {
+export function planSync(items: PmItem[], repo: string, statuses?: GithubStatusRegistry): SyncPlanEntry[] {
   const plan: SyncPlanEntry[] = [];
   const repoLc = repo.toLowerCase();
   for (const item of items) {
@@ -4044,7 +4050,7 @@ export function planSync(items: PmItem[], repo: string): SyncPlanEntry[] {
     for (const tag of item.tags ?? []) {
       const p = parseProvenanceTag(tag);
       if (!p || p.repo !== repoLc) continue;
-      const desired = pmStatusToGithubState(item.status);
+      const desired = pmStatusToGithubState(item.status, statuses);
       plan.push({
         id: item.id,
         number: p.number,
@@ -4092,7 +4098,8 @@ async function runSync(ctx: CommandHandlerContext) {
   }
 
   const selected = requireRequestedItems(readPmItems(ctx.pm_root), scopedIds);
-  const plan = planSync(selected, repo);
+  const workspace = await readGithubWorkspace(ctx.pm_root);
+  const plan = planSync(selected, repo, workspace.statuses);
 
   if (plan.length === 0) {
     const scopeNote = scopedIds.length > 0 ? ` from --ids (${scopedIds.join(", ")})` : "";
@@ -4177,7 +4184,7 @@ export interface GithubExportPayload {
 
 // Convert a pm item into the GitHub issue create/update payload, dropping
 // internal provenance tags from labels and applying the optional label map.
-function itemToGithubPayload(item: PmItem, labelMap?: Map<string, string>): GithubExportPayload {
+function itemToGithubPayload(item: PmItem, labelMap?: Map<string, string>, statuses?: GithubStatusRegistry): GithubExportPayload {
   // Drop our internal provenance tags from exported labels, then apply any
   // user-supplied label mapping (pm tag → GitHub label). Both issue provenance
   // (`gh:owner/repo#N`) and project provenance (`gh-project:owner/number#itemId`)
@@ -4190,7 +4197,7 @@ function itemToGithubPayload(item: PmItem, labelMap?: Map<string, string>): Gith
     title: item.title ?? "(untitled)",
     body: item.body || item.description || "",
     labels: applyLabelMap(labels, labelMap),
-    state: item.status === "closed" || item.status === "canceled" ? "closed" : "open",
+    state: pmStatusToGithubState(item.status, statuses),
   };
 }
 
@@ -4211,11 +4218,12 @@ export function buildExportPlan(
   items: PmItem[],
   repo: string | undefined,
   labelMap?: Map<string, string>,
+  statuses?: GithubStatusRegistry,
 ): ExportPlanEntry[] {
   const repoLc = repo?.toLowerCase();
   const plan: ExportPlanEntry[] = [];
   for (const item of items) {
-    const payload = itemToGithubPayload(item, labelMap);
+    const payload = itemToGithubPayload(item, labelMap, statuses);
     let number: number | undefined;
     if (repoLc) {
       for (const tag of item.tags ?? []) {
@@ -4428,7 +4436,8 @@ async function runExport(ctx: CommandHandlerContext) {
   } else if (["form-ref", "formRef", "form-answers", "formAnswers", "form-bindings", "formBindings"].some(flag => optionProvided(options, flag))) {
     refuseIssueForm("invalid_form_input", [{ field: "form", reason: "selection", remedy: "Pass --form with --repo and --form-ref to enforce an issue-form contract." }]);
   }
-  const plan = buildExportPlan(selected, repo, labelMap);
+  const workspace = await readGithubWorkspace(ctx.pm_root);
+  const plan = buildExportPlan(selected, repo, labelMap, workspace.statuses);
   for (const [index, completion] of completions.entries()) {
     plan[index]!.payload.body = completion.body;
     plan[index]!.payload.labels = [...new Set([...plan[index]!.payload.labels, ...completion.report.contract.labels])];
@@ -4816,10 +4825,10 @@ function isGithubBlockerDependency(target: string): boolean {
  * @param items - The complete runtime-validated item corpus.
  * @returns The candidate items, in corpus order.
  */
-export function selectBlockerCandidates(items: readonly BlockerPmItem[]): BlockerPmItem[] {
+export function selectBlockerCandidates(items: readonly BlockerPmItem[], statuses?: GithubStatusRegistry): BlockerPmItem[] {
   return items.filter((item) => {
-    if (item.status === "blocked") return true;
-    if (BLOCKER_TERMINAL_STATUSES.has(item.status)) return false;
+    if (githubStatusKind(item.status, statuses) === "blocked") return true;
+    if (githubStatusIsTerminal(item.status, statuses)) return false;
     return (
       item.dependencies.some((dep) => dep.kind === "blocked_by" && isGithubBlockerDependency(dep.id))
       || (item.blockedBy !== undefined && isGithubBlockerDependency(item.blockedBy))
@@ -5396,7 +5405,8 @@ async function runBlockers(ctx: CommandHandlerContext) {
 
   const corpus = await readBlockerPmItems(ctx.pm_root);
   const selected = requireRequestedItems(corpus, scopedIds);
-  const candidates = selectBlockerCandidates(selected);
+  const workspace = await readGithubWorkspace(ctx.pm_root);
+  const candidates = selectBlockerCandidates(selected, workspace.statuses);
   const perItem = candidates.map((item) => ({ item, references: collectBlockerReferences(item, fallbackRepo) }));
 
   const unique = new Map<string, ResolvedBlockerReference>();
@@ -6291,7 +6301,8 @@ async function runProjectImport(ctx: CommandHandlerContext) {
   // Reading the local store is non-mutating and keeps dry-run faithful: linked
   // project items must preview as updates, not misleading duplicate creates.
   const pmItems = readPmItems(ctx.pm_root);
-  const plan = buildProjectImportPlan(projectItems, ref, pmItems, statusMap);
+  const workspace = await readGithubWorkspace(ctx.pm_root);
+  const plan = buildProjectImportPlan(projectItems, ref, pmItems, statusMap, workspace.statuses);
 
   let imported = 0;
   let updated = 0;
@@ -6321,8 +6332,11 @@ async function runProjectImport(ctx: CommandHandlerContext) {
       // A `closed` mapping cannot go through `pm update --status closed`
       // (governance require_close_reason rejects it since pm-cli 2026.8.3);
       // the update omits --status and a separate `pm close` records the reason.
-      const closeAfterUpdate = entry.mappedStatus === "closed";
-      if (entry.mappedStatus && !closeAfterUpdate) updArgs.push("--status", entry.mappedStatus);
+      const closeAfterUpdate = entry.mappedStatus !== undefined && canonicalGithubStatus(entry.mappedStatus, workspace.statuses) === workspace.statuses.close_status;
+      if (entry.mappedStatus && !closeAfterUpdate) {
+        updArgs.push("--status", entry.mappedStatus);
+        if (githubStatusIsTerminal(entry.mappedStatus, workspace.statuses)) updArgs.push("--close-reason", projectImportCloseReason(ref, entry.content));
+      }
       const upd = pmRun(updArgs);
       if (!upd.ok) { console.error(`  ${entry.title}: update failed — ${upd.stderr}`); skipped++; continue; }
       if (closeAfterUpdate) {
@@ -6336,8 +6350,8 @@ async function runProjectImport(ctx: CommandHandlerContext) {
     // `require_close_reason` rejects `pm create --status closed` (pm-cli
     // 2026.8.3+). Create open, then close through `pm close` with factual
     // provenance. `--json` is needed to read the assigned id for the close.
-    const createStatus = entry.status === "closed" ? "open" : entry.status;
-    const mustClose = entry.status === "closed";
+    const mustClose = canonicalGithubStatus(entry.status, workspace.statuses) === workspace.statuses.close_status;
+    const createStatus = mustClose ? workspace.statuses.open_status : entry.status;
     const createArgs = [
       "--path", ctx.pm_root, "create",
       "--title", entry.title,
@@ -6348,6 +6362,7 @@ async function runProjectImport(ctx: CommandHandlerContext) {
       "--message", `Imported from GitHub project ${ref.owner}/${ref.number}`,
     ];
     if (entry.body) createArgs.push("--body", entry.body);
+    if (!mustClose && githubStatusIsTerminal(entry.status, workspace.statuses)) createArgs.push("--close-reason", projectImportCloseReason(ref, entry.content));
     if (mustClose) createArgs.push("--json");
     const created = pmRun(createArgs);
     if (!created.ok) { console.error(`  ${entry.title}: create failed — ${created.stderr}`); skipped++; continue; }
@@ -6463,22 +6478,22 @@ async function applyPushEntry(
  * @param pmRoot - Workspace root for the `pm` invocation.
  * @returns The argv array.
  */
-export function buildPullEntryArgs(entry: PullPlanEntryLike, pmRoot: string): string[] {
+export function buildPullEntryArgs(entry: PullPlanEntryLike, pmRoot: string, statuses?: GithubStatusRegistry): string[] {
   const reason = `GitHub project status → ${entry.toStatus}`;
-  if (entry.toStatus === "closed") {
+  if (canonicalGithubStatus(entry.toStatus, statuses) === (statuses?.close_status ?? "closed")) {
     return ["--path", pmRoot, "close", entry.pmId, "--reason", reason];
   }
-  if (entry.toStatus === "canceled") {
+  if (githubStatusIsTerminal(entry.toStatus, statuses)) {
     return [
       "--path", pmRoot, "update", entry.pmId,
-      "--status", "canceled",
+      "--status", canonicalGithubStatus(entry.toStatus, statuses),
       "--close-reason", reason,
       "--message", reason,
     ];
   }
   return [
     "--path", pmRoot, "update", entry.pmId,
-    "--status", entry.toStatus,
+    "--status", canonicalGithubStatus(entry.toStatus, statuses),
     "--message", reason,
   ];
 }
@@ -6487,8 +6502,8 @@ export function buildPullEntryArgs(entry: PullPlanEntryLike, pmRoot: string): st
 // (records closed_at + close_reason); `canceled` keeps its distinct terminal
 // state via `pm update` while recording `--close-reason`; everything else is a
 // plain `pm update --status`.
-function applyPullEntry(entry: PullPlanEntryLike, pmRoot: string): { changed: boolean; error?: string } {
-  const res = pmRun(buildPullEntryArgs(entry, pmRoot));
+function applyPullEntry(entry: PullPlanEntryLike, pmRoot: string, statuses?: GithubStatusRegistry): { changed: boolean; error?: string } {
+  const res = pmRun(buildPullEntryArgs(entry, pmRoot, statuses));
   return res.ok ? { changed: true } : { changed: false, error: res.stderr };
 }
 
@@ -6553,11 +6568,12 @@ async function runProjectSync(ctx: CommandHandlerContext) {
   const pmById = new Map<string, PmItem>();
   for (const it of scoped.selected) if (it.id) pmById.set(it.id, it);
 
+  const workspace = await readGithubWorkspace(ctx.pm_root);
   const pushPlan = doPush
-    ? buildProjectPushPlan(scoped.selected, ref, projectItems, meta.statusField, { addMissing, statusMap })
+    ? buildProjectPushPlan(scoped.selected, ref, projectItems, meta.statusField, { addMissing, statusMap, statuses: workspace.statuses })
     : undefined;
   const pullPlan = doPull
-    ? buildProjectPullPlan(scoped.selected, ref, projectItems, statusMap)
+    ? buildProjectPullPlan(scoped.selected, ref, projectItems, statusMap, workspace.statuses)
     : undefined;
 
   // Conflict resolution when applying BOTH directions: a linked item can appear
@@ -6621,7 +6637,7 @@ async function runProjectSync(ctx: CommandHandlerContext) {
   if (applyPull && pullPlan) {
     for (const e of pullActionable) {
       if (prefer === "pm" && pushItemIds.has(e.itemId)) continue; // push wins
-      const r = applyPullEntry(e, ctx.pm_root);
+      const r = applyPullEntry(e, ctx.pm_root, workspace.statuses);
       if (!r.changed) { console.error(`  pull ${e.pmId} "${e.title}": ${r.error}`); pullFailed++; continue; }
       pulled++;
     }

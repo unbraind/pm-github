@@ -1,9 +1,10 @@
+import { readGithubWorkspace, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue, setOwnValue } from "./own-record.ts";
 /** Source lifecycle, release-window and cross-provider identity rules for issue imports. */
 import { spawnSync } from "node:child_process";
 import { decodeHTML } from "entities";
 import {
-  canonicalDocument, createHistoryEntry, getActiveExtensionRegistrations, ITEM_TYPE_VALUES, mutateItem, normalizeItemId, normalizeStatusInput, parseTags, readSettings, resolveItemTypeRegistry, resolvePmRoot, toNonEmptyImportString,
+  canonicalDocument, createHistoryEntry, SETTINGS_DEFAULTS, resolveItemTypeRegistry, mutateItem, normalizeItemId, normalizeStatusInput, parseTags, toNonEmptyImportString,
 } from "@unbrained/pm-cli/sdk";
 import { CommandError, fetchJSON, githubApiBase, githubGraphQL, parseNextLink, parseProvenanceTag, type GhIssue, type PmItem } from "./index.ts";
 
@@ -13,7 +14,7 @@ import { CommandError, fetchJSON, githubApiBase, githubGraphQL, parseNextLink, p
  * keeps the selected revision stable, including after an interrupted governed update.
  * @internal Shared by transaction planning and deterministic history-shape tests.
  */
-export function selectImportContextIndex(entries: readonly { message?: string; patch: readonly { path: string; value?: unknown }[] }[], status: string): number {
+export function selectImportContextIndex(entries: readonly { message?: string; patch: readonly { path: string; value?: unknown }[] }[], status: string, statuses?: GithubStatusRegistry): number {
   let currentStatus: unknown;
   let selected = -1;
   for (const [index, event] of entries.entries()) {
@@ -23,7 +24,7 @@ export function selectImportContextIndex(entries: readonly { message?: string; p
     const message = event.message ?? "";
     const owned = /^(?:pm-github import create |bulk-item-transaction github-import-|Compensate interrupted bulk transaction github-import-|Preserve GitHub source lifecycle for issue #\d+$)/.test(message);
     const transient = /^(?:pm-github import create |Compensate interrupted bulk transaction github-import-)|^bulk-item-transaction github-import-.* compensate$/.test(message);
-    if (!owned || (currentStatus !== undefined && currentStatus !== status && !transient)) selected = index;
+    if (!owned || (currentStatus !== undefined && normalizeImportValue("status", currentStatus, undefined, statuses) !== normalizeImportValue("status", status, undefined, statuses) && !transient)) selected = index;
   }
   return selected;
 }
@@ -432,12 +433,12 @@ export function importFidelityFields(fidelity: ImportFidelity, linkOnly: boolean
   };
 }
 
-/** Built-in SDK names also canonicalize entries prepared without a workspace context. */
-const defaultImportTypes: ReadonlyMap<string, string> = new Map(ITEM_TYPE_VALUES.map(name => [name.toLowerCase(), name]));
+/** The default SDK registry also canonicalizes built-in aliases for context-free comparisons. */
+const defaultImportTypes: ReadonlyMap<string, string> = new Map(Object.entries(resolveItemTypeRegistry(SETTINGS_DEFAULTS).alias_to_type));
 
 /** Resolve configured and extension-contributed aliases through the writer's SDK registry. */
 export async function readImportTypeNames(pmRoot: string): Promise<ReadonlyMap<string, string>> {
-  const registry = resolveItemTypeRegistry(await readSettings(pmRoot), getActiveExtensionRegistrations());
+  const { types: registry } = await readGithubWorkspace(pmRoot);
   return new Map(Object.entries(registry.alias_to_type));
 }
 
@@ -451,10 +452,10 @@ export function serializeImportTags(tags: readonly string[]): string {
 }
 
 /** Compare source fields using SDK type/status/tag/assignment semantics and body formatting. */
-export function normalizeImportValue(field: string, value: unknown, types = defaultImportTypes): unknown {
+export function normalizeImportValue(field: string, value: unknown, types = defaultImportTypes, statuses?: GithubStatusRegistry): unknown {
   if (field === "type" && typeof value === "string") return types.get(value.trim().toLowerCase()) ?? value;
   if (field === "tags") return parseTags(typeof value === "string" ? value : JSON.stringify(value ?? []));
-  if (field === "status") return normalizeStatusInput(value) ?? value;
+  if (field === "status") return normalizeStatusInput(value, statuses) ?? value;
   // Match the SDK document writer: leading newlines and trailing body space
   // are formatting, while leading indentation remains meaningful content.
   if (field === "body" && typeof value === "string") return value.replace(/^\n+/, "").trimEnd();
@@ -472,16 +473,17 @@ export function normalizeImportValue(field: string, value: unknown, types = defa
  * before/after event instead of editing past history; retrying identical metadata is a no-op.
  * Cross-provider owners retain their creation/completion dates, content and release.
  */
-export async function persistImportFidelity(pmRoot: string, id: string, fidelity: ImportFidelity, linkOnly: boolean, normalizeFields = false): Promise<void> {
-  pmRoot = resolvePmRoot(process.cwd(), pmRoot);
-  const settings = await readSettings(pmRoot);
+export async function persistImportFidelity(pmPath: string, id: string, fidelity: ImportFidelity, linkOnly: boolean, normalizeFields = false): Promise<void> {
+  const workspace = await readGithubWorkspace(pmPath);
+  const pmRoot = workspace.pmRoot;
+  const { settings } = workspace;
   id = normalizeItemId(id, settings.id_prefix);
   await mutateItem({ pmRoot, settings, id, author: "pm-github", op: "import", skipNoop: true,
     message: `Preserve GitHub source lifecycle for issue #${fidelity.github_number}`,
     mutate: document => {
       const before = canonicalDocument(document);
       for (const [field, value] of Object.entries(importFidelityFields(fidelity, linkOnly))) {
-        if (normalizeFields && JSON.stringify(normalizeImportValue(field, ownValue(document.metadata, field))) === JSON.stringify(normalizeImportValue(field, value))) continue;
+        if (normalizeFields && JSON.stringify(normalizeImportValue(field, ownValue(document.metadata, field), undefined, workspace.statuses)) === JSON.stringify(normalizeImportValue(field, value, undefined, workspace.statuses))) continue;
         if (value === undefined) delete document.metadata[field];
         else setOwnValue(document.metadata, field, value);
       }

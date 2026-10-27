@@ -1,3 +1,4 @@
+import { canonicalGithubStatus, githubStatusKind, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
 // pm-github — GitHub Projects v2 support (pure logic layer).
 //
@@ -259,14 +260,15 @@ export function resolveOptionForStatus(
   pmStatus: string | undefined,
   options: Array<ProjectStatusOption | null | undefined>,
   override?: Map<string, string>,
+  statuses?: GithubStatusRegistry,
 ): ProjectStatusOption | undefined {
-  const status = (pmStatus || "open").toLowerCase();
+  const status = canonicalGithubStatus(pmStatus || "open", statuses);
   const byName = new Map<string, ProjectStatusOption>();
   for (const o of options) {
     if (o && typeof o.name === "string") byName.set(normalizeName(o.name), o);
   }
 
-  const overrideName = override?.get(status);
+  const overrideName = override && [...override].find(([key]) => canonicalGithubStatus(key, statuses) === status)?.[1];
   if (overrideName) {
     const hit = byName.get(normalizeName(overrideName));
     if (hit) return hit;
@@ -275,7 +277,7 @@ export function resolveOptionForStatus(
     return undefined;
   }
 
-  const candidates = ownValue(DEFAULT_STATUS_CANDIDATES, status) ?? DEFAULT_STATUS_CANDIDATES.open;
+  const candidates = ownValue(DEFAULT_STATUS_CANDIDATES, githubStatusKind(status, statuses)) ?? DEFAULT_STATUS_CANDIDATES.open;
   for (const cand of candidates) {
     const hit = byName.get(normalizeName(cand));
     if (hit) return hit;
@@ -298,13 +300,14 @@ export function resolveOptionForStatus(
 export function mapOptionNameToPmStatus(
   optionName: string | undefined,
   override?: Map<string, string>,
+  statuses?: GithubStatusRegistry,
 ): string | undefined {
   if (!optionName) return undefined;
   const name = normalizeName(optionName);
 
   if (override) {
     for (const [pmStatus, optName] of override) {
-      if (normalizeName(optName) === name) return pmStatus;
+      if (normalizeName(optName) === name) return canonicalGithubStatus(pmStatus, statuses);
     }
   }
 
@@ -313,13 +316,13 @@ export function mapOptionNameToPmStatus(
   // not open. Keeping "draft" ahead of the open/todo bucket makes the push↔pull
   // roundtrip symmetric (a pm "draft" pushes to a "Draft" option and pulls back
   // to "draft", not "open").
-  if (/(cancel|won'?t|not\s*planned|drop|abandon)/.test(name)) return "canceled";
-  if (/(block|on\s*hold|waiting)/.test(name)) return "blocked";
-  if (/draft/.test(name)) return "draft";
-  if (/\bnot\s+started\b|\bunstarted\b/.test(name)) return "open";
-  if (/(progress|doing|started|active|review)/.test(name)) return "in_progress";
-  if (/(done|closed|complete|shipped|resolved|merged)/.test(name)) return "closed";
-  if (/(todo|to\s*do|backlog|new|open|triage|ready)/.test(name)) return "open";
+  if (/(cancel|won'?t|not\s*planned|drop|abandon)/.test(name)) return canonicalGithubStatus("canceled", statuses);
+  if (/(block|on\s*hold|waiting)/.test(name)) return canonicalGithubStatus("blocked", statuses);
+  if (/draft/.test(name)) return canonicalGithubStatus("draft", statuses);
+  if (/\bnot\s+started\b|\bunstarted\b/.test(name)) return canonicalGithubStatus("open", statuses);
+  if (/(progress|doing|started|active|review)/.test(name)) return canonicalGithubStatus("in_progress", statuses);
+  if (/(done|closed|complete|shipped|resolved|merged)/.test(name)) return canonicalGithubStatus("closed", statuses);
+  if (/(todo|to\s*do|backlog|new|open|triage|ready)/.test(name)) return canonicalGithubStatus("open", statuses);
   return undefined;
 }
 
@@ -455,6 +458,7 @@ export interface PushPlanOptions {
    * already-linked ones). Default true. */
   addMissing?: boolean;
   statusMap?: Map<string, string>;
+  statuses?: GithubStatusRegistry;
 }
 
 // Build the pm → project plan. Pure and side-effect free so it is unit-testable
@@ -505,7 +509,7 @@ export function buildProjectPushPlan(
 
     // Resolve the target Status option for this pm status.
     const targetOption = statusField
-      ? resolveOptionForStatus(status, options, opts.statusMap)
+      ? resolveOptionForStatus(status, options, opts.statusMap, opts.statuses)
       : undefined;
     if (statusField && !targetOption) {
       statusSkipped.push({ pmId: item.id, title, status });
@@ -616,6 +620,7 @@ export function buildProjectPullPlan(
   ref: ProjectRef,
   projectItems: ProjectItem[],
   statusMap?: Map<string, string>,
+  statuses?: GithubStatusRegistry,
 ): PullPlan {
   const pmByItemId = indexPmByProjectItem(pmItems, ref);
   const pmByIssue = indexPmByIssue(pmItems);
@@ -629,12 +634,12 @@ export function buildProjectPullPlan(
     }
     if (!pm || !pm.id) continue; // unlinked project items are handled by import
 
-    const toStatus = mapOptionNameToPmStatus(pi.statusName, statusMap);
+    const toStatus = mapOptionNameToPmStatus(pi.statusName, statusMap, statuses);
     if (!toStatus) {
       if (pi.statusName) statusSkipped.push({ itemId: pi.id, optionName: pi.statusName });
       continue;
     }
-    const fromStatus = pm.status ?? "open";
+    const fromStatus = canonicalGithubStatus(pm.status ?? "open", statuses);
     if (fromStatus === toStatus) continue;
     entries.push({ itemId: pi.id, pmId: pm.id, title: pm.title ?? "(untitled)", fromStatus, toStatus });
   }
@@ -676,6 +681,7 @@ export function buildProjectImportPlan(
   ref: ProjectRef,
   pmItems: PmItemLike[],
   statusMap?: Map<string, string>,
+  statuses?: GithubStatusRegistry,
 ): ImportPlanEntry[] {
   const pmByItemId = indexPmByProjectItem(pmItems, ref);
   const pmByIssue = indexPmByIssue(pmItems);
@@ -690,7 +696,7 @@ export function buildProjectImportPlan(
     // `mappedStatus` records only an EXPLICIT mapping (undefined when the board
     // status is unknown) so the re-import update path can skip the status write
     // instead of clobbering an existing pm state (no data loss).
-    const mappedStatus = mapOptionNameToPmStatus(pi.statusName, statusMap);
+    const mappedStatus = mapOptionNameToPmStatus(pi.statusName, statusMap, statuses);
     let status = mappedStatus;
     if (!status) {
       if (c.state === "closed" || c.state === "merged") {
@@ -721,7 +727,7 @@ export function buildProjectImportPlan(
       action: existing?.id ? "update" : "create",
       itemId: pi.id,
       title,
-      status,
+      status: canonicalGithubStatus(status, statuses),
       mappedStatus,
       body: c.body,
       tags,

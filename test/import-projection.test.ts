@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { devNull, tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, join, relative } from "node:path";
 import test from "node:test";
 import { decode } from "@toon-format/toon";
-import { certifyCompleteListResult, commitImportedItem, create, get, getItemPath, listAllComplete, parseTags, readSettings, schemaAddType } from "@unbrained/pm-cli/sdk";
+import { certifyCompleteListResult, commitImportedItem, create, get, getItemPath, listAllComplete, parseTags, readSettings, schemaAddStatus, schemaAddType } from "@unbrained/pm-cli/sdk";
 import { decodeCompletePmItems, parseImportOptions, runImport, type GhIssue } from "../index.ts";
 import { normalizeImportValue, readImportTypeNames, serializeImportTags } from "../import-fidelity.ts";
 import { boundedCli } from "./helpers/bounded-cli.ts";
@@ -48,11 +48,14 @@ test("tag transport property preserves every token and legacy lossless wire repr
   for (const [tags, legacy] of [[[], ""], [["plain", "second"], "plain,second"], [[" X "], " X "]] as const) assert.equal(serializeImportTags(tags), legacy);
 });
 
-test("mixed closed imports are byte-stable for SDK type aliases and adversarial label tokens", async () => {
-  const root = mkdtempSync(join(tmpdir(), "pm-projection-"));
+test("mixed closed imports are byte-stable for nested workspace SDK aliases and adversarial label tokens", async () => {
+  const workspace = mkdtempSync(join(tmpdir(), "pm-projection-"));
+  const root = join(workspace, ".agents/pm");
   try {
     initialize(root);
     await schemaAddType("Investigation", { folder: "investigations", alias: ["probe"] }, { pmRoot: root, noExtensions: true });
+    await schemaAddStatus("working", { alias: ["busy-now"], role: ["active"] }, { pmRoot: workspace, noExtensions: true });
+    await schemaAddStatus("verified", { alias: ["settled"], role: ["terminal", "terminal_done"] }, { pmRoot: workspace, noExtensions: true });
     const types = await readImportTypeNames(root);
     for (const unknown of ["constructor", "__proto__", "missing"]) assert.equal(normalizeImportValue("type", unknown, types), unknown);
     assert.equal(normalizeImportValue("type", null, types), null);
@@ -62,10 +65,10 @@ test("mixed closed imports are byte-stable for SDK type aliases and adversarial 
       : request.url!.includes("/issues?") ? current : []), async () => {
       let number = 1;
       for (const type of ["issue", " ISSUE ", "task", " PROBE "]) for (const labels of labelSets) {
-        const native = (await create({ title: "Native linked item", type, tags: `gh:fixture/project#${number + 1}` }, { pmRoot: root, noExtensions: true })).item;
+        const native = (await create({ title: "Native linked item", type, status: "busy-now", tags: `gh:fixture/project#${number + 1}` }, { pmRoot: root, noExtensions: true })).item;
         current = [issue(number, labels), issue(number + 1, labels)];
         const options = parseImportOptions({ atomic: true, type });
-        const first = await runImport("fixture/project", root, options);
+        const first = await runImport("fixture/project", workspace, options);
         assert.equal("imported" in first && first.imported, 1);
         assert.equal("updated" in first && first.updated, 1);
         const items = decodeCompletePmItems(certifyCompleteListResult(await listAllComplete({ includeBody: true }, { pmRoot: root, noExtensions: true })));
@@ -75,11 +78,11 @@ test("mixed closed imports are byte-stable for SDK type aliases and adversarial 
           assert.deepEqual(actual.tags, parseTags(JSON.stringify([...labels, `gh:fixture/project#${source.number}`])));
         }
         const before = durable(root);
-        const repeat = await runImport("fixture/project", root, options);
+        const repeat = await runImport("fixture/project", workspace, options);
         assert.ok(durable(root) === before, "Equivalent source input must preserve all items and histories.");
         assert.equal("unchanged" in repeat && repeat.unchanged, true, `${type}: ${JSON.stringify(labels)}`);
         current = current.map(source => ({ ...source, labels: [...source.labels].reverse().concat(source.labels.slice(0, 1)) }));
-        const equivalent = await runImport("fixture/project", root, parseImportOptions({ atomic: true, type: native.type }));
+        const equivalent = await runImport("fixture/project", relative(process.cwd(), root), parseImportOptions({ atomic: true, type: native.type }));
         assert.equal("unchanged" in equivalent && equivalent.unchanged, true, "Canonical type names and reordered labels are equivalent inputs.");
         assert.ok(durable(root) === before, "Canonical spellings and reordered labels must preserve durable bytes.");
         assert.equal((await get(native.id, {}, { pmRoot: root, noExtensions: true })).item.status, "closed");
@@ -87,7 +90,7 @@ test("mixed closed imports are byte-stable for SDK type aliases and adversarial 
       }
       for (const [alias, canonical] of types) for (const spelling of [alias, alias.toUpperCase(), ` ${alias} `]) assert.equal(normalizeImportValue("type", spelling, types), canonical);
     });
-  } finally { rmSync(root, { recursive: true, force: true }); }
+  } finally { rmSync(workspace, { recursive: true, force: true }); }
 });
 
 for (const atomic of [false, true]) test(`additive provider links preserve literal tags (${atomic})`, async () => {
@@ -127,6 +130,8 @@ test("packed npm and native Bun consumers preserve mixed-import bytes in JSON an
   mkdirSync(join(base, "home"));
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: join(base, "home"), NPM_CONFIG_USERCONFIG: devNull, PM_AUTHOR: "fixture", PM_PATH: pmRoot,
     PATH: join(root, "node_modules/.bin") + delimiter + process.env.PATH, GITHUB_TOKEN: "fixture" };
+  for (const key of Object.keys(env)) if (/token|secret|password|credential|api.?key|access.?key|private.?key|npm_media_server|ssh_auth_sock|^npm_auth$/i.test(key)) delete env[key];
+  env.GITHUB_TOKEN = "fixture";
   delete env.NODE_TEST_CONTEXT;
   /** Keep the HTTP fixture responsive while a real package manager or CLI child runs. */
   const run = async (bin: string, args: string[], cwd = root, extra = env): Promise<string> => {
@@ -149,7 +154,7 @@ test("packed npm and native Bun consumers preserve mixed-import bytes in JSON an
     let payload = [issue(1, labelSets.flat()), issue(2, labelSets.flat())];
     await withMockGithub((request, response) => jsonResponse(response, 200, request.url === "/graphql"
       ? { data: { repository: { issue: { timelineItems: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } } }
-      : request.url!.includes("/issues?") ? payload : []), async server => {
+      : request.url!.includes("/issues?") ? payload : request.url === "/repos/fixture/project/issues/7" ? { state: "open" } : []), async server => {
       const args = ["--path", pmRoot, "github", "import", "fixture/project", "--atomic", "--type", "issue"];
       const environment = { ...env, PM_GITHUB_API_BASE: server.baseUrl };
       const first = JSON.parse(await run("npm", ["exec", "--offline", "--", "pm", ...args, "--json"], root, environment)) as { imported: number };
@@ -180,6 +185,36 @@ test("packed npm and native Bun consumers preserve mixed-import bytes in JSON an
       assert.equal(plainRepeat.updated, 2, "Plain import retains its documented apply-each-time accounting.");
       const actual = JSON.parse(await run(cli, ["--path", pmRoot, "--output-include", "full", "list", "--all", "--json"], root, environment)) as { items: Array<{ tags: string[]; type: string }> };
       for (const item of actual.items) { assert.equal(item.type, "Issue"); assert.ok(item.tags.includes("area,api")); }
+      await schemaAddType("Investigation", { folder: "investigations", alias: ["probe"] }, { pmRoot: root, noExtensions: true });
+      await schemaAddStatus("working", { alias: ["busy-now"], role: ["active"] }, { pmRoot: root, noExtensions: true });
+      await schemaAddStatus("verified", { alias: ["settled"], role: ["terminal", "terminal_done"] }, { pmRoot: root, noExtensions: true });
+      await run(cli, ["--path", root, "create", "--title", "Nested native", "--type", "probe", "--status", "busy-now", "--tags", "gh:fixture/project#6"], root, environment);
+      payload = [issue(5, labelSets.flat()), issue(6, labelSets.flat())];
+      const nestedArgs = ["--path", root, "github", "import", "fixture/project", "--atomic", "--type", "probe"];
+      const nestedFirst = JSON.parse(await run("npm", ["exec", "--offline", "--", "pm", ...nestedArgs, "--json"], root, environment)) as { imported: number; updated: number };
+      assert.equal(nestedFirst.imported, 1);
+      assert.equal(nestedFirst.updated, 1);
+      const nestedBefore = durable(pmRoot);
+      for (const bin of ["npm", "bun"]) for (const json of [true, false]) {
+        const output = await run(bin, bin === "npm" ? ["exec", "--offline", "--", "pm", ...nestedArgs, ...(json ? ["--json"] : [])]
+          : ["--bun", cli, ...nestedArgs, ...(json ? ["--json"] : [])], root, environment);
+        const receipt = (json ? JSON.parse(output) : decode(output)) as { unchanged: boolean; imported: number; updated: number };
+        assert.equal(receipt.unchanged, true);
+        assert.equal(receipt.imported, 0);
+        assert.equal(receipt.updated, 0);
+        assert.ok(durable(pmRoot) === nestedBefore, "Nested workspace repeats must preserve every item and history byte.");
+      }
+      const custom = await create({ title: "Terminal custom", type: "probe", status: "busy-now", tags: "gh:fixture/project#7" }, { pmRoot: root, noExtensions: true });
+      await run(cli, ["--path", root, "update", custom.item.id, "--status", "settled", "--close-reason", "Fixture verification"], root, environment);
+      const providerBefore = durable(pmRoot);
+      for (const bin of ["npm", "bun"]) for (const json of [true, false]) for (const command of ["sync", "export"]) {
+        const args = ["--path", root, "github", command, "--repo", "fixture/project", "--ids", custom.item.id, "--dry-run", ...(json ? ["--json"] : [])];
+        const output = await run(bin, bin === "npm" ? ["exec", "--offline", "--", "pm", ...args] : ["--bun", cli, ...args], root, environment);
+        const receipt = (json ? JSON.parse(output) : decode(output)) as { wouldSync: number; plan: Array<{ payload: { state: string } }> };
+        if (command === "sync") assert.equal(receipt.wouldSync, 1);
+        else { assert.equal(receipt.plan.length, 1); assert.equal(receipt.plan[0]!.payload.state, "closed"); }
+        assert.ok(durable(pmRoot) === providerBefore, "Workspace provider previews must preserve native items/history.");
+      }
     });
   } finally { rmSync(base, { recursive: true, force: true }); }
 });

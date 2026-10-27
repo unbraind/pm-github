@@ -1,7 +1,8 @@
+import { readGithubWorkspace, githubStatusIsTerminal } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
 import { normalizeImportValue } from "./import-fidelity.ts";
 /** Close delivered tracker items using merged pull requests and head-check evidence. */
-import { close, hashDocument, locateItem, readLocatedItem, readSettings, resolveItemTypeRegistry, runWithActiveExtensions, setActiveExtensionHooks, listAllComplete, certifyCompleteListResult, getHistoryPath, readHistoryEntries, verifyHistoryEntries, PmCliError, EXIT_CODE, type ItemDocument } from "@unbrained/pm-cli/sdk";
+import { close, hashDocument, locateItem, readLocatedItem, runWithActiveExtensions, setActiveExtensionHooks, listAllComplete, certifyCompleteListResult, getHistoryPath, readHistoryEntries, verifyHistoryEntries, PmCliError, EXIT_CODE, type ItemDocument } from "@unbrained/pm-cli/sdk";
 
 /** Existing GitHub REST transport, supplied by the extension entry point. */
 export interface CloseoutApi {
@@ -301,9 +302,6 @@ export async function checkCloseoutHead(api: CloseoutApi, repo: string, pr: Pull
   return result;
 }
 
-/** Statuses that already ended an item's lifecycle. */
-const TERMINAL_STATUSES: readonly string[] = ["closed", "canceled"];
-
 /** GitHub-style closing keywords that declare delivery of the link they directly precede. */
 const CLOSING_KEYWORDS = new Set(["close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves", "resolved", "deliver", "delivers", "delivered"]);
 
@@ -497,7 +495,7 @@ export function runCloseout(pmRoot: string, repo: string | undefined, options: R
 }
 
 /** Re-select a conflicted item once; each attempt installs a lock-scoped SDK precondition. */
-async function closeoutAttempt(pmRoot: string, repo: string | undefined, options: Record<string, unknown>, api: CloseoutApi, retry: boolean, observer?: CloseoutObserver, onlyItem?: string): Promise<{
+async function closeoutAttempt(pmPath: string, repo: string | undefined, options: Record<string, unknown>, api: CloseoutApi, retry: boolean, observer?: CloseoutObserver, onlyItem?: string): Promise<{
   command: string; repo: string; dry_run: boolean; plan: CloseoutRow[]; checks: CheckGate[]; closed: number; failed: number;
 }> {
   if (!repo || !/^(?!\.{1,2}\/)[A-Za-z0-9_.-]+\/(?!\.{1,2}$)[A-Za-z0-9_.-]+$/.test(repo)) throw new CloseoutUsageError("closeout requires --repo owner/repo or PM_GITHUB_REPO.");
@@ -524,10 +522,11 @@ async function closeoutAttempt(pmRoot: string, repo: string | undefined, options
       }
     }
   }
+  const workspace = await readGithubWorkspace(pmPath);
+  const pmRoot = workspace.pmRoot;
   const corpus = certifyCompleteListResult(await listAllComplete({}, { pmRoot, noExtensions: true }));
   await observer?.("listed");
-  const settings = await readSettings(pmRoot);
-  const registry = resolveItemTypeRegistry(settings);
+  const { settings, types: registry } = workspace;
   const types = registry.type_to_folder;
   const typeNames = new Map(Object.entries(registry.alias_to_type));
   /** Container eligibility uses the same registry as persisted item types. */
@@ -549,7 +548,7 @@ async function closeoutAttempt(pmRoot: string, repo: string | undefined, options
   const activeChildren = new Map<string, number>();
   for (const item of items.values()) {
     const parent = (item as { parent?: unknown }).parent;
-    if (typeof parent === "string" && !TERMINAL_STATUSES.includes(item.status)) activeChildren.set(parent, (activeChildren.get(parent) ?? 0) + 1);
+    if (typeof parent === "string" && !githubStatusIsTerminal(item.status, workspace.statuses)) activeChildren.set(parent, (activeChildren.get(parent) ?? 0) + 1);
   }
   const plan: CloseoutRow[] = [];
   const checks: CheckGate[] = [];
@@ -594,7 +593,7 @@ async function closeoutAttempt(pmRoot: string, repo: string | undefined, options
       if (ref.repo.toLowerCase() !== repo.toLowerCase()) { code = "other_repository"; reason = "Link points to another repository."; }
       else if (!items.has(ref.item)) { code = "unknown_item"; reason = "Item does not exist in the tracker."; }
       else if (skip.has(ref.item)) { code = "explicit_skip"; reason = "Explicitly excluded by --skip."; }
-      else if (TERMINAL_STATUSES.includes(items.get(ref.item)!.status)) { code = "already_terminal"; reason = "Item is already closed or canceled."; }
+      else if (githubStatusIsTerminal(items.get(ref.item)!.status, workspace.statuses)) { code = "already_terminal"; reason = "Item is already closed or canceled."; }
       else if (pr.merged === false) { code = "not_merged"; reason = "Pull request is confirmed unmerged and cannot deliver this item."; }
       else if (isEpic(items.get(ref.item)!.type)) { code = "epic"; reason = "Epics close when their children are done, not by a pull request."; }
       else if (activeChildren.has(ref.item)) { code = "active_children"; reason = `Item has ${activeChildren.get(ref.item)} non-terminal child item(s).`; }
@@ -623,7 +622,7 @@ async function closeoutAttempt(pmRoot: string, repo: string | undefined, options
       const row: CloseoutRow = { item: ref.item, pr: number, action: "skip", code, reason };
       plan.push(row);
       if (role !== "context" && pr.merged !== false && items.has(ref.item) && ref.repo.toLowerCase() === repo.toLowerCase()
-        && !skip.has(ref.item) && !TERMINAL_STATUSES.includes(items.get(ref.item)!.status)
+        && !skip.has(ref.item) && !githubStatusIsTerminal(items.get(ref.item)!.status, workspace.statuses)
         && !isEpic(items.get(ref.item)!.type) && !activeChildren.has(ref.item)) {
         const group = candidates.get(ref.item) ?? [];
         group.push({ row, pr, declared: ref.declared, commitsReadable });
@@ -636,7 +635,7 @@ async function closeoutAttempt(pmRoot: string, repo: string | undefined, options
   for (const [number, reason] of unreadable) {
     const url = `https://github.com/${repo}/pull/${number}`;
     for (const item of items.values()) {
-      if (skip.has(item.id) || TERMINAL_STATUSES.includes(item.status) || isEpic(item.type) || activeChildren.has(item.id)) continue;
+      if (skip.has(item.id) || githubStatusIsTerminal(item.status, workspace.statuses) || isEpic(item.type) || activeChildren.has(item.id)) continue;
       const row: CloseoutRow = { item: item.id, pr: number, action: "skip", code: "head_evidence_unavailable", reason };
       plan.push(row);
       const group = candidates.get(item.id) ?? [];
