@@ -3,6 +3,12 @@
 Validation date: 2026-10-27. Final-head full release receipts and run links are
 recorded in [PR 188](https://github.com/unbraind/pm-github/pull/188).
 
+The review-fix source run
+[40491011369](https://github.com/unbraind/pm-github/actions/runs/40491011369)
+has all four npm/Bun jobs queued without assigned runners. The queue rules cap
+waiting after push at 30 minutes. Pending checks are not passing evidence;
+the PR records the final-head run and exact pending jobs for the orchestrator.
+
 Review round 1 corrected the provider-name comparison class across policy
 filters, mapping destinations, rename collisions, export label maps (including
 unmapped exports), form-label contracts, composed previews and POST/PATCH
@@ -49,9 +55,11 @@ whitespace/CRLF, older policy replays and JSON/TOON round trips. It compares
 counts to a simple tag/policy reference model and reads complete native item
 state back through the SDK before and after planning, including relationships
 and every field observed by this feature. No SDK mocks or handwritten native
-normalization are used. Existing provider import/export/sync behavior is not
-changed by this feature; the property scope is the new planning and validation
-paths and their preservation of SDK state.
+normalization are used. The feature adds no new provider import/export/sync
+path. The review fix also makes existing export/form label outputs follow the
+same case-insensitive provider-name semantics. The property scope covers
+planning, validation, SDK state preservation and generated export/form case
+permutations.
 
 Independently reverting native tag conversion, revision/digest comparison, the
 row cap, or malformed-provenance filtering makes its regression fail. Restoring
