@@ -48,6 +48,18 @@ async function item(root: string, fields: Record<string, unknown>, body = "") {
 /** Verify typed expected refusals without depending on diagnostic prose. */
 function code(expected: string) { return (error: unknown) => { assert.equal((error as { code: string }).code, expected); return true; }; }
 
+test("identity repair removes exact delimiter-bearing claims without changing other literal tags", async () => tracker(async root => {
+  const claim = "gh:fixture/repo,part#1";
+  const owner = await item(root, { github_url: "https://github.com/fixture/repo,part/issues/1", tags: [claim] });
+  const retained = ["keep,comma", '["json"]'];
+  const detach = await item(root, { tags: [claim, ...retained] });
+  const proposed = await planGithubIdentityRepair(root, claim, owner, detach);
+  const result = await applyGithubIdentityRepair(root, { identity: claim, owner, detach, approval: proposed.approval, author: "fixture" });
+  assert.equal(result.changed, true);
+  assert.deepEqual(new Set((await get(detach, {}, { pmRoot: root })).item.tags), new Set(retained));
+  assert.equal((await applyGithubIdentityRepair(root, { identity: claim, owner, detach, approval: proposed.approval, author: "fixture" })).changed, false);
+}));
+
 test("copied prose, structured multi-provider owners, exact refs and bounded graph remain distinct without git", async () => tracker(async root => {
   const owner = await item(root, { github_url: url, tags: [key], github_link_only: false });
   const copied = await item(root, { tags: ["linear:example"], linear_id: null, jira_key: "", ado_id: "   " }, `Example [linear] linear_id=sample ${url} ${url}`);

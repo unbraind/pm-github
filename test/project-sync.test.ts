@@ -64,7 +64,7 @@ function items(root: string): LocalItem[] {
 
 /** Create a local item and return its generated identity. */
 function create(root: string, title: string, tags: string[] = [], status = "open", extra: string[] = []): string {
-  pm(root, ["create", "task", title, "--status", status, "--tags", tags.join(","), ...extra]);
+  pm(root, ["create", "task", title, "--status", status, "--tags", JSON.stringify(tags), ...extra]);
   const item = items(root).find(item => item.title === title);
   assert.ok(item);
   return item.id;
@@ -135,9 +135,10 @@ test("project sync scopes previews, honors dry-run over apply, and rejects empty
 
 test("project sync applies draft and issue additions, status writes, and preserves local tags", async t => {
   const root = tracker(t);
-  const draftId = create(root, "Draft", ["keep"], "in_progress", ["--body", "Local body"]);
-  const issueId = create(root, "Issue", ["gh:acme/widgets#7", "keep"]);
-  const linkedId = create(root, "Linked", [projectItemTag(REF, "linked")]);
+  const retained = ["keep", "area,api", '["json"]'];
+  const draftId = create(root, "Draft", retained, "in_progress", ["--body", "Local body"]);
+  const issueId = create(root, "Issue", ["gh:acme/widgets#7", ...retained]);
+  const linkedId = create(root, "Linked", [projectItemTag(REF, "linked"), ...retained]);
   const calls: GraphqlCall[] = [];
   await withMockGithub(board([draft("linked")], (_req, res, body) => {
     const call = JSON.parse(body) as GraphqlCall;
@@ -156,15 +157,27 @@ test("project sync applies draft and issue additions, status writes, and preserv
   assert.deepEqual(calls.find(c => c.query.includes("issueOrPullRequest"))?.variables, { o: "acme", n: "widgets", num: 7 });
   assert.deepEqual(calls.find(c => c.query.includes("addProjectV2ItemById"))?.variables, { p: "board", c: "issue-node" });
   const after = items(root);
-  assert.deepEqual(new Set(after.find(i => i.id === draftId)?.tags), new Set(["keep", projectItemTag(REF, "new-draft")]));
+  assert.deepEqual(new Set(after.find(i => i.id === draftId)?.tags), new Set([...retained, projectItemTag(REF, "new-draft")]));
   assert.ok(after.find(i => i.id === issueId)?.tags?.includes(projectItemTag(REF, "new-issue")));
-  assert.deepEqual(after.find(i => i.id === linkedId)?.tags, [projectItemTag(REF, "linked")]);
+  for (const item of after) for (const tag of retained) assert.ok(item.tags!.includes(tag));
+  assert.deepEqual(new Set(after.find(i => i.id === linkedId)?.tags), new Set([projectItemTag(REF, "linked"), ...retained]));
+});
+
+test("project import preserves literal tags when replacing an existing tag set", async t => {
+  const root = tracker(t);
+  const retained = [projectItemTag(REF, "linked"), "area,api", '["json"]'];
+  const id = create(root, "Linked", retained);
+  await withMockGithub(board([draft("linked", "Todo", "todo")]), async () => {
+    const ext = await harness;
+    await withEnv({ GITHUB_TOKEN: "fixture", GH_TOKEN: undefined }, () => ext.runCommand({ command: "github project import", args: ["acme/5"], options: {}, pmRoot: root, global: { json: true } }));
+  });
+  assert.deepEqual(new Set(items(root).find(item => item.id === id)!.tags), new Set(retained));
 });
 
 for (const prefer of ["pm", "github"]) {
   test(`project sync resolves simultaneous status conflicts in favor of ${prefer}`, async t => {
     const root = tracker(t);
-    create(root, "Linked", [projectItemTag(REF, "linked")]);
+    create(root, "Linked", [projectItemTag(REF, "linked"), "area,api", '["json"]']);
     let mutations = 0;
     await withMockGithub(board([draft("linked")], (_req, res) => {
       mutations++;
@@ -175,6 +188,7 @@ for (const prefer of ["pm", "github"]) {
     });
     assert.equal(mutations, prefer === "pm" ? 1 : 0);
     const local = items(root)[0];
+    assert.ok(local.tags!.includes("area,api") && local.tags!.includes('["json"]'));
     assert.equal(local.status, prefer === "pm" ? "open" : "closed");
     if (prefer === "github") assert.equal(local.close_reason, "GitHub project status → closed");
   });

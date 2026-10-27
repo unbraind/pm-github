@@ -30,7 +30,7 @@ import { compileIssueForm, completeIssueForm, readRepositoryIssueForm, refuseIss
 export { compileIssueForm, completeIssueForm, readRepositoryIssueForm } from "./issue-forms.ts";
 export type { IssueFormInput, IssueFormSelection, IssueFormContract, IssueFormReport, IssueFormCompletion, IssueFormRefusalCode, FormField, FormRepair, IssueFormReader } from "./issue-forms.ts";
 import {
-  AmbiguousCitationError, buildImportFidelity, fetchImportTimeline, importFidelityFields, matchImportedIssue, normalizeImportValue, persistImportFidelity, readImportReleases, selectImportContextIndex, validateImportLifetime,
+  AmbiguousCitationError, buildImportFidelity, fetchImportTimeline, importFidelityFields, matchImportedIssue, normalizeImportValue, persistImportFidelity, readImportReleases, readImportTypeNames, selectImportContextIndex, serializeImportTags, validateImportLifetime,
   type AmbiguousCitationPlan, type CitationCandidate, type ImportFidelity,
 } from "./import-fidelity.ts";
 import { refreshChanges, runRefresh } from "./refresh.ts";
@@ -1469,14 +1469,14 @@ export function buildAtomicImportMutations(
   const changed = updateOnly ? new Set(refreshChanges(entry).map(change => change.field)) : undefined;
   const audit = updateOnly ? { comment: [`Refreshed linked GitHub issue ${repo.toLowerCase()}#${entry.issueNumber}`] } : {};
   if (entry.linkOnly && entry.match?.id) {
-    return { itemId: entry.match.id, mutations: [{ op: "update", id: entry.match.id, options: { ...(!changed || changed.has("tags") ? { addTags: entry.tags } : {}), ...audit } }] };
+    return { itemId: entry.match.id, mutations: [{ op: "update", id: entry.match.id, options: { ...(!changed || changed.has("tags") ? { addTags: entry.tags.map(tag => serializeImportTags([tag])) } : {}), ...audit } }] };
   }
   const sharedOptions: Record<string, unknown> = {
     title: entry.title,
     type: entry.itemType,
     description: entry.description,
     body: entry.body,
-    tags: entry.tags.join(","),
+    tags: serializeImportTags(entry.tags),
     ...(entry.assignee ? { assignee: entry.assignee } : {}),
     ...(entry.milestone ? { sprint: entry.milestone } : {}),
     ...(entry.status === "canceled" ? { closeReason: entry.fidelity?.github_close_reason ?? `GitHub issue #${entry.issueNumber} closed` } : {}),
@@ -1534,7 +1534,7 @@ export function buildAtomicImportMutations(
   const updateOptions: Record<string, unknown> = {
     ...(updateOnly ? {
       ...(changed!.has("title") ? { title: entry.title } : {}),
-      ...(changed!.has("tags") ? { tags: entry.tags.join(",") } : {}),
+      ...(changed!.has("tags") ? { tags: serializeImportTags(entry.tags) } : {}),
       ...(changed!.has("status") && sharedOptions.closeReason !== undefined ? { closeReason: sharedOptions.closeReason } : {}),
     } : sharedOptions), ...(!changed || changed.has("status") ? statusOptions : {}), ...audit,
   };
@@ -3176,12 +3176,12 @@ export async function prepareGithubImport(
 }
 
 /** Recognize a complete source projection without treating the SDK mutation clock as content. */
-export function importEntryUnchanged(entry: PreparedGithubImport): boolean {
+export function importEntryUnchanged(entry: PreparedGithubImport, types?: ReadonlyMap<string, string>): boolean {
   if (!entry.match?.id || !entry.fidelity || refreshChanges(entry).length !== 0) return false;
   if (entry.linkOnly) return true;
   const fields: Record<string, unknown> = { type: entry.itemType, description: entry.description, body: entry.body,
     ...(entry.assignee ? { assignee: entry.assignee } : {}), ...(entry.milestone ? { sprint: entry.milestone } : {}) };
-  return Object.entries(fields).every(([field, value]) => normalizeImportValue(field, ownValue(entry.match, field) ?? "") === normalizeImportValue(field, value));
+  return Object.entries(fields).every(([field, value]) => normalizeImportValue(field, ownValue(entry.match, field) ?? "", types) === normalizeImportValue(field, value, types));
 }
 
 /** Receipts from the gated import's completeness check. */
@@ -3652,7 +3652,8 @@ export async function runImport(
     // Mixed create/update batches can select a fresh journal after the first
     // apply. Replaying an otherwise identical SDK UPDATE advances updated_at.
     // Never hide an interrupted journal behind the unchanged-state shortcut.
-    const unchanged = prepared.every(importEntryUnchanged) && (await listUnfinishedGithubImports(pmRoot)).length === 0;
+    const typeNames = await readImportTypeNames(pmRoot);
+    const unchanged = prepared.every(entry => importEntryUnchanged(entry, typeNames)) && (await listUnfinishedGithubImports(pmRoot)).length === 0;
     const result = unchanged ? { transactionId: undefined, recovered: false, recoveredItems: undefined, imported: 0, updated: 0,
       itemIds: new Map(prepared.map(entry => [entry.issueNumber, entry.match!.id!])) }
       : await (dependencies.commitAtomic ?? importGithubAtomic)(pmRoot, repo, prepared);
@@ -3761,7 +3762,7 @@ export async function runImport(
 
     if (prepared.linkOnly) {
       const ownerId = match!.id!;
-      const linked = pmRun(["--path", pmRoot, "update", ownerId, "--add-tags", tags.join(",")]);
+      const linked = pmRun(["--path", pmRoot, "update", ownerId, "--add-tags", serializeImportTags(tags)]);
       if (!linked.ok) throw new CommandError(`Could not link GitHub issue #${issue.number} to its existing owner.`);
       await persistImportFidelity(pmRoot, ownerId, prepared.fidelity!, true);
       if (prepared.identity?.via === "citation") adopted++;
@@ -3776,7 +3777,7 @@ export async function runImport(
         "--title", title,
         "--description", description,
         "--body", body,
-        "--tags", tags.join(","),
+        "--tags", serializeImportTags(tags),
         "--message", `Re-imported from GitHub #${issue.number}`,
       ];
       if (assignee) updArgs.push("--assignee", assignee);
@@ -3831,7 +3832,7 @@ export async function runImport(
       "--status", createStatus,
       "--description", description,
       "--body", body,
-      "--tags", tags.join(","),
+      "--tags", serializeImportTags(tags),
       "--message", `Imported from GitHub #${issue.number}`,
     ];
     if (status === "canceled") createArgs.push("--close-reason", prepared.fidelity!.github_close_reason);
@@ -6308,7 +6309,7 @@ async function runProjectImport(ctx: CommandHandlerContext) {
         "--path", ctx.pm_root, "update", entry.pmId,
         "--title", entry.title,
         "--description", description,
-        "--tags", entry.tags.join(","),
+        "--tags", serializeImportTags(entry.tags),
         "--message", `Re-imported from GitHub project ${ref.owner}/${ref.number}`,
       ];
       if (entry.body) updArgs.push("--body", entry.body);
@@ -6343,7 +6344,7 @@ async function runProjectImport(ctx: CommandHandlerContext) {
       "--type", itemType,
       "--status", createStatus,
       "--description", description,
-      "--tags", entry.tags.join(","),
+      "--tags", serializeImportTags(entry.tags),
       "--message", `Imported from GitHub project ${ref.owner}/${ref.number}`,
     ];
     if (entry.body) createArgs.push("--body", entry.body);
@@ -6420,7 +6421,7 @@ async function applyPushEntry(
       if (!existingTags.includes(tag)) {
         const upd = pmRun([
           "--path", pmRoot, "update", pm.id,
-          "--tags", [...existingTags, tag].join(","),
+          "--tags", serializeImportTags([...existingTags, tag]),
           "--message", `Linked to GitHub project ${ref.owner}/${ref.number}`,
         ]);
         if (!upd.ok) return { changed: true, error: `linked but tag write failed — ${upd.stderr}` };

@@ -1,4 +1,5 @@
 import { ownValue } from "./own-record.ts";
+import { normalizeImportValue } from "./import-fidelity.ts";
 /** Close delivered tracker items using merged pull requests and head-check evidence. */
 import { close, hashDocument, locateItem, readLocatedItem, readSettings, resolveItemTypeRegistry, runWithActiveExtensions, setActiveExtensionHooks, listAllComplete, certifyCompleteListResult, getHistoryPath, readHistoryEntries, verifyHistoryEntries, PmCliError, EXIT_CODE, type ItemDocument } from "@unbrained/pm-cli/sdk";
 
@@ -526,7 +527,11 @@ async function closeoutAttempt(pmRoot: string, repo: string | undefined, options
   const corpus = certifyCompleteListResult(await listAllComplete({}, { pmRoot, noExtensions: true }));
   await observer?.("listed");
   const settings = await readSettings(pmRoot);
-  const types = resolveItemTypeRegistry(settings).type_to_folder;
+  const registry = resolveItemTypeRegistry(settings);
+  const types = registry.type_to_folder;
+  const typeNames = new Map(Object.entries(registry.alias_to_type));
+  /** Container eligibility uses the same registry as persisted item types. */
+  const isEpic = (type: unknown) => normalizeImportValue("type", type, typeNames) === normalizeImportValue("type", "Epic", typeNames);
   const snapshots = new Map<string, string>();
   const documents = new Map<string, ItemDocument>();
   const items = new Map(corpus.items.map(item => [item.id, item]));
@@ -591,7 +596,7 @@ async function closeoutAttempt(pmRoot: string, repo: string | undefined, options
       else if (skip.has(ref.item)) { code = "explicit_skip"; reason = "Explicitly excluded by --skip."; }
       else if (TERMINAL_STATUSES.includes(items.get(ref.item)!.status)) { code = "already_terminal"; reason = "Item is already closed or canceled."; }
       else if (pr.merged === false) { code = "not_merged"; reason = "Pull request is confirmed unmerged and cannot deliver this item."; }
-      else if (items.get(ref.item)!.type === "Epic") { code = "epic"; reason = "Epics close when their children are done, not by a pull request."; }
+      else if (isEpic(items.get(ref.item)!.type)) { code = "epic"; reason = "Epics close when their children are done, not by a pull request."; }
       else if (activeChildren.has(ref.item)) { code = "active_children"; reason = `Item has ${activeChildren.get(ref.item)} non-terminal child item(s).`; }
       else if (role === "context") {
         code = "not_delivery";
@@ -619,7 +624,7 @@ async function closeoutAttempt(pmRoot: string, repo: string | undefined, options
       plan.push(row);
       if (role !== "context" && pr.merged !== false && items.has(ref.item) && ref.repo.toLowerCase() === repo.toLowerCase()
         && !skip.has(ref.item) && !TERMINAL_STATUSES.includes(items.get(ref.item)!.status)
-        && items.get(ref.item)!.type !== "Epic" && !activeChildren.has(ref.item)) {
+        && !isEpic(items.get(ref.item)!.type) && !activeChildren.has(ref.item)) {
         const group = candidates.get(ref.item) ?? [];
         group.push({ row, pr, declared: ref.declared, commitsReadable });
         candidates.set(ref.item, group);
@@ -631,7 +636,7 @@ async function closeoutAttempt(pmRoot: string, repo: string | undefined, options
   for (const [number, reason] of unreadable) {
     const url = `https://github.com/${repo}/pull/${number}`;
     for (const item of items.values()) {
-      if (skip.has(item.id) || TERMINAL_STATUSES.includes(item.status) || item.type === "Epic" || activeChildren.has(item.id)) continue;
+      if (skip.has(item.id) || TERMINAL_STATUSES.includes(item.status) || isEpic(item.type) || activeChildren.has(item.id)) continue;
       const row: CloseoutRow = { item: item.id, pr: number, action: "skip", code: "head_evidence_unavailable", reason };
       plan.push(row);
       const group = candidates.get(item.id) ?? [];

@@ -49,6 +49,32 @@ page and stops before evaluating PRs; it makes no tracker writes.
 
 ## Other refusal classes
 
+### Canonical values and lossless tag transport
+
+Re-review found two additional repeat-import cases: `--type issue` is persisted
+as `Issue` by the SDK, and a label such as `area,api` was split by CSV mutation
+options. Comparisons now resolve both type values through the SDK registry,
+including configured aliases. All tag-writing paths share a lossless encoder:
+it preserves the existing CSV wire representation where equivalent, and uses
+the SDK's JSON-array representation otherwise. Stored arrays remain arrays of
+literal tokens during comparison. Raw type inputs and ordinary tag wire bytes
+stay stable for existing transaction fingerprints.
+
+The package-wide audit also found the same rules in project import/push,
+provider-link updates, refresh, identity repair tag removal, and closeout's
+three Epic eligibility checks. Legacy `epic`/`EPIC` metadata remains readable
+and cannot be closed as a delivered leaf. Plain import retains its existing
+apply-each-time behavior; atomic import and refresh retain their byte-stable
+repeat contract.
+
+The class regression suite exercises real SDK writers in non-git trackers,
+custom type aliases, adversarial tag pairs, and packed npm/native Bun consumers
+with JSON and TOON output. Restoring only the previous type normalizer fails
+both the mixed-import and legacy-Epic tests (2/2 failures). Restoring only the
+previous CSV transport fails seven of nine class checks, covering import,
+refresh, provider links, project push and exact identity removal. No existing
+test or acceptance threshold was weakened.
+
 The latest published version at investigation time was **2026.10.26**, published
 2026-10-26. It retains the closeout pagination guard and generic workflow error.
 It also includes the SDK lifecycle-finalization change from PR #180, but that

@@ -3,7 +3,7 @@ import { ownValue, setOwnValue } from "./own-record.ts";
 import { spawnSync } from "node:child_process";
 import { decodeHTML } from "entities";
 import {
-  canonicalDocument, createHistoryEntry, mutateItem, normalizeItemId, normalizeStatusInput, parseTags, readSettings, resolvePmRoot, toNonEmptyImportString,
+  canonicalDocument, createHistoryEntry, getActiveExtensionRegistrations, ITEM_TYPE_VALUES, mutateItem, normalizeItemId, normalizeStatusInput, parseTags, readSettings, resolveItemTypeRegistry, resolvePmRoot, toNonEmptyImportString,
 } from "@unbrained/pm-cli/sdk";
 import { CommandError, fetchJSON, githubApiBase, githubGraphQL, parseNextLink, parseProvenanceTag, type GhIssue, type PmItem } from "./index.ts";
 
@@ -432,8 +432,27 @@ export function importFidelityFields(fidelity: ImportFidelity, linkOnly: boolean
   };
 }
 
-/** Compare source fields using SDK status/tag/assignment semantics and document body formatting. */
-export function normalizeImportValue(field: string, value: unknown): unknown {
+/** Built-in SDK names also canonicalize entries prepared without a workspace context. */
+const defaultImportTypes: ReadonlyMap<string, string> = new Map(ITEM_TYPE_VALUES.map(name => [name.toLowerCase(), name]));
+
+/** Resolve configured and extension-contributed aliases through the writer's SDK registry. */
+export async function readImportTypeNames(pmRoot: string): Promise<ReadonlyMap<string, string>> {
+  const registry = resolveItemTypeRegistry(await readSettings(pmRoot), getActiveExtensionRegistrations());
+  return new Map(Object.entries(registry.alias_to_type));
+}
+
+/** Encode complete tag tokens for SDK options and CLI flags without CSV delimiter loss. */
+export function serializeImportTags(tags: readonly string[]): string {
+  const json = JSON.stringify(tags);
+  const csv = tags.join(",");
+  // Keep existing journal fingerprints when CSV is already lossless. The SDK
+  // accepts JSON arrays for tokens containing commas or JSON-looking text.
+  return JSON.stringify(parseTags(csv)) === JSON.stringify(parseTags(json)) ? csv : json;
+}
+
+/** Compare source fields using SDK type/status/tag/assignment semantics and body formatting. */
+export function normalizeImportValue(field: string, value: unknown, types = defaultImportTypes): unknown {
+  if (field === "type" && typeof value === "string") return types.get(value.trim().toLowerCase()) ?? value;
   if (field === "tags") return parseTags(typeof value === "string" ? value : JSON.stringify(value ?? []));
   if (field === "status") return normalizeStatusInput(value) ?? value;
   // Match the SDK document writer: leading newlines and trailing body space

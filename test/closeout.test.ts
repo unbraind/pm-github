@@ -5,7 +5,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { create, close, update, get, config, acquireLock, PmCliError } from "@unbrained/pm-cli/sdk";
+import { create, close, update, get, config, acquireLock, commitImportedItem, getItemPath, readSettings, PmCliError } from "@unbrained/pm-cli/sdk";
 import extension, { fetchJSON, githubApiBase, parseNextLink } from "../index.ts";
 import { CloseoutUsageError, closeoutFailureReason, compactCloseoutReport, checkCloseoutHead, declaresDelivery, extractCloseoutItems, runCloseout, type CloseoutApi } from "../closeout.ts";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
@@ -665,6 +665,22 @@ test("unreadable protection sources refuse without hiding invalid authorization"
       const report = await closeout(root);
       assert.equal(report.checks[0]!.rule, "unavailable");
       assert.equal(report.plan[0]!.action, "needs_review");
+    });
+  }
+}));
+
+test("legacy type casing preserves the Epic closeout exclusion", async () => tracker(async root => {
+  const sdk = { pmRoot: root, noExtensions: true };
+  for (const type of ["epic", "EPIC"]) {
+    const created = (await create({ title: "Legacy container", type: "Epic", status: "in_progress", acceptanceCriteria: "Verified delivery" }, sdk)).item;
+    await commitImportedItem({ pmRoot: root, id: created.id, itemPath: getItemPath(root, "Epic", created.id), settings: await readSettings(root),
+      document: { metadata: { ...created, type }, body: "" }, author: "fixture", message: "Seed readable legacy type spelling", conflictWarningPrefix: "fixture" });
+    const body = `Closes https://github.com/${repo}/blob/main/.agents/pm/epics/${created.id}.toon`;
+    await withMockGithub(fixture(body), async () => {
+      const report = await runCloseout(root, repo, { pr: "42", apply: true }, api());
+      assert.equal(report.closed, 0);
+      assert.equal(report.plan.find(row => row.item === created.id)!.code, "epic");
+      assert.equal((await get(created.id, {}, sdk)).item.status, "in_progress");
     });
   }
 }));

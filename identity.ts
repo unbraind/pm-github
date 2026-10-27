@@ -8,6 +8,7 @@ import {
   type BulkItemMutation, type CommitItemMutationsOptions, type ItemMetadata,
 } from "@unbrained/pm-cli/sdk";
 import { readRefreshItems } from "./refresh.ts";
+import { serializeImportTags } from "./import-fidelity.ts";
 
 /** Full certified metadata plus the explicitly requested body projection. */
 type IdentityItem = ItemMetadata & { body: string };
@@ -125,7 +126,7 @@ function repairAudit(proposed: IdentityRepairPlan): string {
 }
 /** Translate the narrow plan to a host-owned audited mutation and optimistic item guard. */
 function transaction(pmRoot: string, proposed: IdentityRepairPlan, author: string) {
-  const options = { removeTags: proposed.changes[0]!.before.filter(tag => identity(tag) === proposed.identity), comment: [repairAudit(proposed)] };
+  const options = { removeTags: proposed.changes[0]!.before.filter(tag => identity(tag) === proposed.identity).map(tag => serializeImportTags([tag])), comment: [repairAudit(proposed)] };
   const mutations: BulkItemMutation[] = [{ op: "update", id: proposed.detach, options, match: { key: "updated_at", value: proposed.revision } }];
   return { pmRoot, author, transactionId: `github-identity-${proposed.approval}`, mutations };
 }
