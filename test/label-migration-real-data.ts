@@ -6,18 +6,24 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { pathToFileURL } from "node:url";
-import { planGithubLabelMigration, readGithubLabelCatalog, type GithubLabelMigrationInput, type GithubLabelMigrationReport } from "../index.ts";
+import { planGithubLabelMigration, readGithubLabelCatalog, validateGithubLabelMigrationReport, type GithubLabelMigrationInput } from "../index.ts";
 import { decode } from "@toon-format/toon";
 
 const packageRoot = join(import.meta.dirname, "..");
 const scratch = mkdtempSync(join(tmpdir(), "pm-label-public-"));
 const copies: string[] = [];
 const environment = { ...process.env, NPM_CONFIG_USERCONFIG: "/dev/null", PM_AUTHOR: "fixture", GIT_CEILING_DIRECTORIES: dirname(scratch) };
+/** Keep malformed public wire evidence visible without dumping a minified SDK stack. */
+function validatedWire(value: unknown) {
+  try { return validateGithubLabelMigrationReport(value); }
+  catch (error) { console.error(`Invalid public wire report: ${JSON.stringify(value)}`); throw error; }
+}
 /** Run one exact consumer command without exposing successful install logs. */
-function run(binary: string, args: string[], cwd = packageRoot, overrides: NodeJS.ProcessEnv = {}): string {
-  const result = spawnSync(binary, args, { cwd, env: { ...environment, ...overrides }, encoding: "utf8", timeout: 180000, maxBuffer: 16 * 1024 * 1024 });
-  assert.equal(result.status, 0, `${binary.split("/").at(-1)}: ${result.error?.message ?? result.stderr}`);
-  return result.stdout;
+function run(binary: string, args: string[], cwd = packageRoot, overrides: NodeJS.ProcessEnv = {}, expectedStatus = 0): string {
+  const installing = args[0] === "install" || args[0] === "add";
+  const result = spawnSync(binary, args, { cwd, env: { ...environment, ...overrides }, encoding: "utf8", timeout: installing ? 600000 : 180000, maxBuffer: 16 * 1024 * 1024 });
+  assert.equal(result.status, expectedStatus, `${binary.split("/").at(-1)}: ${result.error?.message ?? result.stderr}`);
+  return expectedStatus === 0 ? result.stdout : result.stdout + result.stderr;
 }
 /** Enumerate only ordinary public tracker entries, never installed extension dependencies. */
 function trackerEntries(root: string): { path: string; directory: boolean }[] {
@@ -88,19 +94,31 @@ try {
   const catalogFile = join(scratch, "catalog.json");
   writeFileSync(requestFile, JSON.stringify(input));
   writeFileSync(catalogFile, JSON.stringify(catalog));
+  // Explicit synthetic offline catalog exercises CSV label names without changing provider labels or native data.
+  const csvSource = { id: "DECLARED_CSV_EXAMPLE", name: "bug, BUG" };
+  const csvCatalog = { complete: true, labels: [csvSource] };
+  const csvInput: GithubLabelMigrationInput = { ...input, sources: [csvSource], filters: [], mappings: [],
+    change: { kind: "rename", name: "planned/defect, next" }, choices: { ...input.choices, tags: "review" } };
+  const csvRequestFile = join(scratch, "csv-request.json");
+  const csvCatalogFile = join(scratch, "csv-catalog.json");
+  writeFileSync(csvRequestFile, JSON.stringify(csvInput));
+  writeFileSync(csvCatalogFile, JSON.stringify(csvCatalog));
+  const csvReport = await planGithubLabelMigration(root, csvInput, { readCatalog: async () => csvCatalog, page: { limit: 5 } });
+  assert.equal(csvReport.counts.tags, report.counts.tags);
+  assert.ok(csvReport.rows.every(row => row.kind === "tags" && row.after_tags.join(",") === "next,planned/defect"));
   run("npm", ["run", "build"]);
   const packed = JSON.parse(run("npm", ["pack", "--ignore-scripts", "--foreground-scripts=false", "--json", "--pack-destination", scratch])) as [{ filename: string }];
   const tarball = join(scratch, packed[0].filename);
   const tooling = join(scratch, "tooling");
-  run("npm", ["install", "--prefix", tooling, "--no-package-lock", "--no-save", "bun@1.3.14"]);
+  run("npm", ["install", "--no-audit", "--no-fund", "--prefix", tooling, "--no-package-lock", "--no-save", "bun@1.3.14"]);
   const bun = join(tooling, "node_modules/.bin/bun");
   const local = join(scratch, "local");
   mkdirSync(local);
   writeFileSync(join(local, "package.json"), '{"name":"label-acceptance","private":true,"type":"module"}');
   console.log("Installing isolated packed consumers");
-  run("npm", ["install", "--prefix", local, "--ignore-scripts", "--no-package-lock", "@unbrained/pm-cli@2026.10.26", tarball]);
+  run("npm", ["install", "--no-audit", "--no-fund", "--prefix", local, "--ignore-scripts", "--no-package-lock", "@unbrained/pm-cli@2026.10.26", tarball]);
   const npmGlobal = join(scratch, "npm-global");
-  run("npm", ["install", "--global", "--prefix", npmGlobal, "--ignore-scripts", "@unbrained/pm-cli@2026.10.26", tarball]);
+  run("npm", ["install", "--no-audit", "--no-fund", "--global", "--prefix", npmGlobal, "--ignore-scripts", "@unbrained/pm-cli@2026.10.26", tarball]);
   const bunGlobal = join(scratch, "bun-global");
   const bunBin = join(scratch, "bun-bin");
   mkdirSync(bunGlobal);
@@ -120,15 +138,22 @@ try {
     const tracker = publicCopy(consumer.name, consumer.extension);
     const original = fingerprint(tracker);
     const args = ["--path", tracker, "github", "labels", "plan", "--input", requestFile, "--catalog", catalogFile, "--limit", "5"];
-    const result = JSON.parse(run(consumer.binary, [...consumer.prefix, ...args, "--json"], local)) as GithubLabelMigrationReport;
-    assert.deepEqual(result.counts, report.counts);
-    assert.equal(result.approval, report.approval);
-    const repeated = JSON.parse(run(consumer.binary, [...consumer.prefix, ...args, "--approve", result.approval, "--json"], local)) as GithubLabelMigrationReport;
+    const result = validatedWire(JSON.parse(run(consumer.binary, [...consumer.prefix, ...args, "--json"], local)));
+    assert.deepEqual(result, report);
+    const repeated = validatedWire(JSON.parse(run(consumer.binary, [...consumer.prefix, ...args, "--approve", result.approval, "--json"], local)));
     assert.equal(repeated.checked, true);
-    assert.deepEqual((decode(run(consumer.binary, [...consumer.prefix, ...args], local)) as GithubLabelMigrationReport).counts, report.counts);
+    assert.deepEqual(validatedWire(decode(run(consumer.binary, [...consumer.prefix, ...args], local))), report);
+    const csvArgs = ["--path", tracker, "github", "labels", "plan", "--input", csvRequestFile, "--catalog", csvCatalogFile, "--limit", "5"];
+    const csv = validatedWire(JSON.parse(run(consumer.binary, [...consumer.prefix, ...csvArgs, "--json"], local)));
+    assert.deepEqual(csv, csvReport);
+    assert.deepEqual(validatedWire(decode(run(consumer.binary, [...consumer.prefix, ...csvArgs], local))), csvReport);
+    assert.match(run(consumer.binary, [...consumer.prefix, ...csvArgs, "--approve", csv.approval, "--json"], local, {}, 2), /unresolved_choices/);
     assert.equal(fingerprint(tracker), original);
-    console.log(JSON.stringify({ consumer: consumer.name, cli: "2026.10.26", json: true, toon: true, revalidated: true, unchanged_tracker: true }));
+    console.log(JSON.stringify({ consumer: consumer.name, cli: "2026.10.26", json: true, toon: true, revalidated: true, csv_refused: true, unchanged_tracker: true }));
   }
+} catch (error) {
+  console.error(error instanceof Error ? error.message : "Public packed acceptance failed");
+  process.exitCode = 1;
 } finally {
   for (const root of copies) {
     chmodSync(root, 0o700);

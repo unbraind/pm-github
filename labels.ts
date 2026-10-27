@@ -2,9 +2,10 @@
 import { createHash } from "node:crypto";
 import { openSync, closeSync, fstatSync, readSync, constants } from "node:fs";
 import { z } from "zod";
-import { createPmCliExpectedError, toImportTags } from "@unbrained/pm-cli/sdk";
+import { createPmCliExpectedError, decodePmTableRows } from "@unbrained/pm-cli/sdk";
 import { readRefreshItems } from "./refresh.ts";
 import { githubLabelNameKey } from "./label-names.ts";
+import { githubLabelsToTags } from "./import-tags.ts";
 import { fetchJSON, githubApiBase, parseNextLink, parseProvenanceTag, resolveGitHubToken } from "./index.ts";
 
 /** Stable expected refusals; every failure supplies an actionable remedy. */
@@ -14,7 +15,10 @@ function refuse(code: LabelMigrationRefusalCode, remedy: string): never {
   throw createPmCliExpectedError(`GitHub label migration: ${code}. ${remedy}`, { exitCode: 2, context: { code, required: remedy } });
 }
 
-const atom = z.string().min(1).max(200).regex(/^[^\r\n\u0000]+$/).refine(value => value.trim().length > 0);
+/** Bound raw names and SDK-produced tags; Unicode lowercase can expand a raw name. */
+function boundedAtom(maximum: number) { return z.string().min(1).max(maximum).regex(/^[^\r\n\u0000]+$/).refine(value => value.trim().length > 0); }
+const atom = boundedAtom(200);
+const nativeTag = boundedAtom(600);
 const count = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const label = z.strictObject({ id: atom, name: atom });
 const choice = z.enum(["review", "keep", "replace"]);
@@ -33,13 +37,34 @@ const catalogSchema = z.strictObject({ complete: z.literal(true), labels: z.arra
 const pageSchema = z.strictObject({ limit: z.number().int().min(1).max(100).default(20), offset: count.default(0) });
 const boundarySchema = z.strictObject({ request: requestSchema, page: pageSchema,
   approval: z.string().regex(/^[a-f0-9]{64}$/).optional() });
-const rowSchema = z.strictObject({ kind: z.enum(["tags", "filters", "mappings"]), id: atom, source: atom,
-  before: atom, after: atom, local_tag: atom.nullable(), choice, evidence: z.enum(["unverified_name", "declared_policy"]),
-  identities: z.array(z.string().min(1).max(240)).max(100), identities_omitted: count });
+const rowFields = { id: atom, source: atom, before: nativeTag, after: atom, choice,
+  evidence: z.enum(["unverified_name", "declared_policy"]), identities: z.array(z.string().min(1).max(240)).max(100), identities_omitted: count };
+const rowSchema = z.discriminatedUnion("kind", [
+  z.strictObject({ ...rowFields, kind: z.literal("tags"), local_tag: nativeTag, after_tags: z.array(nativeTag).max(200) }),
+  z.strictObject({ ...rowFields, kind: z.literal("filters"), local_tag: z.null().default(null), after_tags: z.null().default(null) }),
+  z.strictObject({ ...rowFields, kind: z.literal("mappings"), local_tag: nativeTag, after_tags: z.null().default(null) }),
+]);
 const reportSchema = z.strictObject({ ok: z.literal(true), repo: requestSchema.shape.repo, approval: z.string().regex(/^[a-f0-9]{64}$/),
   checked: z.boolean(), sources: z.array(label).max(20), destination: label,
   counts: z.strictObject({ scanned: count, items: count, tags: count, filters: count, mappings: count, review: count, total: count }),
-  offset: count, next: count.nullable(), rows: z.array(rowSchema).max(100) });
+  offset: count, next: count.nullable().default(null), rows: z.array(rowSchema).max(100) });
+const rowKeys = z.enum([...new Set(rowSchema.options.flatMap(schema => Object.keys(schema.shape)))]);
+const tableReportSchema = reportSchema.omit({ rows: true }).extend({
+  rows: z.array(z.record(z.string().refine(key => rowKeys.options.includes(key)), z.union([z.string().max(131072), count, z.boolean(), z.null()]))).max(100),
+  rows_encoding: z.strictObject({ json_columns: z.array(rowKeys).max(rowKeys.options.length),
+    absent: z.array(z.tuple([z.number().int().min(0).max(99), rowKeys])).max(100 * rowKeys.options.length) }),
+}).refine(value => new Set(value.rows_encoding.json_columns).size === value.rows_encoding.json_columns.length &&
+  new Set(value.rows_encoding.absent.map(coordinate => JSON.stringify(coordinate))).size === value.rows_encoding.absent.length &&
+  value.rows_encoding.absent.every(([index, key]) => index < value.rows.length && value.rows[index]?.[key] === null));
+const reportBoundarySchema = z.union([reportSchema, tableReportSchema.transform((table, context) => {
+  const { rows_encoding, rows, ...report } = table;
+  try {
+    const parsed = reportSchema.safeParse({ ...report, rows: decodePmTableRows({ rows, encoding: rows_encoding }) });
+    if (parsed.success) return parsed.data;
+  } catch { /* Malformed SDK table cells are a refused report, never a leaked payload or stack. */ }
+  context.addIssue({ code: "custom", message: "Invalid encoded report rows" });
+  return z.NEVER;
+})]);
 
 /** Explicit source IDs and expected names; filters and mappings are caller-declared policy inventories. */
 export type GithubLabelMigrationInput = z.infer<typeof requestSchema>;
@@ -52,7 +77,7 @@ export type GithubLabelMigrationReport = z.infer<typeof reportSchema>;
 
 /** Parse producers and consumers with exactly the same strict contract. */
 export function validateGithubLabelMigrationReport(value: unknown): GithubLabelMigrationReport {
-  const result = reportSchema.safeParse(value);
+  const result = reportBoundarySchema.safeParse(value);
   if (!result.success) refuse("invalid_output", "Discard this report and regenerate it with a supported package version.");
   const report = result.data;
   const c = report.counts;
@@ -145,6 +170,8 @@ export async function planGithubLabelMigration(pmRoot: string, input: GithubLabe
   items.sort((a, b) => order(a.id!, b.id!));
   const rows: GithubLabelMigrationReport["rows"] = [];
   const counts = { scanned: items.length, items: 0, tags: 0, filters: 0, mappings: 0, review: 0, total: 0 };
+  const sourceTags = request.sources.map(source => ({ source, tags: githubLabelsToTags([source.name]) }));
+  const destinationTags = githubLabelsToTags([destination.name]);
   /** Count every occurrence while retaining only the requested bounded page. */
   function add(row: GithubLabelMigrationReport["rows"][number]): void {
     counts[row.kind]++;
@@ -158,9 +185,10 @@ export async function planGithubLabelMigration(pmRoot: string, input: GithubLabe
       const parsed = parseProvenanceTag(tag);
       return parsed?.repo === request.repo.toLowerCase() && Number.isSafeInteger(parsed.number) && parsed.number > 0 && tag.length <= 240;
     }))].sort(order);
-    for (const source of request.sources) for (const tag of toImportTags([source.name])) if (item.tags!.includes(tag)) {
+    const localTags = new Set(githubLabelsToTags(item.tags!));
+    for (const { source, tags } of sourceTags) for (const tag of tags) if (localTags.has(tag)) {
       affected = true;
-      add({ kind: "tags", id: item.id!, source: source.id, before: tag, after: toImportTags([destination.name])[0]!, local_tag: tag, choice: request.choices.tags,
+      add({ kind: "tags", id: item.id!, source: source.id, before: tag, after: destination.name, after_tags: destinationTags, local_tag: tag, choice: request.choices.tags,
         evidence: "unverified_name", identities: identities.slice(0, 100), identities_omitted: Math.max(0, identities.length - 100) });
     }
     if (affected) counts.items++;
@@ -168,11 +196,11 @@ export async function planGithubLabelMigration(pmRoot: string, input: GithubLabe
   for (const filter of request.filters) for (const source of request.sources) {
     const before = filter.labels.find(name => githubLabelNameKey(name) === githubLabelNameKey(source.name));
     if (before !== undefined) add({ kind: "filters", id: filter.id, source: source.id, before, after: destination.name,
-      local_tag: null, choice: request.choices.filters, evidence: "declared_policy", identities: [], identities_omitted: 0 });
+      after_tags: null, local_tag: null, choice: request.choices.filters, evidence: "declared_policy", identities: [], identities_omitted: 0 });
   }
   for (const mapping of request.mappings) for (const source of request.sources) if (githubLabelNameKey(mapping.to) === githubLabelNameKey(source.name)) {
     add({ kind: "mappings", id: mapping.id, source: source.id, before: mapping.to, after: destination.name,
-      local_tag: mapping.from, choice: request.choices.mappings, evidence: "declared_policy", identities: [], identities_omitted: 0 });
+      after_tags: null, local_tag: mapping.from, choice: request.choices.mappings, evidence: "declared_policy", identities: [], identities_omitted: 0 });
   }
   const current = digest({ request, labels, revisions: items.map(item => [item.id, item.updated_at, item.tags]) });
   if (approval !== undefined && approval !== current) refuse("stale_plan", "Provider labels, policy or tracker revisions changed. Preview and review the new plan; never replay the saved plan.");

@@ -1,11 +1,11 @@
 # Label migration validation
 
-Validation date: 2026-10-27. Final-head full release receipts and run links are
+Validation date: 2026-10-27. Final-head release status, receipts and run links are
 recorded in [PR 188](https://github.com/unbraind/pm-github/pull/188).
 
-The review-fix source run
+The round 1 review-fix source run
 [40491011369](https://github.com/unbraind/pm-github/actions/runs/40491011369)
-has all four npm/Bun jobs queued without assigned runners. The queue rules cap
+had all four npm/Bun jobs queued without assigned runners at handoff. The queue rules cap
 waiting after push at 30 minutes. Pending checks are not passing evidence;
 the PR records the final-head run and exact pending jobs for the orchestrator.
 
@@ -21,6 +21,41 @@ the existing 500 SDK state sequences with replayed mixed-case policies. The
 packed five-consumer acceptance uses `BUG` filters and `BuG` mapping destinations.
 Full gate test processes are explicitly capped at two workers; native Bun files
 remain serial. No thresholds or source exclusions changed.
+
+Review round 2 closes the preview/import normalization class. The import-owned
+`githubLabelsToTags` function uses the SDK's CSV parser, shared by prepared
+imports, native writes, tag/provenance validation, refresh comparisons and label
+plans. The earlier array-parser call preserved embedded commas and could miss
+both tags produced by importing `one,two`. Tag rows now expose the raw
+destination plus its complete `after_tags` expansion, including zero-tag
+destinations and Unicode case expansion. Provider policy-name matching remains
+separate from native tag conversion; catalog IDs and expected names stay exact.
+
+The added 500-sequence label-set property test runs the importer's prepared
+mutations on a disposable non-git SDK witness and reads actual native state
+back through the SDK. It compares source impacts and complete destination
+expansions with that state, then proves that the projected tag changes equal
+the import write result. Samples include commas, spaces, case variants,
+duplicates after normalization, Unicode, prefixes and prototype-like names.
+It also verifies JSON/TOON producer validation, replayed raw plans, refresh
+no-op comparisons, unresolved approval choices and stale revision refusal.
+The packed five-consumer acceptance adds an explicitly synthetic offline CSV
+catalog against unchanged public tracker data; no provider label is created.
+The new model file passes 2/2 tests, including all 500 random label sets.
+Independently reverting each of nine conversion/comparison/emission sites fails
+its focused regression. Reverting only the planner source conversion also
+makes the 500-sequence property fail on its first mismatching source impact.
+All production files were restored byte-for-byte after those proofs.
+Packed validation also exposed host TOON null compaction and lossless table
+cells. The shared boundary uses declared null defaults and the SDK's own table
+decoder, with field names derived from the producer schema. An additional 500
+wire permutations cover all row kinds, sparse cells, JSON-looking strings and
+extreme metadata; five independent transport reversions fail their regressions.
+Missing continuation on an unfinished page and missing native identities still
+refuse. Installation setup has a bounded 600-second deadline on the saturated
+host; feature commands retain their 180-second deadline and every acceptance
+assertion remains enabled. Optional install audit/funding requests are disabled;
+the release gate's production audit is unchanged.
 
 The overlap check covered core SDK bulk tag mutations, the existing GitHub
 identity explorer, and pm-linear/pm-jira policy/schema mappings. This feature
@@ -76,12 +111,12 @@ files read-only, and never modifies the source repository or provider labels.
 | Measurement | Result |
 | --- | --- |
 | Public tracker | `unbraind/pm-github` |
-| Snapshot revision | `2b71f73dc27951f5cb1c5df0b9d8142864d43541` |
+| Snapshot revision | `f90f86faa9c976392f1d1262fd0b3204de2007e4` |
 | Scanned items, including terminal/custom statuses | 155 |
 | Current provider label identities | 12 |
 | Affected stored items / tag occurrences | 1 / 1 |
 | Declared example filter / export mapping | 1 / 1 |
-| Total affected rows / JSON bytes | 3 / 1,078 |
+| Total affected rows / JSON bytes | 3 / 1,146 |
 | SDK preview and current approval check | Pass; identical source bytes |
 
 The two policy entries are explicit synthetic inventories. They do not claim

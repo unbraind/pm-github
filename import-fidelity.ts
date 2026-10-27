@@ -1,4 +1,5 @@
 import { ownValue, setOwnValue } from "./own-record.ts";
+import { githubLabelsToTags } from "./import-tags.ts";
 /** Source lifecycle, release-window and cross-provider identity rules for issue imports. */
 import { spawnSync } from "node:child_process";
 import { decodeHTML } from "entities";
@@ -434,7 +435,7 @@ export function importFidelityFields(fidelity: ImportFidelity, linkOnly: boolean
 
 /** Compare source instants and tag sets without treating their serialized representation as a change. */
 export function normalizeImportValue(field: string, value: unknown): unknown {
-  if (field === "tags") return [...new Set(value as string[] ?? [])].sort();
+  if (field === "tags") return githubLabelsToTags(value as string[] ?? []);
   if (/^(?:github_)?(?:created|updated|closed|completed)_at$/.test(field) && typeof value === "string" && Number.isFinite(Date.parse(value))) return Date.parse(value);
   return value;
 }

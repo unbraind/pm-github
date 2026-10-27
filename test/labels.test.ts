@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { encode, decode } from "@toon-format/toon";
-import { init, create, update, get, getItemPath, serializeItemDocument, toImportTags, schemaAddStatus, focus, listAllComplete, certifyCompleteListResult } from "@unbrained/pm-cli/sdk";
+import { init, create, update, get, getItemPath, serializeItemDocument, toImportTags, schemaAddStatus, focus, listAllComplete, certifyCompleteListResult, commitImportedItem, readSettings, encodePmTableRows } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension, { planGithubLabelMigration, readGithubLabelCatalog, validateGithubLabelMigrationReport,
   applyLabelMap, buildExportPlan, applyExportPlan, compileIssueForm,
@@ -81,6 +81,73 @@ test("same display intent stays distinct; every affected identity and choice is 
   await assert.rejects(planGithubLabelMigration(root, request({ change: { kind: "rename", name: "KIND/BUG" } }), { readCatalog }), code("invalid_input"));
   await assert.rejects(planGithubLabelMigration(root, request({ sources: [source, target] }), { readCatalog }), code("invalid_input"));
   await assert.rejects(planGithubLabelMigration(root, request({ change: { kind: "consolidate", target: source } }), { readCatalog }), code("invalid_input"));
+}));
+
+test("importer CSV tag semantics cover preview, approval, destination expansion and CLI reports", async () => tracker(async (root, directory) => {
+  await item(root, "CSV import", [" One, TWO ,one "]);
+  const csvSource = { id: "CSV", name: "one,two" };
+  const readCatalog = async () => ({ complete: true, labels: [csvSource] });
+  const input = request({ sources: [csvSource], filters: [], mappings: [], change: { kind: "rename", name: " alpha, BETA " } });
+  const report = await planGithubLabelMigration(root, input, { readCatalog });
+  assert.deepEqual(report.counts, { scanned: 1, items: 1, tags: 2, filters: 0, mappings: 0, review: 2, total: 2 });
+  assert.deepEqual(report.rows.map(row => row.before), ["one", "two"]);
+  assert.ok(report.rows.every(row => row.after === " alpha, BETA "));
+  assert.deepEqual(report.rows.map(row => row.after_tags), [["alpha", "beta"], ["alpha", "beta"]]);
+  const { next: _omitted, ...compact } = report;
+  assert.equal(_omitted, null);
+  assert.deepEqual(validateGithubLabelMigrationReport(compact), report, "host TOON may omit a completed continuation");
+  const unfinished = await planGithubLabelMigration(root, input, { readCatalog, page: { limit: 1 } });
+  const { next: _required, ...truncated } = unfinished;
+  assert.equal(_required, 1);
+  assert.throws(() => validateGithubLabelMigrationReport(truncated), code("invalid_output"));
+  const { local_tag: _identity, ...missingTag } = report.rows[0]!;
+  assert.equal(_identity, "one");
+  assert.throws(() => validateGithubLabelMigrationReport({ ...report, rows: [missingTag, report.rows[1]] }), code("invalid_output"));
+  const policies = await planGithubLabelMigration(root, { ...input, filters: [{ id: "filter", labels: ["ONE,TWO"] }],
+    mappings: [{ id: "map", from: "native", to: "one,TWO" }] }, { readCatalog });
+  const compactPolicies = { ...policies, next: undefined, rows: policies.rows.map(row => row.kind === "tags" ? row :
+    row.kind === "filters" ? { ...row, local_tag: undefined, after_tags: undefined } : { ...row, after_tags: undefined }) };
+  assert.deepEqual(validateGithubLabelMigrationReport(compactPolicies), policies);
+  for (const invalid of [null, undefined]) {
+    assert.throws(() => validateGithubLabelMigrationReport({ ...policies, rows: policies.rows.map(row => row.kind === "mappings" ? { ...row, local_tag: invalid } : row) }), code("invalid_output"));
+  }
+  await assert.rejects(planGithubLabelMigration(root, input, { readCatalog, approval: report.approval, page: { limit: 1 } }), code("unresolved_choices"));
+  const keep = { ...input, choices: { ...input.choices, tags: "keep" as const } };
+  const reviewed = await planGithubLabelMigration(root, keep, { readCatalog });
+  assert.equal((await planGithubLabelMigration(root, keep, { readCatalog, approval: reviewed.approval })).checked, true);
+  const empty = await planGithubLabelMigration(root, { ...input, change: { kind: "rename", name: ",,," } }, { readCatalog });
+  assert.ok(empty.rows.every(row => row.after_tags?.length === 0), "a zero-tag destination stays explicit");
+  const emptySource = { id: "EMPTY", name: ",,," };
+  const emptyInput = { ...input, sources: [emptySource] };
+  const emptyCatalog = async () => ({ complete: true, labels: [emptySource] });
+  const noTags = await planGithubLabelMigration(root, emptyInput, { readCatalog: emptyCatalog });
+  assert.equal(noTags.counts.tags, 0);
+  assert.equal((await planGithubLabelMigration(root, emptyInput, { readCatalog: emptyCatalog, approval: noTags.approval })).checked, true);
+  for (const invalid of [null, new Array(1), [Infinity], ["x".repeat(601)], [" "]]) {
+    assert.throws(() => validateGithubLabelMigrationReport({ ...report, rows: [{ ...report.rows[0], after_tags: invalid } ] }), code("invalid_output"));
+  }
+  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "schema", "hooks", "preflight", "search", "importers"] });
+  const file = join(directory, "csv-policy.json");
+  const catalogFile = join(directory, "csv-catalog.json");
+  writeFileSync(file, JSON.stringify(input));
+  writeFileSync(catalogFile, JSON.stringify(await readCatalog()));
+  for (const json of [false, true]) {
+    const cli = (await harness.runCommand({ command: "github labels plan", pmRoot: root, args: [], options: { input: file, catalog: catalogFile }, global: { json } })).result;
+    assert.deepEqual(validateGithubLabelMigrationReport(json ? JSON.parse(JSON.stringify(cli)) : decode(encode(cli))), report);
+  }
+  const legacy = await item(root, "Earlier SDK array producer", []);
+  await commitImportedItem({ pmRoot: root, id: legacy.id, itemPath: getItemPath(root, "Task", legacy.id),
+    document: { metadata: { ...legacy, tags: [" ONE,TWO ", "one"] }, body: "" }, settings: await readSettings(root),
+    author: "fixture", message: "Earlier SDK array representation", conflictWarningPrefix: "fixture" });
+  const raw = (await get(legacy.id, {}, { pmRoot: root })).item;
+  assert.ok(raw.tags!.includes("one,two"), "the SDK reads earlier array-producer data without CSV splitting it");
+  const legacyReport = await planGithubLabelMigration(root, input, { readCatalog });
+  assert.deepEqual(legacyReport.rows.filter(row => row.id === legacy.id).map(row => row.before), ["one", "two"],
+    "both the source label and stored representation use the importer's converter");
+  const unicode = { id: "UNICODE", name: "İ".repeat(200) };
+  await item(root, "Expanded native tag", [unicode.name]);
+  const expanded = await planGithubLabelMigration(root, { ...input, sources: [unicode] }, { readCatalog: async () => ({ complete: true, labels: [unicode] }) });
+  assert.equal(expanded.rows[0]!.before.length, 400, "SDK Unicode expansion stays within the emitted tag bound");
 }));
 
 test("provider name semantics cover policy comparisons, hidden review rows and exact node identities", async () => tracker(async (root, directory) => {
@@ -315,6 +382,50 @@ test("registered CLI returns compact host-renderable reports and typed input ref
       assert.equal((await run({ input })).counts.items, 1);
     });
   } finally { await server.close(); }
+}));
+
+test("500 SDK table wire permutations preserve producer rows, absent fields and JSON-looking strings", async () => tracker(async root => {
+  await item(root, "Wire witness", ["one,two"]);
+  const csv = { id: "CSV", name: "one,two" };
+  const report = await planGithubLabelMigration(root, request({ sources: [csv], change: { kind: "rename", name: "null,[1],constructor" },
+    filters: [{ id: "filter", labels: ["ONE,TWO"] }], mappings: [{ id: "mapping", from: "[1]", to: "one,two" }] }),
+    { readCatalog: async () => ({ complete: true, labels: [csv] }) });
+  let seed = 0xc0dec123;
+  /** Replayable integer choices vary sparse rows and their SDK encoding metadata. */
+  function random(bound: number) { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return (seed >>> 0) % bound; }
+  let absentWire: { rows: ReturnType<typeof encodePmTableRows>["rows"]; rows_encoding: ReturnType<typeof encodePmTableRows>["encoding"] } | undefined;
+  for (let sequence = 0; sequence < 500; sequence++) {
+    const rows = [...report.rows];
+    for (let i = rows.length - 1; i > 0; i--) { const j = random(i + 1); [rows[i], rows[j]] = [rows[j]!, rows[i]!]; }
+    const producerRows = rows.map(row => {
+      const value: Parameters<typeof encodePmTableRows>[0][number] = { ...row };
+      if (row.kind !== "tags" && random(2)) delete value.after_tags;
+      if (row.kind === "filters" && random(2)) delete value.local_tag;
+      return value;
+    });
+    const table = encodePmTableRows(producerRows);
+    const wire = { ...report, next: random(2) ? undefined : report.next, rows: table.rows, rows_encoding: table.encoding };
+    const expected = { ...report, rows };
+    assert.deepEqual(validateGithubLabelMigrationReport(JSON.parse(JSON.stringify(wire))), expected);
+    assert.deepEqual(validateGithubLabelMigrationReport(decode(encode(wire))), expected);
+    if (table.encoding.absent.length) absentWire = wire;
+    const extreme = [-1, NaN, Infinity, -Infinity, 2 ** 53, 0.5][sequence % 6]!;
+    assert.throws(() => validateGithubLabelMigrationReport({ ...wire,
+      rows_encoding: { ...table.encoding, absent: [[extreme, "id"]] } }), code("invalid_output"));
+  }
+  assert.ok(absentWire);
+  assert.throws(() => validateGithubLabelMigrationReport({ ...report, ...absentWire,
+    rows_encoding: { ...absentWire.rows_encoding, absent: [...absentWire.rows_encoding.absent, ...absentWire.rows_encoding.absent] } }), code("invalid_output"));
+  const table = encodePmTableRows(report.rows);
+  const wire = { ...report, rows: table.rows, rows_encoding: table.encoding };
+  for (const value of ["not-json", "{}", "1e999"]) {
+    assert.throws(() => validateGithubLabelMigrationReport({ ...wire, rows: table.rows.map(row => ({ ...row, after_tags: value })) }), code("invalid_output"));
+  }
+  for (const encoding of [{ ...table.encoding, json_columns: [...table.encoding.json_columns, ...table.encoding.json_columns] },
+    { ...table.encoding, absent: [[report.rows.length, "id"]] }, { ...table.encoding, absent: [[0, "id"]] }]) {
+    assert.throws(() => validateGithubLabelMigrationReport({ ...wire, rows_encoding: encoding }), code("invalid_output"));
+  }
+  assert.throws(() => validateGithubLabelMigrationReport({ ...wire, rows: [{ ...table.rows[0], foreign: "field" }] }), code("invalid_output"));
 }));
 
 test("500 seeded model sequences replay older policies and preserve SDK-read native fields and relationships", async () => tracker(async root => {

@@ -46,6 +46,13 @@ or changed. `review`, `keep`, and `replace` are explicit per-surface choices.
 The mapping policy ID points back to its exact `from`/`to` entry in the request.
 `after` shows the replacement candidate for review; a `keep` choice retains
 `before` rather than applying that candidate.
+For tag rows, `before` and `local_tag` identify a matched native tag; `after` is
+the raw destination label name and `after_tags` is its complete imported native
+tag array. For example, source `one,two` matches both `one` and `two`, and
+destination `alpha,beta` exposes `["alpha","beta"]` on each tag row. A label
+consisting of commas imports no tags and exposes `[]`. Policy rows have
+`after_tags: null`. Repeated native tags from one source count once; different
+source IDs remain separate occurrences even when their expansions overlap.
 `replace` proposes a change; both preview and approval check write nothing.
 Apply reviewed edits through the owning provider/configuration workflow and core
 tag mutation facilities, after checking their revisions at the write boundary.
@@ -98,6 +105,16 @@ const checked = await planGithubLabelMigration(pmRoot, request, {
 validateGithubLabelMigrationReport(JSON.parse(JSON.stringify(checked)));
 ```
 
+Validate decoded host TOON with this same function. The host can omit null
+terminal fields; the shared schema restores their declared null defaults.
+Missing continuation on an unfinished page, missing native tag identities and
+malformed tag expansions still refuse. No separate wire normalizer is needed.
+The same boundary accepts the host's `rows_encoding` metadata and restores
+nested cells with the SDK's `decodePmTableRows`. JSON-looking label strings are
+never decoded by inference. Encoded rows retain the 100-row limit; keys come
+from the producer schema, cells are bounded at 128 KiB, and absent coordinates
+must be unique, in range and backed by null padding.
+
 The optional SDK `readCatalog` adapter supports an explicit offline snapshot and
 must return `{complete:true, labels:[{id,name}]}`. The planner reuses the package's
 isolated complete SDK reader; SDK acquisition never examines executable paths or
@@ -109,8 +126,14 @@ newlines in names, duplicate IDs and out-of-domain pagination. Names and IDs are
 1..200 characters; repositories have two 1..100 character components. Limits:
 20 sources, 10,000 catalog labels, 1,000 filters with 100 labels each, and 1,000
 mappings. Provider label spelling is significant and is never normalized into an
-identity. Tag occurrences use the SDK's native tag conversion, including case
-and whitespace normalization; two provider IDs may point to the same native tag
+identity. Tag occurrences and approval revalidation call the importer's own
+exported `githubLabelsToTags(names)` function, which joins the importer CSV
+representation and delegates to the SDK's string tag parser. Preparation,
+create/update/link-only writes and refresh read-back comparisons call this same
+function. Commas, case, whitespace and native prefix rules therefore agree with
+what import actually writes. Raw names/IDs stay bounded at 200 characters;
+emitted native tags allow up to 600 characters for SDK Unicode expansion, and
+`after_tags` contains at most 200 entries. Two provider IDs may point to the same native tag
 and remain separate unverified occurrences. Producers and validators share the
 same output schema; all numeric
 decisions use integers or exact `BigInt` sums.

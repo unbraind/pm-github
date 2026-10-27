@@ -1,5 +1,7 @@
 import { ownValue } from "./own-record.ts";
 import { uniqueGithubLabelNames } from "./label-names.ts";
+import { githubLabelsToTags } from "./import-tags.ts";
+export { githubLabelsToTags } from "./import-tags.ts";
 // pm-github — GitHub Issues + Projects v2 sync for pm-cli
 //
 // Capabilities (see manifest.json):
@@ -127,7 +129,7 @@ export interface GhIssue {
   state: "open" | "closed";
   /** Why a closed issue was closed; `not_planned` maps to `canceled`, not `closed`. */
   state_reason?: "completed" | "not_planned" | "duplicate" | "reopened" | null;
-  /** Labels on the issue, imported verbatim as pm tags (before any `--label-map`). */
+  /** Labels on the issue, converted through the importer's CSV/SDK native tag rules. */
   labels: Array<{ name: string }>;
   /** Author login, surfaced as a `github_author:` tag when present. */
   user?: { login: string } | null;
@@ -1463,14 +1465,14 @@ export function buildAtomicImportMutations(
   const changed = updateOnly ? new Set(refreshChanges(entry).map(change => change.field)) : undefined;
   const audit = updateOnly ? { comment: [`Refreshed linked GitHub issue ${repo.toLowerCase()}#${entry.issueNumber}`] } : {};
   if (entry.linkOnly && entry.match?.id) {
-    return { itemId: entry.match.id, mutations: [{ op: "update", id: entry.match.id, options: { ...(!changed || changed.has("tags") ? { addTags: entry.tags } : {}), ...audit } }] };
+    return { itemId: entry.match.id, mutations: [{ op: "update", id: entry.match.id, options: { ...(!changed || changed.has("tags") ? { addTags: githubLabelsToTags(entry.tags) } : {}), ...audit } }] };
   }
   const sharedOptions: Record<string, unknown> = {
     title: entry.title,
     type: entry.itemType,
     description: entry.description,
     body: entry.body,
-    tags: entry.tags.join(","),
+    tags: githubLabelsToTags(entry.tags).join(","),
     ...(entry.assignee ? { assignee: entry.assignee } : {}),
     ...(entry.milestone ? { sprint: entry.milestone } : {}),
     ...(entry.status === "canceled" ? { closeReason: entry.fidelity?.github_close_reason ?? `GitHub issue #${entry.issueNumber} closed` } : {}),
@@ -1528,7 +1530,7 @@ export function buildAtomicImportMutations(
   const updateOptions: Record<string, unknown> = {
     ...(updateOnly ? {
       ...(changed!.has("title") ? { title: entry.title } : {}),
-      ...(changed!.has("tags") ? { tags: entry.tags.join(",") } : {}),
+      ...(changed!.has("tags") ? { tags: githubLabelsToTags(entry.tags).join(",") } : {}),
       ...(changed!.has("status") && sharedOptions.closeReason !== undefined ? { closeReason: sharedOptions.closeReason } : {}),
     } : sharedOptions), ...(!changed || changed.has("status") ? statusOptions : {}), ...audit,
   };
@@ -3155,7 +3157,7 @@ export async function prepareGithubImport(
       (issue.state_reason ? ` · state reason ${issue.state_reason}` : "") +
       ` · created ${issue.created_at} · updated ${issue.updated_at}`,
     body: writeCommentsToBody ? composeBody(issue, comments) : (issue.body || ""),
-    tags: [...new Set([...(identity.linkOnly || identity.via === "citation" ? match!.tags ?? [] : []), ...labels, tag, ...(ghAuthorTag ? [ghAuthorTag] : [])])],
+    tags: githubLabelsToTags([...(identity.linkOnly || identity.via === "citation" ? match!.tags ?? [] : []), ...labels, tag, ...(ghAuthorTag ? [ghAuthorTag] : [])]),
     assignee: issue.assignee?.login,
     milestone: issue.milestone?.title,
     comments,
@@ -3279,10 +3281,10 @@ export function verifyImportIdempotency(
   for (const entry of prepared) {
     if (entry.match?.id) {
       matchedIds.push(entry.match.id);
-      if (entry.identity?.via === "citation" && !entry.tags.includes(provenanceTag(repo, entry.issueNumber))) untaggedNewEntries++;
+      if (entry.identity?.via === "citation" && !githubLabelsToTags(entry.tags).includes(provenanceTag(repo, entry.issueNumber))) untaggedNewEntries++;
       continue;
     }
-    if (!entry.tags.includes(provenanceTag(repo, entry.issueNumber))) untaggedNewEntries++;
+    if (!githubLabelsToTags(entry.tags).includes(provenanceTag(repo, entry.issueNumber))) untaggedNewEntries++;
   }
   const conflictingTargets = matchedIds.length - new Set(matchedIds).size;
   if (duplicateTags.size > 0 || untaggedNewEntries > 0 || conflictingTargets > 0) {
@@ -3738,7 +3740,7 @@ export async function runImport(
 
     if (prepared.linkOnly) {
       const ownerId = match!.id!;
-      const linked = pmRun(["--path", pmRoot, "update", ownerId, "--add-tags", tags.join(",")]);
+      const linked = pmRun(["--path", pmRoot, "update", ownerId, "--add-tags", githubLabelsToTags(tags).join(",")]);
       if (!linked.ok) throw new CommandError(`Could not link GitHub issue #${issue.number} to its existing owner.`);
       await persistImportFidelity(pmRoot, ownerId, prepared.fidelity!, true);
       if (prepared.identity?.via === "citation") adopted++;
@@ -3753,7 +3755,7 @@ export async function runImport(
         "--title", title,
         "--description", description,
         "--body", body,
-        "--tags", tags.join(","),
+        "--tags", githubLabelsToTags(tags).join(","),
         "--message", `Re-imported from GitHub #${issue.number}`,
       ];
       if (assignee) updArgs.push("--assignee", assignee);
@@ -3808,7 +3810,7 @@ export async function runImport(
       "--status", createStatus,
       "--description", description,
       "--body", body,
-      "--tags", tags.join(","),
+      "--tags", githubLabelsToTags(tags).join(","),
       "--message", `Imported from GitHub #${issue.number}`,
     ];
     if (status === "canceled") createArgs.push("--close-reason", prepared.fidelity!.github_close_reason);
