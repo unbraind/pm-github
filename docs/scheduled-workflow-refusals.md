@@ -168,15 +168,33 @@ Those targets predate this fix and do not resolve the pagination refusal.
 
 ## Verification handoff
 
-Implementation commit `c989d10` passed focused incident/privacy/comparison tests
-44/44, interrupted recovery and clean repeat tests 2/2, and restored-normalizer
-verification 1/1. Five behavioral function reverts fail their regressions as
-expected. Build, lint, docstrings, privacy and isolated strict health pass.
-The earlier full npm gate passed 1540/1540 and exact coverage across 22 modules
-before the final normalization adjustment. The full local Bun run was
-interrupted on orchestrator instruction; final full gates remain CI-owned.
+Corrected source `f117161` passes the complete [CI matrix](https://github.com/unbraind/pm-github/actions/runs/40563048247).
+Both `npm run release:check` and `bun run release:check` pass on Node 22 and 26:
+each gate reports 1552/1552 tests, zero failures, skips or cancellations, and
+exact 100/100/100/100 coverage across all 23 authored modules. Static checks,
+privacy, audit (zero vulnerabilities), packaging, changelog and publication
+attestation checks pass. The npm jobs also pass the native Bun suite.
+[CodeQL for the same source](https://github.com/unbraind/pm-github/actions/runs/40563048271)
+passes. No coverage threshold, source inventory or existing assertion is weakened.
 
-At 2026-10-27 10:12 UTC, [CI](https://github.com/unbraind/pm-github/actions/runs/40483563492) and [CodeQL](https://github.com/unbraind/pm-github/actions/runs/40483563359)
-remain queued for the implementation commit; Semgrep passed. Pending checks
-are not approval. The documentation/tracker handoff receipt changes no runtime
-code or tests. Caller adoption remains in `pm-github-samq`.
+Focused class acceptance passed 98/98. Final history/import/workspace acceptance
+passed 4/4, configured terminal project apply/preview acceptance passed 2/2,
+and the final own-property/workspace suite passed 7/7 through both the direct
+runner and the linked pm test. Focused coverage of `workspace.ts` is also exact
+100/100/100/100. Five additional function-only behavioral reverts independently
+fail their regressions; the fixed functions are restored before final verification.
+The status-map property covers 81 case/space combinations of ordinary, Unicode
+and prototype-shaped names, preserving field-specific lookup semantics after
+SDK canonicalization. Missing status defaults agree with a real SDK create.
+
+Complete gate receipts above come from the corrected source in CI. Duplicate
+local full attempts were interrupted and are not reported as passes. All tests
+run with at most two workers. The final documentation/tracker receipt leaves
+runtime, tests, workflows and dependency pins identical to that certified source;
+its own head checks are reported separately at handoff.
+
+External review remains unavailable: Greptile reports an expired trial, Sourcery
+reports exhausted review budget, and CodeRabbit skipped review. These outcomes
+are not approvals. Items `pm-github-3it2` and `pm-github-fqjp` remain open for
+orchestrator verification. Caller adoption remains in `pm-github-samq`; no
+caller repository is changed and no release or merge is performed.

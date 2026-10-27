@@ -6,11 +6,12 @@ status: open
 priority: 2
 tags[4]: export,follow-up,status-registry,sync
 created_at: "2026-10-25T22:50:26.602Z"
-updated_at: "2026-10-27T16:44:04.239Z"
+updated_at: "2026-10-27T20:26:17.853Z"
 author: codex-agent
-comments[2]{created_at,author,text}:
+comments[3]{created_at,author,text}:
   "2026-10-25T22:51:41.799Z",codex-agent,"Deduplication used a certified full tracker read: no existing item specifically tracks custom configured status roles in these mappings. Static evidence: itemToGithubPayload and pmStatusToGithubState compare built-in names. This follow-up is intentionally separate from pm-github-ix5j completion semantics."
   "2026-10-27T16:44:04.238Z",codex-agent,"The round-2 workspace resolution class in PR #190 now also covers this existing follow-up: export/sync use the configured SDK terminal roles instead of literal closed/canceled names, project mappings compare canonical aliases, and blocker/changelog selection use the resolved lifecycle registry. Real custom active and terminal alias properties and packed npm/native Bun JSON/TOON sync/export previews pass. This item remains open for orchestrator verification; no status or claim is changed here."
+  "2026-10-27T20:26:17.853Z",codex-agent,"Configured lifecycle mapping is covered by corrected source f117161 in PR 190: workspace-resolved public SDK registries now drive issue sync/export, project mapping and closeout eligibility. Real non-git aliases and packed npm/native Bun JSON/TOON consumers pass; complete npm and Bun release gates on Node 22/26 each pass 1552/1552 with 23 authored modules at exact 100/100/100/100. Evidence: https://github.com/unbraind/pm-github/actions/runs/40563048247. This item remains open and unclaimed for orchestrator verification."
 files[1]{path,scope}:
   index.ts,project
 body: ""
