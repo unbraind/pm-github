@@ -3,6 +3,16 @@
 Validation date: 2026-10-27. Final-head release status, receipts and run links are
 recorded in [PR 188](https://github.com/unbraind/pm-github/pull/188).
 
+Round 2 source validation is recorded on commit `1054723`.
+[CI 40513381730](https://github.com/unbraind/pm-github/actions/runs/40513381730)
+had all four npm/Bun Node 22/26 jobs queued at this receipt, and
+[CodeQL 40513381833](https://github.com/unbraind/pm-github/actions/runs/40513381833)
+was queued. No current-source full release gate had completed. The documentation
+receipt adds no product or test change; the PR carries the final-head run.
+Local privacy audited 7,369 Git objects with approved identities and no secret
+or host-path matches. Changelog generation/check pass. Full-gate acceptance
+remains pending under the queue rule's bounded wait.
+
 The round 1 review-fix source run
 [40491011369](https://github.com/unbraind/pm-github/actions/runs/40491011369)
 had all four npm/Bun jobs queued without assigned runners at handoff. The queue rules cap
