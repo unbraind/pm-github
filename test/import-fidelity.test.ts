@@ -645,15 +645,15 @@ for (const atomic of [false, true]) {
     }));
   }
   test(`provider-only descriptor preserves external ownership without a locator (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
-    const issue = recorded("pm-csv-72");
-    const owner = await identityItem(pmRoot, { provider: "pm-jira", tags: ["gh:unbraind/pm-csv#72", "jira:EX-1"], release: "external-release" });
+    const issue = { ...recorded("pm-csv-72"), labels: [{ name: "fresh" }] };
+    const owner = await identityItem(pmRoot, { provider: "pm-jira", tags: ["gh:unbraind/pm-csv#72", "jira:EX-1", " ONE,TWO "], release: "external-release" });
     assert.equal(owner.external_url, undefined);
     assert.equal(owner.github_link_only, undefined);
     for (let attempt = 0; attempt < 2; attempt++) {
       await importing(pmRoot, issue, atomic);
       const actual = (await get(owner.id, {}, { pmRoot })).item;
       for (const key of ["title", "status", "created_at", "closed_at", "completed_at", "release", "body"] as const) assert.equal(actual[key], owner[key]);
-      assert.deepEqual(actual.tags, owner.tags);
+      assert.deepEqual(new Set(actual.tags), new Set([...owner.tags!, "fresh"]));
       assert.equal(actual.github_link_only, true);
       assert.equal((await listItems(pmRoot)).length, 1);
     }

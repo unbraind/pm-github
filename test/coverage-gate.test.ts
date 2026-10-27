@@ -103,6 +103,19 @@ test("node tooling selects Node under Bun and the current executable otherwise",
   assert.equal(nodeToolingExecutable({}), process.execPath);
 });
 
+test("full coverage gates cap test execution at two workers", () => {
+  const root = coverageFixture();
+  try {
+    const receipt = receiptRunner(root, "complete");
+    assert.equal(runCoverageGate(root, (command, args, options) => {
+      assert.ok(args.includes("--test-concurrency=2"));
+      return receipt(command, args, options);
+    }), 0);
+    const manifest = JSON.parse(readFileSync(join(import.meta.dirname, "../package.json"), "utf8")) as { scripts: { test: string } };
+    assert.match(manifest.scripts.test, /--test-concurrency=2/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("coverage gate main entry runs against the supplied root", () => {
   const root = mkdtempSync(join(tmpdir(), "pm-github-coverage-main-"));
   const previous = process.exitCode;

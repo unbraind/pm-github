@@ -1,0 +1,8 @@
+{
+  "repo": "example/widgets",
+  "sources": [{ "id": "LA_source", "name": "bug" }],
+  "change": { "kind": "rename", "name": "kind/bug" },
+  "filters": [{ "id": "nightly-import", "labels": ["bug", "approved"] }],
+  "mappings": [{ "id": "export-defects", "from": "defect", "to": "bug" }],
+  "choices": { "tags": "review", "filters": "replace", "mappings": "replace" }
+}
