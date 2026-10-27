@@ -55,7 +55,8 @@ It also includes the SDK lifecycle-finalization change from PR #180, but that
 change alone does **not** fix the observed mixed-batch timestamp churn.
 An isolated one-new-issue import repeats cleanly on both releases; it misses the
 incident's trigger. A batch containing one new issue and one existing linked
-native item reproduces the timestamp-only repeat diff on both releases.
+native item reproduces the timestamp-only repeat diff on both releases. These
+package-release replays use the repository-pinned SDK 2026.10.20.
 
 The existing item's first SDK update emits an intermediate history event without
 the bulk-import message marker. `selectImportContextIndex` treats that event as
@@ -109,3 +110,18 @@ Current pins checked on the default branches:
 The open Dependabot PRs [pm-beads #169](https://github.com/unbraind/pm-beads/pull/169)
 and [pm-web #255](https://github.com/unbraind/pm-web/pull/255) propose 2026.10.19.
 Those targets predate this fix and do not resolve the pagination refusal.
+
+## Verification handoff
+
+Implementation commit `c989d10` passed focused incident/privacy/comparison tests
+44/44, interrupted recovery and clean repeat tests 2/2, and restored-normalizer
+verification 1/1. Five behavioral function reverts fail their regressions as
+expected. Build, lint, docstrings, privacy and isolated strict health pass.
+The earlier full npm gate passed 1540/1540 and exact coverage across 22 modules
+before the final normalization adjustment. The full local Bun run was
+interrupted on orchestrator instruction; final full gates remain CI-owned.
+
+At 2026-10-27 10:12 UTC, [CI](https://github.com/unbraind/pm-github/actions/runs/40483563492) and [CodeQL](https://github.com/unbraind/pm-github/actions/runs/40483563359)
+remain queued for the implementation commit; Semgrep passed. Pending checks
+are not approval. The documentation/tracker handoff receipt changes no runtime
+code or tests. Caller adoption remains in `pm-github-samq`.
