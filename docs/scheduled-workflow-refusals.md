@@ -77,6 +77,14 @@ test or acceptance threshold was weakened.
 
 The latest published version at investigation time was **2026.10.26**, published
 2026-10-26. It retains the closeout pagination guard and generic workflow error.
+
+During verification, **2026.10.27** was published at 14:16 UTC. Its release tag
+points to `f90f86faa9c976392f1d1262fd0b3204de2007e4`; `closeout.ts`, `index.ts`,
+`import-fidelity.ts` and both reusable workflow files have identical Git blob
+IDs to the original main revision `2b71f73`. The npm registry also reports
+2026.10.27. This release does not include the incident or re-review fixes;
+callers need a release containing PR #190.
+
 It also includes the SDK lifecycle-finalization change from PR #180, but that
 change alone does **not** fix the observed mixed-batch timestamp churn.
 An isolated one-new-issue import repeats cleanly on both releases; it misses the
