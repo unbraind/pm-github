@@ -37,6 +37,8 @@ and its matching repository issue provenance tags. Unlinked and other-provider
 items remain visible with an empty issue identity list; they are never adopted
 or changed. `review`, `keep`, and `replace` are explicit per-surface choices.
 The mapping policy ID points back to its exact `from`/`to` entry in the request.
+`after` shows the replacement candidate for review; a `keep` choice retains
+`before` rather than applying that candidate.
 `replace` proposes a change; both preview and approval check write nothing.
 Apply reviewed edits through the owning provider/configuration workflow and core
 tag mutation facilities, after checking their revisions at the write boundary.

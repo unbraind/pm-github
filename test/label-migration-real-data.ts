@@ -1,10 +1,11 @@
 /** Opt-in public tracker and packed installation acceptance. Never reads private or hosted data. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, readFileSync, symlinkSync, chmodSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readdirSync, readFileSync, chmodSync, rmSync, copyFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
+import { pathToFileURL } from "node:url";
 import { planGithubLabelMigration, readGithubLabelCatalog, type GithubLabelMigrationInput, type GithubLabelMigrationReport } from "../index.ts";
 import { decode } from "@toon-format/toon";
 
@@ -13,22 +14,30 @@ const scratch = mkdtempSync(join(tmpdir(), "pm-label-public-"));
 const copies: string[] = [];
 const environment = { ...process.env, NPM_CONFIG_USERCONFIG: "/dev/null", PM_AUTHOR: "fixture", GIT_CEILING_DIRECTORIES: dirname(scratch) };
 /** Run one exact consumer command without exposing successful install logs. */
-function run(binary: string, args: string[], cwd = packageRoot): string {
-  const result = spawnSync(binary, args, { cwd, env: environment, encoding: "utf8", timeout: 180000, maxBuffer: 16 * 1024 * 1024 });
-  assert.equal(result.status, 0, `${binary.split("/").at(-1)}: ${result.stderr}`);
+function run(binary: string, args: string[], cwd = packageRoot, overrides: NodeJS.ProcessEnv = {}): string {
+  const result = spawnSync(binary, args, { cwd, env: { ...environment, ...overrides }, encoding: "utf8", timeout: 180000, maxBuffer: 16 * 1024 * 1024 });
+  assert.equal(result.status, 0, `${binary.split("/").at(-1)}: ${result.error?.message ?? result.stderr}`);
   return result.stdout;
 }
-/** Hash public tracker bytes, excluding the explicitly installed extension symlink. */
+/** Enumerate only ordinary public tracker entries, never installed extension dependencies. */
+function trackerEntries(root: string): { path: string; directory: boolean }[] {
+  return readdirSync(root, { withFileTypes: true }).flatMap(entry => {
+    if (entry.name === "extensions" || entry.isSymbolicLink()) return [];
+    const path = join(root, entry.name);
+    return [{ path, directory: entry.isDirectory() }, ...(entry.isDirectory() ? trackerEntries(path) : [])];
+  });
+}
+/** Hash public tracker bytes, excluding explicitly installed extension files. */
 function fingerprint(root: string): string {
   const hash = createHash("sha256");
-  for (const entry of readdirSync(root, { recursive: true, withFileTypes: true }).filter(entry => entry.isFile()).sort((a, b) => a.name.localeCompare(b.name))) {
-    hash.update(join(entry.parentPath, entry.name).slice(root.length)).update(readFileSync(join(entry.parentPath, entry.name)));
+  for (const entry of trackerEntries(root).filter(entry => !entry.directory).sort((a, b) => a.path.localeCompare(b.path))) {
+    hash.update(entry.path.slice(root.length)).update(readFileSync(entry.path));
   }
   return hash.digest("hex");
 }
 /** Extract only the public tracked tracker, never git metadata or a working tracker mutation. */
 function publicCopy(name: string, extensionPath?: string): string {
-  const directory = join(scratch, name);
+  const directory = join(scratch, `tracker-${name}`);
   mkdirSync(directory);
   const archive = spawnSync("git", ["archive", "origin/main", ".agents/pm"], { cwd: packageRoot, maxBuffer: 16 * 1024 * 1024 });
   assert.equal(archive.status, 0);
@@ -37,11 +46,16 @@ function publicCopy(name: string, extensionPath?: string): string {
   copies.push(root);
   if (extensionPath) {
     mkdirSync(join(root, "extensions"), { recursive: true });
-    symlinkSync(extensionPath, join(root, "extensions/pm-github"), "dir");
+    const installed = join(root, "extensions/pm-github");
+    mkdirSync(installed);
+    copyFileSync(join(extensionPath, "package.json"), join(installed, "package.json"));
+    const manifest = JSON.parse(readFileSync(join(extensionPath, "manifest.json"), "utf8")) as Record<string, unknown>;
+    writeFileSync(join(installed, "manifest.json"), JSON.stringify({ ...manifest, entry: "./entry.js" }));
+    // A normal physical extension entry imports the actual installed artifact in place,
+    // retaining npm/Bun's real dependency layout and global executable symlinks.
+    writeFileSync(join(installed, "entry.js"), `export { default } from ${JSON.stringify(pathToFileURL(join(extensionPath, "dist/index.js")).href)};\n`);
   }
-  for (const entry of readdirSync(root, { recursive: true, withFileTypes: true })) {
-    if (!entry.isSymbolicLink()) chmodSync(join(entry.parentPath, entry.name), entry.isDirectory() ? 0o555 : 0o444);
-  }
+  for (const entry of trackerEntries(root)) chmodSync(entry.path, entry.directory ? 0o555 : 0o444);
   chmodSync(root, 0o555);
   return root;
 }
@@ -72,6 +86,7 @@ try {
   const catalogFile = join(scratch, "catalog.json");
   writeFileSync(requestFile, JSON.stringify(input));
   writeFileSync(catalogFile, JSON.stringify(catalog));
+  run("npm", ["run", "build"]);
   const packed = JSON.parse(run("npm", ["pack", "--ignore-scripts", "--foreground-scripts=false", "--json", "--pack-destination", scratch])) as [{ filename: string }];
   const tarball = join(scratch, packed[0].filename);
   const tooling = join(scratch, "tooling");
@@ -89,17 +104,17 @@ try {
   mkdirSync(bunGlobal);
   mkdirSync(bunBin);
   writeFileSync(join(bunGlobal, "package.json"), '{"name":"global-label-acceptance","private":true}');
-  const bunConfig = join(scratch, "bunfig.toml");
-  writeFileSync(bunConfig, `[install]\nglobalDir = ${JSON.stringify(bunGlobal)}\nglobalBinDir = ${JSON.stringify(bunBin)}\n`);
-  run(bun, ["add", "--global", "--ignore-scripts", "--config", bunConfig, "@unbrained/pm-cli@2026.10.26", tarball]);
+  run(bun, ["add", "--global", "--ignore-scripts", "@unbrained/pm-cli@2026.10.26", tarball], packageRoot,
+    { BUN_INSTALL_GLOBAL_DIR: bunGlobal, BUN_INSTALL_BIN: bunBin });
   const consumers = [
     { name: "project-local", binary: join(local, "node_modules/.bin/pm"), prefix: [], extension: join(local, "node_modules/pm-github") },
     { name: "npx", binary: "npx", prefix: ["--no-install", "pm"], extension: join(local, "node_modules/pm-github") },
-    { name: "bunx", binary: bun, prefix: ["x", "--bun", "--no-install", "pm"], extension: join(local, "node_modules/pm-github") },
+    { name: "bunx", binary: join(tooling, "node_modules/.bin/bunx"), prefix: ["--bun", "--no-install", "pm"], extension: join(local, "node_modules/pm-github") },
     { name: "npm-global", binary: join(npmGlobal, "bin/pm"), prefix: [], extension: join(npmGlobal, "lib/node_modules/pm-github") },
     { name: "bun-global", binary: join(bunBin, "pm"), prefix: [], extension: join(bunGlobal, "node_modules/pm-github") },
   ];
   for (const consumer of consumers) {
+    console.log(`Checking ${consumer.name}`);
     const tracker = publicCopy(consumer.name, consumer.extension);
     const original = fingerprint(tracker);
     const args = ["--path", tracker, "github", "labels", "plan", "--input", requestFile, "--catalog", catalogFile, "--limit", "5"];
@@ -115,7 +130,7 @@ try {
 } finally {
   for (const root of copies) {
     chmodSync(root, 0o700);
-    for (const entry of readdirSync(root, { recursive: true, withFileTypes: true })) if (!entry.isSymbolicLink()) chmodSync(join(entry.parentPath, entry.name), entry.isDirectory() ? 0o700 : 0o600);
+    for (const entry of trackerEntries(root)) chmodSync(entry.path, entry.directory ? 0o700 : 0o600);
   }
   rmSync(scratch, { recursive: true, force: true });
 }

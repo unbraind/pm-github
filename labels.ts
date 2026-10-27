@@ -4,7 +4,7 @@ import { openSync, closeSync, fstatSync, readSync, constants } from "node:fs";
 import { z } from "zod";
 import { createPmCliExpectedError, toImportTags } from "@unbrained/pm-cli/sdk";
 import { readRefreshItems } from "./refresh.ts";
-import { fetchJSON, githubApiBase, parseNextLink, resolveGitHubToken } from "./index.ts";
+import { fetchJSON, githubApiBase, parseNextLink, parseProvenanceTag, resolveGitHubToken } from "./index.ts";
 
 /** Stable expected refusals; every failure supplies an actionable remedy. */
 export type LabelMigrationRefusalCode = "invalid_input" | "catalog_unavailable" | "stale_labels" | "incomplete_read" | "stale_plan" | "unresolved_choices" | "invalid_output";
@@ -34,7 +34,7 @@ const boundarySchema = z.strictObject({ request: requestSchema, page: pageSchema
   approval: z.string().regex(/^[a-f0-9]{64}$/).optional() });
 const rowSchema = z.strictObject({ kind: z.enum(["tags", "filters", "mappings"]), id: atom, source: atom,
   before: atom, after: atom, local_tag: atom.nullable(), choice, evidence: z.enum(["unverified_name", "declared_policy"]),
-  identities: z.array(atom).max(100), identities_omitted: count });
+  identities: z.array(z.string().min(1).max(240)).max(100), identities_omitted: count });
 const reportSchema = z.strictObject({ ok: z.literal(true), repo: requestSchema.shape.repo, approval: z.string().regex(/^[a-f0-9]{64}$/),
   checked: z.boolean(), sources: z.array(label).max(20), destination: label,
   counts: z.strictObject({ scanned: count, items: count, tags: count, filters: count, mappings: count, review: count, total: count }),
@@ -153,7 +153,10 @@ export async function planGithubLabelMigration(pmRoot: string, input: GithubLabe
   }
   for (const item of items) {
     let affected = false;
-    const identities = [...new Set(item.tags!.filter(tag => tag.toLowerCase().startsWith(`gh:${request.repo.toLowerCase()}#`) && /^gh:[^\s#]+#[1-9]\d*$/i.test(tag)))].sort(order);
+    const identities = [...new Set(item.tags!.filter(tag => {
+      const parsed = parseProvenanceTag(tag);
+      return parsed?.repo === request.repo.toLowerCase() && Number.isSafeInteger(parsed.number) && parsed.number > 0 && tag.length <= 240;
+    }))].sort(order);
     for (const source of request.sources) for (const tag of toImportTags([source.name])) if (item.tags!.includes(tag)) {
       affected = true;
       add({ kind: "tags", id: item.id!, source: source.id, before: tag, after: toImportTags([destination.name])[0]!, local_tag: tag, choice: request.choices.tags,

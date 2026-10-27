@@ -101,6 +101,17 @@ test("1000 items return complete counts and bounded rows on a read-only non-git 
   assert.equal(first.approval, result.approval);
 }));
 
+test("bounded provenance skips foreign or malformed references without losing the affected item", async () => tracker(async root => {
+  const repo = `${"a".repeat(100)}/${"b".repeat(100)}`;
+  const valid = `gh:${repo}#${Number.MAX_SAFE_INTEGER}`;
+  await item(root, "Extreme provenance", ["bug", valid, `gh:${repo}#${"9".repeat(300)}`, `gh:${repo}#0`,
+    `gh:${repo}#${"0".repeat(300)}1`, "gh:other/repo#1"]);
+  const report = await planGithubLabelMigration(root, request({ repo, filters: [], mappings: [] }), { readCatalog });
+  assert.equal(report.counts.items, 1);
+  assert.deepEqual(report.rows[0]!.identities, [valid]);
+  assert.deepEqual(validateGithubLabelMigrationReport(decode(encode(report))), report);
+}));
+
 test("approval revalidates current target revisions and exact label IDs, never a saved plan", async () => tracker(async root => {
   const created = await item(root, "Target", ["bug"]);
   const input = request({ choices: { tags: "replace", filters: "keep", mappings: "replace" } });
