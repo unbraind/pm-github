@@ -273,12 +273,31 @@ There are no saved plans, leases, idempotency keys, or retries in the completion
 adapter. Every call re-reads native state, and the semantic form digest is only
 a source identifier. Imports and sync do not use this opt-in export adapter.
 
+## Label migration impact plans
+
+Preview an exact GitHub label rename or explicit consolidation across stored
+provider tag occurrences, declared import filters and local export mappings:
+
+```sh
+pm github labels plan --input label-migration.json --limit 10 --json
+pm github labels plan --input label-migration.json --approve <approval>
+```
+
+Start with the [JSON example](docs/label-migration.json) and
+[SDK/CLI contract](docs/label-migrations.md). Provider node IDs stay distinct even
+when their names normalize to the same native tag. Complete counts accompany a
+bounded page of exact affected item/policy identities and explicit choices.
+Checking an application plan revalidates current label IDs and SDK revisions;
+both commands are read-only. Filters/mappings must be explicitly inventoried.
+
 ## Without git
 
 With an explicit repository, GitHub import, export, refresh, sync, project commands,
 blocker checks, issue-form compilation/completion, closeout and webhook receive/reconcile work in a plain pm tracker
 without a git executable.
 `pm github identity` also works there, entirely offline and without credentials.
+`pm github labels plan` works on read-only non-git trackers; `--catalog` supplies
+an offline complete label snapshot, otherwise it reads current GitHub labels.
 The provider commands still require their normal GitHub access and credentials. Privacy scanning
 with `github gate --diff <file>` also works there. Reading a proposed tracker diff
 with `github gate` requires a git repository; otherwise pass an explicit diff.

@@ -34,6 +34,9 @@ import {
 } from "./import-fidelity.ts";
 import { refreshChanges, runRefresh } from "./refresh.ts";
 import { exploreGithubIdentities, planGithubIdentityRepair, applyGithubIdentityRepair } from "./identity.ts";
+import { planGithubLabelMigration, readLabelMigrationJson, type GithubLabelMigrationInput } from "./labels.ts";
+export { planGithubLabelMigration, readGithubLabelCatalog, validateGithubLabelMigrationReport } from "./labels.ts";
+export type { GithubLabelMigrationInput, GithubLabelCatalog, GithubLabelCatalogReader, GithubLabelMigrationReport, LabelMigrationRefusalCode } from "./labels.ts";
 export { exploreGithubIdentities, planGithubIdentityRepair, applyGithubIdentityRepair } from "./identity.ts";
 export type { IdentityRefusalCode, IdentityEdge, IdentityNode, IdentityReport, IdentityRepairPlan } from "./identity.ts";
 import { acceptGithubWebhook, reconcileGithubWebhooks, WebhookRefusal } from "./webhooks.ts";
@@ -7009,6 +7012,29 @@ export default defineExtension({
           limit: options.limit === undefined ? undefined : Number(options.limit),
           offset: options.offset === undefined ? undefined : Number(options.offset),
           identity: typeof options.identity === "string" ? options.identity : undefined,
+        });
+      },
+    });
+
+    api.registerCommand({
+      name: "github labels plan",
+      description: "Preview exact provider label rename/consolidation impacts on stored tags and declared filters/mappings. Read-only; --approve revalidates a saved digest against current state.",
+      flags: [
+        { long: "--input", value_name: "file", description: "Strict JSON request with repo, source IDs/names, change, filters, mappings and choices" },
+        { long: "--catalog", value_name: "file", description: "Complete offline catalog JSON; omit to fetch all current GitHub labels" },
+        { long: "--approve", value_name: "digest", description: "Check the exact reviewed plan against current labels, policy and SDK revisions; writes nothing" },
+        { long: "--limit", value_name: "N", description: "Affected rows per page, 1..100 (default 20); counts always cover the complete corpus" },
+        { long: "--offset", value_name: "N", description: "Nonnegative affected-row offset" },
+      ],
+      async run(ctx: CommandHandlerContext) {
+        const { input, catalog, approve, limit, offset } = ctx.options;
+        if (typeof input !== "string" || catalog !== undefined && typeof catalog !== "string" || approve !== undefined && typeof approve !== "string") {
+          throw createPmCliExpectedError("Supply --input <JSON file>, optional --catalog <JSON file> and a full --approve digest.", { exitCode: 2, context: { code: "invalid_input", required: "Use pm github labels plan --help and the documented JSON example." } });
+        }
+        return planGithubLabelMigration(ctx.pm_root, readLabelMigrationJson(input) as GithubLabelMigrationInput, {
+          page: { limit: limit === undefined ? undefined : Number(limit), offset: offset === undefined ? undefined : Number(offset) },
+          approval: approve,
+          readCatalog: catalog === undefined ? undefined : async () => readLabelMigrationJson(catalog),
         });
       },
     });
