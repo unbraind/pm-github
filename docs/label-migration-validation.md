@@ -20,6 +20,16 @@ expected-name drift, catalog drift and same-content SDK revision changes refuse
 old approvals. Foreign or malformed issue references cannot invalidate the
 affected item or become a claimed issue identity.
 
+The large fixture uses an exact seed ID and a disjoint bulk-ID namespace. An SDK
+complete read certifies 1,000 source items before permissions change or planning
+starts. The earlier `e9af282` run passed all four release gates and the Node 26
+native Bun suite, but Node 22 native Bun exposed overlapping synthetic IDs that
+could overwrite the randomly named seed and leave only 999 source items. A
+deterministic collision reproduces that failure under Node and Bun; restoring
+the disjoint namespace passes under Node and Bun 1.3.5/1.3.14. The planner's
+production code is unchanged by this fixture correction. Final-head full CI
+receipts are recorded in the PR.
+
 The seeded model runs 500 random operation sequences with SDK-native tag
 conversion, native edits, custom statuses, ambient focus, relationships,
 whitespace/CRLF, older policy replays and JSON/TOON round trips. It compares

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { encode, decode } from "@toon-format/toon";
-import { init, create, update, get, getItemPath, serializeItemDocument, toImportTags, schemaAddStatus, focus } from "@unbrained/pm-cli/sdk";
+import { init, create, update, get, getItemPath, serializeItemDocument, toImportTags, schemaAddStatus, focus, listAllComplete, certifyCompleteListResult } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension, { planGithubLabelMigration, readGithubLabelCatalog, validateGithubLabelMigrationReport,
   type GithubLabelMigrationInput, type GithubLabelCatalog, type GithubLabelMigrationReport } from "../index.ts";
@@ -49,8 +49,8 @@ async function tracker(run: (root: string, directory: string) => Promise<void>) 
   } finally { rmSync(directory, { recursive: true, force: true }); }
 }
 /** Seed all fixture items with explicit relationships, preventing ambient focus inheritance. */
-async function item(root: string, title: string, tags: string[]) {
-  return (await create({ title, type: "Task", tags: tags.join(","), parent: "none", unset: ["sprint", "release", "goal", "objective"], clearDeps: true }, { pmRoot: root })).item;
+async function item(root: string, title: string, tags: string[], id?: string) {
+  return (await create({ id, title, type: "Task", tags: tags.join(","), parent: "none", unset: ["sprint", "release", "goal", "objective"], clearDeps: true }, { pmRoot: root })).item;
 }
 
 test("same display intent stays distinct; every affected identity and choice is explicit", async () => tracker(async root => {
@@ -83,11 +83,13 @@ test("same display intent stays distinct; every affected identity and choice is 
 }));
 
 test("1000 items return complete counts and bounded rows on a read-only non-git tracker", async () => tracker(async root => {
-  const base = await item(root, "Thousand fixture base", ["bug"]);
+  const base = await item(root, "Thousand fixture base", ["bug"], "fixture-0001");
   for (let i = 1; i < 1000; i++) {
-    const id = `fixture-${String(i).padStart(4, "0")}`;
+    const id = `${base.id}-bulk-${String(i).padStart(4, "0")}`;
     writeFileSync(getItemPath(root, "Task", id), serializeItemDocument({ metadata: { ...base, id, title: `Fixture ${i}`, tags: ["bug", `gh:fixture/repo#${i}`] }, body: "" }));
   }
+  const seeded = certifyCompleteListResult(await listAllComplete({ includeBody: true }, { pmRoot: root, cwd: root, noExtensions: true }));
+  assert.equal(seeded.items.length, 1000, "source fixture is complete before preview or permission changes");
   for (const entry of readdirSync(root, { recursive: true, withFileTypes: true }).filter(entry => entry.isFile())) chmodSync(join(entry.parentPath, entry.name), 0o444);
   const before = snapshot(root);
   const result = await planGithubLabelMigration(root, request(), { readCatalog, page: { limit: 7, offset: 996 } });
