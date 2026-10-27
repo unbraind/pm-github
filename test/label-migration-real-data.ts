@@ -126,6 +126,31 @@ try {
   writeFileSync(join(bunGlobal, "package.json"), '{"name":"global-label-acceptance","private":true}');
   run(bun, ["add", "--global", "--ignore-scripts", "@unbrained/pm-cli@2026.10.26", tarball], packageRoot,
     { BUN_INSTALL_GLOBAL_DIR: bunGlobal, BUN_INSTALL_BIN: bunBin });
+  const sdkProof = join(local, "sdk-proof.ts");
+  writeFileSync(sdkProof, `import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { encodePmTableRows } from "@unbrained/pm-cli/sdk";
+import { planGithubLabelMigration, validateGithubLabelMigrationReport, type GithubLabelMigrationInput } from ${JSON.stringify(pathToFileURL(join(local, "node_modules/pm-github/dist/index.js")).href)};
+const input = JSON.parse(readFileSync(${JSON.stringify(requestFile)}, "utf8")) as GithubLabelMigrationInput;
+const catalog: unknown = JSON.parse(readFileSync(${JSON.stringify(catalogFile)}, "utf8"));
+const report = await planGithubLabelMigration(${JSON.stringify(root)}, input, { readCatalog: async () => catalog, page: { limit: 5 } });
+const table = encodePmTableRows(report.rows);
+assert.deepEqual(validateGithubLabelMigrationReport({ ...report, next: undefined, rows: table.rows, rows_encoding: table.encoding }), report);
+const filterIndex = report.rows.findIndex(row => row.kind === "filters");
+const bad = { ...report, rows: table.rows.map(row => ({ ...row })), rows_encoding: { ...table.encoding, absent: [[filterIndex, "after_tags"]] } };
+delete bad.rows[filterIndex]!.after_tags;
+const descriptor = Object.getOwnPropertyDescriptor(Object.prototype, "after_tags");
+try {
+  Object.defineProperty(Object.prototype, "after_tags", { value: null, configurable: true, writable: true });
+  assert.throws(() => validateGithubLabelMigrationReport(bad), (error: unknown) => (error as { code?: string }).code === "invalid_output");
+} finally {
+  if (descriptor) Object.defineProperty(Object.prototype, "after_tags", descriptor);
+  else Reflect.deleteProperty(Object.prototype, "after_tags");
+}
+console.log(JSON.stringify({ runtime: process.versions.bun ? "Bun" : "Node", sdk: "2026.10.26", table_codec: true, own_padding: true, scanned: report.counts.scanned, affected: report.counts.total }));
+`);
+  for (const runtime of [process.execPath, bun]) console.log(run(runtime, [sdkProof], local, { PM_PATH: root }).trim());
+  assert.equal(fingerprint(root), before);
   const consumers = [
     { name: "project-local", binary: join(local, "node_modules/.bin/pm"), prefix: [], extension: join(local, "node_modules/pm-github") },
     { name: "npx", binary: "npx", prefix: ["--no-install", "pm"], extension: join(local, "node_modules/pm-github") },

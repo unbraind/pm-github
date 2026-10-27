@@ -113,7 +113,8 @@ The same boundary accepts the host's `rows_encoding` metadata and restores
 nested cells with the SDK's `decodePmTableRows`. JSON-looking label strings are
 never decoded by inference. Encoded rows retain the 100-row limit; keys come
 from the producer schema, cells are bounded at 128 KiB, and absent coordinates
-must be unique, in range and backed by null padding.
+must be unique, in range and backed by an own null-padding entry; inherited
+properties never stand in for encoded cells.
 
 The optional SDK `readCatalog` adapter supports an explicit offline snapshot and
 must return `{complete:true, labels:[{id,name}]}`. The planner reuses the package's

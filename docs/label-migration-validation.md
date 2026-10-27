@@ -60,7 +60,11 @@ Packed validation also exposed host TOON null compaction and lossless table
 cells. The shared boundary uses declared null defaults and the SDK's own table
 decoder, with field names derived from the producer schema. An additional 500
 wire permutations cover all row kinds, sparse cells, JSON-looking strings and
-extreme metadata; five independent transport reversions fail their regressions.
+extreme metadata; six independent transport reversions fail their regressions.
+The final guard reuses the package's own-entry reader: an inherited null cannot
+stand in for a missing padding cell. Reverting only that read accepts the
+prototype-padding adversary and fails the property. Standalone Node/Bun SDK
+checks, including this adversary, are part of the packed acceptance helper.
 Missing continuation on an unfinished page and missing native identities still
 refuse. Installation setup has a bounded 600-second deadline on the saturated
 host; feature commands retain their 180-second deadline and every acceptance

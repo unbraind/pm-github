@@ -426,6 +426,18 @@ test("500 SDK table wire permutations preserve producer rows, absent fields and 
     assert.throws(() => validateGithubLabelMigrationReport({ ...wire, rows_encoding: encoding }), code("invalid_output"));
   }
   assert.throws(() => validateGithubLabelMigrationReport({ ...wire, rows: [{ ...table.rows[0], foreign: "field" }] }), code("invalid_output"));
+  const filterIndex = report.rows.findIndex(row => row.kind === "filters");
+  const inherited = { ...wire, rows: table.rows.map(row => ({ ...row })),
+    rows_encoding: { ...table.encoding, absent: [[filterIndex, "after_tags"]] } };
+  delete inherited.rows[filterIndex]!.after_tags;
+  const descriptor = Object.getOwnPropertyDescriptor(Object.prototype, "after_tags");
+  try {
+    Object.defineProperty(Object.prototype, "after_tags", { value: null, configurable: true, writable: true });
+    assert.throws(() => validateGithubLabelMigrationReport(inherited), code("invalid_output"));
+  } finally {
+    if (descriptor) Object.defineProperty(Object.prototype, "after_tags", descriptor);
+    else Reflect.deleteProperty(Object.prototype, "after_tags");
+  }
 }));
 
 test("500 seeded model sequences replay older policies and preserve SDK-read native fields and relationships", async () => tracker(async root => {

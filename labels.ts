@@ -6,6 +6,7 @@ import { createPmCliExpectedError, decodePmTableRows } from "@unbrained/pm-cli/s
 import { readRefreshItems } from "./refresh.ts";
 import { githubLabelNameKey } from "./label-names.ts";
 import { githubLabelsToTags } from "./import-tags.ts";
+import { ownValue } from "./own-record.ts";
 import { fetchJSON, githubApiBase, parseNextLink, parseProvenanceTag, resolveGitHubToken } from "./index.ts";
 
 /** Stable expected refusals; every failure supplies an actionable remedy. */
@@ -55,7 +56,7 @@ const tableReportSchema = reportSchema.omit({ rows: true }).extend({
     absent: z.array(z.tuple([z.number().int().min(0).max(99), rowKeys])).max(100 * rowKeys.options.length) }),
 }).refine(value => new Set(value.rows_encoding.json_columns).size === value.rows_encoding.json_columns.length &&
   new Set(value.rows_encoding.absent.map(coordinate => JSON.stringify(coordinate))).size === value.rows_encoding.absent.length &&
-  value.rows_encoding.absent.every(([index, key]) => index < value.rows.length && value.rows[index]?.[key] === null));
+  value.rows_encoding.absent.every(([index, key]) => index < value.rows.length && ownValue(value.rows[index], key) === null));
 const reportBoundarySchema = z.union([reportSchema, tableReportSchema.transform((table, context) => {
   const { rows_encoding, rows, ...report } = table;
   try {
