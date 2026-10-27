@@ -3,6 +3,19 @@
 Validation date: 2026-10-27. Final-head full release receipts and run links are
 recorded in [PR 188](https://github.com/unbraind/pm-github/pull/188).
 
+Review round 1 corrected the provider-name comparison class across policy
+filters, mapping destinations, rename collisions, export label maps (including
+unmapped exports), form-label contracts, composed previews and POST/PATCH
+payloads. Provider names use case-insensitive keys while preserving first-seen
+spelling. IDs, local mapping keys and revision bindings remain exact. The
+adversarial coverage includes every ASCII spelling of `bug`, paginated hidden
+review choices, distinct node IDs with colliding name keys, JSON/TOON command
+results, form/export composition, 500 generated export case permutations and
+the existing 500 SDK state sequences with replayed mixed-case policies. The
+packed five-consumer acceptance uses `BUG` filters and `BuG` mapping destinations.
+Full gate test processes are explicitly capped at two workers; native Bun files
+remain serial. No thresholds or source exclusions changed.
+
 The overlap check covered core SDK bulk tag mutations, the existing GitHub
 identity explorer, and pm-linear/pm-jira policy/schema mappings. This feature
 explains provider label policy changes; it creates no new resolver or

@@ -4,6 +4,7 @@ import { openSync, closeSync, fstatSync, readSync, constants } from "node:fs";
 import { z } from "zod";
 import { createPmCliExpectedError, toImportTags } from "@unbrained/pm-cli/sdk";
 import { readRefreshItems } from "./refresh.ts";
+import { githubLabelNameKey } from "./label-names.ts";
 import { fetchJSON, githubApiBase, parseNextLink, parseProvenanceTag, resolveGitHubToken } from "./index.ts";
 
 /** Stable expected refusals; every failure supplies an actionable remedy. */
@@ -134,7 +135,7 @@ export async function planGithubLabelMigration(pmRoot: string, input: GithubLabe
     refuse("stale_labels", "A selected label ID or expected name changed. Fetch the current catalog, choose exact identities and preview again.");
   }
   const destination = request.change.kind === "rename" ? { id: request.sources[0]!.id, name: request.change.name } : request.change.target;
-  if (request.change.kind === "rename" && (request.sources.length !== 1 || labels.some(current => current.id !== destination.id && current.name.toLowerCase() === destination.name.toLowerCase())) ||
+  if (request.change.kind === "rename" && (request.sources.length !== 1 || labels.some(current => current.id !== destination.id && githubLabelNameKey(current.name) === githubLabelNameKey(destination.name))) ||
     request.change.kind === "consolidate" && request.sources.some(source => source.id === destination.id)) {
     refuse("invalid_input", "Rename exactly one ID to an unused name, or explicitly consolidate distinct source IDs into a separate target ID.");
   }
@@ -164,11 +165,12 @@ export async function planGithubLabelMigration(pmRoot: string, input: GithubLabe
     }
     if (affected) counts.items++;
   }
-  for (const filter of request.filters) for (const source of request.sources) if (filter.labels.includes(source.name)) {
-    add({ kind: "filters", id: filter.id, source: source.id, before: source.name, after: destination.name,
+  for (const filter of request.filters) for (const source of request.sources) {
+    const before = filter.labels.find(name => githubLabelNameKey(name) === githubLabelNameKey(source.name));
+    if (before !== undefined) add({ kind: "filters", id: filter.id, source: source.id, before, after: destination.name,
       local_tag: null, choice: request.choices.filters, evidence: "declared_policy", identities: [], identities_omitted: 0 });
   }
-  for (const mapping of request.mappings) for (const source of request.sources) if (mapping.to === source.name) {
+  for (const mapping of request.mappings) for (const source of request.sources) if (githubLabelNameKey(mapping.to) === githubLabelNameKey(source.name)) {
     add({ kind: "mappings", id: mapping.id, source: source.id, before: mapping.to, after: destination.name,
       local_tag: mapping.from, choice: request.choices.mappings, evidence: "declared_policy", identities: [], identities_omitted: 0 });
   }

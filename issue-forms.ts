@@ -4,6 +4,7 @@ import { openSync, readSync, closeSync, fstatSync, constants } from "node:fs";
 import { parseDocument } from "yaml";
 import { z } from "zod";
 import { emptyRecord, ownValue } from "./own-record.ts";
+import { uniqueGithubLabelNames } from "./label-names.ts";
 import { createPmCliExpectedError, readSettings, resolveItemTypeRegistry, getActiveExtensionRegistrations, locateItem, readLocatedItem } from "@unbrained/pm-cli/sdk";
 
 /** Stable refusals carry a bounded repair list in the SDK error context. */
@@ -107,7 +108,7 @@ function compile(request: z.infer<typeof requestSchema>): IssueFormContract {
     if (!compiled.some(field => field.id === id)) refuseIssueForm("invalid_form_input", [{ field: id, reason: "unknown_field", remedy: "Use only answer IDs listed by the compiled contract." }]);
   }
   return { repo: request.repo, ref: request.ref, path: request.path,
-    digest: createHash("sha256").update(JSON.stringify(request.yaml)).digest("hex"), fields: compiled, labels: request.yaml.labels ?? [] };
+    digest: createHash("sha256").update(JSON.stringify(request.yaml)).digest("hex"), fields: compiled, labels: uniqueGithubLabelNames(request.yaml.labels ?? []) };
 }
 /** Compile repository form semantics without reading a tracker or contacting GitHub. */
 export function compileIssueForm(value: unknown): IssueFormContract { return compile(input(value)); }

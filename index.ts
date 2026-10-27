@@ -1,4 +1,5 @@
 import { ownValue } from "./own-record.ts";
+import { uniqueGithubLabelNames } from "./label-names.ts";
 // pm-github — GitHub Issues + Projects v2 sync for pm-cli
 //
 // Capabilities (see manifest.json):
@@ -742,16 +743,7 @@ export function applyLabelMap(
   labels: string[],
   labelMap: Map<string, string> | undefined,
 ): string[] {
-  if (!labelMap || labelMap.size === 0) return labels;
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const label of labels) {
-    const mapped = labelMap.get(label) ?? label;
-    if (seen.has(mapped)) continue;
-    seen.add(mapped);
-    out.push(mapped);
-  }
-  return out;
+  return uniqueGithubLabelNames(labels.map(label => labelMap?.get(label) ?? label));
 }
 
 // Parse one or more CSV-like option values into a deduplicated string list.
@@ -4288,7 +4280,7 @@ export async function applyExportPlan(
           "PATCH",
           `${githubApiBase()}/repos/${repo}/issues/${entry.number}`,
           token,
-          JSON.stringify({ title: p.title, body: p.body, labels: p.labels, state: p.state }),
+          JSON.stringify({ title: p.title, body: p.body, labels: uniqueGithubLabelNames(p.labels), state: p.state }),
         );
         updated++;
       } else {
@@ -4296,7 +4288,7 @@ export async function applyExportPlan(
           "POST",
           `${githubApiBase()}/repos/${repo}/issues`,
           token,
-          JSON.stringify({ title: p.title, body: p.body, labels: p.labels }),
+          JSON.stringify({ title: p.title, body: p.body, labels: uniqueGithubLabelNames(p.labels) }),
         );
         created++;
       }
@@ -4415,7 +4407,7 @@ async function runExport(ctx: CommandHandlerContext) {
   const plan = buildExportPlan(selected, repo, labelMap);
   for (const [index, completion] of completions.entries()) {
     plan[index]!.payload.body = completion.body;
-    plan[index]!.payload.labels = [...new Set([...plan[index]!.payload.labels, ...completion.report.contract.labels])];
+    plan[index]!.payload.labels = uniqueGithubLabelNames([...plan[index]!.payload.labels, ...completion.report.contract.labels]);
   }
   const creates = plan.filter((e) => e.action === "create").length;
   const updates = plan.filter((e) => e.action === "update").length;

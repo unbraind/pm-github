@@ -6,10 +6,10 @@ status: in_progress
 priority: 2
 tags[3]: labels,migration,planning
 created_at: "2026-10-27T06:17:55.248Z"
-updated_at: "2026-10-27T08:11:53.812Z"
+updated_at: "2026-10-27T10:44:10.636Z"
 author: codex-agent
 acceptance_criteria: "Same display intent never merges labels by inference; 1000 items yield complete counts and bounded affected rows; stale provider label IDs invalidate application plans; typed SDK and CLI, strict boundaries, non-git read-only validation and seeded state properties."
-comments[7]{created_at,author,text}:
+comments[11]{created_at,author,text}:
   "2026-10-27T06:18:14.443Z",codex-agent,"Overlap rechecked against installed core SDK bulk mutations and sibling pm-linear/pm-jira docs. Core edits local tags; github identity explores competing ownership; Linear negotiates team schema. None previews a GitHub label policy across exact provider IDs, stored tag occurrences, declared import filters and export mappings. Scope: read-only plans plus fresh revalidation; no new importer, exporter, sync writer, journal, resolver or remote mutation. Existing importer stores label names rather than label IDs, so name matches are reported as unverified occurrences requiring an explicit choice, never inferred consolidation. Acceptance covers distinct same-intent IDs, complete 1000-item counts with bounded rows, stale IDs/revisions, strict input/output schemas, real non-git SDK state and packed consumers. Registry reports CLI 2026.10.27; repo pin remains 2026.10.20 per queue rule."
   "2026-10-27T06:29:10.429Z",codex-agent,"Implementation adds a read-only typed planner and github labels plan command. Exact node IDs and expected provider names select identities; SDK toImportTags finds native normalized occurrences without merging provider IDs. Choices cover tag/filter/mapping policy; complete counts accompany bounded rows. Revalidation reads fresh catalogs and current SDK revisions rather than replaying saved mutations. The 1000-item read-only non-git fixture passes. Targeted boundary tests cover sparse/extreme inputs, same-intent IDs, stale deleted/recreated labels and revision changes; seeded 500-sequence model checks are being completed. No stateful writer/journal/import/export/sync path is introduced."
   "2026-10-27T06:34:03.464Z",codex-agent,"Behavioral revert proof: independently replacing SDK-native tag conversion with exact provider spelling, disabling current approval/revision comparison, and removing the row cap each makes its targeted regression fail (exit 1). Restoring the code passes. Targeted tests: 7/7 including 500 seeded operation sequences; targeted planner coverage is 100 percent statements, branches, functions and lines. Public non-git read-only tracker at main 2b71f73: 155 items scanned, 12 provider labels, one affected item/tag and two declared policy examples (one filter, one mapping), 3 rows, 1078 JSON bytes; byte identity preserved. Isolated packed installation acceptance is in progress."
@@ -17,12 +17,21 @@ comments[7]{created_at,author,text}:
   "2026-10-27T06:58:57.868Z",codex-agent,"PR 188 is ready for review. All five packed consumers pass on CLI 2026.10.26: project-local, npx, native Bun/bunx, npm-global and Bun-global; each verifies JSON, TOON, current approval and byte-identical public tracker source. Public snapshot remains 155 items, 12 labels, one affected item/tag and two explicitly declared policies, 3 rows and 1078 JSON bytes. Added a passing bounded-provenance regression: oversized or malformed foreign references cannot fail an otherwise valid affected item. Reverting that guard alone fails the test (exit 1). Full unchanged npm/Bun CI gates are running; final-head run URLs and exact counts are maintained in the PR. Automated reviews are unavailable or skipped and are not approvals. No CLI/SDK defect was identified; installation-harness corrections preserved actual package layouts rather than relocating dependencies."
   "2026-10-27T08:08:18.534Z",codex-agent,"Final-head run 40464566061 passed all four full npm/Bun release gates (1526 tests each, exact 100/100/100/100 across 22 modules) and the Node 26 native Bun suite (1526 tests across 57 files). Node 22 native Bun failed only the 1000-item fixture, whose SDK read contained 999 items; its other seven feature regressions, including all 500 model sequences, passed. The fixture used a random SDK seed ID and a synthetic numeric ID range that can overlap and overwrite that seed. Correcting the fixture to use disjoint IDs and certifying its source count through the SDK before the read-only preview. No production planner mutation is involved."
   "2026-10-27T08:11:50.180Z",codex-agent,"Deterministic collision proof confirms fixture defect: force the seed ID into the old numeric clone range and the source SDK count becomes 999; reverting only the disjoint clone namespace fails under both Node and Bun (exit 1). Fixed fixture uses an exact seed ID, descendants in a separate namespace, and a certified SDK source count of 1000 before preview. The corrected focused test passes under Node, Bun 1.3.5 and CI-matching Bun 1.3.14. Production labels.ts and the packed runtime surface are unchanged. Re-running the complete CI matrix after the fixture correction; all thresholds and dependency pins remain unchanged."
-files[4]{path,scope}:
+  "2026-10-27T10:17:20.283Z",codex-agent,"Re-review blocking finding accepted. General rule: provider label names follow GitHub's case-insensitive matching everywhere they are compared or combined; opaque node IDs, local mapping keys and exact catalog revision bindings remain exact. Package-wide audit found the missing matches in label-plan filters and mapping destinations, plus case-sensitive deduplication in applyLabelMap (including no-map exports), issue-form contract labels and form/export label composition. REST request emission will use the same provider-name rule. Raw import/refresh label payloads remain governed by SDK-native tag normalization; form question labels and configured status names are separate domains. origin/main is not ahead (0 commits behind), so no merge is needed. No additional actionable non-blocking findings were supplied or published in PR review comments; all newly found class instances will be covered."
+  "2026-10-27T10:35:21.684Z",codex-agent,"Focused class regressions pass: all eight ASCII case spellings of bug across rename and consolidation; SDK and registered CLI JSON/TOON reports; off-page unresolved policy choices; exact node IDs and expected-name revision bindings; first-spelling preservation; 500 export/form case permutations; form/export composition; direct POST and PATCH payload normalization. Existing 500 SDK state sequences now replay mixed-case policy inputs with an independent presence-based reference model. Full feature-file coverage is still running on the loaded host. Operational test runners now explicitly use at most two workers. Pinned pm 2026.10.20 refuses linked-test metadata edits through --update-index/--set-json because the declared peer floor cannot safely refuse item format 2; normal files/comments/add operations work, so existing test entries and pins are preserved and a separate focused entry has timeout 600."
+  "2026-10-27T10:41:39.819Z",codex-agent,"Revert proof: independently restoring case-sensitive filter matching, mapping destinations, mapped/unmapped export deduplication, issue-form contract labels, form/export composition, PATCH labels, POST labels, rename collisions, or the shared name key makes its focused regression fail (all nine exit 1). Removing the two-worker cap independently fails its guard test (exit 1). Every changed file was restored byte-for-byte after each proof. Full focused feature run passed 11/11, including 500 mixed-case SDK state sequences plus 500 generated export/form permutations; planner and shared-name helper both have exact 100/100/100/100 targeted coverage. Pinned pm linked-test run passed the three provider-name class tests. Catalog revision bindings, opaque IDs and local mapping keys remain exact by explicit adversarial assertions."
+  "2026-10-27T10:44:00.100Z",codex-agent,"Restored-code follow-up checks passed: legacy export and worker-cap regressions 9/9; native Bun 1.3.14 class regressions 3/3; typecheck, test typecheck, lint and docstrings pass. The shared provider-name helper is used at every comparison/combination site found in the package audit. No tests were removed or weakened. Full gates remain CI evidence with explicit --test-concurrency=2; native Bun files run serially. Final-head gate counts and fresh mixed-case packed consumer receipts will be recorded in PR 188."
+files[9]{path,scope}:
   index.ts,project
+  issue-forms.ts,project
+  label-names.ts,project
   labels.ts,project
+  package.json,project
+  scripts/coverage-gate.ts,project
+  test/coverage-gate.test.ts,project
   test/label-migration-real-data.ts,project
   test/labels.test.ts,project
-tests[4]:
+tests[5]:
   - command: node --test --test-concurrency=2 test/labels.test.ts
     scope: project
     provenance:
@@ -52,6 +61,14 @@ tests[4]:
     provenance:
       author: codex-agent
       created_at: "2026-10-27T08:11:17.583Z"
+      source_kind: local_mutation
+      source_ref: feat/label-migration-impact-plans
+  - command: node --test --test-concurrency=2 --test-name-pattern=provider.name test/labels.test.ts
+    scope: project
+    timeout_seconds: 600
+    provenance:
+      author: codex-agent
+      created_at: "2026-10-27T10:30:51.425Z"
       source_kind: local_mutation
       source_ref: feat/label-migration-impact-plans
 docs[4]{path,scope}:

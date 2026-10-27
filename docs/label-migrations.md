@@ -10,6 +10,13 @@ Copy [the request example](label-migration.json), replace its repository and
 source ID/name with current values, and inventory the filters and mappings you
 actually use. `filters` describe saved `--labels` selections. `mappings` describe
 export `--label-map` pairs (`from` is the local tag; `to` is the GitHub label).
+Provider-name comparisons ignore case: selecting `bug` also affects a filter
+containing `BUG` or an export destination `BuG`. The first configured spelling
+is preserved in each affected row. Repeated case variants within one filter
+count once per selected source ID, and unresolved policy choices still block
+approval when their rows fall outside the displayed page. Local mapping keys,
+opaque node IDs and expected catalog spellings retain their exact semantics;
+name comparison never combines distinct selected IDs.
 These flags have no persistent package-wide inventory to discover. Empty arrays
 explicitly declare no such policies. IDs identify individual policies in output.
 The report covers exactly this declared inventory, not configuration hidden in

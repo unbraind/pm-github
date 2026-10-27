@@ -289,6 +289,9 @@ when their names normalize to the same native tag. Complete counts accompany a
 bounded page of exact affected item/policy identities and explicit choices.
 Checking an application plan revalidates current label IDs and SDK revisions;
 both commands are read-only. Filters/mappings must be explicitly inventoried.
+Provider policy names match without case (`bug`, `BUG`, `BuG`); node IDs stay
+distinct. Exports and issue-form label composition use the same comparison,
+keeping the first spelling of each effective provider label.
 
 ## Without git
 

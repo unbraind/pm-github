@@ -68,13 +68,15 @@ try {
   const source = catalog.labels.find(label => label.name === "bug")!;
   assert.ok(source);
   const input: GithubLabelMigrationInput = { repo: "unbraind/pm-github", sources: [source], change: { kind: "rename", name: "planned/defect" },
-    filters: [{ id: "declared-import-example", labels: ["bug"] }], mappings: [{ id: "declared-export-example", from: "local-defect", to: "bug" }],
+    filters: [{ id: "declared-import-example", labels: ["BUG"] }], mappings: [{ id: "declared-export-example", from: "local-defect", to: "BuG" }],
     choices: { tags: "keep", filters: "replace", mappings: "replace" } };
   const root = publicCopy("sdk");
   const before = fingerprint(root);
   const start = performance.now();
   const report = await planGithubLabelMigration(root, input, { readCatalog: async () => catalog, page: { limit: 5 } });
   assert.ok(report.counts.items > 0);
+  assert.equal(report.counts.filters, 1, "mixed-case import policies stay affected");
+  assert.equal(report.counts.mappings, 1, "mixed-case export policies stay affected");
   const checked = await planGithubLabelMigration(root, input, { readCatalog: async () => catalog, approval: report.approval, page: { limit: 5 } });
   assert.equal(checked.checked, true);
   assert.equal(fingerprint(root), before);
