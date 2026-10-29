@@ -295,8 +295,31 @@ test("closeout contract keeps sync safety helpers, exact pins, env bindings and 
     if (!step.includes("run:")) continue;
     assert.doesNotMatch(shell(name), /\$\{\{/);
   }
-  for (const name of ["Validate npm project directory", "Resolve sync commit scope", "Install dependencies", "Require clean setup artifacts", "Install pinned pm-github extension", "Isolate workflow setup artifacts", "Gate tracker and regenerated changelog", "Verify strict pm health"]) {
+  for (const name of ["Validate npm project directory", "Install dependencies", "Require clean setup artifacts", "Isolate workflow setup artifacts", "Gate tracker and regenerated changelog", "Verify strict pm health"]) {
     assert.equal(shell(name), shell(name, sync), name);
+  }
+  // Sync adds rule receipts and installation-failure cleanup. Compare the
+  // unchanged publication boundaries directly, rather than diagnostic wrappers.
+  const scopes = [shell("Resolve sync commit scope"), shell("Resolve sync commit scope", sync)];
+  assert.equal(scopes[0]!.split("report_workflow_failure()")[0], scopes[1]!.split("report_workflow_failure()")[0]);
+  assert.equal(scopes[0]!.split("mapfile -t sync_scope")[1]!.split("restore_sync_setup()")[0],
+    scopes[1]!.split("mapfile -t sync_scope")[1]!.split("restore_sync_setup()")[0]);
+  for (const name of ["restore_sync_setup", "restore_workflow_setup_artifacts", "check_sync_setup_clean", "check_sync_scope", "check_sync_path"]) {
+    const pattern = new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?^\\}`, "m");
+    const shared = scopes.map(source => pattern.exec(source)?.[0]);
+    assert.ok(shared[0], name);
+    assert.ok(shared[1], name);
+    assert.equal(shared[0], shared[1], name);
+  }
+  const gates = scopes.map(source => /^gate_sync_change\(\) \{[\s\S]*?^\}/m.exec(source)![0]);
+  assert.equal(gates[0]!.split(/  (?:if ! )?pm github gate/)[0], gates[1]!.split(/  (?:if ! )?pm github gate/)[0]);
+  for (const source of gates) assert.ok(source.includes('pm github gate --diff "${RUNNER_TEMP}/pm-github-sync.patch" --json'));
+  const install = shell("Install pinned pm-github extension", sync).split("\n");
+  let previous = -1;
+  for (const line of shell("Install pinned pm-github extension").split("\n").filter(Boolean)) {
+    const index = install.indexOf(line, previous + 1);
+    assert.ok(index > previous, line);
+    previous = index;
   }
   assert.match(workflow, /--force-with-lease="refs\/heads\/\$\{SYNC_BRANCH\}:\$\{SYNC_LEASE\}"/);
   assert.match(workflow, /--since 1970-01-01 --apply --json/);

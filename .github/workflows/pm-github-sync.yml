@@ -73,8 +73,8 @@ concurrency:
   group: pm-github-sync-${{ inputs.repository }}
   cancel-in-progress: false
 
-# No workflow-wide grant: the job below requests exactly what it needs.
-permissions: {}
+# The sync job narrows its token below. The alert job inherits the caller grant
+# so older issues:read callers can still sync; alerts need caller issues:write.
 
 jobs:
   gated-sync:
@@ -85,6 +85,8 @@ jobs:
       issues: read
       actions: write
     runs-on: ubuntu-latest
+    outputs:
+      failure-rules: ${{ steps.failure_rules.outputs.rules }}
     env:
       REPOSITORY: ${{ inputs.repository }}
       ADOPT_CITED: ${{ inputs.adopt-cited }}
@@ -242,6 +244,8 @@ jobs:
           cat > "${RUNNER_TEMP}/pm-github-sync-scope.sh" <<'SCOPE'
           report_workflow_failure() {
             local report_file="$1" error_file="$2" diff_file="${3:-/dev/null}"
+            # Extract only enumerated rule names; raw receipts never leave this job.
+            grep -Eoh '\b(github-token-classic|github-token-fine-grained|npm-token|aws-access-key-id|slack-token|slack-webhook|openai-legacy-key|openai-api-key|openai-project-key|openai-service-account-key|anthropic-api-key|bearer-token|private-key-block|email-address|phone-number|absolute-host-path|windows-host-path|home-username|high-entropy-assignment)\b' "${report_file}" "${error_file}" > "${RUNNER_TEMP}/pm-github-failure-rules" || true
             local diagnostic="${RUNNER_TEMP}/pm-github-diagnostic.json"
             local patch="${RUNNER_TEMP}/pm-github-diagnostic.patch"
             pm github workflow-diagnostic --report "${report_file}" --error-file "${error_file}" --diff "${diff_file}" --json > "${diagnostic}"
@@ -332,7 +336,10 @@ jobs:
             if [[ ${#sync_paths[@]} -gt 0 ]]; then
               git --literal-pathspecs diff --cached --no-color --no-ext-diff --no-textconv --no-renames --binary --unified=2147483647 -- "${sync_paths[@]}" > "${RUNNER_TEMP}/pm-github-sync.patch"
             fi
-            pm github gate --diff "${RUNNER_TEMP}/pm-github-sync.patch" --json
+            if ! pm github gate --diff "${RUNNER_TEMP}/pm-github-sync.patch" --json > "${RUNNER_TEMP}/pm-github-final-gate.json" 2> "${RUNNER_TEMP}/pm-github-final-gate.err"; then
+              report_workflow_failure "${RUNNER_TEMP}/pm-github-final-gate.json" "${RUNNER_TEMP}/pm-github-final-gate.err"
+              return 1
+            fi
           }
           SCOPE
 
@@ -349,6 +356,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
+          trap 'result=$?; if (( result != 0 )); then restore_workflow_setup_artifacts; restore_sync_setup; fi; exit "${result}"' EXIT
           pm package install "npm:pm-github@${PM_GITHUB_VERSION}" --project
           node -e 'if (require("./" + process.argv[2] + "/extensions/pm-github/package.json").version !== process.argv[1]) process.exit(1)' "${PM_GITHUB_VERSION}" "${PM_SYNC_TRACKER}"
 
@@ -745,3 +754,71 @@ jobs:
             sleep 60
           done
           echo "::notice::Bot PR maintenance reached its configured bound; auto-merge remains enabled when allowed. The next scheduled run rebuilds from the current default branch. Unresolved conversations still require resolution."
+
+      - name: Record safe failure rules
+        id: failure_rules
+        if: always()
+        shell: bash
+        run: |
+          rules="$(grep -Ex 'github-token-classic|github-token-fine-grained|npm-token|aws-access-key-id|slack-token|slack-webhook|openai-legacy-key|openai-api-key|openai-project-key|openai-service-account-key|anthropic-api-key|bearer-token|private-key-block|email-address|phone-number|absolute-host-path|windows-host-path|home-username|high-entropy-assignment' "${RUNNER_TEMP}/pm-github-failure-rules" 2>/dev/null | sort -u | paste -sd, - || true)"
+          printf 'rules=%s\n' "${rules}" >> "${GITHUB_OUTPUT}"
+
+  # Inherit permissions so existing read-only callers do not become invalid.
+  # The caller must grant issues:write to enable issue creation/edit/closure.
+  # No checkout, source execution, raw logs or issue content enter the body.
+  sync-status-issue:
+    needs: gated-sync
+    if: always() && (needs.gated-sync.result == 'failure' || needs.gated-sync.result == 'success')
+    concurrency:
+      group: pm-github-sync-alert-${{ github.repository }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reconcile sync failure tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SYNC_RESULT: ${{ needs.gated-sync.result }}
+          FAILURE_RULES: ${{ needs.gated-sync.outputs.failure-rules }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          title="Daily gated issue sync is failing"
+          body="$(mktemp)"
+          trap 'rm -f "${body}"' EXIT
+          # A failed read cannot establish absence. Never create after one.
+          if ! issues="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues?state=all&per_page=100" --jq '.[] | select(.pull_request == null) | {number,title,state}' | jq -s --arg title "${title}" '[.[] | select(.title == $title) | {number,state}] | sort_by(.number)')"; then
+            echo "::warning::Cannot look up the sync failure issue; skipped to avoid duplicates."
+            exit 0
+          fi
+          if [[ "${SYNC_RESULT}" == success ]]; then
+            for number in $(jq -r '.[] | select(.state == "open") | .number' <<< "${issues}"); do
+              gh issue close "${number}" -R "${GITHUB_REPOSITORY}" || { echo "::warning::Cannot close sync failure issue; caller needs issues:write."; exit 0; }
+            done
+            exit 0
+          fi
+          # Current-attempt metadata only, never download or quote job logs.
+          if ! jobs="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}/jobs?per_page=100" --jq '.jobs[]' | jq -s '.')"; then
+            echo "::warning::Cannot read failed step metadata; skipped sync alert."
+            exit 0
+          fi
+          # Step names are fixed by this reusable workflow; sanitize API metadata.
+          failed_step="$(jq -r '[.[] | select(.name | test("(^| / )gated-sync$")) | .steps[] | select(.conclusion == "failure") | .name][0] // "gated-sync"' <<< "${jobs}")"
+          case "${failed_step}" in
+            "Require caller default branch"|"Resolve pm-github release version"|"Validate sync inputs"|"Checkout caller default branch"|"Validate npm project directory"|"Setup Node.js"|"Prepare sync branch from default branch"|"Install dependencies"|"Resolve sync commit scope"|"Require clean setup artifacts"|"Install pinned pm-github extension"|"Configure PM merge drivers"|"Isolate workflow setup artifacts"|"Verify gate is available"|"Validate GitHub access"|"Revalidate GitHub blockers (report only)"|"Preview GitHub to pm plan"|"Gated GitHub to pm import"|"Verify repeat import is a no-op"|"Run caller post-import script"|"Gate tracker and regenerated changelog"|"Verify strict pm health"|"Create automation app token"|"Validate publication credentials"|"Commit gated sync changes and open review PR"|"Dispatch caller CI and report parked runs"|"Record safe failure rules") ;;
+            *) failed_step="gated-sync" ;;
+          esac
+          FAILURE_RULES="$(printf '%s' "${FAILURE_RULES}" | tr ',' '\n' | grep -Ex 'github-token-classic|github-token-fine-grained|npm-token|aws-access-key-id|slack-token|slack-webhook|openai-legacy-key|openai-api-key|openai-project-key|openai-service-account-key|anthropic-api-key|bearer-token|private-key-block|email-address|phone-number|absolute-host-path|windows-host-path|home-username|high-entropy-assignment' | sort -u | paste -sd, - || true)"
+          {
+            printf 'Failing step: %s\n' "${failed_step}"
+            printf 'Run URL: %s/%s/actions/runs/%s/attempts/%s\n' "${GITHUB_SERVER_URL}" "${GITHUB_REPOSITORY}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
+            printf 'Rules: %s\n' "${FAILURE_RULES:-none}"
+          } > "${body}"
+          number="$(jq -r '.[0].number // empty' <<< "${issues}")"
+          if [[ -n "${number}" ]]; then
+            if [[ "$(jq -r '.[0].state' <<< "${issues}")" == closed ]]; then
+              gh issue reopen "${number}" -R "${GITHUB_REPOSITORY}" || { echo "::warning::Cannot reopen sync failure issue; caller needs issues:write."; exit 0; }
+            fi
+            gh issue edit "${number}" -R "${GITHUB_REPOSITORY}" --body-file "${body}" || echo "::warning::Cannot update sync failure issue; caller needs issues:write."
+          else
+            gh issue create -R "${GITHUB_REPOSITORY}" --title "${title}" --body-file "${body}" || echo "::warning::Cannot create sync failure issue; caller needs issues:write."
+          fi

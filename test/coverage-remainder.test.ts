@@ -774,7 +774,7 @@ test("plain imports preserve assigned metadata and synchronize existing annotati
     const first = await captureStderr(() => runImport("acme/widgets", tracker, opts({ "comments-mode": "annotations" }), common));
     assert.ok("imported" in first.result && first.result.imported === 1);
     const second = await captureStderr(() => runImport("acme/widgets", tracker, opts({ "comments-mode": "annotations" }), common));
-    assert.ok("updated" in second.result && second.result.updated === 1);
+    assert.ok("updated" in second.result && second.result.updated === 0);
     const items = JSON.parse(spawnSync(REAL_PM, ["--path", tracker, "list", "--json", "--full"], { encoding: "utf8" }).stdout) as { items: Array<{ assignee: string; sprint: string; comments: Array<{ text: string }> }> };
     assert.equal(items.items[0]?.assignee, "fixture");
     assert.equal(items.items[0]?.sprint, "Sprint");

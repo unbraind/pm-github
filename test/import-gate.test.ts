@@ -279,7 +279,7 @@ test("gated host path refusals identify the imported field and redact match evid
           resolveToken: () => undefined, fetchIssues: async () => [malicious], fetchIssueTimeline: async () => [],
           fetchIssueComments: async () => [{ id: 1, body: field === "comments" ? leak : "Public comment",
             user: { login: "octocat" }, created_at: input.created_at }],
-        }), error => {
+        }), (error: unknown) => {
           assert.ok(error instanceof CommandError);
           const report = JSON.parse(error.message) as { findings: Array<{ rule: string; item_id: string; field: string; excerpt: string; match_offset: number }> };
           const expectedField = field === "labels" ? "tags" : field === "comments" ? "body" : field;
@@ -308,20 +308,21 @@ test("parseImportOptions reads the gate flag without changing defaults", () => {
   assert.strictEqual(parseImportOptions({ gate: "1" }).gate, true);
 });
 
-test("gated previews redact issue titles and labels in both import modes", async () => {
+test("gated previews refuse and redact unsafe issue titles and labels in both import modes", async () => {
   const original = console.error;
   const messages: string[] = [];
   console.error = (...values: unknown[]) => { messages.push(values.join(" ")); };
   try {
     for (const atomic of [false, true]) {
       const malicious = { ...issue(1, GH_TOKEN, "Public body"), labels: [{ name: GH_TOKEN }] };
-      const result = await runImport("acme/widgets", "unused-preview", parseImportOptions({ gate: true, dryRun: true, atomic }), {
+      await assert.rejects(runImport("acme/widgets", "unused-preview", parseImportOptions({ gate: true, dryRun: true, atomic }), {
         resolveToken: () => undefined, fetchIssues: async () => [malicious], readItems: () => [],
+      }), (error: unknown) => {
+        assert.match((error as Error).message, /github-token-classic/);
+        assert.ok(!(error as Error).message.includes(GH_TOKEN));
+        return true;
       });
-      assert.ok("wouldImport" in result);
-      assert.equal(result.wouldImport, 1);
     }
-    assert.ok(messages.some(message => message.includes("(gated title)")));
     assert.ok(!messages.join("\n").includes(GH_TOKEN));
   } finally {
     console.error = original;
@@ -630,7 +631,7 @@ test("gated dry-run embeds the verified plan receipts and writes nothing", async
       const gate = preview.gate as Record<string, unknown>;
       assert.deepStrictEqual(gate.completeness, { fetched: 1, planned: 1, skipped: 0 });
       assert.deepStrictEqual(gate.idempotency, { adopted: 0, provenance_indexed: 0, matched_by_provenance: 0, new_entries: 1 });
-      assert.strictEqual(gate.scan, "post-write");
+      assert.strictEqual(gate.scan, "plan");
       // Nothing was written: the working tree still matches the baseline commit.
       assert.strictEqual(git(["status", "--porcelain"]).stdout.trim(), "");
     });
@@ -683,6 +684,7 @@ test("the caller default branch guard is first and preserves the remaining step 
     "Gate tracker and regenerated changelog", "Verify strict pm health",
     "Create automation app token", "Validate publication credentials",
     "Commit gated sync changes and open review PR", "Dispatch caller CI and report parked runs",
+    "Record safe failure rules", "Reconcile sync failure tracking issue",
   ]);
   assert.match(steps[0]!, /RUN_REF: \$\{\{ github.ref \}\}/);
   assert.match(steps[0]!, /EVENT_DEFAULT_BRANCH: \$\{\{ github.event.repository.default_branch \}\}/);
@@ -1631,7 +1633,7 @@ test("workflow input shell diagnoses a foreign repository and branch outside aut
 test("workflow credentials stay out of install steps and checkout persistence", () => {
   const steps = workflow.split(/\n      - name: /).slice(1);
   const tokenSteps = steps.filter(step => step.includes("GH_TOKEN:")).map(step => step.split("\n")[0]);
-  assert.deepEqual(tokenSteps, ["Require caller default branch", "Validate GitHub access", "Revalidate GitHub blockers (report only)", "Preview GitHub to pm plan", "Gated GitHub to pm import", "Verify repeat import is a no-op", "Commit gated sync changes and open review PR", "Dispatch caller CI and report parked runs"]);
+  assert.deepEqual(tokenSteps, ["Require caller default branch", "Validate GitHub access", "Revalidate GitHub blockers (report only)", "Preview GitHub to pm plan", "Gated GitHub to pm import", "Verify repeat import is a no-op", "Commit gated sync changes and open review PR", "Dispatch caller CI and report parked runs", "Reconcile sync failure tracking issue"]);
   assert.doesNotMatch(workflow.slice(0, stepOffset("Require caller default branch")), /GH_TOKEN:/);
   assert.match(steps.find(step => step.startsWith("Checkout caller default branch"))!, /persist-credentials: false/);
   assert.match(workflowShell(["Install dependencies"]), /npm ci --ignore-scripts/);
@@ -1685,7 +1687,7 @@ test("post-import changelog findings and script failures block publication", asy
           PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE, POST_IMPORT_SCRIPT: script, SYNTHETIC_SECRET: GH_TOKEN });
         assert.notEqual(result.code, 0);
         if (script === "generate-secret") {
-          assert.match(result.stderr, /github-token-classic/);
+          assert.match(result.stdout + result.stderr, /github-token-classic/);
           assert.ok(fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8").includes(GH_TOKEN));
           assert.ok(!result.stdout.includes(GH_TOKEN) && !result.stderr.includes(GH_TOKEN));
         } else assert.equal(result.code, 19);
@@ -1766,7 +1768,7 @@ test("publication rechecks late changes and rescans the exact working content it
           PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE, LATE_PATH: filename,
           LATE_CONTENT: mode === "credential" || mode === "tracker-secret" ? GH_TOKEN : "changed\n" });
         assert.notEqual(result.code, 0, `${mode}: ${result.stdout}\n${result.stderr}`);
-        if (mode === "tracker-secret") assert.match(result.stderr, /github-token-classic/);
+        if (mode === "tracker-secret") assert.match(result.stdout + result.stderr, /github-token-classic/);
         else assert.ok(result.stdout.includes(filename), result.stdout);
         assert.deepEqual(remoteRefs(bare), ["refs/heads/main"]);
       });
@@ -1854,7 +1856,7 @@ for (const adoptCited of [undefined, "false", "true"]) {
         { ...env, ADOPT_CITED: adoptCited, PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE });
         assert.equal(result.code, 0, result.stdout + result.stderr);
         const receipt = JSON.parse(fs.readFileSync(path.join(base, "pm-github-import.json"), "utf8")) as { plan: { action: string }[] };
-        assert.equal(receipt.plan[0]!.action, "update");
+        assert.equal(receipt.plan[0]!.action, "unchanged");
         const actual = (await get(local.id, {}, { pmRoot })).item;
         if (adoptCited === "true") assert.equal(actual.github_url, "https://github.com/acme/widgets/issues/1");
         else assert.deepEqual(actual, before);
@@ -1869,4 +1871,26 @@ test("reusable workflow adoption input defaults false and the example retains th
   assert.match(workflow, /adopt-cited:\n        description: [^\n]+\n        type: boolean\n        required: false\n        default: false/);
   assert.match(workflow, /ADOPT_CITED: \$\{\{ inputs.adopt-cited \}\}/);
   assert.match(callerExample, /adopt-cited: false/);
+});
+
+
+test("failed extension installation restores tracked bookkeeping before returning", async () => {
+  const { root, base, git } = initSyncRepo();
+  const registry = ".agents/pm/extensions/.managed-extensions.json";
+  try {
+    fs.mkdirSync(path.dirname(path.join(root, registry)), { recursive: true });
+    const original = "{\"version\":1,\"entries\":[]}\n";
+    fs.writeFileSync(path.join(root, registry), original);
+    assert.equal(git(["add", "-f", "--", registry]).status, 0);
+    assert.equal(git(["commit", "-qm", "Bookkeeping baseline"]).status, 0);
+    const env = await prepareWorkflowFixture(root, base);
+    const tools = path.join(base, "failed-install-tools");
+    fs.mkdirSync(tools);
+    fs.writeFileSync(path.join(tools, "pm"), '#!/usr/bin/env bash\nprintf "changed" > "$PM_SYNC_TRACKER/extensions/.managed-extensions.json"\nexit 29\n', { mode: 0o755 });
+    const result = await executeWorkflow(workflowShell(["Install pinned pm-github extension"]), root,
+      { ...env, PATH: tools + path.delimiter + env.PATH });
+    assert.equal(result.code, 29, result.stdout + result.stderr);
+    assert.equal(fs.readFileSync(path.join(root, registry), "utf8"), original);
+    assert.equal(git(["status", "--porcelain", "--", registry]).stdout, "");
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });

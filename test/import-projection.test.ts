@@ -213,9 +213,11 @@ test("packed npm and native Bun consumers preserve mixed-import bytes in JSON an
       const plain = JSON.parse(await run("npm", ["exec", "--offline", "--", "pm", ...plainArgs, "--json"], root, environment)) as { imported: number; updated: number };
       assert.equal(plain.imported, 1);
       assert.equal(plain.updated, 1);
+      const plainBefore = durable(pmRoot);
       const plainRepeat = decode(await run("bun", ["--bun", cli, ...plainArgs], root, environment)) as { imported: number; updated: number };
       assert.equal(plainRepeat.imported, 0);
-      assert.equal(plainRepeat.updated, 2, "Plain import retains its documented apply-each-time accounting.");
+      assert.equal(plainRepeat.updated, 0, "An unchanged plain import reports no writes.");
+      assert.equal(durable(pmRoot), plainBefore, "Native Bun plain repeats preserve all item/history bytes.");
       const actual = JSON.parse(await run(cli, ["--path", pmRoot, "list", "--all", "--full", "--json"], root, environment)) as { items: Array<{ tags: string[]; type: string }> };
       for (const item of actual.items) {
         assert.equal(item.type, "Issue");

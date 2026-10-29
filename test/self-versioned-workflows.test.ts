@@ -81,7 +81,9 @@ for (const file of files) {
   for (const scenario of scenarios) {
     test(`${kind} resolves ${scenario.name}`, () => fixture(cwd => {
       const env: NodeJS.ProcessEnv = { ...setup(cwd), REMOTE_TAGS: scenario.tags, REQUESTED_PM_GITHUB_VERSION: scenario.input ?? "",
-        WORKFLOW_SHA: scenario.sha ?? workflowSha, REMOTE_STATUS: scenario.remoteStatus ?? "0" };
+        WORKFLOW_SHA: scenario.sha ?? workflowSha, REMOTE_STATUS: scenario.remoteStatus ?? "0", RUNNER_TEMP: cwd };
+      const scope = shell(source, "Resolve sync commit scope").split("<<'SCOPE'\n")[1]!.split("\nSCOPE")[0]!;
+      writeFileSync(join(cwd, "pm-github-sync-scope.sh"), scope);
       const script = shell(source, "Resolve pm-github release version");
       const result = bash(cwd, script, env);
       const output = result.stdout + result.stderr;

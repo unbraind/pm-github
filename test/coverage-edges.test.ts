@@ -85,7 +85,7 @@ test("empty upstream and gated non-atomic imports retain pass receipts", async t
     const result = await github.runImport("acme/widgets", root, github.parseImportOptions({ gate: true }), { resolveToken: () => undefined });
     assert.ok("gate" in result && result.gate && "verdict" in result.gate && result.gate.verdict === "pass");
     const second = await github.runImport("acme/widgets", root, github.parseImportOptions({ gate: true }), { resolveToken: () => undefined });
-    assert.ok("updated" in second && second.updated === 1);
+    assert.ok("updated" in second && second.updated === 0);
   });
 });
 

@@ -333,9 +333,11 @@ an offline complete label snapshot, otherwise it reads current GitHub labels.
 The provider commands still require their normal GitHub access and credentials. Privacy scanning
 with `github gate --diff <file>` also works there. Reading a proposed tracker diff
 with `github gate` requires a git repository; otherwise pass an explicit diff.
-Gated imports (`github import --gate`, including the scheduled sync workflow)
+Gated applies (`github import --gate`, including the scheduled sync workflow)
 also require a git repository so the proposed publication can be checked. They
 refuse before writing when the tracker is outside one; plain imports still work.
+`github import --gate --dry-run` scans the rendered plan in memory and also works
+in a non-git tracker without writing items or history.
 
 Import lifecycle finalization uses the pm SDK's item mutation boundary, retaining
 GitHub source dates and both import write hooks. Tracker ownership, workflow,
@@ -995,7 +997,7 @@ and [why manual job checks do not satisfy PR branch rules](https://docs.github.c
 
 The caller template uses top-level `permissions: {}` and grants its
 `gated-closeout` job only `contents: write`, `pull-requests: write`, `checks: read`
-and `actions: write`. Closeout uses `checks: read` instead of sync's `issues: read`
+and `actions: write`. Closeout uses `checks: read` instead of sync's `issues: write`
 to retrieve head-check evidence ([GitHub Checks API permissions](https://docs.github.com/en/rest/checks/runs#list-check-runs-for-a-git-reference)).
 The reusable workflow cannot elevate the caller's token
 permissions ([GitHub reusable workflow permissions](https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations)).
@@ -1017,7 +1019,7 @@ for reliable caller CI invocation with `GITHUB_TOKEN`
 
 The reusable workflow's first step resolves the caller's default branch using the repository API with the job token, falling back to `github.event.repository.default_branch` only when present. Scheduled payloads need no `repository` object. If neither source provides a valid branch, the job fails closed with a clear error before checkout. It requires `github.ref` to equal `refs/heads/<resolved-default-branch>`. A mismatch fails before checkout or any sync operation with a one-line error naming both refs. Scheduled calls and manual `workflow_dispatch` calls on the default branch are accepted; manual dispatches selecting another branch are refused. Checkout, sync-branch preparation, PR lookup/base and tracker links all use that resolved branch, including defaults such as `trunk` or `release/stable`. Callers need no guard of their own. Repin the reusable workflow to a release commit containing this guard to receive it.
 
-Fleet repos sync their issues into pm through ONE audited implementation: the reusable `workflow_call` workflow at [`.github/workflows/pm-github-sync.yml`](.github/workflows/pm-github-sync.yml). Its safety order is validate → dry-run plan → **gated import** → verify the repeat import is a no-op → caller post-import script → **full changed-path scope check and privacy gate** → strict health → repeat scope check and scan immediately before commit/push/review PR → caller CI dispatch. The default `post-import-script` is `changelog:full`, invoked with `npm run --if-present`: it runs the caller's own generator when present, so imported closed issues and their changelog entries land in the same commit. Actions are pinned by commit SHA. The job requests `contents: write`, `pull-requests: write`, `issues: read`, and `actions: write` for dispatch.
+Fleet repos sync their issues into pm through ONE audited implementation: the reusable `workflow_call` workflow at [`.github/workflows/pm-github-sync.yml`](.github/workflows/pm-github-sync.yml). Its safety order is validate → dry-run plan → **gated import** → verify the repeat import is a no-op → caller post-import script → **full changed-path scope check and privacy gate** → strict health → repeat scope check and scan immediately before commit/push/review PR → caller CI dispatch. The default `post-import-script` is `changelog:full`, invoked with `npm run --if-present`: it runs the caller's own generator when present, so imported closed issues and their changelog entries land in the same commit. Actions are pinned by commit SHA. The sync job requests `contents: write`, `pull-requests: write`, `issues: read`, and `actions: write` for dispatch. The separate failure-issue job inherits the caller grant and needs `issues: write` to create or update one tracking issue and close it after recovery. Its body includes only the failing step, run URL and rule names. Older read-only callers keep syncing but cannot write alerts; updating a workflow pin cannot elevate their permissions. See [daily sync recovery](docs/daily-sync-recovery.md) for source triage, no-op guarantees and rollout requirements.
 
 When the tracker has no changes, regenerated `CHANGELOG.md` drift is discarded and the run emits a notice that the caller's own `changelog:check` owns that drift. The sync closes any owned open review PR and exits successfully without pushing or dispatching CI. Changelog changes are published only together with tracker changes.
 
@@ -1052,7 +1054,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  issues: read
+  issues: write # Failure tracking issue creation, updates and recovery closure.
   actions: write
 
 jobs:
