@@ -713,10 +713,10 @@ export function buildProjectImportPlan(
 
     // Provenance tags this import adds, MERGED with any tags the existing pm item
     // already carries (labels from a prior `pm github import`, user-added tags).
-    // `pm update --tags` REPLACES the tag set, so passing only the provenance
-    // tags would silently wipe everything else — a data-loss bug. Union, dedup,
-    // existing-first (preserves order); the Set collapses re-adds of a tag we
-    // already own.
+    // Preserve native atoms in the preview. The writer adds only missing
+    // provenance: serializing existing tags as CSV would split literal comma
+    // atoms and invent additional tags. Existing-first Set order also keeps
+    // this persisted plan representation compatible with previous producers.
     const provenance = [projectItemTag(ref, pi.id)];
     if (c.repo && typeof c.number === "number") {
       provenance.push(issueProvenanceTag(c.repo, c.number));

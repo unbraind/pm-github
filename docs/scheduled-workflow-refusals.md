@@ -73,13 +73,16 @@ passes the targeted tests. No raw settings fallback or SDK mock is used.
 ### Canonical values and lossless tag transport
 
 Re-review found two additional repeat-import cases: `--type issue` is persisted
-as `Issue` by the SDK, and a label such as `area,api` was split by CSV mutation
-options. Comparisons now resolve both type values through the SDK registry,
-including configured aliases. All tag-writing paths share a lossless encoder:
-it preserves the existing CSV wire representation where equivalent, and uses
-the SDK's JSON-array representation otherwise. Stored arrays remain arrays of
-literal tokens during comparison. Raw type inputs and ordinary tag wire bytes
-stay stable for existing transaction fingerprints.
+as `Issue` by the SDK, and tag comparison disagreed with mutation parsing.
+Comparisons resolve both type values through the SDK registry, including
+configured aliases. The main integration retains its shared provider-label CSV
+conversion: a provider label `area,api` contributes `area` and `api`, while a
+stored native atom `area,api` remains one atom. Native arrays are normalized
+without CSV serialization. SDK additive values and the combined CLI flag use
+the lossless codec at their respective carrier boundaries; JSON-looking native
+atoms remain literal. Ordinary lossless CSV bytes retain existing fingerprints.
+Provider CSV delimiters are split before native normalization, so a JSON-looking
+label has the same meaning in a single-label plan and a real import batch.
 
 The package-wide audit also found the same rules in project import/push,
 provider-link updates, refresh, identity repair tag removal, and closeout's
@@ -153,7 +156,7 @@ After this fix is released, update the reusable-workflow SHA to a release
 containing it. Changing only the deprecated version input does not update the
 release-derived package. No caller is edited by this PR.
 
-Current pins checked on the default branches:
+Pins checked on default branches during the original incident investigation:
 
 | Callers | Current reusable-workflow release |
 | --- | --- |
@@ -166,7 +169,7 @@ The open Dependabot PRs [pm-beads #169](https://github.com/unbraind/pm-beads/pul
 and [pm-web #255](https://github.com/unbraind/pm-web/pull/255) propose 2026.10.19.
 Those targets predate this fix and do not resolve the pagination refusal.
 
-## Verification handoff
+## Verification before main integration
 
 Corrected source `f117161` passes the complete [CI matrix](https://github.com/unbraind/pm-github/actions/runs/40563048247).
 Both `npm run release:check` and `bun run release:check` pass on Node 22 and 26:

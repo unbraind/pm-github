@@ -4,7 +4,7 @@ import { ownValue, setOwnValue } from "./own-record.ts";
 import { spawnSync } from "node:child_process";
 import { decodeHTML } from "entities";
 import {
-  canonicalDocument, createHistoryEntry, SETTINGS_DEFAULTS, resolveItemTypeRegistry, mutateItem, normalizeItemId, normalizeStatusInput, parseTags, toNonEmptyImportString,
+  canonicalDocument, createHistoryEntry, SETTINGS_DEFAULTS, resolveItemTypeRegistry, mutateItem, normalizeItemId, normalizeStatusInput, parseTags, toNonEmptyImportString, toImportTags,
 } from "@unbrained/pm-cli/sdk";
 import { CommandError, fetchJSON, githubApiBase, githubGraphQL, parseNextLink, parseProvenanceTag, type GhIssue, type PmItem } from "./index.ts";
 
@@ -454,7 +454,7 @@ export function serializeImportTags(tags: readonly string[]): string {
 /** Compare source fields using SDK type/status/tag/assignment semantics and body formatting. */
 export function normalizeImportValue(field: string, value: unknown, types = defaultImportTypes, statuses?: GithubStatusRegistry): unknown {
   if (field === "type" && typeof value === "string") return types.get(value.trim().toLowerCase()) ?? value;
-  if (field === "tags") return parseTags(typeof value === "string" ? value : JSON.stringify(value ?? []));
+  if (field === "tags") return toImportTags(Array.isArray(value) || typeof value === "string" ? value : []);
   if (field === "status") return normalizeStatusInput(value, statuses) ?? value;
   // Match the SDK document writer: leading newlines and trailing body space
   // are formatting, while leading indentation remains meaningful content.

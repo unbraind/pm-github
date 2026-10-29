@@ -1,5 +1,8 @@
 import { readGithubWorkspace, canonicalGithubStatus, githubStatusKind, githubStatusIsTerminal, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
+import { uniqueGithubLabelNames } from "./label-names.ts";
+import { githubLabelsToTags, importTagArguments, importTagOptions, importTagValues, nativeTagAdditions } from "./import-tags.ts";
+export { githubLabelsToTags } from "./import-tags.ts";
 // pm-github — GitHub Issues + Projects v2 sync for pm-cli
 //
 // Capabilities (see manifest.json):
@@ -36,6 +39,9 @@ import {
 } from "./import-fidelity.ts";
 import { refreshChanges, runRefresh } from "./refresh.ts";
 import { exploreGithubIdentities, planGithubIdentityRepair, applyGithubIdentityRepair } from "./identity.ts";
+import { planGithubLabelMigration, readLabelMigrationJson, type GithubLabelMigrationInput } from "./labels.ts";
+export { planGithubLabelMigration, readGithubLabelCatalog, validateGithubLabelMigrationReport } from "./labels.ts";
+export type { GithubLabelMigrationInput, GithubLabelCatalog, GithubLabelCatalogReader, GithubLabelMigrationReport, LabelMigrationRefusalCode } from "./labels.ts";
 export { exploreGithubIdentities, planGithubIdentityRepair, applyGithubIdentityRepair } from "./identity.ts";
 export type { IdentityRefusalCode, IdentityEdge, IdentityNode, IdentityReport, IdentityRepairPlan } from "./identity.ts";
 import { acceptGithubWebhook, reconcileGithubWebhooks, WebhookRefusal } from "./webhooks.ts";
@@ -59,6 +65,7 @@ import {
   normalizeItemId as sdkNormalizeItemId,
   readSettings as sdkReadSettings,
   resolvePmRoot as sdkResolvePmRoot,
+  toImportTags,
   writeFileAtomic,
   getHistoryPath as sdkGetHistoryPath,
   readHistorySnapshot as sdkReadHistorySnapshot,
@@ -125,7 +132,7 @@ export interface GhIssue {
   state: "open" | "closed";
   /** Why a closed issue was closed; `not_planned` maps to `canceled`, not `closed`. */
   state_reason?: "completed" | "not_planned" | "duplicate" | "reopened" | null;
-  /** Labels on the issue, imported verbatim as pm tags (before any `--label-map`). */
+  /** Labels on the issue, converted through the importer's CSV/SDK native tag rules. */
   labels: Array<{ name: string }>;
   /** Author login, surfaced as a `github_author:` tag when present. */
   user?: { login: string } | null;
@@ -741,16 +748,7 @@ export function applyLabelMap(
   labels: string[],
   labelMap: Map<string, string> | undefined,
 ): string[] {
-  if (!labelMap || labelMap.size === 0) return labels;
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const label of labels) {
-    const mapped = labelMap.get(label) ?? label;
-    if (seen.has(mapped)) continue;
-    seen.add(mapped);
-    out.push(mapped);
-  }
-  return out;
+  return uniqueGithubLabelNames(labels.map(label => labelMap?.get(label) ?? label));
 }
 
 // Parse one or more CSV-like option values into a deduplicated string list.
@@ -1472,14 +1470,14 @@ export function buildAtomicImportMutations(
   const changed = updateOnly ? new Set(refreshChanges(entry, statuses).map(change => change.field)) : undefined;
   const audit = updateOnly ? { comment: [`Refreshed linked GitHub issue ${repo.toLowerCase()}#${entry.issueNumber}`] } : {};
   if (entry.linkOnly && entry.match?.id) {
-    return { itemId: entry.match.id, mutations: [{ op: "update", id: entry.match.id, options: { ...(!changed || changed.has("tags") ? { addTags: entry.tags.map(tag => serializeImportTags([tag])) } : {}), ...audit } }] };
+    return { itemId: entry.match.id, mutations: [{ op: "update", id: entry.match.id, options: { ...(!changed || changed.has("tags") ? importTagOptions(entry) : {}), ...audit } }] };
   }
   const sharedOptions: Record<string, unknown> = {
     title: entry.title,
     type: entry.itemType,
     description: entry.description,
     body: entry.body,
-    tags: serializeImportTags(entry.tags),
+    ...importTagOptions(entry),
     ...(entry.assignee ? { assignee: entry.assignee } : {}),
     ...(entry.milestone ? { sprint: entry.milestone } : {}),
     ...((!closing && githubStatusIsTerminal(entry.status, statuses)) ? { closeReason: entry.fidelity?.github_close_reason ?? `GitHub issue #${entry.issueNumber} closed` } : {}),
@@ -1537,7 +1535,7 @@ export function buildAtomicImportMutations(
   const updateOptions: Record<string, unknown> = {
     ...(updateOnly ? {
       ...(changed!.has("title") ? { title: entry.title } : {}),
-      ...(changed!.has("tags") ? { tags: serializeImportTags(entry.tags) } : {}),
+      ...(changed!.has("tags") ? importTagOptions(entry) : {}),
       ...(changed!.has("status") && sharedOptions.closeReason !== undefined ? { closeReason: sharedOptions.closeReason } : {}),
     } : sharedOptions), ...(!changed || changed.has("status") ? statusOptions : {}), ...audit,
   };
@@ -3165,7 +3163,7 @@ export async function prepareGithubImport(
       (issue.state_reason ? ` · state reason ${issue.state_reason}` : "") +
       ` · created ${issue.created_at} · updated ${issue.updated_at}`,
     body: writeCommentsToBody ? composeBody(issue, comments) : (issue.body || ""),
-    tags: [...new Set([...(identity.linkOnly || identity.via === "citation" ? match!.tags ?? [] : []), ...labels, tag, ...(ghAuthorTag ? [ghAuthorTag] : [])])],
+    tags: toImportTags([...(identity.linkOnly || identity.via === "citation" ? match!.tags ?? [] : []), ...githubLabelsToTags([...labels, tag, ...(ghAuthorTag ? [ghAuthorTag] : [])])]),
     assignee: issue.assignee?.login,
     milestone: issue.milestone?.title,
     comments,
@@ -3298,10 +3296,10 @@ export function verifyImportIdempotency(
   for (const entry of prepared) {
     if (entry.match?.id) {
       matchedIds.push(entry.match.id);
-      if (entry.identity?.via === "citation" && !entry.tags.includes(provenanceTag(repo, entry.issueNumber))) untaggedNewEntries++;
+      if (entry.identity?.via === "citation" && !importTagValues(entry).includes(provenanceTag(repo, entry.issueNumber))) untaggedNewEntries++;
       continue;
     }
-    if (!entry.tags.includes(provenanceTag(repo, entry.issueNumber))) untaggedNewEntries++;
+    if (!importTagValues(entry).includes(provenanceTag(repo, entry.issueNumber))) untaggedNewEntries++;
   }
   const conflictingTargets = matchedIds.length - new Set(matchedIds).size;
   if (duplicateTags.size > 0 || untaggedNewEntries > 0 || conflictingTargets > 0) {
@@ -3736,7 +3734,6 @@ export async function runImport(
       match,
       description,
       body,
-      tags,
       comments,
       syncAnnotations,
     } = prepared;
@@ -3768,7 +3765,9 @@ export async function runImport(
 
     if (prepared.linkOnly) {
       const ownerId = match!.id!;
-      const linked = pmRun(["--path", pmRoot, "update", ownerId, "--add-tags", serializeImportTags(tags)]);
+      const nativeTags = importTagArguments(prepared);
+      const linked = nativeTags.length
+        ? pmRun(["--path", pmRoot, "update", ownerId, ...nativeTags]) : { ok: true };
       if (!linked.ok) throw new CommandError(`Could not link GitHub issue #${issue.number} to its existing owner.`);
       await persistImportFidelity(pmRoot, ownerId, prepared.fidelity!, true);
       if (prepared.identity?.via === "citation") adopted++;
@@ -3778,12 +3777,13 @@ export async function runImport(
     if (match?.id) {
       // Idempotent update — never duplicate. Status transitions go through the
       // proper command (close requires a reason; reopen via update --status).
+      const nativeTags = importTagArguments(prepared);
       const updArgs = [
         "--path", pmRoot, "update", match.id,
         "--title", title,
         "--description", description,
         "--body", body,
-        "--tags", serializeImportTags(tags),
+        ...nativeTags,
         "--message", `Re-imported from GitHub #${issue.number}`,
       ];
       if (assignee) updArgs.push("--assignee", assignee);
@@ -3838,7 +3838,7 @@ export async function runImport(
       "--status", createStatus,
       "--description", description,
       "--body", body,
-      "--tags", serializeImportTags(tags),
+      "--tags", importTagOptions(prepared).tags!,
       "--message", `Imported from GitHub #${issue.number}`,
     ];
     if (canonicalGithubStatus(status, workspace.statuses) === canonicalGithubStatus("canceled", workspace.statuses)) createArgs.push("--close-reason", prepared.fidelity!.github_close_reason);
@@ -4312,7 +4312,7 @@ export async function applyExportPlan(
           "PATCH",
           `${githubApiBase()}/repos/${repo}/issues/${entry.number}`,
           token,
-          JSON.stringify({ title: p.title, body: p.body, labels: p.labels, state: p.state }),
+          JSON.stringify({ title: p.title, body: p.body, labels: uniqueGithubLabelNames(p.labels), state: p.state }),
         );
         updated++;
       } else {
@@ -4320,7 +4320,7 @@ export async function applyExportPlan(
           "POST",
           `${githubApiBase()}/repos/${repo}/issues`,
           token,
-          JSON.stringify({ title: p.title, body: p.body, labels: p.labels }),
+          JSON.stringify({ title: p.title, body: p.body, labels: uniqueGithubLabelNames(p.labels) }),
         );
         created++;
       }
@@ -4440,7 +4440,7 @@ async function runExport(ctx: CommandHandlerContext) {
   const plan = buildExportPlan(selected, repo, labelMap, workspace.statuses);
   for (const [index, completion] of completions.entries()) {
     plan[index]!.payload.body = completion.body;
-    plan[index]!.payload.labels = [...new Set([...plan[index]!.payload.labels, ...completion.report.contract.labels])];
+    plan[index]!.payload.labels = uniqueGithubLabelNames([...plan[index]!.payload.labels, ...completion.report.contract.labels]);
   }
   const creates = plan.filter((e) => e.action === "create").length;
   const updates = plan.filter((e) => e.action === "update").length;
@@ -6316,11 +6316,12 @@ async function runProjectImport(ctx: CommandHandlerContext) {
       continue;
     }
     if (entry.action === "update" && entry.pmId) {
+      const addedTags = nativeTagAdditions(pmItems.find(item => item.id === entry.pmId)!.tags!, entry.tags);
       const updArgs = [
         "--path", ctx.pm_root, "update", entry.pmId,
         "--title", entry.title,
         "--description", description,
-        "--tags", serializeImportTags(entry.tags),
+        ...(addedTags.length ? ["--add-tags", addedTags.join(",")] : []),
         "--message", `Re-imported from GitHub project ${ref.owner}/${ref.number}`,
       ];
       if (entry.body) updArgs.push("--body", entry.body);
@@ -6433,10 +6434,10 @@ async function applyPushEntry(
     if (pm?.id) {
       const tag = projectItemTag(ref, itemId!);
       const existingTags = pm.tags!;
-      if (!existingTags.includes(tag)) {
+      if (nativeTagAdditions(existingTags, [tag]).length) {
         const upd = pmRun([
           "--path", pmRoot, "update", pm.id,
-          "--tags", serializeImportTags([...existingTags, tag]),
+          "--add-tags", tag,
           "--message", `Linked to GitHub project ${ref.owner}/${ref.number}`,
         ]);
         if (!upd.ok) return { changed: true, error: `linked but tag write failed — ${upd.stderr}` };
@@ -6781,7 +6782,7 @@ const defineExtension = <TModule extends ExtensionModule>(module: TModule): TMod
 
 export default defineExtension({
   name: "pm-github",
-  version: "2026.10.27",
+  version: "2026.10.28",
 
   activate(api: ExtensionApi) {
     // -----------------------------------------------------------------------
@@ -7044,6 +7045,29 @@ export default defineExtension({
           limit: options.limit === undefined ? undefined : Number(options.limit),
           offset: options.offset === undefined ? undefined : Number(options.offset),
           identity: typeof options.identity === "string" ? options.identity : undefined,
+        });
+      },
+    });
+
+    api.registerCommand({
+      name: "github labels plan",
+      description: "Preview exact provider label rename/consolidation impacts on stored tags and declared filters/mappings. Read-only; --approve revalidates a saved digest against current state.",
+      flags: [
+        { long: "--input", value_name: "file", description: "Strict JSON request with repo, source IDs/names, change, filters, mappings and choices" },
+        { long: "--catalog", value_name: "file", description: "Complete offline catalog JSON; omit to fetch all current GitHub labels" },
+        { long: "--approve", value_name: "digest", description: "Check the exact reviewed plan against current labels, policy and SDK revisions; writes nothing" },
+        { long: "--limit", value_name: "N", description: "Affected rows per page, 1..100 (default 20); counts always cover the complete corpus" },
+        { long: "--offset", value_name: "N", description: "Nonnegative affected-row offset" },
+      ],
+      async run(ctx: CommandHandlerContext) {
+        const { input, catalog, approve, limit, offset } = ctx.options;
+        if (typeof input !== "string" || catalog !== undefined && typeof catalog !== "string" || approve !== undefined && typeof approve !== "string") {
+          throw createPmCliExpectedError("Supply --input <JSON file>, optional --catalog <JSON file> and a full --approve digest.", { exitCode: 2, context: { code: "invalid_input", required: "Use pm github labels plan --help and the documented JSON example." } });
+        }
+        return planGithubLabelMigration(ctx.pm_root, readLabelMigrationJson(input) as GithubLabelMigrationInput, {
+          page: { limit: limit === undefined ? undefined : Number(limit), offset: offset === undefined ? undefined : Number(offset) },
+          approval: approve,
+          readCatalog: catalog === undefined ? undefined : async () => readLabelMigrationJson(catalog),
         });
       },
     });

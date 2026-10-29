@@ -33,7 +33,7 @@ const changelog = readFileSync(resolve(repoRoot, "CHANGELOG.md"), "utf8");
 
 const CLI = "@unbrained/pm-cli";
 const EXACT_VERSION = /^\d+\.\d+\.\d+$/;
-const BLOCKER_SDK_FLOOR = "2026.10.5";
+const SDK_CONTRACT_FLOOR = "2026.10.17";
 
 /**
  * Two independent systems enforce the pm CLI compatibility floor, and each reads
@@ -60,7 +60,7 @@ const BLOCKER_SDK_FLOOR = "2026.10.5";
  * Both arguments must already match {@link EXACT_VERSION}; the callers assert
  * that first, so no part can be `NaN` here.
  *
- * @param pinned - The exact version pinned in `devDependencies`.
+ * @param pinned - The exact SDK version resolved in the lockfile.
  * @param floor - The exact version declared as the compatibility floor.
  * @returns `true` when `pinned` is at or above `floor`.
  */
@@ -97,8 +97,8 @@ test("the extension manifest declares the same floor the CLI actually enforces",
   );
   assert.strictEqual(
     declared,
-    BLOCKER_SDK_FLOOR,
-    "blocker complete reads and structured command exit codes require the pm CLI 2026.10.5 host contract",
+    SDK_CONTRACT_FLOOR,
+    "lossless table decoding and under-lock transaction matching require the pm CLI 2026.10.17 host contract",
   );
   assert.ok(
     !Object.hasOwn(extensionManifest, "pm"),
@@ -109,45 +109,31 @@ test("the extension manifest declares the same floor the CLI actually enforces",
     /BREAKING: pm-github now requires pm CLI 2026\.8\.20 or newer; older hosts may fail installation or runtime validation/,
     "CHANGELOG.md must disclose the compatibility break enforced by the manifest and peer dependency",
   );
+  assert.match(changelog, /BREAKING: PM CLI 2026\.10\.17 minimum/,
+    "the pending pm item must disclose the current SDK compatibility break");
 });
 
-test("the development dependency is an exact pin at or above the declared floor", () => {
+test("the development minimum range has an exact compatible lock resolution", () => {
   const dev = packageJson.devDependencies?.[CLI];
-  assert.ok(dev, `package.json devDependencies must declare ${CLI}`);
-  assert.match(
-    dev,
-    EXACT_VERSION,
-    `devDependencies["${CLI}"] must be an exact pin so CI and a working copy resolve the same CLI, got ${dev}`,
-  );
   const declared = extensionManifest.pm_min_version;
-  assert.strictEqual(
-    typeof declared,
-    "string",
-    `manifest.json pm_min_version must be a string to be comparable, got ${typeof declared}`,
-  );
-  assert.match(
-    declared as string,
-    EXACT_VERSION,
-    `manifest.json pm_min_version must be an exact three-part version to be comparable, got ${String(declared)}`,
-  );
-  assert.ok(
-    atOrAbove(dev, declared as string),
-    `the pinned development CLI ${dev} is below the declared floor ${String(declared)}`,
-  );
-  // CI pins the newest fleet CLI so its checks exercise the current host,
-  // while the manifest remains a compatibility minimum for consumers.
-  assert.ok(
-    atOrAbove(dev, BLOCKER_SDK_FLOOR),
-    `the pinned development CLI ${dev} must satisfy the canonical host floor ${BLOCKER_SDK_FLOOR}`,
-  );
+  assert.strictEqual(typeof declared, "string");
+  assert.match(declared as string, EXACT_VERSION);
+  assert.equal(dev, `>=${String(declared)}`, "development and peer ranges share the enforced minimum");
+  const lock = JSON.parse(readFileSync(resolve(repoRoot, "package-lock.json"), "utf8")) as {
+    packages: Record<string, { version?: string; devDependencies?: Record<string, string>; peerDependencies?: Record<string, string>; integrity?: string }>;
+  };
+  assert.equal(lock.packages[""]!.devDependencies?.[CLI], dev);
+  assert.equal(lock.packages[""]!.peerDependencies?.[CLI], packageJson.peerDependencies?.[CLI]);
+  const resolved = lock.packages["node_modules/@unbrained/pm-cli"]!;
+  assert.match(resolved.version!, EXACT_VERSION, "npm ci must retain an exact SDK resolution");
+  assert.match(resolved.integrity!, /^sha512-/, "the exact development SDK bytes remain integrity locked");
+  assert.ok(atOrAbove(resolved.version!, declared as string), "the exact locked SDK must satisfy the declared minimum");
+  assert.ok(atOrAbove(resolved.version!, SDK_CONTRACT_FLOOR));
 });
 
 test("the version comparison orders YYYY.M.D numerically, not lexicographically", () => {
-  // In the repository as it stands the pin equals the floor, so the
-  // greater-than branch of atOrAbove is never reached by the assertion above.
-  // A comparison whose ordering branch is never executed is not verified by
-  // the suite passing — V8 does not even report a branch it never reaches —
-  // so the ordering is exercised here directly.
+  // Exercise equal, earlier and later components independently of the current
+  // lock resolution, including the unpadded-date lexicographic trap.
   assert.ok(atOrAbove("2026.8.15", "2026.8.15"), "an equal pin satisfies the floor");
   assert.ok(atOrAbove("2026.8.15", "2026.8.7"), "a later day satisfies an earlier floor");
   assert.ok(!atOrAbove("2026.8.14", "2026.8.15"), "an earlier day must not satisfy a later floor");

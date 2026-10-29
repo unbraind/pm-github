@@ -6,8 +6,8 @@ import { devNull, tmpdir } from "node:os";
 import { delimiter, join, relative } from "node:path";
 import test from "node:test";
 import { decode } from "@toon-format/toon";
-import { certifyCompleteListResult, commitImportedItem, create, get, getItemPath, listAllComplete, parseTags, readSettings, schemaAddStatus, schemaAddType } from "@unbrained/pm-cli/sdk";
-import { decodeCompletePmItems, parseImportOptions, runImport, type GhIssue } from "../index.ts";
+import { certifyCompleteListResult, commitImportedItem, create, get, getItemPath, listAllComplete, parseTags, toImportTags, decodePmTableRows, type PmTableCellEncoding, type PmEncodedTableRows, readSettings, schemaAddStatus, schemaAddType } from "@unbrained/pm-cli/sdk";
+import { decodeCompletePmItems, parseImportOptions, runImport, githubLabelsToTags, planGithubLabelMigration, type GhIssue } from "../index.ts";
 import { normalizeImportValue, readImportTypeNames, serializeImportTags } from "../import-fidelity.ts";
 import { boundedCli } from "./helpers/bounded-cli.ts";
 import { jsonResponse, withMockGithub } from "./helpers/mock-github-server.ts";
@@ -15,6 +15,13 @@ import { jsonResponse, withMockGithub } from "./helpers/mock-github-server.ts";
 const packageRoot = join(import.meta.dirname, "..");
 const cli = join(packageRoot, "node_modules/.bin/pm");
 const labelSets = [["plain", "second"], ["area,api"], ['["json"]', 'quote"tag', "space label"], [" É,ß ", "constructor", "__proto__", "DUP", "dup"]];
+
+/** Restore only explicitly encoded host tables; JSON-looking native tag atoms stay opaque. */
+function consumerItems(output: string, json: boolean): { items: Array<{ type: string; tags: string[] }> } {
+  const value = (json ? JSON.parse(output) : decode(output)) as { items: PmEncodedTableRows["rows"]; items_encoding?: PmTableCellEncoding };
+  const items = value.items_encoding ? decodePmTableRows({ rows: value.items, encoding: value.items_encoding }) : value.items;
+  return { items: items as unknown as Array<{ type: string; tags: string[] }> };
+}
 
 /** Read durable item/history bytes while excluding lock, cache and journal receipts. */
 function durable(root: string): string {
@@ -48,6 +55,26 @@ test("tag transport property preserves every token and legacy lossless wire repr
   for (const [tags, legacy] of [[[], ""], [["plain", "second"], "plain,second"], [[" X "], " X "]] as const) assert.equal(serializeImportTags(tags), legacy);
 });
 
+test("JSON-looking provider labels have identical single-label plans and batch import values", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pm-label-context-"));
+  try {
+    initialize(root);
+    for (const [index, name] of ['["array"]', '["comma,atom"]', "[]", '["json"]', "ordinary,CSV"].entries()) {
+      const provenance = `gh:fixture/project#${index + 1}`;
+      const reference = (await create({ title: "SDK CSV oracle", type: "Task", tags: [name, provenance].join(",") }, { pmRoot: root, noExtensions: true })).item;
+      const expected = reference.tags!.filter(tag => tag !== provenance);
+      assert.deepEqual(githubLabelsToTags([name]), expected, "A single-label preview must match a real import batch with provenance.");
+      assert.deepEqual(githubLabelsToTags([name, provenance]), reference.tags);
+      const sources = [{ id: `LABEL_${index}`, name }];
+      const report = await planGithubLabelMigration(root, { repo: "fixture/project", sources,
+        change: { kind: "rename", name: "replaced" }, filters: [], mappings: [],
+        choices: { tags: "review", filters: "keep", mappings: "keep" } },
+        { readCatalog: async () => ({ complete: true, labels: sources }) });
+      assert.deepEqual(report.rows.filter(row => row.kind === "tags" && row.id === reference.id).map(row => row.before).sort(), expected.slice().sort());
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("mixed closed imports are byte-stable for nested workspace SDK aliases and adversarial label tokens", async () => {
   const workspace = mkdtempSync(join(tmpdir(), "pm-projection-"));
   const root = join(workspace, ".agents/pm");
@@ -75,7 +102,8 @@ test("mixed closed imports are byte-stable for nested workspace SDK aliases and 
         for (const source of current) {
           const actual = items.find(item => item.tags?.includes(`gh:fixture/project#${source.number}`))!;
           assert.equal(actual.type, native.type, `SDK type ${type}`);
-          assert.deepEqual(actual.tags, parseTags(JSON.stringify([...labels, `gh:fixture/project#${source.number}`])));
+          // Main owns provider CSV conversion; the byte-stability assertion below remains exact.
+          assert.deepEqual(actual.tags, toImportTags([...labels, `gh:fixture/project#${source.number}`].join(",")));
         }
         const before = durable(root);
         const repeat = await runImport("fixture/project", workspace, options);
@@ -108,7 +136,8 @@ for (const atomic of [false, true]) test(`additive provider links preserve liter
       const options = parseImportOptions({ atomic, type: "issue" });
       await runImport("fixture/project", root, options);
       const written = (await get(local.id, {}, { pmRoot: root, noExtensions: true })).item;
-      assert.deepEqual(written.tags, parseTags(JSON.stringify([...original, ...labels])));
+      assert.deepEqual(written.tags, toImportTags([...original, ...toImportTags(labels.join(","))]));
+      for (const atom of local.tags!) assert.ok(written.tags!.includes(atom), "Native tag atoms must survive provider CSV conversion unchanged.");
       assert.equal(written.type, "Task");
       assert.equal(written.body, "Provider context");
       const before = durable(root);
@@ -169,10 +198,14 @@ test("packed npm and native Bun consumers preserve mixed-import bytes in JSON an
         assert.equal(receipt.imported, 0);
         assert.equal(receipt.updated, 0);
         assert.ok(durable(pmRoot) === before, "Packed repeat must preserve item and history bytes.");
-        const listArgs = ["--path", pmRoot, "--output-include", "full", "list", "--all", ...format];
+        const listArgs = ["--path", pmRoot, "list", "--all", "--full", ...format];
         const view = await run(bin, bin === "npm" ? ["exec", "--offline", "--", "pm", ...listArgs] : ["--bun", cli, ...listArgs], root, environment);
-        const listed = (json ? JSON.parse(view) : decode(view)) as { items: Array<{ type: string; tags: string[] }> };
-        for (const item of listed.items) { assert.equal(item.type, "Issue"); assert.ok(item.tags.includes("area,api")); }
+        const listed = consumerItems(view, json);
+        for (const item of listed.items) {
+          assert.equal(item.type, "Issue");
+          assert.deepEqual(item.tags.filter(tag => !tag.startsWith("gh:fixture/project#")), toImportTags(labelSets.flat().join(",")));
+          assert.equal(item.tags.filter(tag => tag.startsWith("gh:fixture/project#")).length, 1);
+        }
       }
       await run(cli, ["--path", pmRoot, "create", "--title", "Plain native", "--type", "issue", "--tags", "gh:fixture/project#4"], root, environment);
       payload = [issue(3, labelSets.flat()), issue(4, labelSets.flat())];
@@ -183,8 +216,12 @@ test("packed npm and native Bun consumers preserve mixed-import bytes in JSON an
       const plainRepeat = decode(await run("bun", ["--bun", cli, ...plainArgs], root, environment)) as { imported: number; updated: number };
       assert.equal(plainRepeat.imported, 0);
       assert.equal(plainRepeat.updated, 2, "Plain import retains its documented apply-each-time accounting.");
-      const actual = JSON.parse(await run(cli, ["--path", pmRoot, "--output-include", "full", "list", "--all", "--json"], root, environment)) as { items: Array<{ tags: string[]; type: string }> };
-      for (const item of actual.items) { assert.equal(item.type, "Issue"); assert.ok(item.tags.includes("area,api")); }
+      const actual = JSON.parse(await run(cli, ["--path", pmRoot, "list", "--all", "--full", "--json"], root, environment)) as { items: Array<{ tags: string[]; type: string }> };
+      for (const item of actual.items) {
+        assert.equal(item.type, "Issue");
+        assert.deepEqual(item.tags.filter(tag => !tag.startsWith("gh:fixture/project#")), toImportTags(labelSets.flat().join(",")));
+        assert.equal(item.tags.filter(tag => tag.startsWith("gh:fixture/project#")).length, 1);
+      }
       await schemaAddType("Investigation", { folder: "investigations", alias: ["probe"] }, { pmRoot: root, noExtensions: true });
       await schemaAddStatus("working", { alias: ["busy-now"], role: ["active"] }, { pmRoot: root, noExtensions: true });
       await schemaAddStatus("verified", { alias: ["settled"], role: ["terminal", "terminal_done"] }, { pmRoot: root, noExtensions: true });
