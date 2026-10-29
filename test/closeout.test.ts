@@ -5,7 +5,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { create, close, update, get, config, acquireLock, PmCliError } from "@unbrained/pm-cli/sdk";
+import { create, close, update, get, config, acquireLock, commitImportedItem, getItemPath, readSettings, PmCliError } from "@unbrained/pm-cli/sdk";
 import extension, { fetchJSON, githubApiBase, parseNextLink } from "../index.ts";
 import { CloseoutUsageError, closeoutFailureReason, compactCloseoutReport, checkCloseoutHead, declaresDelivery, extractCloseoutItems, runCloseout, type CloseoutApi } from "../closeout.ts";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
@@ -221,12 +221,12 @@ test("failure reasons discard arbitrary prose and malformed diagnostic codes", (
   }
 });
 
-test("public apply reports partial results as CommandError exit 1 after remaining closes", async () => tracker(async (root, ids) => {
+for (const json of [false, true]) test(`public apply reports partial results as CommandError exit 1 after remaining closes (json=${json})`, async () => tracker(async (root, ids) => {
   const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "importers", "schema", "hooks", "preflight", "search"] });
   const unlock = await acquireLock(root, ids[0]!, 300, "private-lock-owner");
   try {
     await withEnv({ PM_GITHUB_REPO: repo, GITHUB_TOKEN: "fixture", PM_LOCK_WAIT_MS: "0" }, () => withMockGithub(fixture(ids.slice(0, 2).map(id => link(id)).join("\n")), async server => {
-      await assert.rejects(harness.runCommand({ command: "github closeout", pmRoot: root, options: { pr: ["42"], apply: true } }), (error: unknown) => {
+      await assert.rejects(harness.runCommand({ command: "github closeout", pmRoot: root, global: { json }, options: { pr: ["42"], apply: true } }), (error: unknown) => {
         assert.equal((error as Error).name, "CommandError");
         assert.equal((error as { exitCode: number }).exitCode, 1);
         const report = JSON.parse((error as Error).message) as { closed: number; failed: number; plan: { action: string; reason: string }[] };
@@ -665,6 +665,22 @@ test("unreadable protection sources refuse without hiding invalid authorization"
       const report = await closeout(root);
       assert.equal(report.checks[0]!.rule, "unavailable");
       assert.equal(report.plan[0]!.action, "needs_review");
+    });
+  }
+}));
+
+test("legacy type casing preserves the Epic closeout exclusion", async () => tracker(async root => {
+  const sdk = { pmRoot: root, noExtensions: true };
+  for (const type of ["epic", "EPIC"]) {
+    const created = (await create({ title: "Legacy container", type: "Epic", status: "in_progress", acceptanceCriteria: "Verified delivery" }, sdk)).item;
+    await commitImportedItem({ pmRoot: root, id: created.id, itemPath: getItemPath(root, "Epic", created.id), settings: await readSettings(root),
+      document: { metadata: { ...created, type }, body: "" }, author: "fixture", message: "Seed readable legacy type spelling", conflictWarningPrefix: "fixture" });
+    const body = `Closes https://github.com/${repo}/blob/main/.agents/pm/epics/${created.id}.toon`;
+    await withMockGithub(fixture(body), async () => {
+      const report = await runCloseout(root, repo, { pr: "42", apply: true }, api());
+      assert.equal(report.closed, 0);
+      assert.equal(report.plan.find(row => row.item === created.id)!.code, "epic");
+      assert.equal((await get(created.id, {}, sdk)).item.status, "in_progress");
     });
   }
 }));

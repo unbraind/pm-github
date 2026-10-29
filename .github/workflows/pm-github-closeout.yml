@@ -243,6 +243,18 @@ jobs:
           export PM_SYNC_TRACKER
           printf 'PM_SYNC_TRACKER=%s\n' "${PM_SYNC_TRACKER}" >> "${GITHUB_ENV}"
           cat > "${RUNNER_TEMP}/pm-github-sync-scope.sh" <<'SCOPE'
+          report_workflow_failure() {
+            local report_file="$1" error_file="$2" diff_file="${3:-/dev/null}"
+            local diagnostic="${RUNNER_TEMP}/pm-github-diagnostic.json"
+            local patch="${RUNNER_TEMP}/pm-github-diagnostic.patch"
+            pm github workflow-diagnostic --report "${report_file}" --error-file "${error_file}" --diff "${diff_file}" --json > "${diagnostic}"
+            { printf '%s\n' '--- /dev/null' '+++ b/workflow-diagnostic.txt' '@@ -0,0 +1 @@'; jq -r '"+" + (.reason | gsub("[\\r\\n]"; " "))' "${diagnostic}"; } > "${patch}"
+            if pm github gate --diff "${patch}" --json > "${RUNNER_TEMP}/pm-github-diagnostic-gate.json" 2> "${RUNNER_TEMP}/pm-github-diagnostic-gate.err"; then
+              jq -r '"::error::" + (.reason | gsub("%"; "%25") | gsub("\\r"; "%0D") | gsub("\\n"; "%0A"))' "${diagnostic}"
+            else
+              echo "::error::Failure diagnostic blocked by the privacy gate; review source content before retrying. No branch was published."
+            fi
+          }
           mapfile -t sync_scope < <(printf '%s\n' \
             ":(top,literal)${PM_SYNC_TRACKER}" \
             ':(top,literal)CHANGELOG.md' \
@@ -367,6 +379,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
           # Full history catches up after missed schedules; the command skips terminal items.
           # Keep the report private until the proposed change has passed the privacy gate.
           required_args=()
@@ -375,7 +388,7 @@ jobs:
             required_args+=(--required-checks "${REQUIRED_CHECKS}")
           fi
           if ! pm github closeout --repo "${REPOSITORY}" --since 1970-01-01 --apply --json "${required_args[@]}" > "${RUNNER_TEMP}/pm-github-closeout.json" 2> "${RUNNER_TEMP}/pm-github-closeout.err"; then
-            echo "::error::Closeout refused; check token read access to pull requests, checks and branch rules, and tracker close validation. No branch was published."
+            report_workflow_failure "${RUNNER_TEMP}/pm-github-closeout.json" "${RUNNER_TEMP}/pm-github-closeout.err"
             exit 1
           fi
           jq -e '.command == "github closeout" and .dry_run == false and .failed == 0 and (.closed | type == "number")' "${RUNNER_TEMP}/pm-github-closeout.json" >/dev/null
@@ -383,12 +396,12 @@ jobs:
           # Foreign, terminal, excluded and unlinked PRs cannot block this run.
           jq -e 'all(.plan[]; (.code | type) == "string")' "${RUNNER_TEMP}/pm-github-closeout.json" >/dev/null
           if jq -e 'any(.plan[]; .action == "skip" and (.code == "head_evidence_unavailable" or .code == "required_checks_unverified"))' "${RUNNER_TEMP}/pm-github-closeout.json" >/dev/null; then
-            echo "::error::Closeout refused; check token read access to head checks for linked local tracker items, and declare required-checks when protection metadata is unavailable. No branch was published."
+            report_workflow_failure "${RUNNER_TEMP}/pm-github-closeout.json" /dev/null
             exit 1
           fi
           # Merge facts are checked before head lookup and have a distinct decision.
           if jq -e 'any(.plan[]; .action == "skip" and .code == "incomplete_merge")' "${RUNNER_TEMP}/pm-github-closeout.json" >/dev/null; then
-            echo "::error::Closeout refused; incomplete merged-PR metadata blocks a linked local tracker item. No branch was published."
+            report_workflow_failure "${RUNNER_TEMP}/pm-github-closeout.json" /dev/null
             exit 1
           fi
           # Persist only safe attribution facts so an all-held run can still open a review PR.

@@ -512,15 +512,21 @@ export function scanLineForRuleHits(line: string, trackerLine = false): RuleHit[
       offsets.push(index);
     }
   }
-  const quoted = quotedSourcePositions(decoded);
+  let quoted: boolean[] | undefined;
   // Rule normalization can collapse backslash pairs in raw source. Keep its
   // original quote state too, so that an escaped quote cannot become a closer.
-  const originalQuoted = serialized ? [] : quotedSourcePositions(line);
+  let originalQuoted: boolean[] | undefined;
   const hits: RuleHit[] = [];
   for (const rule of [...CREDENTIAL_RULES, ...PERSONAL_DATA_RULES, ...HOST_PATH_RULES]) {
     rule.pattern.lastIndex = 0;
     for (let match = rule.pattern.exec(decoded); match; match = rule.pattern.exec(decoded)) {
-      if (rule.rule === "absolute-host-path" && isBareRootRegex(decoded, match[0], match.index, quoted[match.index]! || originalQuoted[offsets[match.index]!] === true)) continue;
+      if (rule.rule === "absolute-host-path") {
+        // Only this rule needs quote state. Inputs without host-path candidates
+        // avoid two full scans, and unchanged decoded text shares the same map.
+        quoted ??= quotedSourcePositions(decoded);
+        originalQuoted ??= serialized ? [] : decoded === line ? quoted : quotedSourcePositions(line);
+        if (isBareRootRegex(decoded, match[0], match.index, quoted[match.index]! || originalQuoted[offsets[match.index]!] === true)) continue;
+      }
       if (!rule.confirm || rule.confirm(match[0])) {
         const matched = rule.rule === "home-username" ? match[0].slice(match[0].indexOf("~")) : match[0];
         const start = match.index + match[0].length - matched.length;

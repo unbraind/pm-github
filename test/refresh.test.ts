@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, mkdirSync, cpSync, copy
 import { tmpdir } from "node:os";
 import { join, delimiter } from "node:path";
 import { spawnSync } from "node:child_process";
-import { WorkspaceTransactionInterruptedError, create, update, get, comments, listAllComplete, readHistorySnapshot, getHistoryPath, deleteItem, readSettings, normalizeItemId, commitImportedItem, getItemPath } from "@unbrained/pm-cli/sdk";
+import { WorkspaceTransactionInterruptedError, create, update, get, comments, listAllComplete, readHistorySnapshot, getHistoryPath, deleteItem, readSettings, normalizeItemId, commitImportedItem, getItemPath, toImportTags } from "@unbrained/pm-cli/sdk";
 import extension, {
   buildAtomicImportMutations, deriveAtomicItemId, importGithubAtomic, listUnfinishedGithubImports,
   parseImportOptions, prepareGithubImport, readGithubImportPlan, resumeGithubImport,
@@ -62,12 +62,17 @@ function transport(nodes: Record<string, ReturnType<typeof node> | null>, errors
 
 for (const atomic of [false, true]) {
   test(`apply then re-apply preserves every byte and history line without cache priming (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
-    const linked = (await create({ title: "Stale", tags: "gh:fixture/repo#1" }, { pmRoot })).item;
+    const linked = (await create({ title: "Stale", tags: "gh:fixture/repo#1,area,api" }, { pmRoot })).item;
     const upstream = node();
     upstream.labels.nodes.push({ name: "second-label" });
+    upstream.labels.nodes.push(...["area,api", '["json"]', 'quote"tag', " É,ß "].map(name => ({ name })));
     const upstreams = new Map([[1, upstream]]);
     await withMockGithub((...args) => transport({ i1: upstreams.get(1)! })(...args), async () => {
       assert.equal((await runRefresh("fixture/repo", pmRoot, { atomic })).updated, 1);
+      const written = (await get(linked.id, {}, { pmRoot })).item;
+      assert.deepEqual(written.tags, toImportTags([...upstream.labels.nodes.map(label => label.name),
+        "gh:fixture/repo#1", "github_author:fixture"].join(",")));
+      assert.ok(written.tags!.includes('["json"]'));
       const before = snapshot(pmRoot);
       const historyLines = readFileSync(getHistoryPath(pmRoot, linked.id), "utf8").trimEnd().split("\n").length;
       const repeated = await runRefresh("fixture/repo", pmRoot, { atomic });

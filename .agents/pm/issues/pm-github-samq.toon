@@ -1,0 +1,16 @@
+id: pm-github-samq
+title: Coordinate caller adoption and source-content remediation for scheduled workflows
+description: "After pm-github-3it2 is released, update affected reusable workflow SHA pins through caller-owned review. All 21 named caller repositories are listed in docs/scheduled-workflow-refusals.md. Align newline required-checks declarations where GITHUB_TOKEN cannot read administration-only protection. pm-changelog sync job 121514139043 also requires source-content remediation or a reviewed narrow allowlist for absolute-host-path body findings; package diagnostics must preserve that refusal. No caller mutation belongs to the package fix."
+type: Issue
+status: open
+priority: 2
+tags[4]: caller-adoption,closeout,follow-up,sync
+created_at: "2026-10-27T03:39:19.756Z"
+updated_at: "2026-10-27T15:36:40.264Z"
+author: codex-agent
+acceptance_criteria: "Caller owners adopt a release containing the pagination/diagnostic fix, review required-check declarations against branch policy, and resolve source privacy findings. Validate each scheduled workflow under its real GITHUB_TOKEN without weakening evidence or privacy gates."
+comments[1]{created_at,author,text}:
+  "2026-10-27T15:36:40.264Z",codex-agent,"Caller-adoption update: the newly published 2026.10.27 release at tag commit f90f86faa9c976392f1d1262fd0b3204de2007e4 retains byte-identical closeout.ts, index.ts, import-fidelity.ts and both reusable workflows from original main 2b71f73. Bumping to that release does not fix this incident. All 21 callers listed in docs/scheduled-workflow-refusals.md need a release SHA containing PR #190. Explicit required-check declarations and the documented pm-changelog source-content privacy remediation remain caller-owned. Source and re-review class fixes now pass both complete local release gates, 1548/1548 each with exact all-source four-dimensional coverage; PR #190 remains open for verification and is not merged."
+docs[1]{path,scope}:
+  docs/scheduled-workflow-refusals.md,project
+body: ""

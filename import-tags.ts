@@ -1,10 +1,11 @@
 /** Import-owned label conversion shared by writers, previews and read-back comparisons. */
-import { toImportTags } from "@unbrained/pm-cli/sdk";
+import { parseTags, toImportTags } from "@unbrained/pm-cli/sdk";
 import type { PreparedGithubImport } from "./index.ts";
+import { serializeImportTags } from "./import-fidelity.ts";
 
-/** Use the importer's CSV representation and SDK parser, including embedded commas and native tag rules. */
+/** Split provider CSV delimiters before native normalization so JSON-looking names never change meaning with batch context. */
 export function githubLabelsToTags(names: readonly string[]): string[] {
-  return toImportTags(names.join(","));
+  return toImportTags(names.flatMap(name => name.split(",")));
 }
 
 /** Select genuinely new native tag atoms without converting retained tracker state into command CSV. */
@@ -24,14 +25,15 @@ export function importTagValues(entry: PreparedGithubImport): string[] {
 export function importTagOptions(entry: PreparedGithubImport): { tags?: string; addTags?: string[] } {
   const tags = importTagValues(entry);
   if (entry.match?.id && (entry.linkOnly || entry.identity?.via === "citation")) {
-    return { addTags: nativeTagAdditions(entry.match.tags, tags) };
+    return { addTags: nativeTagAdditions(entry.match.tags, tags).map(tag => serializeImportTags([tag])) };
   }
-  return { tags: tags.join(",") };
+  return { tags: serializeImportTags(tags) };
 }
 
 /** Encode the shared import tag options once for every plain CLI mutation, including an empty additive update. */
 export function importTagArguments(entry: PreparedGithubImport): string[] {
   const options = importTagOptions(entry);
   if (options.tags !== undefined) return ["--tags", options.tags];
-  return options.addTags!.length ? ["--add-tags", options.addTags!.join(",")] : [];
+  const additions = options.addTags!.flatMap(tag => parseTags(tag));
+  return additions.length ? ["--add-tags", serializeImportTags(additions)] : [];
 }

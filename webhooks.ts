@@ -2,7 +2,7 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { open, mkdir, readdir, readFile } from "node:fs/promises";
 import { join, basename } from "node:path";
-import { acquireLock, writeFileAtomic } from "@unbrained/pm-cli/sdk";
+import { acquireLock, writeFileAtomic, resolvePmRoot, ensureTrackerInitialized } from "@unbrained/pm-cli/sdk";
 import { runRefresh } from "./refresh.ts";
 
 /** Stable refusal discriminators; no secret, payload or storage path is included in diagnostics. */
@@ -93,7 +93,8 @@ async function flush(file: string): Promise<void> {
 /** Serialize independent writers using the host's token-owned, crash-recoverable tracker lock. */
 async function locked<T>(pmRoot: string, repo: string, operation: (directory: string) => Promise<T>, lockId = "github-webhooks"): Promise<T> {
   try {
-    await readFile(join(pmRoot, "settings.json"), "utf8");
+    pmRoot = resolvePmRoot(process.cwd(), pmRoot);
+    await ensureTrackerInitialized(pmRoot);
     // Age alone cannot prove a worker is dead while it awaits provider or disk I/O.
     const release = await acquireLock(pmRoot, lockId, 300, "pm-github", false, true, 5000);
     try {
@@ -127,6 +128,7 @@ export async function acceptGithubWebhook(pmRoot: string, input: GithubWebhookDe
     throw new WebhookRefusal("invalid_event", "Supply an issue event from the explicitly selected repository; pull requests and ambiguous identities are unsupported.");
   }
   const record: InboxRecord = { version: 1, repo, delivery: input.delivery, digest: hash(input.payload), number: Number(issue.number) };
+  pmRoot = resolvePmRoot(process.cwd(), pmRoot);
   return locked(pmRoot, repo, async directory => {
     const file = join(directory, `${hash(record.delivery)}.json`);
     if ((await readdir(directory)).includes(`${hash(record.delivery)}.json`)) {
@@ -154,6 +156,7 @@ async function readRecord(file: string, repo: string): Promise<InboxRecord> {
 export async function reconcileGithubWebhooks(pmRoot: string, repoArg: string, limit = 20): Promise<WebhookReconciliation> {
   const repo = repository(repoArg);
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new WebhookRefusal("invalid_options", "Use a delivery limit from 1 to 100 (default 20).");
+  pmRoot = resolvePmRoot(process.cwd(), pmRoot);
   return locked(pmRoot, repo, async directory => {
     const names = new Set(await readdir(directory));
     const files = [...names].filter(file => /^[a-f0-9]{64}\.json$/.test(file)).sort();

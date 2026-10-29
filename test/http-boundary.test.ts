@@ -214,7 +214,7 @@ test("fetchJSON throws immediately on a non-retryable 404 (no retry)", async () 
   }, async (server) => {
     await assert.rejects(
       fetchJSON(`${server.baseUrl}/repos/a/b`, "t"),
-      /GitHub API returned HTTP 404/,
+      /GitHub API returned HTTP 404 for GET \/repos\/a\/b/,
     );
     assert.equal(calls, 1, "a 404 must NOT be retried");
   });

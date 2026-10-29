@@ -64,3 +64,13 @@ test("environment snapshots preserve own prototype-name entries and restore abse
   for (const name of names) assert.equal(ownValue(process.env, name), before.get(name));
   assert.deepEqual(Object.getOwnPropertyDescriptors(Object.prototype), prototype);
 });
+
+
+test("project override keys preserve case and whitespace semantics after SDK canonicalization", () => {
+  for (const name of names) for (const input of [name, name.toUpperCase(), ` ${name} `]) {
+    for (const key of [name, name.toLowerCase(), ` ${name.toUpperCase()} `]) {
+      const options = [{ id: "default", name: "Todo" }, { id: "own", name }];
+      assert.equal(resolveOptionForStatus(input, options, new Map([[key, name]]))?.id, "own", `${JSON.stringify(input)} / ${JSON.stringify(key)}`);
+    }
+  }
+});

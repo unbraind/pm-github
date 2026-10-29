@@ -1,6 +1,8 @@
+import { readGithubWorkspace, githubStatusIsTerminal } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
+import { normalizeImportValue } from "./import-fidelity.ts";
 /** Close delivered tracker items using merged pull requests and head-check evidence. */
-import { close, hashDocument, locateItem, readLocatedItem, readSettings, resolveItemTypeRegistry, runWithActiveExtensions, setActiveExtensionHooks, listAllComplete, certifyCompleteListResult, getHistoryPath, readHistoryEntries, verifyHistoryEntries, PmCliError, EXIT_CODE, type ItemDocument } from "@unbrained/pm-cli/sdk";
+import { close, hashDocument, locateItem, readLocatedItem, runWithActiveExtensions, setActiveExtensionHooks, listAllComplete, certifyCompleteListResult, getHistoryPath, readHistoryEntries, verifyHistoryEntries, PmCliError, EXIT_CODE, type ItemDocument } from "@unbrained/pm-cli/sdk";
 
 /** Existing GitHub REST transport, supplied by the extension entry point. */
 export interface CloseoutApi {
@@ -51,7 +53,7 @@ interface PullRequest {
 /** A required context may be bound to a particular GitHub App. */
 interface RequiredCheck { name: string; app: number | null }
 /** Preserve readable requirements while recording a metadata gap or an empty policy. */
-interface RequiredPolicy { checks: RequiredCheck[]; fallback: boolean; unavailable: boolean }
+interface RequiredPolicy { checks: RequiredCheck[]; fallback: boolean; unavailable: boolean; gaps: string[] }
 /** Only check-run facts used to decide whether a head passed. */
 interface CheckRun { name: string; head_sha: string; status: string; conclusion: string | null; app: { id: number } }
 /** Legacy commit statuses are newest first; only the latest per context counts. */
@@ -96,9 +98,21 @@ function requiredContexts(value: unknown): string[] {
   return (values as string[]).flatMap(entry => entry.split("\n")).map(line => line.trim()).filter(Boolean);
 }
 
+/** A safe read diagnostic contains a known endpoint and no response or exception prose. */
+class CloseoutReadError extends Error {}
+
+/** Identify a failed read without copying tokens, API bodies or transport errors. */
+async function evidenceRead(api: CloseoutApi, url: string): Promise<{ body: string; linkHeader?: string }> {
+  try { return await api.get(url); }
+  catch (error: unknown) {
+    const status = error instanceof Error ? /HTTP (\d{3})\b/.exec(error.message)?.[1] : undefined;
+    throw new CloseoutReadError(`GitHub GET ${new URL(url).pathname} failed; verify token read access and retry${status ? `: HTTP ${status}` : "."}`);
+  }
+}
+
 /** Read one payload with the shared authenticated retry/redirect transport. */
 async function payload(api: CloseoutApi, endpoint: string): Promise<unknown> {
-  return JSON.parse((await api.get(`${api.base}${endpoint}`)).body) as unknown;
+  return JSON.parse((await evidenceRead(api, `${api.base}${endpoint}`)).body) as unknown;
 }
 
 /** Drain same-endpoint pagination; reject cycles, foreign links and truncated totals. */
@@ -108,11 +122,23 @@ async function pages(api: CloseoutApi, endpoint: string, checks = false, done?: 
   const seen = new Set<string>();
   const rows: unknown[] = [];
   let total: number | undefined;
+  let numericPath: string | undefined;
   while (next) {
     const url = new URL(next);
-    if (url.origin !== initial.origin || url.pathname !== initial.pathname || seen.has(next)) throw new Error("Unverifiable GitHub pagination.");
+    if (url.origin !== initial.origin || seen.has(next)) throw new CloseoutReadError(`Unverifiable GitHub pagination for GET ${initial.pathname}; retry with a same-repository next-page link.`);
+    if (url.pathname !== initial.pathname && url.pathname !== numericPath) {
+      // GitHub emits numeric repository aliases in Link headers even when the
+      // first request used owner/name. Verify the alias before following it.
+      const named = /^\/repos\/([^/]+\/[^/]+)(\/.*)$/.exec(initial.pathname);
+      const numeric = /^\/repositories\/([1-9]\d*)(\/.*)$/.exec(url.pathname);
+      if (!named || !numeric || named[2] !== numeric[2]) throw new CloseoutReadError(`Unverifiable GitHub pagination for GET ${initial.pathname}; next-page endpoint changed.`);
+      const identity = record(await payload(api, `/repos/${named[1]}`));
+      if (!Number.isSafeInteger(identity.id) || String(identity.id) !== numeric[1]
+        || text(identity.full_name).toLowerCase() !== named[1]!.toLowerCase()) throw new CloseoutReadError(`Unverifiable GitHub pagination for GET ${initial.pathname}; repository ID does not match.`);
+      numericPath = url.pathname;
+    }
     seen.add(next);
-    const response = await api.get(next);
+    const response = await evidenceRead(api, next);
     const value: unknown = JSON.parse(response.body);
     let page = value;
     if (checks) {
@@ -171,18 +197,19 @@ function mergeEvidence(pr: PullRequest): boolean {
 }
 
 /** Treat only permission and not-found responses as protection metadata gaps. */
-async function readProtectionSource<T>(read: () => Promise<T>): Promise<T | null> {
+async function readProtectionSource<T>(read: () => Promise<T>, gaps: string[]): Promise<T | null> {
   try { return await read(); }
   catch (error: unknown) {
-    if (error instanceof Error && /HTTP (403|404)$/.test(error.message)) return null;
+    if (error instanceof Error && /HTTP (403|404)$/.test(error.message)) { gaps.push(error.message); return null; }
     throw error;
   }
 }
 
 /** Combine all readable app-bound contexts without discarding known requirements. */
 async function requirements(api: CloseoutApi, repo: string, branch: string): Promise<RequiredPolicy> {
-  const classic = await readProtectionSource(async () => record(await payload(api, `/repos/${repo}/branches/${encodeURIComponent(branch)}/protection/required_status_checks`)));
-  const rules = await readProtectionSource(() => pages(api, `/repos/${repo}/rules/branches/${encodeURIComponent(branch)}?per_page=100`));
+  const gaps: string[] = [];
+  const classic = await readProtectionSource(async () => record(await payload(api, `/repos/${repo}/branches/${encodeURIComponent(branch)}/protection/required_status_checks`)), gaps);
+  const rules = await readProtectionSource(() => pages(api, `/repos/${repo}/rules/branches/${encodeURIComponent(branch)}?per_page=100`), gaps);
   const checks: RequiredCheck[] = [];
   if (classic !== null) {
     if (!Array.isArray(classic.contexts) || !Array.isArray(classic.checks)) throw new Error("Missing required-check definitions.");
@@ -210,7 +237,7 @@ async function requirements(api: CloseoutApi, repo: string, branch: string): Pro
       checks.push({ name: text(check.context), app: typeof app === "number" ? app : null });
     }
   }
-  return { checks, fallback: checks.length === 0, unavailable: classic === null || rules === null };
+  return { checks, fallback: checks.length === 0, unavailable: classic === null || rules === null, gaps };
 }
 
 /** Verify metadata-backed or caller-declared requirements before considering observed head runs. */
@@ -221,7 +248,7 @@ export async function checkCloseoutHead(api: CloseoutApi, repo: string, pr: Pull
     if (policy.unavailable) {
       if (declared.length === 0) {
         result.code = "required_checks_unverified";
-        result.reason = "Required-check metadata unavailable; declare --required-checks to verify the required contexts.";
+        result.reason = `${policy.gaps[0]}. Required-check metadata unavailable; declare --required-checks (workflow input required-checks) to verify the required contexts. GITHUB_TOKEN cannot read administration-only branch protection.`;
         return result;
       }
       policy.checks.push(...declared.map(name => ({ name, app: null })));
@@ -267,15 +294,13 @@ export async function checkCloseoutHead(api: CloseoutApi, repo: string, pr: Pull
       ...[...statuses.values()].filter(status => status.state === "success").map(status => status.context)])].sort();
     result.code = "head_checks_passed";
     result.ok = true;
-  } catch {
+  } catch (error: unknown) {
     result.code = "head_evidence_unavailable";
+    if (error instanceof CloseoutReadError) result.reason = error.message;
     // Never echo an API body, exception payload, PR body or comment into the report.
   }
   return result;
 }
-
-/** Statuses that already ended an item's lifecycle. */
-const TERMINAL_STATUSES: readonly string[] = ["closed", "canceled"];
 
 /** GitHub-style closing keywords that declare delivery of the link they directly precede. */
 const CLOSING_KEYWORDS = new Set(["close", "closes", "closed", "fix", "fixes", "fixed", "resolve", "resolves", "resolved", "deliver", "delivers", "delivered"]);
@@ -407,7 +432,12 @@ function closeReason(pr: PullRequest, passed: string[]): string {
 export function closeoutFailureReason(error: unknown): string {
   if (error instanceof PmCliError) {
     const code = error.code;
-    if (typeof code === "string" && /^[a-z][a-z0-9_]{0,79}$/.test(code)) return `SDK close refused: ${code}.`;
+    if (typeof code === "string" && /^[a-z][a-z0-9_]{0,79}$/.test(code)) {
+      const fields = [...new Set([...(error.context.recovery?.missing_required_fields ?? []), ...(error.context.field ? [error.context.field] : []),
+        ...(error.context.policy_violations ?? []).flatMap(violation => violation.missing_fields)]
+        .filter(field => /^[a-z][a-z0-9_]{0,79}$/.test(field)))];
+      return `SDK close refused: ${code}.${fields.length ? ` Supply required fields: ${fields.join(", ")}.` : ""}`;
+    }
     return `SDK close refused (exit ${error.exitCode}).`;
   }
   return "SDK close failed (unclassified error).";
@@ -465,7 +495,7 @@ export function runCloseout(pmRoot: string, repo: string | undefined, options: R
 }
 
 /** Re-select a conflicted item once; each attempt installs a lock-scoped SDK precondition. */
-async function closeoutAttempt(pmRoot: string, repo: string | undefined, options: Record<string, unknown>, api: CloseoutApi, retry: boolean, observer?: CloseoutObserver, onlyItem?: string): Promise<{
+async function closeoutAttempt(pmPath: string, repo: string | undefined, options: Record<string, unknown>, api: CloseoutApi, retry: boolean, observer?: CloseoutObserver, onlyItem?: string): Promise<{
   command: string; repo: string; dry_run: boolean; plan: CloseoutRow[]; checks: CheckGate[]; closed: number; failed: number;
 }> {
   if (!repo || !/^(?!\.{1,2}\/)[A-Za-z0-9_.-]+\/(?!\.{1,2}$)[A-Za-z0-9_.-]+$/.test(repo)) throw new CloseoutUsageError("closeout requires --repo owner/repo or PM_GITHUB_REPO.");
@@ -492,10 +522,15 @@ async function closeoutAttempt(pmRoot: string, repo: string | undefined, options
       }
     }
   }
+  const workspace = await readGithubWorkspace(pmPath);
+  const pmRoot = workspace.pmRoot;
   const corpus = certifyCompleteListResult(await listAllComplete({}, { pmRoot, noExtensions: true }));
   await observer?.("listed");
-  const settings = await readSettings(pmRoot);
-  const types = resolveItemTypeRegistry(settings).type_to_folder;
+  const { settings, types: registry } = workspace;
+  const types = registry.type_to_folder;
+  const typeNames = new Map(Object.entries(registry.alias_to_type));
+  /** Container eligibility uses the same registry as persisted item types. */
+  const isEpic = (type: unknown) => normalizeImportValue("type", type, typeNames) === normalizeImportValue("type", "Epic", typeNames);
   const snapshots = new Map<string, string>();
   const documents = new Map<string, ItemDocument>();
   const items = new Map(corpus.items.map(item => [item.id, item]));
@@ -513,17 +548,17 @@ async function closeoutAttempt(pmRoot: string, repo: string | undefined, options
   const activeChildren = new Map<string, number>();
   for (const item of items.values()) {
     const parent = (item as { parent?: unknown }).parent;
-    if (typeof parent === "string" && !TERMINAL_STATUSES.includes(item.status)) activeChildren.set(parent, (activeChildren.get(parent) ?? 0) + 1);
+    if (typeof parent === "string" && !githubStatusIsTerminal(item.status, workspace.statuses)) activeChildren.set(parent, (activeChildren.get(parent) ?? 0) + 1);
   }
   const plan: CloseoutRow[] = [];
   const checks: CheckGate[] = [];
   const closures: { row: CloseoutRow; reason: string; at: string; resolution: string; expectedResult: string; actualResult: string }[] = [];
   const candidates = new Map<string, { row: CloseoutRow; pr: PullRequest; declared: boolean; commitsReadable: boolean }[]>();
-  const unreadable: number[] = [];
+  const unreadable = new Map<number, string>();
   for (const number of [...new Set(numbers)].sort((a, b) => a - b)) {
     let evidence: unknown;
     try { evidence = await payload(api, `/repos/${repo}/pulls/${number}`); }
-    catch { unreadable.push(number); continue; }
+    catch (error: unknown) { unreadable.set(number, error instanceof CloseoutReadError ? error.message : "Pull-request evidence unavailable or incomplete."); continue; }
     const pr = pullRequest(evidence, repo, number);
     let gate: CheckGate = { pr: number, code: "incomplete_merge", rule: "unavailable", ok: false, passed: [], reason: `Missing or invalid merge evidence: ${mergeEvidenceGaps(pr).join(", ")}.` };
     if (mergeEvidence(pr)) gate = await checkCloseoutHead(api, repo, pr, declared);
@@ -558,9 +593,9 @@ async function closeoutAttempt(pmRoot: string, repo: string | undefined, options
       if (ref.repo.toLowerCase() !== repo.toLowerCase()) { code = "other_repository"; reason = "Link points to another repository."; }
       else if (!items.has(ref.item)) { code = "unknown_item"; reason = "Item does not exist in the tracker."; }
       else if (skip.has(ref.item)) { code = "explicit_skip"; reason = "Explicitly excluded by --skip."; }
-      else if (TERMINAL_STATUSES.includes(items.get(ref.item)!.status)) { code = "already_terminal"; reason = "Item is already closed or canceled."; }
+      else if (githubStatusIsTerminal(items.get(ref.item)!.status, workspace.statuses)) { code = "already_terminal"; reason = "Item is already closed or canceled."; }
       else if (pr.merged === false) { code = "not_merged"; reason = "Pull request is confirmed unmerged and cannot deliver this item."; }
-      else if (items.get(ref.item)!.type === "Epic") { code = "epic"; reason = "Epics close when their children are done, not by a pull request."; }
+      else if (isEpic(items.get(ref.item)!.type)) { code = "epic"; reason = "Epics close when their children are done, not by a pull request."; }
       else if (activeChildren.has(ref.item)) { code = "active_children"; reason = `Item has ${activeChildren.get(ref.item)} non-terminal child item(s).`; }
       else if (role === "context") {
         code = "not_delivery";
@@ -587,8 +622,8 @@ async function closeoutAttempt(pmRoot: string, repo: string | undefined, options
       const row: CloseoutRow = { item: ref.item, pr: number, action: "skip", code, reason };
       plan.push(row);
       if (role !== "context" && pr.merged !== false && items.has(ref.item) && ref.repo.toLowerCase() === repo.toLowerCase()
-        && !skip.has(ref.item) && !TERMINAL_STATUSES.includes(items.get(ref.item)!.status)
-        && items.get(ref.item)!.type !== "Epic" && !activeChildren.has(ref.item)) {
+        && !skip.has(ref.item) && !githubStatusIsTerminal(items.get(ref.item)!.status, workspace.statuses)
+        && !isEpic(items.get(ref.item)!.type) && !activeChildren.has(ref.item)) {
         const group = candidates.get(ref.item) ?? [];
         group.push({ row, pr, declared: ref.declared, commitsReadable });
         candidates.set(ref.item, group);
@@ -597,11 +632,11 @@ async function closeoutAttempt(pmRoot: string, repo: string | undefined, options
   }
   // A failed PR read can hide linkage and a competing claim. Retain its number for
   // every active eligible item; without the PR evidence no item can be proved unrelated.
-  for (const number of unreadable) {
+  for (const [number, reason] of unreadable) {
     const url = `https://github.com/${repo}/pull/${number}`;
     for (const item of items.values()) {
-      if (skip.has(item.id) || TERMINAL_STATUSES.includes(item.status) || item.type === "Epic" || activeChildren.has(item.id)) continue;
-      const row: CloseoutRow = { item: item.id, pr: number, action: "skip", code: "head_evidence_unavailable", reason: "Pull-request fetch failed; merge, linkage and delivery evidence unavailable." };
+      if (skip.has(item.id) || githubStatusIsTerminal(item.status, workspace.statuses) || isEpic(item.type) || activeChildren.has(item.id)) continue;
+      const row: CloseoutRow = { item: item.id, pr: number, action: "skip", code: "head_evidence_unavailable", reason };
       plan.push(row);
       const group = candidates.get(item.id) ?? [];
       group.push({ row, pr: { number, html_url: url, body: null, merged: true, merged_at: null, merge_commit_sha: null, commits: null,

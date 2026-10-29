@@ -867,6 +867,13 @@ for schedules, groups, commit messages and labels.
 
 ## Automated closeout workflow
 
+For scheduled failures, see the [run evidence and refusal guide](docs/scheduled-workflow-refusals.md).
+Both maintenance workflows select one actionable reason from private command
+receipts and privacy-scan it before emitting an error annotation. Closeout
+accepts GitHub's numeric pagination aliases only after verifying repository
+identity; denied reads identify the endpoint and status, and close validation
+identifies the item and required fields without exposing raw exception prose.
+
 [`.github/workflows/pm-github-closeout.yml`](.github/workflows/pm-github-closeout.yml)
 is a reusable `workflow_call` that opens or updates **one** PR titled
 `chore(pm): close items delivered by merged pull requests` from `pm-github/closeout`.
@@ -1147,6 +1154,14 @@ Release attribution uses the actual dates of locally available calendar tags, in
 Before creating an item, import checks the complete tracker for its provenance tag, GitHub URLs in provenance or link metadata, and Linear/Jira/ADO links referenced by the GitHub issue body. A unique existing external owner receives the GitHub tag and source metadata; its title, body, provider identity, creation/completion dates and release remain intact. A persisted `github_link_only` marker preserves that ownership on subsequent syncs. Free-text descriptions and bodies do not declare GitHub ownership. Ambiguous matches refuse the import before writes with `--gate` or `--atomic`. A plain multi-issue import may write earlier issues before rejecting a later ambiguous match.
 
 With `--gate` and a nonempty filtered issue list, both preview and apply results include a `plan` with source dates, closure reason, release, target identity, link/create/update action and state-conflict decision. An empty filtered issue list returns without a `plan`, including with `--gate --dry-run`. GitHub wins lifecycle conflicts for GitHub-owned imports. A canceled item that GitHub later reports as completed uses the SDK's explicit repeat-closure transition with the source reason. A linked external owner keeps its local status, and the plan records `preserve-provider-owner`; `github_state` still records the source state. Atomic transaction identity includes the latest external edit or different lifecycle generation in history. Local state edits and repeated state cycles force reconciliation, while staging and compensation keep crash retries on the same journal. Finalization runs before the SDK commits and is compensated with the batch on failure. It is idempotent and runs again after a recovered atomic journal, so an interrupted finalization can be repaired by retrying the same import before the gate permits a push.
+
+An atomic apply whose complete normalized source projection already matches every item
+reports `unchanged: true`, zero imports/updates, and no transaction ID. It leaves
+native timestamps and item history untouched, including after a mixed batch of
+new and existing items. This shortcut is disabled while any GitHub SDK journal
+is unfinished; normal recovery still runs. Native annotation synchronization,
+dependency linking, and the post-write privacy gate still run on an unchanged
+item projection.
 
 SDK limitation: native `updated_at` remains the local mutation clock because the bulk SDK uses it to address rollback history. The GitHub update date is retained exactly in `github_updated_at`, and the gated plan discloses this policy. Backdating native `updated_at` safely requires an SDK import mutation whose version identity is independent of source time. Native creation, closure and completion dates still preserve GitHub lifetimes for momentum and cycle-time readers.
 

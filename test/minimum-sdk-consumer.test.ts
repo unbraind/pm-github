@@ -83,8 +83,8 @@ test("packed package type-checks and imports against its exact declared minimum 
     run(node, [join(consumer, "node_modules/typescript/bin/tsc"), "--project", "tsconfig.json"], consumer, environment);
     writeFileSync(join(consumer, "probe.mjs"), `import assert from "node:assert/strict";
 import { join } from "node:path";
-import extension, { planGithubLabelMigration, validateGithubLabelMigrationReport } from "pm-github";
-import { init, create, get, mutateItem, readSettings, encodePmTableRows } from "@unbrained/pm-cli/sdk";
+import extension, { planGithubLabelMigration, validateGithubLabelMigrationReport, buildAtomicImportMutations } from "pm-github";
+import { init, create, update, get, mutateItem, readSettings, encodePmTableRows, normalizeItemId } from "@unbrained/pm-cli/sdk";
 assert.ok(extension);
 const root = join(process.cwd(), "tracker");
 await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { pmRoot: root, cwd: process.cwd(), noExtensions: true });
@@ -106,10 +106,21 @@ assert.deepEqual((await get(item.id, {}, { pmRoot: root })).item.tags, ["bug, bu
 const zero = await planGithubLabelMigration(root, input, { readCatalog });
 assert.equal(zero.counts.tags, 0);
 assert.deepEqual(validateGithubLabelMigrationReport({ ...zero, rows: undefined, next: undefined }), zero);
-console.log(JSON.stringify({ sdk: ${JSON.stringify(minimum)}, extension_import: true, encoded_rows: true, native_comma: true, non_git: true }));
+const owner = (await get(item.id, {}, { pmRoot: root })).item;
+const additive = buildAtomicImportMutations("fixture/repo", { issueNumber: 1, title: owner.title, itemType: owner.type,
+  status: owner.status, description: "", body: "", tags: [...owner.tags, '["array"]', "gh:fixture/repo#1"],
+  comments: [], syncAnnotations: false, linkOnly: true, match: owner }, settings.id_prefix, normalizeItemId);
+assert.equal(additive.mutations[0].op, "update");
+await update(owner.id, { ...additive.mutations[0].options, ...scope }, { pmRoot: root });
+const preserved = (await get(owner.id, {}, { pmRoot: root })).item;
+assert.ok(preserved.tags.includes("bug, bug"));
+assert.ok(preserved.tags.includes('["array"]'));
+assert.ok(!preserved.tags.includes("array"));
+
+console.log(JSON.stringify({ sdk: ${JSON.stringify(minimum)}, extension_import: true, encoded_rows: true, native_comma: true, json_tag: true, non_git: true }));
 `);
     console.log(`minimum SDK ${minimum}: importing and exercising the installed artifact`);
-    const result = JSON.parse(run(process.execPath, ["probe.mjs"], consumer, { ...environment, PATH: consumer })) as { sdk: string; extension_import: boolean; encoded_rows: boolean; native_comma: boolean; non_git: boolean };
-    assert.deepEqual(result, { sdk: minimum, extension_import: true, encoded_rows: true, native_comma: true, non_git: true });
+    const result = JSON.parse(run(process.execPath, ["probe.mjs"], consumer, { ...environment, PATH: consumer })) as { sdk: string; extension_import: boolean; encoded_rows: boolean; native_comma: boolean; json_tag: boolean; non_git: boolean };
+    assert.deepEqual(result, { sdk: minimum, extension_import: true, encoded_rows: true, native_comma: true, json_tag: true, non_git: true });
   } finally { rmSync(scratch, { recursive: true, force: true }); }
 });
