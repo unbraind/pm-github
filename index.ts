@@ -40,6 +40,11 @@ import {
 import { refreshChanges, runRefresh } from "./refresh.ts";
 import { exploreGithubIdentities, planGithubIdentityRepair, applyGithubIdentityRepair } from "./identity.ts";
 import { planGithubLabelMigration, readLabelMigrationJson, type GithubLabelMigrationInput } from "./labels.ts";
+import { captureGithubDiscussion, refuseDiscussion } from "./discussions.ts";
+export { captureGithubDiscussion, readGithubDiscussionComment, validateDiscussionCaptureReport } from "./discussions.ts";
+export type { DiscussionCaptureOptions, DiscussionCommentReader, DiscussionRefusalCode } from "./discussions.ts";
+export type { DiscussionCaptureInput, DiscussionCaptureReport, DiscussionDecisionEvidence } from "./discussion-schema.ts";
+import type { DiscussionCaptureInput } from "./discussion-schema.ts";
 export { planGithubLabelMigration, readGithubLabelCatalog, validateGithubLabelMigrationReport } from "./labels.ts";
 export type { GithubLabelMigrationInput, GithubLabelCatalog, GithubLabelCatalogReader, GithubLabelMigrationReport, LabelMigrationRefusalCode } from "./labels.ts";
 export { exploreGithubIdentities, planGithubIdentityRepair, applyGithubIdentityRepair } from "./identity.ts";
@@ -7045,6 +7050,26 @@ export default defineExtension({
           limit: options.limit === undefined ? undefined : Number(options.limit),
           offset: options.offset === undefined ? undefined : Number(options.offset),
           identity: typeof options.identity === "string" ? options.identity : undefined,
+        });
+      },
+    });
+
+    api.registerCommand({
+      name: "github discussion capture",
+      description: "Preview explicitly marked issue-comment spans as native Decisions. Apply only the reviewed digest; source instructions remain quoted data.",
+      flags: [
+        { long: "--input", value_name: "file", description: "Strict JSON selection: repo, issue, item, selections with comment/start/end/quote/marked:true" },
+        { long: "--approve", value_name: "digest", description: "Apply the exact reviewed preview, re-reading every source and native target" },
+        { long: "--max-output-bytes", value_name: "N", description: "Complete JSON receipt budget, integer 1024..131072 (default 65536)" },
+      ],
+      async run(ctx: CommandHandlerContext) {
+        const { input, approve, maxOutputBytes } = ctx.options;
+        if (typeof input !== "string" || approve !== undefined && typeof approve !== "string") refuseDiscussion("invalid_selection", "Supply --input with a strict JSON selection document and an optional full --approve digest.");
+        let selection: unknown;
+        try { selection = readLabelMigrationJson(input); }
+        catch { refuseDiscussion("invalid_selection", "Supply a readable bounded regular JSON selection file; see pm github discussion capture --help."); }
+        return captureGithubDiscussion(ctx.pm_root, selection as DiscussionCaptureInput, ctx.sdk, {
+          approval: approve, maxOutputBytes: maxOutputBytes === undefined ? undefined : Number(maxOutputBytes),
         });
       },
     });

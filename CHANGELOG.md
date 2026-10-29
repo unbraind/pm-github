@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Capture selected GitHub discussion passages as reviewed native Decisions ([pm-github-selected-discussion-decisions](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-selected-discussion-decisions.toon))
+
 ## 2026.10.28 - 2026-10-28
 
 ### Added

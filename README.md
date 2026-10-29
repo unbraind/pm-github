@@ -300,6 +300,28 @@ in `after` and expose its complete native expansion in `after_tags`, including
 an empty array when the destination produces no tags. Approval checks use the
 same conversion and refuse unresolved tag choices across every affected row.
 
+## Selected discussion decision capture
+
+Turn explicitly selected GitHub **issue-comment** passages into reviewable native
+Decisions with author attribution, source revision and exact quoted spans. Start
+with [the selection example](docs/discussion-capture-example.json), then review:
+
+```sh
+pm github discussion capture --input selection.json --json
+pm github discussion capture --input selection.json --approve REVIEWED_DIGEST --json
+```
+
+Only spans carrying `marked: true` are eligible. Empty selections write nothing;
+unmarked prose is never interpreted as a decision. Apply re-reads current source
+and native history, refuses stale approvals, and preserves existing captures on
+retry. Quotes remain inert JSON data. Independent invalid records have bounded
+refusal/remedy rows. TOON and JSON expose the same compact report.
+
+The typed SDK surface is `captureGithubDiscussion(pmRoot, input, hostSdk, options)`.
+It uses the host-injected SDK client; no local git repository is needed. Read the
+[contract and SDK example](docs/discussion-capture.md) for exact offsets, bounds,
+retry semantics and the remaining optimistic read-to-create concurrency window.
+
 ## Without git
 
 With an explicit repository, GitHub import, export, refresh, sync, project commands,
