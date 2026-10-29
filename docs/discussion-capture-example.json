@@ -1,0 +1,14 @@
+{
+  "repo": "example/project",
+  "issue": 42,
+  "item": "project-context",
+  "selections": [
+    {
+      "comment": 123456,
+      "start": 0,
+      "end": 19,
+      "quote": "Use the native SDK.",
+      "marked": true
+    }
+  ]
+}

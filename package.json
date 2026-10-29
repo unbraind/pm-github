@@ -17,7 +17,9 @@
     "dist/",
     "manifest.json",
     "README.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "docs/discussion-capture.md",
+    "docs/discussion-capture-example.json"
   ],
   "scripts": {
     "build": "tsc",
@@ -101,10 +103,12 @@
     },
     "docs": [
       "README.md",
-      "CHANGELOG.md"
+      "CHANGELOG.md",
+      "docs/discussion-capture.md"
     ],
     "examples": [
-      "README.md"
+      "README.md",
+      "docs/discussion-capture-example.json"
     ]
   },
   "publishConfig": {
