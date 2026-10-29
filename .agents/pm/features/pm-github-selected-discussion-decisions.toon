@@ -6,10 +6,10 @@ status: in_progress
 priority: 2
 tags[4]: changelog-unreleased,decisions,discussion,evidence
 created_at: "2026-10-29T06:56:09.992Z"
-updated_at: "2026-10-29T08:23:14.892Z"
+updated_at: "2026-10-29T08:47:23.757Z"
 author: codex-agent
 acceptance_criteria: Unmarked prose creates no decisions; editing a selected comment makes apply stale; repeated approved capture creates no duplicate observation; source instructions remain inert data; strict bounded inputs and outputs; model-based SDK read-back over at least 500 seeded random sequences; no-git and packed npm/Bun acceptance; exact-head CI release gates
-comments[10]{created_at,author,text}:
+comments[11]{created_at,author,text}:
   "2026-10-29T06:56:44.664Z",codex-agent,"Overlap checked against current core declarations and sibling sources: pm-review/src/tracker.ts owns PR findings; pm-linear/index.ts captureLinearThread owns Linear evidence notes; pm-evidence/src/evidence.ts owns citation resolution/review. This adds only selected GitHub issue-comment decisions. Plan: one explicitly marked UTF-16 span per independent native Decision, canonical source URL plus exact JSON evidence, deterministic identity, explicit parent/scope and registry-derived status; preview and apply share preparation. Re-read SDK target history and selected remote comment immediately before each create. No transaction isolation claim: ordinary writers can still race between the last read and SDK create; deterministic IDs prevent duplicate creation. No multi-step destructive compensation or frozen recovery plans."
   "2026-10-29T07:06:11.279Z",codex-agent,"Implementation now shares a strict selection/evidence/report schema across SDK and CLI. Exact quotes live as JSON data in native Decision bodies, with attributed GitHub source revision and native linked docs. Focused real non-git tests cover stale source edits, parent ABA, independent bad records, retries, preservation of edited targets and competing parent writes at every observable boundary. SDK create appends explicit-unset audit metadata to history messages; replay recognition now respects that supported suffix while retaining the full history revision guard."
   "2026-10-29T07:20:41.491Z",codex-agent,"Seeded state model passed 500 sequences (seed 0xdec1510): 1741 operations, 337 Decision creates, 162 older-input replays, 49 stale-source refusals. State is read through the SDK and compared with a second real SDK tracker, including native fields and relationships. Native semantic staging was subsequently added through previewItemMutations using the exact create producer; it catches project-specific create requirements without source writes. The model will be rerun with this final staging path before handoff. Targeted coverage currently covers every new line/function; HTTP/history boundary cases complete branch evidence next."
@@ -20,6 +20,7 @@ comments[10]{created_at,author,text}:
   "2026-10-29T08:09:21.760Z",codex-agent,"The final bounded 500-sequence model and focused native suite passed through the linked pm test command. Additional hardening now admits SDK-supported Unicode/slash-bearing status names and GitHub bot attribution, rejects coerced approval controls, and reads tombstone history even when a target document is absent. Deleted targets invalidate old approvals and are preserved rather than resurrected. Canonical native ID whitespace aliases remain delegated to the SDK; native ID characters are still constrained by the SDK itself. Final targeted cases and unchanged full CI gates verify these additions."
   "2026-10-29T08:19:46.418Z",codex-agent,"Final targeted run through the pinned pm test command passes 16/16, with zero failures/skips and 100% statements/branches/functions/lines for discussion-schema.ts and discussions.ts under c8. The earlier linked 500-sequence model run also passed. Packed acceptance on CLI 2026.10.28 passes all five launchers (project-local, npm global, Bun global, npx, native Bun bunx): each creates one Decision, repeats unchanged and reads exact evidence through the installed host. Tested archive SHA-256: 18829c1e76c6e76174f878febf864cabba590ad3189f1e1b569cd301a791a8fb. Typecheck, test typecheck, lint, docstrings and zero-duplication gate pass; package-wide npm/Bun release evidence will come from exact-head CI."
   "2026-10-29T08:23:14.892Z",codex-agent,"Local strict health reports no history drift or integrity failure, but refuses a host/extension SDK version skew (2026.10.25 versus 2026.10.28); four older in-progress records are advisory. Dependency pins remain unchanged per the queue rule. The same main base passed fresh CI run 40808490467; this PR will use fresh exact-head CI for authoritative tracker health and package-wide npm/Bun release evidence. The local warning is retained rather than hidden or repaired."
+  "2026-10-29T08:47:21.886Z",codex-agent,"Ready PR: https://github.com/unbraind/pm-github/pull/195 . Implementation commit 3a893b6d7b267133503630c6709f549b20a320f2 has fresh tracker health passing on Node 22/26 and CodeQL passing at https://github.com/unbraind/pm-github/actions/runs/40842368469 . At this receipt, all four npm/Bun release-gate jobs remain pending in https://github.com/unbraind/pm-github/actions/runs/40842368383 . The live PR checks link carries authoritative results for the current head after this tracking-only receipt. The original 30-minute CI wait cutoff is retained; no pending gate is counted as passed. The feature and SDK follow-up remain open for orchestrator verification."
 files[9]{path,scope}:
   discussion-schema.ts,project
   discussions.ts,project
@@ -33,8 +34,14 @@ files[9]{path,scope}:
 tests[2]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   node --test --test-concurrency=1 test/discussions.test.ts test/discussion-model.test.ts,project,codex-agent,"2026-10-29T07:28:35.521Z",local_mutation,feat/selected-discussion-decision-capture
   node --test --test-concurrency=1 test/discussions.test.ts,project,codex-agent,"2026-10-29T08:09:25.766Z",local_mutation,feat/selected-discussion-decision-capture
-docs[3]{path,scope}:
-  docs/discussion-capture-example.json,project
-  docs/discussion-capture.md,project
-  README.md,project
+docs[4]:
+  - path: docs/discussion-capture-example.json
+    scope: project
+  - path: docs/discussion-capture.md
+    scope: project
+  - path: "https://github.com/unbraind/pm-github/pull/195/checks"
+    scope: project
+    note: Live exact-head CI checks and release-gate run links
+  - path: README.md
+    scope: project
 body: ""
