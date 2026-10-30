@@ -3,11 +3,13 @@ title: Make scheduled closeout and sync refusals actionable
 description: "Scheduled fleet closeout fails behind a generic workflow refusal; sync also fails import or repeat-idempotency gates. Diagnose real scheduled jobs in at least four repositories and repair package-owned causes without editing callers. Related historical closeout policy work: pm-github-f1ev and pm-github-2o9k."
 type: Issue
 pm_format_version: 2
-status: in_progress
+status: closed
 priority: 1
 tags[5]: closeout,diagnostics,"gh:unbraind/pm-cli#1628",github-actions,sync
 created_at: "2026-10-27T03:21:33.321Z"
-updated_at: "2026-10-30T06:56:05.508Z"
+updated_at: "2026-10-30T09:28:08.142Z"
+closed_at: "2026-10-30T09:28:07.215Z"
+completed_at: "2026-10-30T08:48:28.000Z"
 author: codex-agent
 acceptance_criteria: "Record exact scheduled run evidence and preserve safe actionable closeout diagnostics. Daily sync continuation: unchanged normalized GitHub issues perform zero item/history writes in plain and atomic mixed batches; seeded random repeated-import properties and preview/apply privacy parity fail on behavioral revert; must-allow and must-refuse corpora retain fail-closed paths and contact addresses; classify all findings in eight repositories without matched values; restore install bookkeeping byte-for-byte; one safe stable failure tracking issue updates on failure and closes on success with caller permission requirements documented; gated read-only non-git real-data validation for pm-gantt-chart, pm-web and pm-rl; unchanged full npm and Bun release gates; link code, tests, docs and upstream SDK reproduction; commit tracker with code and deliver an unmerged PR with CI evidence."
 comments[57]{created_at,author,text}:
@@ -198,4 +200,5 @@ docs[3]{path,scope}:
   docs/daily-sync-recovery.md,project
   docs/scheduled-workflow-refusals.md,project
   README.md,project
+close_reason: "Delivered by PR #198 (4568f2e): Fix daily gated issue sync idempotency, privacy precision and alerts"
 body: ""

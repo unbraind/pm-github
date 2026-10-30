@@ -2,13 +2,16 @@ id: pm-github-selected-discussion-decisions
 title: Capture selected GitHub discussion passages as reviewed native Decisions
 description: "Own GitHub issue-comment decision capture, using native SDK persistence and source citations. Overlap rechecked: core stores Decisions and notes; pm-review imports PR reviewer findings; pm-linear captures its selected Linear threads; pm-evidence owns citation resolution. None owns explicitly marked GitHub issue-comment spans."
 type: Feature
-status: in_progress
+status: closed
 priority: 2
 tags[4]: changelog-unreleased,decisions,discussion,evidence
 created_at: "2026-10-29T06:56:09.992Z"
-updated_at: "2026-10-29T08:47:23.757Z"
+updated_at: "2026-10-30T09:28:03.078Z"
+closed_at: "2026-10-30T09:28:01.462Z"
+completed_at: "2026-10-29T09:55:16.000Z"
 author: codex-agent
 acceptance_criteria: Unmarked prose creates no decisions; editing a selected comment makes apply stale; repeated approved capture creates no duplicate observation; source instructions remain inert data; strict bounded inputs and outputs; model-based SDK read-back over at least 500 seeded random sequences; no-git and packed npm/Bun acceptance; exact-head CI release gates
+release: 2026.10.29
 comments[11]{created_at,author,text}:
   "2026-10-29T06:56:44.664Z",codex-agent,"Overlap checked against current core declarations and sibling sources: pm-review/src/tracker.ts owns PR findings; pm-linear/index.ts captureLinearThread owns Linear evidence notes; pm-evidence/src/evidence.ts owns citation resolution/review. This adds only selected GitHub issue-comment decisions. Plan: one explicitly marked UTF-16 span per independent native Decision, canonical source URL plus exact JSON evidence, deterministic identity, explicit parent/scope and registry-derived status; preview and apply share preparation. Re-read SDK target history and selected remote comment immediately before each create. No transaction isolation claim: ordinary writers can still race between the last read and SDK create; deterministic IDs prevent duplicate creation. No multi-step destructive compensation or frozen recovery plans."
   "2026-10-29T07:06:11.279Z",codex-agent,"Implementation now shares a strict selection/evidence/report schema across SDK and CLI. Exact quotes live as JSON data in native Decision bodies, with attributed GitHub source revision and native linked docs. Focused real non-git tests cover stale source edits, parent ABA, independent bad records, retries, preservation of edited targets and competing parent writes at every observable boundary. SDK create appends explicit-unset audit metadata to history messages; replay recognition now respects that supported suffix while retaining the full history revision guard."
@@ -44,4 +47,5 @@ docs[4]:
     note: Live exact-head CI checks and release-gate run links
   - path: README.md
     scope: project
+close_reason: "Delivered by PR #195 (9d8401b): Capture selected GitHub issue passages as reviewed native Decisions"
 body: ""

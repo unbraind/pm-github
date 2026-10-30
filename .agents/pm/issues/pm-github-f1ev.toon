@@ -2,13 +2,17 @@ id: pm-github-f1ev
 title: Refuse closeout when required-check metadata is unverified
 description: "Fix https://github.com/unbraind/pm-github/issues/138. Require complete protection metadata or explicit caller-declared contexts; harden caller permissions."
 type: Issue
-status: in_progress
+pm_format_version: 2
+status: closed
 priority: 1
 tags[2]: closeout,validation
 created_at: "2026-10-16T16:04:00.890Z"
-updated_at: "2026-10-16T21:41:48.600Z"
+updated_at: "2026-10-30T09:28:10.998Z"
+closed_at: "2026-10-30T09:28:09.509Z"
+completed_at: "2026-10-16T22:35:17.000Z"
 author: codex-agent
 acceptance_criteria: Unavailable metadata without declarations never closes or publishes; declared contexts require success; metadata-backed behavior remains unchanged; npm and Bun release gates pass.
+release: 2026.10.19
 comments[21]{created_at,author,text}:
   "2026-10-16T16:04:15.081Z",codex-agent,"Plan: distinguish unavailable protection metadata from a readable empty policy. Refuse with required_checks_unverified unless required-checks declares contexts; retain readable app-bound requirements. Exercise real command and workflow shell against injected HTTP evidence and real trackers. Keep workflow edits minimal around open PR #139."
   "2026-10-16T16:08:21.292Z",codex-agent,"Implementation distinguishes metadata gaps from a readable empty policy. required_checks_unverified blocks workflow publication; required-checks verifies declared contexts plus readable app-bound requirements. Regression coverage uses actual workflow bash, a packed extension, injected HTTP APIs, real SDK tracker mutations and an isolated Git remote. Caller write scopes now belong only to gated-closeout."
@@ -59,4 +63,5 @@ tests[2]:
 docs[2]{path,scope}:
   docs/closeout-workflow-caller.yml,project
   README.md,project
+close_reason: "Delivered by PR #140 (247b95e): Never close items on unverified required checks when branch-protection metadata is unavailable"
 body: ""

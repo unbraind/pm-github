@@ -2,13 +2,16 @@ id: pm-github-2e38
 title: "Preview exact GitHub label migration impacts (BREAKING: PM CLI 2026.10.17 minimum)"
 description: "Plan provider label renames and explicit consolidations across stored tags, declared import filters and local mappings, with exact identity evidence, bounded output and stale-plan refusal."
 type: Feature
-status: in_progress
+status: closed
 priority: 2
 tags[4]: changelog-unreleased,labels,migration,planning
 created_at: "2026-10-27T06:17:55.248Z"
-updated_at: "2026-10-27T18:53:28.815Z"
+updated_at: "2026-10-30T09:27:56.831Z"
+closed_at: "2026-10-30T09:27:55.284Z"
+completed_at: "2026-10-27T20:16:09.000Z"
 author: codex-agent
 acceptance_criteria: "Same display intent never merges labels by inference; 1000 items yield complete counts and bounded affected rows; stale provider label IDs invalidate application plans; typed SDK and CLI, strict boundaries, non-git read-only validation and seeded state properties."
+release: 2026.10.28
 comments[43]{created_at,author,text}:
   "2026-10-27T06:18:14.443Z",codex-agent,"Overlap rechecked against installed core SDK bulk mutations and sibling pm-linear/pm-jira docs. Core edits local tags; github identity explores competing ownership; Linear negotiates team schema. None previews a GitHub label policy across exact provider IDs, stored tag occurrences, declared import filters and export mappings. Scope: read-only plans plus fresh revalidation; no new importer, exporter, sync writer, journal, resolver or remote mutation. Existing importer stores label names rather than label IDs, so name matches are reported as unverified occurrences requiring an explicit choice, never inferred consolidation. Acceptance covers distinct same-intent IDs, complete 1000-item counts with bounded rows, stale IDs/revisions, strict input/output schemas, real non-git SDK state and packed consumers. Registry reports CLI 2026.10.27; repo pin remains 2026.10.20 per queue rule."
   "2026-10-27T06:29:10.429Z",codex-agent,"Implementation adds a read-only typed planner and github labels plan command. Exact node IDs and expected provider names select identities; SDK toImportTags finds native normalized occurrences without merging provider IDs. Choices cover tag/filter/mapping policy; complete counts accompany bounded rows. Revalidation reads fresh catalogs and current SDK revisions rather than replaying saved mutations. The 1000-item read-only non-git fixture passes. Targeted boundary tests cover sparse/extreme inputs, same-intent IDs, stale deleted/recreated labels and revision changes; seeded 500-sequence model checks are being completed. No stateful writer/journal/import/export/sync path is introduced."
@@ -184,4 +187,5 @@ docs[5]{path,scope}:
   docs/label-migrations.md,project
   docs/sdk-minimum.md,project
   README.md,project
+close_reason: "Delivered by PR #188 (faa035e): Preview exact GitHub label migration impacts"
 body: ""
