@@ -46,6 +46,8 @@ function fixture(body: string | null, override?: MockGithubHandler): MockGithubH
     else if (url.includes("/pulls/")) jsonResponse(response, 200, pull(body, { number: Number(url.split("/").at(-1)), html_url: `https://github.com/${repo}/pull/${url.split("/").at(-1)}` }));
     else if (url.includes("/rules/branches/")) jsonResponse(response, 200, []);
     else if (url.includes("/protection/")) jsonResponse(response, 200, { contexts: ["CI"], checks: [{ context: "CI", app_id: 7 }] });
+    // The branch summary stays unreadable unless a test grants it, so denied protection keeps meaning "unavailable".
+    else if (/\/branches\/[^/?]+$/.test(url)) jsonResponse(response, 403, {});
     else if (url.includes("/check-runs")) jsonResponse(response, 200, { total_count: 1, check_runs: [run()] });
     else if (url.includes("/statuses")) jsonResponse(response, 200, []);
     else jsonResponse(response, 400, {});
@@ -667,6 +669,39 @@ test("unreadable protection sources refuse without hiding invalid authorization"
       assert.equal(report.plan[0]!.action, "needs_review");
     });
   }
+}));
+
+test("the branch summary supplies classic required checks when protection is administration-only", async () => tracker(async (root, ids) => {
+  const required = { enforcement_level: "everyone", contexts: ["CI"], checks: [{ context: "CI", app_id: 7 }] };
+  const cases = [
+    { name: "required context passes", summary: { protected: true, protection: { enabled: true, required_status_checks: required } }, app: 7, rule: "required", code: "head_checks_passed" },
+    { name: "summary app binding holds", summary: { protected: true, protection: { enabled: true, required_status_checks: required } }, app: 8, rule: "required", code: "head_checks_failed" },
+    { name: "unprotected branch", summary: { protected: false, protection: { enabled: false } }, app: 8, rule: "fallback", code: "head_checks_passed" },
+    { name: "required checks switched off", summary: { protected: true, protection: { enabled: true, required_status_checks: { ...required, enforcement_level: "off" } } }, app: 8, rule: "fallback", code: "head_checks_passed" },
+    { name: "protected without check details", summary: { protected: true, protection: { enabled: true } }, app: 7, rule: "unavailable", code: "required_checks_unverified" },
+    { name: "protected without a protection object", summary: { protected: true }, app: 7, rule: "unavailable", code: "required_checks_unverified" },
+    { name: "unverifiable protected flag", summary: { protected: "yes" }, app: 7, rule: "unavailable", code: "head_evidence_unavailable" },
+  ];
+  for (const scenario of cases) {
+    await withMockGithub(fixture(link(ids[0]!), (request, response) => {
+      // GITHUB_TOKEN reads the branch summary but never the administration-only protection endpoint.
+      if (request.url!.includes("/protection/")) jsonResponse(response, 403, {});
+      else if (/\/branches\/main$/.test(request.url!)) jsonResponse(response, 200, { name: "main", ...scenario.summary });
+      else if (request.url!.includes("/check-runs")) jsonResponse(response, 200, { total_count: 1, check_runs: [run({ app: { id: scenario.app } })] });
+    }), async () => {
+      const gate = await checkCloseoutHead(api(), repo, pull(link(ids[0]!)));
+      assert.equal(gate.rule, scenario.rule, scenario.name);
+      assert.equal(gate.code, scenario.code, scenario.name);
+    });
+  }
+  await withMockGithub(fixture(link(ids[0]!), (request, response) => {
+    if (request.url!.includes("/protection/")) jsonResponse(response, 403, {});
+    else if (/\/branches\/main$/.test(request.url!)) jsonResponse(response, 200, cases[0]!.summary);
+  }), async () => {
+    const report = await closeout(root, { pr: "42", apply: true });
+    assert.equal(report.closed, 1, "a scheduled caller closes with no declared required-checks input");
+    assert.equal(report.checks[0]!.reason, "Required head checks concluded success (branch-protection and ruleset rule).");
+  });
 }));
 
 test("legacy type casing preserves the Epic closeout exclusion", async () => tracker(async root => {

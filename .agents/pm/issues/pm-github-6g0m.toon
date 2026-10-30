@@ -1,0 +1,25 @@
+id: pm-github-6g0m
+title: Scheduled closeout reads required checks from the branch summary instead of failing every fleet caller
+description: "Every fleet caller of pm-github-closeout.yml fails its daily run once it has an item to close (pm-rust and pm-jira since at least 10-25, pm-lint since 10-28). GITHUB_TOKEN cannot read the administration-only classic protection endpoint, no caller declares required-checks, so each closable row becomes required_checks_unverified and the workflow refuses. The branch summary (GET /repos/{owner}/{repo}/branches/{branch}) returns protection.required_status_checks with repository read access (verified anonymously on unbraind/pm-lint: contexts and app bindings; the protection endpoint returns 401)."
+type: Issue
+status: in_progress
+priority: 1
+tags[3]: ci,closeout,github-token
+created_at: "2026-10-30T19:11:05.310Z"
+updated_at: "2026-10-30T19:47:47.878Z"
+author: claude-orchestrator
+acceptance_criteria: "Classic protection 403 falls back to the branch summary's required_status_checks, including app bindings; Unprotected branches and enforcement_level off contribute no classic requirements; A protected summary without required-check details stays unavailable; an unverifiable protected flag is head_evidence_unavailable; A scheduled caller closes a delivered item with no declared required-checks"
+expected_result: Scheduled closeout with GITHUB_TOKEN verifies classic required checks from the branch summary and closes delivered items without a required-checks input.
+actual_result: "Daily closeout fails fleet-wide: Closeout refused; required_checks_unverified for every closable row."
+comments[1]{created_at,author,text}:
+  "2026-10-30T19:47:47.878Z",claude-orchestrator,"Orchestrator implementation: classicRequirements() reads the protection endpoint, then the branch summary on 403/404. Tests: 'the branch summary supplies classic required checks when protection is administration-only' covers 7 summary shapes (required context passes; app binding holds; unprotected; enforcement off; protected without details -> unavailable; no protection object -> unavailable; invalid protected flag -> head_evidence_unavailable) plus an apply run that closes with no declared required-checks. Revert proof: returning before the summary read fails 'required context passes'. Closeout suites 553/553 (closeout*, changelog-placement, scheduled-refusals); lint, typecheck, docstring, duplication, privacy, changelog:check pass. Real data: pm-lint dry-run and apply with the owner token plan/close pm-lint-4tem from PR #41; anonymous GET /repos/unbraind/pm-lint/branches/main returns required contexts test (22), test (26), codeql while the protection endpoint returns 401."
+files[6]{path,scope}:
+  closeout.ts,project
+  docs/bot-pr-automation.md,project
+  docs/scheduled-workflow-refusals.md,project
+  README.md,project
+  test/closeout-selection.test.ts,project
+  test/closeout.test.ts,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test test/closeout.test.ts,project,claude-orchestrator,"2026-10-30T19:11:10.551Z",local_mutation,fix/closeout-required-checks-from-branch-summary
+body: ""

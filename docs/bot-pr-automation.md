@@ -113,9 +113,9 @@ above; App setup removes that approval step for unattended operation.
 ## Existing closeout evidence policy
 
 Current main also fails closed when branch-protection metadata cannot be read
-and `required-checks` is empty. The audited closeout callers have no such input,
-so adopting this release also needs the one-time newline-separated required
-context declaration. This policy comes from PR #140 and is preserved here;
+and `required-checks` is empty. Classic required checks are read from the branch
+summary when the administration-only endpoint refuses `GITHUB_TOKEN`, so the
+audited closeout callers need no declaration. This policy comes from PR #140 and is preserved here;
 workflow selection is not proof of which checks branch protection requires.
 The audit read protection with the operator credential, not GITHUB_TOKEN.
 

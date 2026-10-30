@@ -100,7 +100,13 @@ latest status. Check-run, status and ruleset pages are fully read. Rulesets are
 read through GitHub's [effective branch rules API](https://docs.github.com/en/rest/repos/rules#get-rules-for-a-branch).
 The check policy reflects the rules readable at invocation time.
 
-When either protection source is unreadable (HTTP 403/404), the row is ineligible
+Classic required checks come from the administration-only protection endpoint when the
+token can read it. Otherwise they come from the [branch summary](https://docs.github.com/en/rest/branches/branches#get-a-branch)
+(`protection.required_status_checks`), which repository read access returns. Scheduled
+callers using `GITHUB_TOKEN` therefore need no declared names. A protected branch whose
+summary omits its required checks stays unavailable.
+
+When classic or ruleset requirements stay unreadable (HTTP 403/404), the row is ineligible
 with `required_checks_unverified`. Observed green runs cannot prove that every
 required context ran. Supply `--required-checks $'test (22)\ntest (26)'` (Bash) to declare a
 newline-separated set of required context names when metadata is unavailable.
@@ -915,9 +921,10 @@ such as `trunk` or `release/stable`. The caller's pinned PM CLI comes from
 inside the workspace and contain `package.json`. The SDK resolves the tracker
 from the repository root. The exact release version resolved from the workflow commit is installed and verified.
 
-`required-checks` is an optional workflow input with an empty default. Set it to
-all required context names, **one context name per line**, when the token cannot read
-branch-protection or ruleset metadata, as is common with `GITHUB_TOKEN`:
+`required-checks` is an optional workflow input with an empty default. `GITHUB_TOKEN`
+reads classic required checks through the branch summary, so callers usually leave it
+empty. Set it to all required context names, **one context name per line**, only when the
+token can read neither the branch summary's required checks nor the ruleset metadata:
 
 ```yaml
 with:
