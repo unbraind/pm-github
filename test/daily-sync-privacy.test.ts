@@ -12,9 +12,9 @@ const mustAllow = [
 ];
 const mustRefuse = [
   ...["home", "private", "tmp", "etc", "mnt", "Users"].map(root => "/" + root + "/fixture/report"),
-  "C:" + "\\Users\\fixture\\report.txt", "C:" + "/Users/fixture/report.txt", "fixture.person@example.invalid",
+  "C:" + "\\Users\\fixture\\report.txt", "C:" + "/Users" + "/fixture/report.txt", "fixture.person@example.invalid",
   "ssh://person@example.invalid/repo.git", "git@github.com", "git@github.com: contact", "ssh://git@github.com: contact",
-  'const path = "/' + 'home sample/";', "const re = /home/fixture/;", "const re = /private paused = true;",
+  'const path = "/' + 'home sample/";', "const re = /" + "home" + "/fixture/;", "const re = /private paused = true;",
 ];
 
 test("must-allow corpus covers regex literals, URL and repository paths, API routes and bot identities", () => {
