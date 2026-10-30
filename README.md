@@ -924,7 +924,8 @@ from the repository root. The exact release version resolved from the workflow c
 `required-checks` is an optional workflow input with an empty default. `GITHUB_TOKEN`
 reads classic required checks through the branch summary, so callers usually leave it
 empty. Set it to all required context names, **one context name per line**, only when the
-token can read neither the branch summary's required checks nor the ruleset metadata:
+token cannot read either source: the classic required checks (protection endpoint or branch
+summary) or the ruleset metadata:
 
 ```yaml
 with:
