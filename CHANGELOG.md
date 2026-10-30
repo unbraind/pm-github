@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Make scheduled closeout and sync refusals actionable ([pm-github-3it2](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-3it2.toon))
+
 ## 2026.10.29 - 2026-10-29
 
 ### Added
@@ -14,9 +20,17 @@
 
 ## 2026.10.26 - 2026-10-26
 
+### Added
+
+- Validate selected GitHub issue forms before export ([pm-github-ix5j](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-ix5j.toon))
+
 ### Changed
 
 - Use the pm SDK for GitHub import lifecycle persistence ([pm-github-d26g](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-d26g.toon))
+
+### Other
+
+- Point the npm homepage at the package catalog and link the author ([pm-github-o846](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-o846.toon))
 
 ## 2026.10.25 - 2026-10-25
 
@@ -74,6 +88,12 @@
 - Closed: Gate historical identities and host-path privacy across every Git object ([pm-github-zqad](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-zqad.toon))
 - Closed: The daily release cannot build a changelog once the tracker outgrows the default output budget ([pm-github-ypi5](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-ypi5.toon))
 
+## 2026.10.19 - 2026-10-19
+
+### Fixed
+
+- Refuse closeout when required-check metadata is unverified ([pm-github-f1ev](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-f1ev.toon))
+
 ## 2026.10.16 - 2026-10-16
 
 ### Added
@@ -91,6 +111,10 @@
 
 - Close pm items delivered by merged pull requests with verifiable GitHub evidence ([pm-github-t4i2](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-t4i2.toon))
 - Regenerate caller changelogs and dispatch required CI for gated sync PRs ([pm-github-wrmt](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-wrmt.toon))
+
+### Fixed
+
+- closeout cannot close items in trackers that require structured close fields ([pm-github-2o9k](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-2o9k.toon))
 
 ## 2026.10.14 - 2026-10-14
 

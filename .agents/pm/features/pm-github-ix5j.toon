@@ -2,13 +2,19 @@ id: pm-github-ix5j
 title: Validate selected GitHub issue forms before export
 description: "Acceptance: compile explicitly selected repository issue forms into required dropdown/text answers, supported validators and explicit pm-field bindings; refuse unsupported constructs; missing answers produce zero remote writes and one bounded repair checklist. Provide typed SDK and CLI, compact TOON/JSON, docs and example, non-git real public tracker validation, seeded model-based tests and unchanged npm/Bun CI release gates."
 type: Feature
-status: in_progress
+status: closed
 priority: 2
 tags[3]: export,issue-forms,validation
 created_at: "2026-10-25T22:35:34.611Z"
-updated_at: "2026-10-26T06:56:21.729Z"
+updated_at: "2026-10-30T11:28:58.961Z"
+closed_at: "2026-10-30T09:27:58.188Z"
+completed_at: "2026-10-26T08:11:00.000Z"
 author: codex-agent
 acceptance_criteria: All required dropdown and text inputs accounted for; unsupported constructs explicitly refused; missing required answers yield zero remote writes and one bounded repair checklist; typed SDK/CLI and compact output; docs/example; non-git public tracker proof; seeded properties; npm and Bun release gates unchanged; package-wide external-name lookups use own-property semantics without name denylists; prototype and Unicode IDs and choices match a Map model across 500 random forms; Object.prototype unchanged and every missing-required export has zero remote writes; answer-lookup behavioral revert fails the property test.
+release: 2026.10.26
+resolution: "Delivered by PR #182 (38b69ae), merged to main."
+expected_result: Selected GitHub issue forms are validated before items are exported.
+actual_result: PR #182 (38b69ae) merged with green CI and a finished review; the behavior ships in release 2026.10.26.
 comments[15]{created_at,author,text}:
   "2026-10-25T22:36:13.527Z",codex-agent,"Overlap rechecked against installed core SDK schema/completion APIs, the CLI example importer, and sibling GitHub/Jira/Linear/presets implementations: core validates native items; Projects v2 fields describe board columns. No repository issue-form completion adapter found. Implement a read-only form preflight and export guard; existing export identity/idempotency defects remain outside scope. No journal, outbox, status interpretation or shared mutable state will be added."
   "2026-10-25T22:44:24.760Z",codex-agent,"Implemented a strict bounded issue-form boundary, typed compiler/completion SDK, current-state native SDK reads, compact CLI and batch export guard. Supported text/dropdown validators are explicit; unsupported constructs refuse. An initial zero-write test exposed SDK get context-usage journaling, so completion now uses SDK locateItem/readLocatedItem and avoids that write. Targeted schema, HTTP and no-git tests cover the corrected boundary; seeded model validation is running."
@@ -53,4 +59,5 @@ docs[4]{path,scope}:
   docs/issue-form-bindings.json,project
   docs/own-property-audit.md,project
   README.md,project
+close_reason: "Delivered by PR #182 (38b69ae): Validate GitHub issue-form answers before exporting items"
 body: ""

@@ -2,13 +2,20 @@ id: pm-github-2o9k
 title: closeout cannot close items in trackers that require structured close fields
 description: "Found while dogfooding pm github closeout on 2026-10-15. pm-rust's tracker enforces strict close validation, so pm close requires resolution, expected_result and actual_result. closeout passes only a close reason, so pm github closeout --apply on pm-rust PR 81 failed on the first item ('missing resolution, expected_result, actual_result'), wrote nothing (it failed closed) and left all seven delivered items open; the orchestrator closed them by hand. closeout should populate the structured fields from the same verifiable GitHub facts it already uses (resolution: delivered by the PR, with merge and head SHAs; expected_result: the item's acceptance criteria when present; actual_result: merged, with the passing required checks), never from PR body or comment text, and should report clearly when a tracker policy still refuses the close."
 type: Issue
-status: in_progress
+pm_format_version: 2
+status: closed
 priority: 1
 tags[2]: closeout,validation
 created_at: "2026-10-15T03:53:05.372Z"
-updated_at: "2026-10-15T10:25:51.453Z"
+updated_at: "2026-10-30T11:29:01.474Z"
+closed_at: "2026-10-30T09:28:04.460Z"
+completed_at: "2026-10-15T11:31:00.000Z"
 author: claude-hub
 acceptance_criteria: "On a tracker with strict close validation, closeout --apply closes every eligible item with resolution, expected_result and actual_result derived only from GitHub facts and the item's own acceptance criteria. When an item has no acceptance criteria, expected_result falls back to a fixed sentence built only from GitHub facts (for example: delivered by the linked pull request, merged with its required checks passing). Generated fields never restate a defect-shaped item title as the delivered behaviour, and contain no PR body or comment text. A tracker that refuses the close for another reason yields a skip row with that reason instead of aborting the remaining plan. Tests cover strict and default validation trackers, and items with and without acceptance criteria."
+release: 2026.10.15
+resolution: "Delivered by PR #126 (1d42805), merged to main."
+expected_result: Closeout can close items in trackers that require structured close fields.
+actual_result: PR #126 (1d42805) merged with green CI and a finished review; the behavior ships in release 2026.10.15.
 dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
   pm-github-t4i2,related,"2026-10-15T03:53:05.372Z",claude-hub,"cli:create:dep",detected
 comments[9]{created_at,author,text}:
@@ -30,4 +37,5 @@ tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,
 docs[2]{path,scope}:
   docs/strict-closeout-proof.md,project
   README.md,project
+close_reason: "Delivered by PR #126 (1d42805): Close items on trackers with strict close validation using GitHub facts and acceptance criteria"
 body: ""
