@@ -26,5 +26,12 @@
       "commit": "434df4237bdf7d5fdd3ddbd7ae42ce10d75e13ae",
       "path": "test/gate.test.ts"
     }
+  },
+  "c7097c6a9a6c0fec31fbc35b4a26388c622b8561": {
+    "justification": "Historical synthetic precision corpus: placeholder host-path shapes are intentional must-refuse fixtures. Current source constructs these strings at runtime. Exact test blob reviewed; no real host data and no imported-content exemption.",
+    "historical_test": {
+      "commit": "0580eb225935e077a20148b4fa029e837dac2245",
+      "path": "test/daily-sync-privacy.test.ts"
+    }
   }
 }

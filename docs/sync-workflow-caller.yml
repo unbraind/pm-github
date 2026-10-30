@@ -24,7 +24,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  issues: read
+  issues: write # Required for the deduplicated failure alert and recovery closure.
   actions: write # Required to dispatch the caller CI after opening/updating the PR.
 jobs:
   gated-sync:

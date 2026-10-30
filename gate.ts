@@ -142,6 +142,8 @@ export interface TrackerGateInput {
   readonly dependencies?: GateRunDependencies;
   /** Rendered import values scanned in memory before persistence or diagnostics. */
   readonly plannedItems?: readonly { readonly itemId: string; readonly fields: Readonly<Record<string, unknown>> }[];
+  /** Scan the same rendered plan without collecting a Git diff (read-only previews). */
+  readonly planOnly?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -229,8 +231,9 @@ const PERSONAL_DATA_RULES: readonly ContentRule[] = [
     // followed directly by a path) names the git service account, not a
     // person, so the pattern skips exactly that shape; a bare `git@host`
     // contact address, even before a colon and a space, is still matched.
+    // The ssh:// form permits only the git service account with a URL path.
     // The lookbehind keeps a match from starting inside a local part.
-    pattern: /(?<![A-Za-z0-9._%+-])(?!git@[A-Za-z0-9.-]+\.[A-Za-z]{2,}:[A-Za-z0-9_~./-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
+    pattern: /(?<![A-Za-z0-9._%+-])(?!(?<=ssh:\/\/)git@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?=\/|:\d+\/))(?!git@[A-Za-z0-9.-]+\.[A-Za-z]{2,}:[A-Za-z0-9_~./-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
     // GitHub, GitLab and most mail systems use a "noreply" domain or local part
     // for automated identities; anything else in imported issue text is a real
     // person's address and fails closed.
@@ -449,7 +452,7 @@ function quotedSourcePositions(line: string): boolean[] {
 /**
  * Recognize a bare-root token inside an immediately invoked JavaScript regex.
  *
- * Require an expression boundary and a closing test/exec call without crossing
+ * Require an expression boundary and a closed regex expression without crossing
  * quotes, escapes, newlines or another slash. Actual slash-separated paths
  * remain findings, including paths inside regex source. Walk the lead-in once
  * backwards instead of rescanning a whole prefix for every candidate. Quoted
@@ -465,8 +468,8 @@ function isBareRootRegex(line: string, matched: string, index: number, quoted: b
   if (quoted || matched.slice(1).includes("/")) return false;
   let before = index - 1;
   while (before >= 0 && /[ \t]/.test(line[before]!)) before--;
-  return (before < 0 || "=(,:".includes(line[before]!)) &&
-    /^[ \t][^/"'`\\\r\n]*\/[dgimsuvy]*\.(?:test|exec)[ \t]*\(/.test(line.slice(index + matched.length));
+  return (before < 0 || "=([,:".includes(line[before]!)) &&
+    /^[ \t][^/"'`\\\r\n]*\/[dgimsuvy]*(?:\.(?:test|exec)[ \t]*\(|[ \t]*(?:[,;)]|$))/.test(line.slice(index + matched.length));
 }
 
 /**
@@ -1061,7 +1064,10 @@ export function runTrackerGate(input: TrackerGateInput): GateReport {
   let source: GateReport["source"];
   let files: ChangeFile[];
   try {
-    if (input.diffFile) {
+    if (input.planOnly) {
+      source = "diff";
+      files = [];
+    } else if (input.diffFile) {
       source = "diff";
       const diffText = readFileSync(path.resolve(input.diffFile));
       files = parseUnifiedDiff(diffText);

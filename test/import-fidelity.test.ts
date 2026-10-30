@@ -146,7 +146,7 @@ for (const atomic of [false, true]) {
     assert.ok(before.tags?.every(tag => actual.tags?.includes(tag)));
     assert.equal(actual.description, before.description);
     const plan = (await importing(pmRoot, issue, atomic, true)).plan as Array<Record<string, unknown>>;
-    assert.equal(plan[0]!.action, "link");
+    assert.equal(plan[0]!.action, "unchanged");
     assert.equal((plan[0]!.identity as { via: string }).via, "provider-link");
   }));
 
@@ -514,7 +514,7 @@ for (const atomic of [false, true]) {
 }
 
 for (const atomic of [false, true]) {
-  test(`gated closure plans do not echo an unscanned closing PR title (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
+  test(`gated closure previews and applies refuse an unsafe closing PR title (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
     const issue = recorded("pm-beads-85");
     const token = "ghp_" + "A".repeat(36);
     await withMockGithub((request, response) => {
@@ -525,12 +525,15 @@ for (const atomic of [false, true]) {
       else jsonResponse(response, 200, request.url?.includes("/timeline") ? [] : [issue]);
     }, async () => {
       const options = { state: "all", atomic, gate: true };
-      const preview = await captureStderr(() => runImport("unbraind/pm-beads", pmRoot, parseImportOptions({ ...options, "dry-run": true })));
-      assert.ok(!JSON.stringify(preview).includes(token));
-      assert.ok("plan" in preview.result);
-      const plan = preview.result.plan as { github_close_reason: string }[];
-      assert.equal(plan[0]!.github_close_reason, `Closed on GitHub as completed on ${issue.closed_at}; closing PR https://github.com/example/project/pull/1`);
-      await assert.rejects(runImport("unbraind/pm-beads", pmRoot, parseImportOptions(options)), /FAIL before write/);
+      const captured = await captureStderr(async () => {
+        for (const dryRun of [true, false]) await assert.rejects(
+          runImport("unbraind/pm-beads", pmRoot, parseImportOptions({ ...options, "dry-run": dryRun })), (error: unknown) => {
+            assert.match((error as Error).message, /FAIL before write/);
+            assert.ok(!(error as Error).message.includes(token));
+            return true;
+          });
+      });
+      assert.ok(!JSON.stringify(captured).includes(token));
       assert.equal((await listItems(pmRoot)).length, 0);
     });
   }));

@@ -3491,6 +3491,7 @@ export async function runImport(
   // duplicate my whole tracker" and is the one thing --dry-run exists to rule out.
   const workspace = await readGithubWorkspace(pmPath);
   const pmRoot = workspace.pmRoot;
+  const typeNames = new Map(Object.entries(workspace.types.alias_to_type));
   /** Read the complete raw corpus in-process, retaining all provider metadata and bodies. */
   const readImportItems = async (): Promise<PmItem[]> => {
     if (dependencies.readItems) return dependencies.readItems(pmRoot);
@@ -3568,8 +3569,8 @@ export async function runImport(
     gatePlan = planned;
     gatePlanByNumber = new Map(planned.map((entry) => [entry.issueNumber, entry]));
     skipped = skippedNumbers.length;
-    if (opts.gate && !opts.dryRun) {
-      const preview = runCommandTrackerGate({ pmRoot, plannedItems: planned.map(entry => ({
+    if (opts.gate) {
+      const preview = runCommandTrackerGate({ pmRoot, planOnly: opts.dryRun, plannedItems: planned.map(entry => ({
         itemId: entry.match?.id ?? `github-issue-${entry.issueNumber}`,
         fields: { ...entry.fidelity, title: entry.title, description: entry.description, body: entry.body, tags: entry.tags,
           assignee: entry.assignee, sprint: entry.milestone,
@@ -3590,7 +3591,7 @@ export async function runImport(
     const source = entry.fidelity!;
     const reason = source.github_close_reason.split(" (", 1)[0]!;
     return { issue: entry.issueNumber, item: entry.match?.id,
-      action: entry.identity?.via === "citation" ? "adopt" : entry.linkOnly ? "link" : entry.match?.id ? "update" : "create", status: entry.status,
+      action: importEntryUnchanged(entry, typeNames, workspace.statuses) ? "unchanged" : entry.identity?.via === "citation" ? "adopt" : entry.linkOnly ? "link" : entry.match?.id ? "update" : "create", status: entry.status,
       ...source, github_close_reason: reason,
       created_at: entry.linkOnly ? entry.match!.created_at : source.github_created_at,
       updated_at_policy: "sdk-mutation-clock; source in github_updated_at",
@@ -3602,7 +3603,7 @@ export async function runImport(
   });
   const adoptionCount = gatePlan!.filter(entry => entry.identity?.via === "citation").length;
   const planFields = { ...(opts.gate || adoptionCount > 0 || citationCandidates.length > 0 ? { plan: fidelityPlan() } : {}), ...citationReceipt };
-  const gatePlanFields = { ...planFields, ...(opts.gate ? { gate: { completeness: gateCompleteness, idempotency: gateIdempotency, scan: "post-write" } } : {}) };
+  const gatePlanFields = { ...planFields, ...(opts.gate ? { gate: { completeness: gateCompleteness, idempotency: gateIdempotency, scan: opts.dryRun ? "plan" : "post-write" } } : {}) };
 
   if (opts.atomic) {
     // The gated pipeline already prepared every entry (and counted its skips)
@@ -3629,11 +3630,16 @@ export async function runImport(
       );
     }
 
+    // Preserve the complete ordered plan while a transaction is resumable.
+    // Otherwise omit each normalized no-op, including in mixed batches.
+    const changed = (await listUnfinishedGithubImports(pmRoot)).length > 0 ? prepared
+      : prepared.filter(entry => !importEntryUnchanged(entry, typeNames, workspace.statuses));
+    const changedAdoptions = changed.filter(entry => entry.identity?.via === "citation").length;
     if (opts.dryRun) {
-      imported = prepared.filter((entry) => !entry.match?.id).length;
-      updated = prepared.length - imported - adoptionCount;
+      imported = changed.filter((entry) => !entry.match?.id).length;
+      updated = changed.length - imported - changedAdoptions;
       for (const entry of prepared) {
-        const action = entry.identity?.via === "citation" ? "adopt" : entry.match?.id ? "update" : "import";
+        const action = !changed.includes(entry) ? "unchanged" : entry.identity?.via === "citation" ? "adopt" : entry.match?.id ? "update" : "import";
         console.error(`  [dry-run][atomic] #${entry.issueNumber} ${action}: ${opts.gate ? "(gated title)" : entry.title} (${entry.status})`);
       }
       console.error(
@@ -3661,11 +3667,11 @@ export async function runImport(
     // Mixed create/update batches can select a fresh journal after the first
     // apply. Replaying an otherwise identical SDK UPDATE advances updated_at.
     // Never hide an interrupted journal behind the unchanged-state shortcut.
-    const typeNames = new Map(Object.entries(workspace.types.alias_to_type));
-    const unchanged = prepared.every(entry => importEntryUnchanged(entry, typeNames, workspace.statuses)) && (await listUnfinishedGithubImports(pmRoot)).length === 0;
+    const unchanged = changed.length === 0;
     const result = unchanged ? { transactionId: undefined, recovered: false, recoveredItems: undefined, imported: 0, updated: 0,
       itemIds: new Map(prepared.map(entry => [entry.issueNumber, entry.match!.id!])) }
-      : await (dependencies.commitAtomic ?? importGithubAtomic)(pmRoot, repo, prepared);
+      : await (dependencies.commitAtomic ?? importGithubAtomic)(pmRoot, repo, changed);
+    for (const entry of prepared) if (!changed.includes(entry)) result.itemIds.set(entry.issueNumber, entry.match!.id!);
     if (opts.gate) verifyImportedProvenance(await readImportItems(), prepared, repo);
     // Planned native comments are part of the verified plan: a contended lock,
     // a refused add, or a committed entry whose created id is missing from the
@@ -3711,8 +3717,8 @@ export async function runImport(
       ...(unchanged ? { unchanged: true } : {}),
       recovered: result.recovered,
       imported: result.imported,
-      updated: result.updated - (result.recovered ? 0 : adoptionCount),
-      adopted: result.recovered ? 0 : adoptionCount,
+      updated: result.updated - (result.recovered ? 0 : changedAdoptions),
+      adopted: result.recovered ? 0 : changedAdoptions,
       ...(result.recoveredItems !== undefined ? { recoveredItems: result.recoveredItems } : {}),
       skipped,
       atomic: true,
@@ -3757,6 +3763,15 @@ export async function runImport(
       const args = ["--path", pmRoot, "close", id, "--reason", prepared.fidelity!.github_close_reason];
       return args;
     };
+
+    // Annotation sync still runs when only comments changed; native content
+    // mutations must never advance the SDK clock for an identical projection.
+    if (importEntryUnchanged(prepared, typeNames, workspace.statuses)) {
+      if (!opts.dryRun && syncAnnotations) {
+        commentWriteFailures += (await syncGithubCommentsToAnnotations(match!.id!, comments, pmRoot, issue.number)).failed;
+      }
+      continue;
+    }
 
     if (opts.dryRun) {
       const action = prepared.identity?.via === "citation" ? "adopt" : match?.id ? "update" : "import";
