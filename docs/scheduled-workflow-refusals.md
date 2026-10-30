@@ -134,9 +134,11 @@ Branch protection is a separate policy boundary. GitHub documents
 [Administration read permission for branch-protection reads](https://docs.github.com/en/rest/branches/branch-protection#get-branch-protection).
 The Actions [permissions table](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#permissions)
 does not offer administration permission to `GITHUB_TOKEN`. A 403 is not evidence
-that no checks are required. Closeout retains readable ruleset/app bindings and
-requires the newline-separated `required-checks` input when policy metadata is
-unavailable. It reports the actual failed endpoint and status. It does not infer
+that no checks are required. Closeout then reads the same required contexts and app
+bindings from the branch summary (`GET /repos/{owner}/{repo}/branches/{branch}`), which
+repository read access returns. It retains readable ruleset/app bindings and
+requires the newline-separated `required-checks` input only when policy metadata is
+still unavailable. It reports the actual failed endpoint and status. It does not infer
 historical required-check success from a merged PR's current merge-state label.
 
 SDK close refusals identify the item, PR, stable validation code, and missing

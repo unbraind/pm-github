@@ -67,7 +67,7 @@ async function selection(options: SelectionOptions) {
       if (endpoint.includes("/pulls?")) return { body: JSON.stringify(options.dates.map((day, i) => ({ number: i + 1, merged_at: options.gap === "merge-time" ? null : at(day), updated_at: at(day) }))) };
       const affected = number === 1 || headNumber === 1;
       if (number === 1 && options.gap === "pr-fetch" && !endpoint.includes("/commits?")) throw new Error("PR unavailable");
-      if (options.gap === "required-metadata" && endpoint.includes("/branches/gap/")) throw new Error("HTTP 403");
+      if (options.gap === "required-metadata" && /\/branches\/gap(\/|$)/.test(endpoint)) throw new Error("HTTP 403");
       if (headNumber === 1 && options.gap === "checks-fetch" && endpoint.includes("/check-runs")) throw new Error("Checks unavailable");
       if (endpoint.includes("/commits?")) {
         if (number === 1 && options.gap === "invalid-commits") return { body: "[{}]" };

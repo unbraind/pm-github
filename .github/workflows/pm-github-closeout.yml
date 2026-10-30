@@ -32,7 +32,7 @@ on:
         required: false
         default: "ci.yml codeql.yml"
       required-checks:
-        description: "One required context name per line; spaces are preserved and blank lines ignored; used when protection metadata is unavailable"
+        description: "One required context name per line; spaces are preserved and blank lines ignored; needed only when either the classic source (protection or branch summary) or the ruleset metadata is unreadable"
         type: string
         required: false
         default: ""

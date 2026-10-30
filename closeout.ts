@@ -205,10 +205,29 @@ async function readProtectionSource<T>(read: () => Promise<T>, gaps: string[]): 
   }
 }
 
+/**
+ * Read classic required checks. GITHUB_TOKEN cannot read the administration-only protection endpoint, but the
+ * branch summary carries the same required contexts with repository read access, so scheduled callers need no
+ * declared names. A protected branch whose summary omits them stays unavailable.
+ */
+async function classicRequirements(api: CloseoutApi, repo: string, branch: string, gaps: string[]): Promise<Record<string, unknown> | null> {
+  const path = `/repos/${repo}/branches/${encodeURIComponent(branch)}`;
+  const classic = await readProtectionSource(async () => record(await payload(api, `${path}/protection/required_status_checks`)), gaps);
+  if (classic !== null) return classic;
+  const summary = await readProtectionSource(async () => record(await payload(api, path)), gaps);
+  if (summary === null) return null;
+  if (summary.protected === false) return { contexts: [], checks: [] };
+  if (summary.protected !== true) throw new Error("Invalid branch protection summary.");
+  const protection = summary.protection === undefined ? undefined : record(summary.protection);
+  if (protection?.required_status_checks === undefined) { gaps.push("Branch summary omits required status checks"); return null; }
+  const required = record(protection.required_status_checks);
+  return required.enforcement_level === "off" ? { contexts: [], checks: [] } : required;
+}
+
 /** Combine all readable app-bound contexts without discarding known requirements. */
 async function requirements(api: CloseoutApi, repo: string, branch: string): Promise<RequiredPolicy> {
   const gaps: string[] = [];
-  const classic = await readProtectionSource(async () => record(await payload(api, `/repos/${repo}/branches/${encodeURIComponent(branch)}/protection/required_status_checks`)), gaps);
+  const classic = await classicRequirements(api, repo, branch, gaps);
   const rules = await readProtectionSource(() => pages(api, `/repos/${repo}/rules/branches/${encodeURIComponent(branch)}?per_page=100`), gaps);
   const checks: RequiredCheck[] = [];
   if (classic !== null) {
