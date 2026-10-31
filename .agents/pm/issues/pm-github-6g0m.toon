@@ -2,13 +2,16 @@ id: pm-github-6g0m
 title: Scheduled closeout reads required checks from the branch summary instead of failing every fleet caller
 description: "Every fleet caller of pm-github-closeout.yml fails its daily run once it has an item to close (pm-rust and pm-jira since at least 10-25, pm-lint since 10-28). GITHUB_TOKEN cannot read the administration-only classic protection endpoint, no caller declares required-checks, so each closable row becomes required_checks_unverified and the workflow refuses. The branch summary (GET /repos/{owner}/{repo}/branches/{branch}) returns protection.required_status_checks with repository read access (verified anonymously on unbraind/pm-lint: contexts and app bindings; the protection endpoint returns 401)."
 type: Issue
-status: in_progress
+status: closed
 priority: 1
 tags[3]: ci,closeout,github-token
 created_at: "2026-10-30T19:11:05.310Z"
-updated_at: "2026-10-30T19:47:47.878Z"
+updated_at: "2026-10-31T01:39:55.283Z"
+closed_at: "2026-10-31T01:39:54.240Z"
+completed_at: "2026-10-30T22:10:21.000Z"
 author: claude-orchestrator
 acceptance_criteria: "Classic protection 403 falls back to the branch summary's required_status_checks, including app bindings; Unprotected branches and enforcement_level off contribute no classic requirements; A protected summary without required-check details stays unavailable; an unverifiable protected flag is head_evidence_unavailable; A scheduled caller closes a delivered item with no declared required-checks"
+resolution: "Delivered by PR #204 (167299b): Close delivered items in scheduled runs by reading required checks from the branch summary"
 expected_result: Scheduled closeout with GITHUB_TOKEN verifies classic required checks from the branch summary and closes delivered items without a required-checks input.
 actual_result: "Daily closeout fails fleet-wide: Closeout refused; required_checks_unverified for every closable row."
 comments[1]{created_at,author,text}:
@@ -22,4 +25,5 @@ files[6]{path,scope}:
   test/closeout.test.ts,project
 tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   node --test test/closeout.test.ts,project,claude-orchestrator,"2026-10-30T19:11:10.551Z",local_mutation,fix/closeout-required-checks-from-branch-summary
+close_reason: "Delivered by PR #204 (167299b): Close delivered items in scheduled runs by reading required checks from the branch summary"
 body: ""

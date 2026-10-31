@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Scheduled closeout reads required checks from the branch summary instead of failing every fleet caller ([pm-github-6g0m](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-6g0m.toon))
+
 ## 2026.10.30 - 2026-10-30
 
 ### Fixed
