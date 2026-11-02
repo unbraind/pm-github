@@ -115,7 +115,7 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
     name: "remove-procfs-allowance",
     description: "procfs interface paths must fail again",
     replacements: [{ find: "if (root === \"proc\") {", replace: "if (root === \"proc\") return false; if (root === \"proc\") {" }],
-    expectFailingAllowRows: ["pm-review-title", "pm-review-body-proc-pid", "pm-review-body-proc-bare", "proc-bare", "proc-self", "proc-self-root-only", "proc-digits", "proc-placeholder"],
+    expectFailingAllowRows: ["pm-review-title", "pm-review-body-proc-pid", "pm-review-body-proc-bare", "proc-bare", "proc-self", "proc-self-root-only", "proc-digits", "proc-placeholder", "placeholder-home-then-proc"],
     expectPassingRefuseRows: [],
   },
   {
@@ -160,7 +160,7 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
     name: "remove-placeholder-home-posix",
     description: "placeholder account segments after POSIX home roots must fail again",
     replacements: [{ find: "if (isHomePlaceholderSegment(first)) return !embedsIdentityRoot(segments.slice(2));", replace: "if (isHomePlaceholderSegment(first)) return false;" }],
-    expectFailingAllowRows: ["pm-swarm-placeholder-home", "placeholder-home-bare", "placeholder-home-angle", "placeholder-users-curly", "placeholder-home-dollar", "placeholder-home-braced", "placeholder-home-dotted", "placeholder-home-percent"],
+    expectFailingAllowRows: ["pm-swarm-placeholder-home", "placeholder-home-bare", "placeholder-home-angle", "placeholder-users-curly", "placeholder-home-dollar", "placeholder-home-braced", "placeholder-home-dotted", "placeholder-home-percent", "placeholder-home-in-markup", "placeholder-home-then-proc"],
     expectPassingRefuseRows: [],
   },
   {
@@ -198,7 +198,7 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
       replace: "true &&",
     }],
     expectFailingAllowRows: [],
-    expectPassingRefuseRows: ["other-drive", "runner-win-short"],
+    expectPassingRefuseRows: ["other-drive", "runner-win-short", "smuggled-drive-after-win-placeholder"],
   },
   {
     name: "broaden-git-transport-local-part",
@@ -257,6 +257,13 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
     replacements: [{ find: "pattern: /(?<=^|[\\s\"'`([=,{<>),;\\]}]", replace: "pattern: /(?<=^|[\\s\"'`([=,{]" }],
     expectFailingAllowRows: [],
     expectPassingRefuseRows: ["hidden-after-proc"],
+  },
+  {
+    name: "remove-bracket-smuggle-check",
+    description: "a refused path behind a bracket inside a non-placeholder segment would pass",
+    replacements: [{ find: "function hidesHostPathBehindBracket(matched: string): boolean {", replace: "function hidesHostPathBehindBracket(matched: string): boolean { if (matched.length < 99999) return false;" }],
+    expectFailingAllowRows: [],
+    expectPassingRefuseRows: ["smuggled-root-after-placeholder", "smuggled-temp-after-proc", "smuggled-tilde-after-runner", "smuggled-drive-after-win-placeholder"],
   },
 ];
 

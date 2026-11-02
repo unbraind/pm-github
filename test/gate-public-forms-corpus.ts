@@ -127,6 +127,8 @@ export const PUBLIC_FORMS_MUST_ALLOW: readonly PublicFormRow[] = [
   { id: "placeholder-home-braced", line: "cache at " + posix("home", "${USER}", ".cache"), allowGroup: "placeholder-home-posix" },
   { id: "placeholder-home-dotted", line: "open " + posix("home", "<user.name>", "project"), allowGroup: "placeholder-home-posix" },
   { id: "placeholder-home-percent", line: "open " + posix("home", "%USERNAME%", "project"), allowGroup: "placeholder-home-posix" },
+  { id: "placeholder-home-in-markup", line: "see <code>" + posix("home", "<user>", "repo") + "</code>", allowGroup: "placeholder-home-posix" },
+  { id: "placeholder-home-then-proc", line: "compare " + posix("home", "<user>", "notes") + ">" + posix("proc", "self", "status"), allowGroup: "placeholder-home-posix" },
   { id: "placeholder-home-windows", line: "config at " + winBack("C", "Users", "example", "file"), allowGroup: "placeholder-home-windows" },
   { id: "placeholder-home-windows-fwd", line: "config at " + winFwd("C", "Users", "<user>", "file"), allowGroup: "placeholder-home-windows" },
   { id: "placeholder-home-windows-username", line: "config at " + winBack("C", "Users", "%USERNAME%", "settings.json"), allowGroup: "placeholder-home-windows" },
@@ -177,6 +179,11 @@ export const PUBLIC_FORMS_MUST_REFUSE: readonly PublicFormRefuseRow[] = [
   // --- a path hidden directly behind a permitted form ------------------------
   { id: "hidden-after-proc", line: "see " + posix("proc") + "<" + posix("home", "alice") + "> end", rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "hidden-after-placeholder", line: "ok " + posix("home", "example") + ">" + posix("home", "alice"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
+  // --- a refused path behind a bracket inside a non-placeholder segment ----
+  { id: "smuggled-root-after-placeholder", line: "ok " + posix("home", "<user>", "x") + ">" + posix("root", ".ssh", "id_rsa"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
+  { id: "smuggled-temp-after-proc", line: "read " + posix("proc", "self", "x") + "}" + posix("tmp", "alice-notes"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
+  { id: "smuggled-tilde-after-runner", line: "log " + posix("home", "runner", "work", "a", "b") + ">~alice/notes", rule: "absolute-host-path", refuseGroup: "embedded-identity" },
+  { id: "smuggled-drive-after-win-placeholder", line: "ok " + winBack("C", "Users", "<user>", "x") + ">" + winBack("D", "private", "alice"), rule: "windows-host-path", refuseGroup: "embedded-identity" },
   { id: "sys-dot-escape", line: "read " + posix("sys", "..", "home", "alice"), rule: "absolute-host-path", refuseGroup: "dot-escape" },
   { id: "placeholder-wrong-level", line: "read " + posix("home", "alice", "<user>", "file"), rule: "absolute-host-path", refuseGroup: "concrete-home" },
   { id: "placeholder-win-wrong-level", line: "read " + winBack("C", "Users", "alice", "{user}", "file"), rule: "windows-host-path", refuseGroup: "concrete-home" },

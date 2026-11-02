@@ -42,11 +42,19 @@ now explicitly scanned so its allowance and traversal refusal are observable.
 
 ## Corpus and proof
 
-The shared corpus has 43 must-allow and 50 must-refuse rows. Every row runs as
+The shared corpus has 45 must-allow and 54 must-refuse rows. Every row runs as
 plain text and JSON-escaped TOON text and through a complete synthetic tracker
 diff; allow rows also run as whole JSON strings and JSONL history changes.
 Refusal findings retain their expected rule and item attribution. All corpus
 names and account paths are synthetic and assembled at runtime.
+
+Angle and curly brackets continue a path so whole placeholder segments are
+judged in place. A bracket inside any other segment can end one path and
+start the next, so the text after it is judged again by every host-path rule:
+a refused root-account, temp, other-drive or tilde-username path behind a permitted prefix
+keeps the whole match refused (`smuggled-*` rows), while a placeholder path
+in markup or followed by a public procfs path stays allowed
+(`placeholder-home-in-markup`, `placeholder-home-then-proc`).
 
 Run `node scripts/prove-gate-public-forms.ts`. Each disposable gate mutation
 must flip exactly its recorded row IDs; missing/duplicate anchors, unexpected
@@ -55,17 +63,17 @@ flips and import failures fail the proof. Temporary copies are removed.
 | Mutation | Allow flips | Refuse flips |
 | --- | ---: | ---: |
 | `remove-sysfs-allowance` | 2 | 0 |
-| `remove-procfs-allowance` | 8 | 0 |
+| `remove-procfs-allowance` | 9 | 0 |
 | `remove-reserved-domain-allowance` | 12 | 0 |
 | `remove-git-transport-allowance` | 4 | 0 |
 | `remove-runner-workspace-posix` | 2 | 0 |
 | `remove-runner-workspace-windows` | 3 | 0 |
 | `remove-toolcache-allowance` | 1 | 0 |
-| `remove-placeholder-home-posix` | 8 | 0 |
+| `remove-placeholder-home-posix` | 10 | 0 |
 | `remove-placeholder-home-windows` | 3 | 0 |
 | `broaden-reserved-domain-anchor` | 0 | 7 |
 | `broaden-runner-shape-posix` | 0 | 3 |
-| `broaden-runner-shape-windows` | 0 | 2 |
+| `broaden-runner-shape-windows` | 0 | 3 |
 | `broaden-git-transport-local-part` | 0 | 2 |
 | `broaden-placeholder-position-posix` | 0 | 1 |
 | `broaden-placeholder-position-windows` | 0 | 1 |
@@ -73,6 +81,7 @@ flips and import failures fail the proof. Temporary copies are removed.
 | `remove-embedded-identity-check` | 0 | 4 |
 | `broaden-proc-shape` | 0 | 3 |
 | `remove-bracket-leadins` | 0 | 1 |
+| `remove-bracket-smuggle-check` | 0 | 4 |
 
 The proof harness also tests unreadable source, invalid baselines, source-anchor
 drift, changed row expectations, private diagnostic suppression, cleanup and

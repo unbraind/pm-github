@@ -375,6 +375,36 @@ function isPublicWindowsPath(matched: string): boolean {
 }
 
 /**
+ * Whether a bracket inside a matched path begins a second host path that
+ * would be refused on its own.
+ *
+ * Angle and curly brackets are continuation characters so whole placeholder
+ * segments (`<pid>`, `{user}`) are judged in place. A bracket in any other
+ * segment can end one path and begin the next (a root-account, temp, second
+ * drive or tilde-username path written straight after it), so the text after
+ * it is judged again by every host-path rule, exactly as if it stood alone.
+ *
+ * @param matched - The complete matched path.
+ * @returns True when a path behind a non-placeholder bracket must refuse the
+ *          whole match.
+ */
+function hidesHostPathBehindBracket(matched: string): boolean {
+  for (let index = 0; index < matched.length; index++) {
+    if (!"<>{}".includes(matched[index]!)) continue;
+    const segmentStart = Math.max(matched.lastIndexOf("/", index), matched.lastIndexOf("\\", index)) + 1;
+    const nextSeparator = matched.slice(index).search(/[\\/]/);
+    const segment = matched.slice(segmentStart, nextSeparator === -1 ? matched.length : index + nextSeparator);
+    if (isBracketedPlaceholder(segment, "<", ">") || isBracketedPlaceholder(segment, "{", "}")) continue;
+    const rest = matched.slice(index + 1);
+    for (const rule of HOST_PATH_RULES) {
+      const hit = new RegExp(rule.pattern.source, "y").exec(rest);
+      if (hit && (!rule.confirm || rule.confirm(hit[0]))) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Personal-data signatures: an email that is not a no-reply or documentation
  * address, and phone numbers in their two common written shapes.
  */
@@ -451,7 +481,7 @@ const HOST_PATH_RULES: readonly ContentRule[] = [
     // characters (they carry placeholder segments such as `<pid>`), never a
     // silent stop; the confirm then judges the complete path.
     pattern: /(?<=^|[\s"'`([=,{<>),;\]}]|[A-Za-z0-9_]{2}:|file:\/\/)\/(?:home|Users|root|tmp|var|etc|opt|srv|mnt|media|private|Volumes|usr|run|proc|sys|data|nix|scratch|workspace|builds|Library|System)(?=\/|$|[\s"'`<>),;\]}])(?:\/[^\s"'`),;\]]*)?/g,
-    confirm: (matched) => !isPublicPosixPath(matched),
+    confirm: (matched) => !isPublicPosixPath(matched) || hidesHostPathBehindBracket(matched),
   },
   {
     rule: "windows-host-path",
@@ -460,7 +490,7 @@ const HOST_PATH_RULES: readonly ContentRule[] = [
     // segments (`<placeholder>` after a Users root) are matched whole and
     // judged by the confirm instead of truncating the match before them.
     pattern: /(?:(?<![A-Za-z0-9_:/])|(?<=file:\/\/\/))[A-Za-z]:[\\/][^\s"'`),;\]]+/g,
-    confirm: (matched) => !isPublicWindowsPath(matched),
+    confirm: (matched) => !isPublicWindowsPath(matched) || hidesHostPathBehindBracket(matched),
   },
   {
     rule: "home-username",
