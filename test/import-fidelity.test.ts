@@ -68,9 +68,11 @@ for (const atomic of [false, true]) {
     test(`${name}: ${atomic ? "atomic" : "plain"} import preserves real lifetimes and honest closure wording`, async () => tracker(async (_directory, pmRoot) => {
       const issue = recorded(name);
       const checkRetry = fixtureIndex < 2;
+      // Exercise every recorded lifetime against an already-linked closed owner.
+      // Fresh mirrors are covered by the mixed-batch byte-level regression.
+      await create({ title: "Legacy source snapshot", type: "Issue", status: "closed", closeReason: "Legacy generic closure",
+        tags: `gh:${issue.html_url.split("/").slice(3, 5).join("/")}#${issue.number}` }, { pmRoot });
       if (checkRetry) {
-        await create({ title: "Legacy source snapshot", type: "Issue", status: "closed", closeReason: "Legacy generic closure",
-          tags: `gh:${issue.html_url.split("/").slice(3, 5).join("/")}#${issue.number}` }, { pmRoot });
         const beforePreview = (await listItems(pmRoot));
         const preview = await importing(pmRoot, issue, atomic, true);
         const plan = (preview.plan as Array<Record<string, unknown>>)[0]!;
