@@ -1,0 +1,11 @@
+id: pm-github-quay
+title: "SDK 2026.10.26 adoption: three real-SDK compensation tests fail on the pending toolchain PR"
+description: "Tracks gh:unbraind/pm-github#197 (filed 2026-10-29, missed by the blind issue watch). The open toolchain PR #194 (head 858cb976dc) resolves SDK 2026.10.26 and its test(22)/test(26)/bun-release(22)/(26) checks still fail (latest run 41330041504, 2026-11-01). Three real-SDK atomic-compensation cases (import-fidelity restoration after finalization; terminal-failure plan cleanup, fresh and recovery variants) receive 'compensation was incomplete' instead of completed compensation when an ordinary error is injected at committing; the suspected interaction is source-lifecycle finalization appending a Persistent import event inside the commit hook before the injected transition. Diagnose whether the host finalization contract or the test injection changed, fix, and keep the 100% thresholds."
+type: Issue
+status: open
+priority: 2
+tags[3]: ci,"gh:unbraind/pm-github#197",sdk-adoption
+created_at: "2026-11-02T09:17:15.200Z"
+updated_at: "2026-11-02T09:17:15.200Z"
+author: pi-glm
+body: ""
