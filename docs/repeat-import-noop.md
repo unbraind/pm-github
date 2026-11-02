@@ -2,8 +2,11 @@
 
 ## Version scope and root cause
 
-The reported `pm-github@2026.10.28` failure is reproducible with the real
-`@unbrained/pm-cli@2026.10.25` SDK. The synthetic mixed batch contains a
+The hosted failure reported in #175 ran `pm-github@2026.10.19` (verified by
+the installed-package receipt in the issue). That exact run was not replayed
+here. Separately, the published `pm-github@2026.10.28` package fails the same
+no-op property with the real `@unbrained/pm-cli@2026.10.25` SDK, which shows
+the defect class persisted after 2026.10.19. The synthetic mixed batch contains a
 previously linked closed item, new closed issues (including one updated after
 closing), and an open issue. Its identical repeat still plans updates and fails
 the no-op assertion.
