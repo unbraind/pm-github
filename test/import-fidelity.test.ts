@@ -99,6 +99,7 @@ for (const atomic of [false, true]) {
       if (atomic && !checkRetry) {
         const closedAtWrites = history.entries.flatMap(entry => entry.patch.filter(patch => patch.path === "/metadata/closed_at" && patch.value !== undefined).map(patch => patch.value));
         assert.deepEqual([...new Set(closedAtWrites)].filter(value => value !== issue.closed_at), [], "a fresh atomic mirror never records an import-time closed_at");
+        assert.ok(closedAtWrites.includes(issue.closed_at), "a fresh atomic mirror records the source closed_at in history");
       }
       if (checkRetry) {
         await importing(pmRoot, issue, atomic);

@@ -56,9 +56,13 @@ lifecycle repair, fails the interrupted-replay case (**0/1 passing**,
 The published `2026.10.28` package with host `2026.10.25` also fails all nine,
 including the original mixed-batch repeat assertion.
 
-The recorded lifecycle fixtures now consistently cover linked closed owners;
-their existing history assertions remain intact. Fresh mirrors have explicit
-creation/closure/completion date assertions in the new mixed-batch regression.
+The recorded lifecycle fixtures keep both paths: the two retry fixtures import
+over an already-linked closed owner, and the others import into an empty
+tracker. A fresh atomic mirror now writes creation plus fenced finalization,
+so its history floor is two entries instead of three (the removed forced
+re-close was the third), and every `closed_at` written to its history must be
+GitHub's own value, which must itself be recorded. The mixed-batch regression
+adds explicit creation/closure/completion date assertions for fresh mirrors.
 The focused atomic, fidelity, refresh, SDK guard/hook and repeat suite passes
 113/113. Canceled refresh transitions retain their required native close reason.
 
