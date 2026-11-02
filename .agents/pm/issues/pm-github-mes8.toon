@@ -1,0 +1,11 @@
+id: pm-github-mes8
+title: Packed projection fixture cleanup can mask its own test outcome
+description: "Tracks gh:unbraind/pm-github#202 (filed 2026-10-30, missed by the blind issue watch). test/import-projection.test.ts on current main still ends with a bare 'finally { rmSync(base, { recursive: true, force: true }) }' (line ~258), so an ENOTEMPTY from the isolated HOME teardown replaces an earlier exception from the protected body and the receipt proves neither that the packed import assertions passed nor that they failed. Observed once on the merged CodeQL-pin PR #200 head (Node 22, run 41029600935). Make the final cleanup non-fatal (or run it outside the assertion path and log residuals), so a teardown race cannot mask the actual test outcome; keep the two Bun lanes green."
+type: Issue
+status: open
+priority: 2
+tags[3]: ci,fixtures,"gh:unbraind/pm-github#202"
+created_at: "2026-11-02T09:17:17.491Z"
+updated_at: "2026-11-02T09:17:17.491Z"
+author: pi-glm
+body: ""
