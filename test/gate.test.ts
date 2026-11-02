@@ -132,12 +132,12 @@ test("escaped tokens and Windows paths retain redacted findings", () => {
   // SSH clone URLs name the git service account, not a person.
   assert.deepEqual(scanLineForRuleHits("clone with `git@github.com:acme/widgets.git`"), []);
   assert.deepEqual(scanLineForRuleHits("git@gitlab.com:group/project.git"), []);
-  assert.ok(scanLineForRuleHits("gitlover@example.org").some(hit => hit.rule === "email-address"));
+  assert.ok(scanLineForRuleHits("gitlover@example.dev").some(hit => hit.rule === "email-address"));
   // Only the SSH URL shape is exempt: a git@ contact address is still personal data.
-  for (const contact of ["Contact git@example.org", "write to git@example.org: thanks", "agit@github.com:x"]) {
+  for (const contact of ["Contact git@example.dev", "write to git@example.dev: thanks", "agit@github.com:x"]) {
     assert.ok(scanLineForRuleHits(contact).some(hit => hit.rule === "email-address"), contact);
   }
-  assert.ok(scanLineForRuleHits("person-noreply@example.org").some(hit => hit.rule === "email-address"));
+  assert.ok(scanLineForRuleHits("person-noreply@example.dev").some(hit => hit.rule === "email-address"));
 });
 
 test("a present but unreadable optional allowlist fails without echoing its error", () => {
@@ -195,7 +195,7 @@ const HIGH_ENTROPY_SECRET = "Zj9kP2mQ7xW4" + "nB8vC5tR1sD";
 const HOME_PATH = "/" + "home" + "/alice/report.txt";
 const TMP_PATH = "/" + "tmp" + "/scratch.log";
 const WIN_PATH = "C:" + "\\Users" + "\\bob" + "\\debug.log";
-const PERSONAL_EMAIL = "alice.person@example.org";
+const PERSONAL_EMAIL = "alice.person@example.dev";
 const PHONE_US = "(555) 123-4567";
 const PHONE_INTL = "+49 30 5557 9922";
 

@@ -220,9 +220,163 @@ const CREDENTIAL_RULES: readonly ContentRule[] = [
   { rule: "private-key-block", pattern: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/g },
 ];
 
+// ---------------------------------------------------------------------------
+// Public technical forms — the exact allowances shared by the personal-data
+// and host-path rules. Each helper answers ONE narrow question; the confirms
+// compose them so removing or broadening a single allowance is independently
+// observable (see scripts/prove-gate-public-forms.ts).
+// ---------------------------------------------------------------------------
+
 /**
- * Personal-data signatures: an email that is not a no-reply address, and phone
- * numbers in their two common written shapes.
+ * Documentation-only email domains reserved by RFC 2606/6761 (plus the
+ * special-use `localhost` name): mail on them can never reach a real person,
+ * so an address is a fixture rather than personal data. Compared exactly and
+ * case-insensitively against the whole domain, so registrable look-alikes
+ * (`notexample.com`, `example.com.evil.io`) stay refusals.
+ */
+const RESERVED_EMAIL_DOMAINS: readonly string[] = ["example.com", "example.net", "example.org", "localhost"];
+
+/** Reserved top-level labels whose subdomains are also documentation-only. */
+const RESERVED_EMAIL_DOMAIN_SUFFIXES: readonly string[] = [".example", ".invalid", ".test", ".localhost"];
+
+/**
+ * Whether an email domain (lowercased, the whole text after the at-sign) is
+ * documentation-only per RFC 2606/6761.
+ *
+ * @param domain - The complete lowercased domain after the at-sign.
+ * @returns True for `example.com`/`example.net`/`example.org`/`localhost`
+ *          exactly, or any domain whose final label is `example`, `invalid`,
+ *          `test` or `localhost`.
+ */
+function isReservedDocumentationDomain(domain: string): boolean {
+  return RESERVED_EMAIL_DOMAINS.includes(domain) ||
+    RESERVED_EMAIL_DOMAIN_SUFFIXES.some((suffix) => domain.endsWith(suffix));
+}
+
+/**
+ * Home-root child segments that name no account: the documentation name, the
+ * shell/env placeholder users, and bracketed placeholders handled separately.
+ */
+const HOME_PLACEHOLDER_SEGMENTS: readonly string[] = ["example", "$USER", "${USER}", "%USERNAME%"];
+
+/**
+ * Whether a path segment is a bracketed placeholder such as `<user>` or
+ * `{user}`: matched brackets around a nonempty placeholder body.
+ *
+ * @param segment - One slash-separated path segment.
+ * @param open - The required opening bracket character.
+ * @param close - The required closing bracket character.
+ * @returns True when the segment is exactly `open + body + close`.
+ */
+function isBracketedPlaceholder(segment: string, open: string, close: string): boolean {
+  return segment.length > open.length + close.length && segment.startsWith(open) && segment.endsWith(close) &&
+    /^[^<> {}\\/\s]+$/.test(segment.slice(open.length, segment.length - close.length));
+}
+
+/**
+ * Whether a segment directly after a home root names no account.
+ *
+ * @param segment - The first path segment after `/home/`, `/Users/` or a
+ *                  Windows `Users` root.
+ * @returns True for `example`, `$USER`, `${USER}`, `%USERNAME%` and bracketed
+ *          `<placeholder>`/`{placeholder}` segments.
+ */
+function isHomePlaceholderSegment(segment: string): boolean {
+  return HOME_PLACEHOLDER_SEGMENTS.includes(segment) ||
+    isBracketedPlaceholder(segment, "<", ">") || isBracketedPlaceholder(segment, "{", "}");
+}
+
+/**
+ * Whether one path segment can smuggle traversal or hidden content past a
+ * permitted shape.
+ *
+ * Exact `.`/`..` segments traverse out of the permitted root; percent signs
+ * can decode to them or hide other content outside the one Windows env
+ * placeholder; a backslash inside a POSIX path is content, never a separator,
+ * so it could re-split the path under a different reading and is refused.
+ *
+ * @param segment - One separator-split path segment.
+ * @param posix - Whether the path was split on forward slashes only.
+ * @returns True when the segment must keep the whole path a refusal.
+ */
+function isEscapePathSegment(segment: string, posix: boolean): boolean {
+  if (segment === "." || segment === "..") return true;
+  if (segment !== "%USERNAME%" && segment.includes("%")) return true;
+  return posix && segment.includes("\\");
+}
+
+/** Identity-bearing roots that must never appear inside a permitted tail. */
+const EMBEDDED_IDENTITY_SEGMENTS: readonly string[] = ["home", "Users"];
+
+/**
+ * Whether any segment of a permitted tail embeds a fresh identity root (a
+ * home root or a Windows drive), which would smuggle a concrete account past
+ * the allowed prefix (for example `…/x/home/alice`).
+ *
+ * @param segments - The segments after a shape's recognized prefix.
+ * @returns True when the tail must keep the whole path a refusal.
+ */
+function embedsIdentityRoot(segments: readonly string[]): boolean {
+  return segments.some((segment) => EMBEDDED_IDENTITY_SEGMENTS.includes(segment) || /^[A-Za-z]:$/.test(segment));
+}
+
+/**
+ * Whether an absolute POSIX path is a public, non-identifying technical form.
+ *
+ * Admits exactly the procfs interface paths (`/proc` itself, `/proc/self/…`,
+ * `/proc/<digits>/…` and `/proc/<placeholder>/…`), the GitHub-hosted runner
+ * workspaces (the fixed hosted account's `work/<seg>/<seg>/…` subtree under
+ * either home root), the hosted tool cache (`/opt/hostedtoolcache/…`) and
+ * placeholder home roots (`<placeholder>` children of either home root).
+ * Every other root — a concrete account, `/root`, `/tmp`, `/var` and friends —
+ * and any path with a traversal or encoding escape, or an identity root
+ * embedded in its tail, stays a refusal.
+ *
+ * @param matched - The complete matched path, starting at its leading slash.
+ * @returns True when the path carries no host or account identity.
+ */
+function isPublicPosixPath(matched: string): boolean {
+  const segments = matched.slice(1).split("/");
+  const [root = "", first = ""] = segments;
+  if (segments.some((segment) => isEscapePathSegment(segment, true))) return false;
+  if (root === "sys") return !embedsIdentityRoot(segments.slice(1));
+  if (root === "proc") {
+    return (first === "" || first === "self" || /^\d+$/.test(first) || isBracketedPlaceholder(first, "<", ">")) &&
+      !embedsIdentityRoot(segments.slice(2));
+  }
+  if (root === "opt") return first === "hostedtoolcache" && !embedsIdentityRoot(segments.slice(2));
+  if (root !== "home" && root !== "Users") return false;
+  if (isHomePlaceholderSegment(first)) return !embedsIdentityRoot(segments.slice(2));
+  return first === "runner" && segments[2] === "work" && (segments[3] ?? "") !== "" && (segments[4] ?? "") !== "" &&
+    !embedsIdentityRoot(segments.slice(5));
+}
+
+/**
+ * Whether a Windows drive path is a public, non-identifying technical form.
+ *
+ * Admits exactly the GitHub-hosted runner workspaces (`D:\a\<seg>\<seg>\…`
+ * with either separator) and placeholder home roots
+ * (`C:\Users\<placeholder>\…`). Any other drive, root or account segment, and
+ * any path with a traversal or encoding escape, or an identity root embedded
+ * in its tail, stays a refusal.
+ *
+ * @param matched - The complete matched path, starting at its drive letter.
+ * @returns True when the path carries no host or account identity.
+ */
+function isPublicWindowsPath(matched: string): boolean {
+  const [drive = "", ...segments] = matched.split(/[\\/]/);
+  const [root = "", first = ""] = segments;
+  if (segments.some((segment) => isEscapePathSegment(segment, false))) return false;
+  if (drive.toLowerCase() === "c:") {
+    return root === "Users" && isHomePlaceholderSegment(first) && !embedsIdentityRoot(segments.slice(2));
+  }
+  return drive.toLowerCase() === "d:" && root === "a" && first !== "" && (segments[2] ?? "") !== "" &&
+    !embedsIdentityRoot(segments.slice(3));
+}
+
+/**
+ * Personal-data signatures: an email that is not a no-reply or documentation
+ * address, and phone numbers in their two common written shapes.
  */
 const PERSONAL_DATA_RULES: readonly ContentRule[] = [
   {
@@ -233,13 +387,18 @@ const PERSONAL_DATA_RULES: readonly ContentRule[] = [
     // contact address, even before a colon and a space, is still matched.
     // The ssh:// form permits only the git service account with a URL path.
     // The lookbehind keeps a match from starting inside a local part.
-    pattern: /(?<![A-Za-z0-9._%+-])(?!(?<=ssh:\/\/)git@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?=\/|:\d+\/))(?!git@[A-Za-z0-9.-]+\.[A-Za-z]{2,}:[A-Za-z0-9_~./-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
+    pattern: /(?<![A-Za-z0-9._%+-])(?!(?<=ssh:\/\/)git@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?=\/|:\d+\/))(?!git@[A-Za-z0-9.-]+\.[A-Za-z]{2,}:[A-Za-z0-9_~./-])[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9.-]+\.[A-Za-z]{2,}[A-Za-z0-9-]*|[Ll][Oo][Cc][Aa][Ll][Hh][Oo][Ss][Tt])(?![A-Za-z0-9-]|\.[A-Za-z0-9])/g,
     // GitHub, GitLab and most mail systems use a "noreply" domain or local part
     // for automated identities; anything else in imported issue text is a real
-    // person's address and fails closed.
+    // person's address and fails closed. RFC 2606/6761 documentation domains
+    // (matched exactly after the at-sign) never deliver to a person, so fixture
+    // addresses on them are public examples rather than personal data; every
+    // registrable look-alike (`notexample.com`, `example.com.evil.io`) still
+    // fails closed.
     confirm: (matched) => {
       const [local, domain] = matched.toLowerCase().split("@");
-      return !/^(?:no-?reply)$/.test(local!) && !/(?:^|\.)no-?reply(?:\.|$)/.test(domain!);
+      if (/^(?:no-?reply)$/.test(local!) || /(?:^|\.)no-?reply(?:\.|$)/.test(domain!)) return false;
+      return !isReservedDocumentationDomain(domain!);
     },
   },
   {
@@ -271,7 +430,10 @@ const PERSONAL_DATA_RULES: readonly ContentRule[] = [
  * and home-directory usernames (`~user`, but never the anonymous `~/`), which
  * would publish the machine and account that produced an import. The list is
  * the POSIX/Windows set a developer workstation actually leaks, mirroring the
- * repository's own object-store privacy gate.
+ * repository's own object-store privacy gate. Each path rule also carries a
+ * `confirm` that keeps exactly the public, non-identifying technical forms
+ * (see the public-forms helpers above) from failing; everything a real
+ * person's machine produces still fails closed.
  */
 const HOST_PATH_RULES: readonly ContentRule[] = [
   {
@@ -283,12 +445,22 @@ const HOST_PATH_RULES: readonly ContentRule[] = [
     // not `/home`). The lead-in is a lookbehind so the match is the path
     // itself; it also admits `file://` URLs and `label:` prefixes (`cwd:/home/…`),
     // whose two-character minimum leaves drive letters to the Windows rule.
-    pattern: /(?<=^|[\s"'`([=,{]|[A-Za-z0-9_]{2}:|file:\/\/)\/(?:home|Users|root|tmp|var|etc|opt|srv|mnt|media|private|Volumes|usr|run|proc|data|nix|scratch|workspace|builds|Library|System)(?=\/|$|[\s"'`<>),;\]}])(?:\/[^\s"'`<>),;\]}]*)?/g,
+    // Every opening or closing bracket is a lead-in too, so a path hidden
+    // directly behind a permitted form (an allowed root followed by `>` or
+    // `;`) is still matched on its own. Angle brackets are continuation
+    // characters (they carry placeholder segments such as `<pid>`), never a
+    // silent stop; the confirm then judges the complete path.
+    pattern: /(?<=^|[\s"'`([=,{<>),;\]}]|[A-Za-z0-9_]{2}:|file:\/\/)\/(?:home|Users|root|tmp|var|etc|opt|srv|mnt|media|private|Volumes|usr|run|proc|sys|data|nix|scratch|workspace|builds|Library|System)(?=\/|$|[\s"'`<>),;\]}])(?:\/[^\s"'`),;\]]*)?/g,
+    confirm: (matched) => !isPublicPosixPath(matched),
   },
   {
     rule: "windows-host-path",
     // A drive letter at a token start, or as a `file:///C:/…` URL path.
-    pattern: /(?:(?<![A-Za-z0-9_:/])|(?<=file:\/\/\/))[A-Za-z]:[\\/][^\s"'`<>),;\]}]+/g,
+    // Angle brackets are continuation characters here too, so placeholder
+    // segments (`<placeholder>` after a Users root) are matched whole and
+    // judged by the confirm instead of truncating the match before them.
+    pattern: /(?:(?<![A-Za-z0-9_:/])|(?<=file:\/\/\/))[A-Za-z]:[\\/][^\s"'`),;\]]+/g,
+    confirm: (matched) => !isPublicWindowsPath(matched),
   },
   {
     rule: "home-username",

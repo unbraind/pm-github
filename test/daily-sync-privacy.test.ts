@@ -9,11 +9,12 @@ const mustAllow = [
   "https://example.invalid/private/path", "https://example.invalid/home/path", "GET /api/items", "./private/path", "src/home/path",
   "git@github.com:fixture/project.git", "ssh://git@github.com/fixture/project.git", "ssh://git@github.com:2222/fixture/project.git",
   "noreply@example.invalid", "bot@users.noreply.github.com", "no-reply@example.invalid",
+  "fixture.person@example.invalid", "ssh://person@example.invalid/repo.git",
 ];
 const mustRefuse = [
   ...["home", "private", "tmp", "etc", "mnt", "Users"].map(root => "/" + root + "/fixture/report"),
-  "C:" + "\\Users\\fixture\\report.txt", "C:" + "/Users" + "/fixture/report.txt", "fixture.person@example.invalid",
-  "ssh://person@example.invalid/repo.git", "git@github.com", "git@github.com: contact", "ssh://git@github.com: contact",
+  "C:" + "\\Users\\fixture\\report.txt", "C:" + "/Users" + "/fixture/report.txt", "fixture.person@example.dev",
+  "ssh://person@example.dev/repo.git", "git@github.com", "git@github.com: contact", "ssh://git@github.com: contact",
   'const path = "/' + 'home sample/";', "const re = /" + "home" + "/fixture/;", "const re = /private paused = true;",
 ];
 

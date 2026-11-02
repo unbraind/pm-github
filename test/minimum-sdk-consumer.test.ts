@@ -20,6 +20,12 @@ function publicEnvironment(): NodeJS.ProcessEnv {
   result.npm_config_userconfig = "/dev/null";
   result.GOMAXPROCS = "2";
   delete result.NODE_OPTIONS;
+  // Allow an explicit transport timer while discarding inherited Node flags.
+  const networkTimer = process.env.PM_GITHUB_TEST_NETWORK_ATTEMPT_TIMEOUT_MS;
+  if (networkTimer !== undefined) {
+    assert.ok(/^[1-9]\d{0,4}$/.test(networkTimer), "Registry transport timer must be a bounded positive integer");
+    result.NODE_OPTIONS = `--network-family-autoselection-attempt-timeout=${networkTimer}`;
+  }
   delete result.NODE_TEST_CONTEXT;
   delete result.NODE_V8_COVERAGE;
   return result;
@@ -73,6 +79,9 @@ test("packed package type-checks and imports against its exact declared minimum 
     const sources = readdirSync(repo).filter(name => name.endsWith(".ts"));
     for (const name of sources) cpSync(join(repo, name), join(source, name));
     cpSync(join(repo, "scripts"), join(source, "scripts"), { recursive: true });
+    // Include the proof's shared corpus dependency in the complete source witness.
+    mkdirSync(join(source, "test"));
+    cpSync(join(repo, "test/gate-public-forms-corpus.ts"), join(source, "test/gate-public-forms-corpus.ts"));
     copyDeclarationSources(join(consumer, "node_modules/pm-github/dist"), join(consumer, "declaration-audit"));
     writeFileSync(join(consumer, "tsconfig.json"), JSON.stringify({ compilerOptions: {
       target: "ES2022", module: "NodeNext", moduleResolution: "NodeNext", strict: true, noEmit: true,

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Allow public technical forms in the tracker privacy gate ([pm-github-01n8](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-01n8.toon))
+
 ## 2026.11.1 - 2026-11-01
 
 ### Fixed
