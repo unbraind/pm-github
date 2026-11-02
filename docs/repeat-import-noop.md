@@ -146,7 +146,13 @@ run after recovery.
 
 ## Completed continuation gates
 
-`NPM_CONFIG_USERCONFIG=/dev/null npm run release:check` passes all 11 checks
+These results are for commit `0245180`. The later commits only change
+`test/import-fidelity.test.ts` (fresh-import path restored, closed_at history
+checks) and this note. For them the complete `test/import-fidelity.test.ts`
+file passes 54/54, with type-check and lint clean. The full gate for the final
+head is the pull request's CI run.
+
+At `0245180`, `NPM_CONFIG_USERCONFIG=/dev/null npm run release:check` passes all 11 checks
 with the operational `NODE_OPTIONS=--max-old-space-size-percentage=60` override
 already used before the abort. No checked-in resource setting, threshold,
 source exclusion or assertion changed. The fresh test phase passes **1,609/1,609**
