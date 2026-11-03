@@ -7,9 +7,7 @@ status: in_progress
 priority: 1
 tags[4]: changelog-unreleased,gate,"gh:unbraind/pm-github#193",privacy
 created_at: "2026-11-02T13:12:32.087Z"
-updated_at: "2026-11-03T02:59:39.352Z"
-assignee: pi-github
-claim_principal: pi-github
+updated_at: "2026-11-03T03:01:13.281Z"
 author: codex-sol
 estimated_minutes: 180
 acceptance_criteria: "Every specified public technical form passes plain, serialized and full tracker scans; concrete host data and non-reserved personal email refusals remain intact; exact removal and broadening mutations pass; eight-repository rule/hash measurement and README boundaries are documented; unchanged release gates pass; branch pushed once without a PR or closing this item."
