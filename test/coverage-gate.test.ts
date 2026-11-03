@@ -250,7 +250,8 @@ test("the effective merge heap stays at the documented ceiling under an inherite
   const env = { ...process.env, NODE_OPTIONS: "--max-old-space-size-percentage=60" };
   const probe = ["-e", "process.stdout.write(String(require('v8').getHeapStatistics().heap_size_limit))"];
   assert.equal(splitHeapOverrides(env.NODE_OPTIONS).rest, undefined);
-  const bounded = spawnSync(process.execPath, [COVERAGE_HEAP_FLAG, ...probe], { env: { ...env, NODE_OPTIONS: "" }, encoding: "utf8" });
+  // Probe the Node executable the gate launches; under Bun, process.execPath is Bun itself.
+  const bounded = spawnSync(nodeToolingExecutable(process.versions), [COVERAGE_HEAP_FLAG, ...probe], { env: { ...env, NODE_OPTIONS: "" }, encoding: "utf8" });
   const mib = Number(bounded.stdout) / 1048576;
   // heap_size_limit adds the young generation to the old-space ceiling.
   assert.ok(mib > 0 && mib <= 3072 + 512, `bounded merge heap ${mib} MiB exceeds the 3072 MiB ceiling`);
@@ -263,7 +264,8 @@ test("test workers keep the caller's inherited heap limit after the split", () =
     const { rest, heap } = splitHeapOverrides("--max-old-space-size=1234 --enable-source-maps");
     const env: NodeJS.ProcessEnv = { ...process.env, NODE_OPTIONS: rest };
     delete env.NODE_TEST_CONTEXT;
-    const run = spawnSync(process.execPath, [...heap, "--test", "--test-concurrency=1", join(dir, "probe.test.cjs")], { cwd: dir, env, encoding: "utf8" });
+    // The gate nests this same Node executable under c8, also when the suite itself runs under Bun.
+    const run = spawnSync(nodeToolingExecutable(process.versions), [...heap, "--test", "--test-concurrency=1", join(dir, "probe.test.cjs")], { cwd: dir, env, encoding: "utf8" });
     const mib = Number(/WORKER_HEAP=(\d+)/.exec(run.stdout)?.[1]) / 1048576;
     // The worker is a separate process: only the runner's forwarded execArgv can set its limit.
     assert.ok(mib >= 1234 && mib <= 1234 + 512, `test worker heap ${mib} MiB does not reflect the inherited 1234 MiB limit`);
