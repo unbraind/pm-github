@@ -129,9 +129,12 @@ import { spawnSync } from "node:child_process";
 import { runCoverageGate } from "./scripts/coverage-gate.ts";
 process.exitCode = runCoverageGate(process.cwd(), (node, args, options) =>
   spawnSync("/usr/bin/time", ["-v", node, ...args.slice(0, 2), "report",
-    ...args.slice(2, args.indexOf("--test") - 1)], options));
+    ...args.slice(2, args.indexOf(node))], options));
 JS
 ```
+
+The c8 options end where the nested `node` command begins. Inherited heap
+limits sit between that `node` and `--test`, so the slice ends at `node`.
 
 Run focused checks with
 `NPM_CONFIG_USERCONFIG=/dev/null node --test test/coverage-gate.test.ts`.
@@ -141,7 +144,9 @@ The independent object store retains the full privacy scan; it does not
 certify or repair unrelated objects in the shared store. Hosted Node 22/26 CI
 is a separate follow-up after publication of the branch.
 
-The single final release check exited zero. All 1,609 tests passed, with zero
+The receipts below are historical: they validate the bounded merge at
+da3f62e, before the inherited `NODE_OPTIONS` handling above was added.
+That revision's single final release check exited zero. All 1,609 tests passed, with zero
 failures, skips or cancellations. Exact coverage across the same 28 modules
 was 13,195/13,195 lines and statements, 422/422 functions, and 5,080/5,080
 branches, with zero skipped source. The final run emitted 3,844 receipts
@@ -157,3 +162,12 @@ Both privacy tests that failed against the unrelated shared-store object
 passed in the independent clone. The shared-store follow-up has since closed:
 the privacy gate passed over the shared store after the stale objects were
 removed.
+
+The current receipt validates the inherited heap handling. Its source matches
+479c029, and the checkout adds only this change's branch-only fixture and
+documentation. A full `npm run coverage` exited zero. All 1,629 tests passed,
+with zero failures, skips or cancellations. Exact coverage across the same 28
+modules was 13,252/13,252 lines and statements, 426/426 functions, and
+5,103/5,103 branches. Its timed peak RSS was 1,672,188 KiB, within 0.5% of the
+historical run. This run inherited no `NODE_OPTIONS`; the probe test above
+covers an inherited heap limit.

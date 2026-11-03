@@ -160,6 +160,16 @@ test("real c8 bounds many-receipt merging and preserves covered, uncovered and u
     assert.ok(lines.covered > 0, "filtering must retain executed included-source counts");
     assert.ok(lines.covered < lines.total, "filtering cannot hide an uncovered included-source line");
     assert.equal(existsSync(join(root, "coverage", "lcov.info")), false);
+
+    // Every line runs but one branch never does, so only the branch counter can fail the gate.
+    writeFileSync(join(root, "source.ts"), 'export function choose(value: boolean): string { return value ? "yes" : "no"; }\n');
+    writeFileSync(testFile, 'import { choose } from "../source.ts"; choose(true);\n');
+    assert.equal(runCoverageGate(root), 1, "an untaken branch on fully covered lines must fail");
+    const branchOnly = (JSON.parse(readFileSync(join(root, "coverage", "coverage-summary.json"), "utf8")) as Record<string, Record<"lines" | "branches", { covered: number; total: number }>>)[join(root, "source.ts")]!;
+    assert.equal(branchOnly.lines.covered, branchOnly.lines.total, "the fixture must leave no uncovered line");
+    assert.ok(branchOnly.branches.covered > 0 && branchOnly.branches.covered < branchOnly.branches.total, "the untaken branch must reach the receipt");
+    assert.equal(existsSync(join(root, "coverage", "lcov.info")), false);
+
     writeFileSync(testFile, fullTest);
     writeFileSync(join(root, "unloaded.ts"), "export function uncovered(): string { return 'never loaded'; }\n");
     assert.equal(runCoverageGate(root), 1);
