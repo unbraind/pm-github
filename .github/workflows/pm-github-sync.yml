@@ -145,8 +145,8 @@ jobs:
           # Release tags keep zero-padded date components (v2026.11.02) while the
           # daily release plan publishes npm versions without padding (2026.11.2),
           # so strip the padding from every component before comparing or installing.
-          # Every operand is validated as N.N.N or N.N.N-N first, which keeps the
-          # arithmetic expansion from ever evaluating untrusted text.
+          # Pure string operations on operands already validated as N.N.N or N.N.N-N:
+          # no arithmetic, so no component can overflow or be evaluated.
           normalize_pm_github_version() {
             local version="${1}" suffix="" normalized="" part
             if [[ "${version}" == *"-"* ]]; then
@@ -156,7 +156,9 @@ jobs:
             local IFS='.'
             read -r -a parts <<< "${version}"
             for part in "${parts[@]}"; do
-              normalized+="${normalized:+.}$((10#${part}))"
+              # Strip the leading zeros as text; an all-zero component stays 0.
+              part="${part#"${part%%[!0]*}"}"
+              normalized+="${normalized:+.}${part:-0}"
             done
             printf '%s' "${normalized}${suffix:+-${suffix}}"
           }

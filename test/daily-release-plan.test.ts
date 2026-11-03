@@ -6,7 +6,7 @@ import { createRequire } from "node:module";
 import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { decideDailyRelease, type DailyReleaseInput } from "../scripts/daily-release-plan.ts";
+import { decideDailyRelease, normalizeReleaseVersion, type DailyReleaseInput } from "../scripts/daily-release-plan.ts";
 
 const input: DailyReleaseInput = { existingPrs: [], mainSha: "new-main", lastRelease: null, today: "2026.10.18" };
 const workflowPr = { number: 144, headRefName: "release/2026.10.17", isCrossRepository: false,
@@ -403,4 +403,14 @@ test("branch cleanup keeps a ref updated after merge instead of adopting its new
   assert.equal(result.outputs, "", "a new remote SHA must not be adopted as a cleanup lease");
   assert.match(result.stdout, /::warning::.*stale info/);
   assert.match(result.stdout, /release continues/);
+});
+
+test("normalizeReleaseVersion strips padding as text and leaves other shapes unchanged", () => {
+  assert.equal(normalizeReleaseVersion("2026.11.02"), "2026.11.2");
+  assert.equal(normalizeReleaseVersion("2027.01.01-2"), "2027.1.1-2");
+  assert.equal(normalizeReleaseVersion("2026.00.000"), "2026.0.0");
+  // Number() would round this to 18446744073709552000; the workflows keep every digit.
+  assert.equal(normalizeReleaseVersion("18446744073709551616.11.02"), "18446744073709551616.11.2");
+  assert.equal(normalizeReleaseVersion("latest"), "latest");
+  assert.equal(normalizeReleaseVersion("2026.11"), "2026.11");
 });

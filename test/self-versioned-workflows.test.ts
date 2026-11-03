@@ -66,6 +66,8 @@ for (const file of files) {
     { name: "numeric version without suffix", tags: `${workflowSha}\trefs/tags/v2027.1.2`, expected: "2027.1.2" },
     { name: "zero-padded tag resolves to the published unpadded version", tags: `${workflowSha}\trefs/tags/v2026.11.02`, expected: "2026.11.2" },
     { name: "zero-padded tag with suffix keeps the suffix", tags: `${workflowSha}\trefs/tags/v2027.01.01-2`, expected: "2027.1.1-2" },
+    { name: "a component past 64-bit range normalizes as text without wrapping", tags: `${workflowSha}\trefs/tags/v18446744073709551616.11.02`, expected: "18446744073709551616.11.2" },
+    { name: "an all-zero component normalizes to 0", tags: `${workflowSha}\trefs/tags/v2026.00.000`, expected: "2026.0.0" },
     { name: "zero-padded legacy input normalizes like a tag", tags: `${otherSha}\trefs/tags/v2020.1.1`, input: "2026.11.02", expected: "2026.11.2", warning: true },
     { name: "padded tag matches a normalized input without warning", tags: `${workflowSha}\trefs/tags/v2026.11.02`, input: "2026.11.2", expected: "2026.11.2" },
     { name: "two padded spellings of one version are not ambiguous", tags: `${workflowSha}\trefs/tags/v2026.11.02\n${workflowSha}\trefs/tags/v2026.11.2`, expected: "2026.11.2" },

@@ -11,7 +11,10 @@ export interface DailyReleaseInput {
  * equals the npm version this plan publishes (2026.11.2). */
 export function normalizeReleaseVersion(version: string): string {
   const match = /^([0-9]+)\.([0-9]+)\.([0-9]+)(-[0-9]+)?$/.exec(version);
-  return match ? `${Number(match[1])}.${Number(match[2])}.${Number(match[3])}${match[4] ?? ""}` : version;
+  if (!match) return version;
+  // Strip zeros as text, matching the workflows: Number() would lose precision.
+  const strip = (part: string): string => part.replace(/^0+(?=[0-9])/, "");
+  return `${strip(match[1]!)}.${strip(match[2]!)}.${strip(match[3]!)}${match[4] ?? ""}`;
 }
 
 /** Rebuild from current main on every eligible run, reusing even yesterday's open PR. */
