@@ -64,8 +64,8 @@ export function collectCoverageSources(root: string, target: string): string[] {
   });
 }
 
-/** Heap ceiling for c8 aggregation on public Linux runners with 16 GB RAM. */
-export const COVERAGE_HEAP_FLAG = "--max-old-space-size=12288";
+/** Measured incremental merge ceiling and margin: docs/bounded-coverage-merge.md. */
+export const COVERAGE_HEAP_FLAG = "--max-old-space-size=3072";
 
 /**
  * Run the strict all-source gate and return its exit status.
@@ -90,12 +90,10 @@ export function runCoverageGate(root: string, runner: CoverageRunner = spawnSync
     const coverageEnv: NodeJS.ProcessEnv = { ...process.env, TZ: "UTC" };
     delete coverageEnv.NODE_TEST_CONTEXT;
     const node = nodeToolingExecutable(process.versions);
-    // c8 merges the raw V8 coverage of every spawned process, including each
-    // real pm CLI child the sync-pipeline tests start. That merge exceeded Node's
-    // former 8 GiB ceiling on Node 26 after all 1,337 tests passed, even with
-    // matrix setup shared. Leave runner headroom with a 12 GiB heap ceiling.
-    // This changes resources only: thresholds, includes and the test set stay unchanged.
-    const result = runner(node, [COVERAGE_HEAP_FLAG, c8, "--100", "--all", "--exclude-after-remap", "--extension=.ts", "--extension=.js",
+    // c8 12 incrementally merges one receipt into its accumulator at a time.
+    // The default retains every raw child receipt, including excluded code.
+    // Keep c8's native remapping and inclusion logic; do not pre-filter URLs.
+    const result = runner(node, [COVERAGE_HEAP_FLAG, c8, "--merge-async", "--100", "--all", "--exclude-after-remap", "--extension=.ts", "--extension=.js",
       `--reports-dir=${reports}`, `--temp-directory=${join(reports, "v8")}`,
       "--reporter=text", "--reporter=lcov", "--reporter=json-summary", "--reporter=json",
       ...sources.map(file => `--include=${file}`), node, "--test", "--test-concurrency=2", ...config.tests],

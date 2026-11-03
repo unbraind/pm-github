@@ -1,6 +1,7 @@
 /** Regression tests for the all-source denominator and fail-closed receipts. */
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -129,10 +130,37 @@ test("coverage gate main entry runs against the supplied root", () => {
   }
 });
 
-test("real c8 requires both branches and rejects a completely unloaded authored module", () => {
+test("real c8 bounds many-receipt merging and preserves covered, uncovered and unloaded sources", () => {
   const root = coverageFixture();
   try {
     assert.equal(runCoverageGate(root), 0);
+    const testFile = join(root, "test", "source.test.ts");
+    const fullTest = readFileSync(testFile, "utf8");
+    // More serialized input than the merge heap can hold. Built-in URLs are
+    // outside the inventory, just like most real child-process receipts.
+    writeFileSync(testFile, fullTest + `
+      import { writeFileSync } from "node:fs";
+      import { join } from "node:path";
+      const noise = JSON.stringify({ result: [{ scriptId: "0", url: "node:coverage-noise",
+        functions: Array.from({ length: 3000 }, () => ({ functionName: "outside",
+          ranges: [{ startOffset: 0, endOffset: 1, count: 0 }], isBlockCoverage: true })) }] });
+      for (let index = 0; index < 512; index++) {
+        writeFileSync(join(process.env.NODE_V8_COVERAGE!, "noise-" + index + ".json"), noise);
+      }
+    `);
+    assert.equal(runCoverageGate(root, (command, args, options) =>
+      spawnSync(command, ["--max-old-space-size=128", ...args.slice(1)], options)), 0,
+      "hundreds of raw receipts must fit a 128 MiB merge heap");
+
+    writeFileSync(join(root, "source.ts"), 'export function choose(value: boolean): string {\n  if (value) {\n    return "yes";\n  }\n  return "no";\n}\n');
+    writeFileSync(testFile, 'import { choose } from "../source.ts"; choose(true);\n');
+    assert.equal(runCoverageGate(root), 1, "an uncovered line in an included URL must fail");
+    const summary = JSON.parse(readFileSync(join(root, "coverage", "coverage-summary.json"), "utf8")) as Record<string, { lines: { covered: number; total: number } }>;
+    const lines = summary[join(root, "source.ts")]!.lines;
+    assert.ok(lines.covered > 0, "filtering must retain executed included-source counts");
+    assert.ok(lines.covered < lines.total, "filtering cannot hide an uncovered included-source line");
+    assert.equal(existsSync(join(root, "coverage", "lcov.info")), false);
+    writeFileSync(testFile, fullTest);
     writeFileSync(join(root, "unloaded.ts"), "export function uncovered(): string { return 'never loaded'; }\n");
     assert.equal(runCoverageGate(root), 1);
     assert.equal(existsSync(join(root, "coverage", "lcov.info")), false);
@@ -149,7 +177,7 @@ test("coverage inventory accepts dot-dot names inside the repository and rejects
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("the c8 merge process gets the enlarged heap before the c8 entry point", () => {
+test("the incremental c8 merge receives its bounded heap before the entry point", () => {
   const seen: string[][] = [];
   const spy: CoverageRunner = (_command, args) => { seen.push([...args]); return { status: 1 }; };
   const root = coverageFixture();
@@ -161,4 +189,5 @@ test("the c8 merge process gets the enlarged heap before the c8 entry point", ()
   assert.equal(seen.length, 1);
   assert.equal(seen[0]![0], COVERAGE_HEAP_FLAG, "the heap flag must precede c8 so the merge process receives it");
   assert.match(seen[0]![1]!, /c8\.js$/);
+  assert.ok(seen[0]!.includes("--merge-async"));
 });
