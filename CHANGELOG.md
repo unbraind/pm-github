@@ -4,7 +4,12 @@
 
 ### Fixed
 
+- Resolve an unrelated unreachable commit identity reported by whole-store privacy checks ([pm-github-privacy-store-followup](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-privacy-store-followup.toon))
 - Reusable workflows fail after pm package install when callers pin zero-padded release tags like v2026.11.02 ([pm-github-4gak](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-4gak.toon))
+
+### Other
+
+- Bound coverage aggregation memory and compare default-heap CI behavior ([pm-github-vhi6](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-vhi6.toon))
 
 ## 2026.11.1 - 2026-11-01
 
