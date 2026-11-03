@@ -5,6 +5,7 @@
 ### Fixed
 
 - Allow public technical forms in the tracker privacy gate ([pm-github-01n8](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-01n8.toon))
+- Reusable workflows fail after pm package install when callers pin zero-padded release tags like v2026.11.02 ([pm-github-4gak](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-4gak.toon))
 
 ### Other
 

@@ -6,6 +6,17 @@ export interface DailyReleaseInput {
   today: string;
 }
 
+/** Strip zero padding from each numeric component of a date-shaped version,
+ * preserving an optional -N suffix, so a release tag's version (v2026.11.02)
+ * equals the npm version this plan publishes (2026.11.2). */
+export function normalizeReleaseVersion(version: string): string {
+  const match = /^([0-9]+)\.([0-9]+)\.([0-9]+)(-[0-9]+)?$/.exec(version);
+  if (!match) return version;
+  // Strip zeros as text, matching the workflows: Number() would lose precision.
+  const strip = (part: string): string => part.replace(/^0+(?=[0-9])/, "");
+  return `${strip(match[1]!)}.${strip(match[2]!)}.${strip(match[3]!)}${match[4] ?? ""}`;
+}
+
 /** Rebuild from current main on every eligible run, reusing even yesterday's open PR. */
 export function decideDailyRelease(input: DailyReleaseInput) {
   // gh represents the GITHUB_TOKEN author as app/github-actions.
@@ -14,9 +25,11 @@ export function decideDailyRelease(input: DailyReleaseInput) {
     && /^release\/\d{4}\.\d{1,2}\.\d{1,2}$/.test(pr.headRefName))
     .sort((a, b) => releaseDate(b.headRefName) - releaseDate(a.headRefName) || b.number - a.number);
   const existingPr = candidates[0];
-  const version = input.today.split(".").map(Number).join(".");
-  const releasedVersion = input.lastRelease?.tag.replace(/^v/, "").split("-")[0]?.split(".").map(Number).join(".");
-  const shouldRelease = releasedVersion !== version && input.lastRelease?.sha !== input.mainSha;
+  const version = normalizeReleaseVersion(input.today);
+  const releasedVersion = input.lastRelease
+    ? normalizeReleaseVersion(input.lastRelease.tag.replace(/^v/, "").split("-")[0]!)
+    : undefined;
+  const shouldRelease = releasedVersion !== version.split("-")[0] && input.lastRelease?.sha !== input.mainSha;
   return {
     should_release: shouldRelease,
     action: !shouldRelease ? "skip" : existingPr ? "refresh" : "create",
