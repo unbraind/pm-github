@@ -162,14 +162,14 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
     name: "remove-placeholder-home-posix",
     description: "placeholder account segments after POSIX home roots must fail again",
     replacements: [{ find: "if (isHomePlaceholderSegment(first)) return !embedsIdentityRoot(segments.slice(2));", replace: "if (isHomePlaceholderSegment(first)) return false;" }],
-    expectFailingAllowRows: ["pm-swarm-placeholder-home", "placeholder-home-bare", "placeholder-home-unicode-segment", "placeholder-home-angle", "placeholder-users-curly", "placeholder-home-dollar", "placeholder-home-braced", "placeholder-home-dotted", "placeholder-home-percent", "placeholder-home-in-markup", "placeholder-home-then-proc", "placeholder-home-then-file-url", "placeholder-home-then-file-notes", "placeholder-home-then-runner-win", "placeholder-home-then-bare-drive", "placeholder-home-then-anonymous-tilde", "placeholder-home-windows-fwd"],
+    expectFailingAllowRows: ["pm-swarm-placeholder-home", "placeholder-home-bare", "placeholder-home-unicode-segment", "placeholder-home-angle", "placeholder-users-curly", "placeholder-home-dollar", "placeholder-home-braced", "placeholder-home-dotted", "placeholder-home-braced-root-subdir", "placeholder-home-percent-root-subdir", "placeholder-home-percent", "placeholder-home-in-markup", "placeholder-home-then-proc", "placeholder-home-then-file-url", "placeholder-home-then-file-notes", "placeholder-home-then-runner-win", "placeholder-home-then-bare-drive", "placeholder-home-then-anonymous-tilde", "placeholder-home-windows-fwd", "placeholder-home-windows-percent-root-subdir"],
     expectPassingRefuseRows: [],
   },
   {
     name: "remove-placeholder-home-windows",
     description: "placeholder account segments after a Windows Users root must fail again",
     replacements: [{ find: "return root === \"Users\" && isHomePlaceholderSegment(first) &&", replace: "return false && root === \"Users\" && isHomePlaceholderSegment(first) &&" }],
-    expectFailingAllowRows: ["placeholder-home-windows", "placeholder-home-windows-fwd", "placeholder-home-windows-username"],
+    expectFailingAllowRows: ["placeholder-home-windows", "placeholder-home-windows-fwd", "placeholder-home-windows-percent-root-subdir", "placeholder-home-windows-username"],
     expectPassingRefuseRows: [],
   },
   {
@@ -275,7 +275,7 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
     description: "a refused path behind any delimiter inside a non-placeholder segment would pass",
     replacements: [{ find: "function hidesHostPathBehindDelimiter(matched: string): boolean {", replace: "function hidesHostPathBehindDelimiter(matched: string): boolean { if (matched.length < 99999) return false;" }],
     expectFailingAllowRows: [],
-    expectPassingRefuseRows: ["smuggled-tilde-after-runner", "smuggled-var-after-bracket", "smuggled-var-after-colon", "smuggled-var-after-equals", "smuggled-var-after-square-bracket", "smuggled-var-after-paren", "smuggled-var-after-pipe", "smuggled-data-after-at-proc", "smuggled-file-url-after-placeholder", "proc-colon-chain-over-cap"],
+    expectPassingRefuseRows: ["smuggled-var-after-bracket", "smuggled-var-after-colon", "smuggled-var-after-equals", "smuggled-var-after-square-bracket", "smuggled-var-after-paren", "smuggled-var-after-pipe", "smuggled-data-after-at-proc", "smuggled-file-url-after-placeholder", "proc-colon-chain-over-cap"],
   },
   {
     name: "revert-delimiter-set",
@@ -290,6 +290,20 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
     replacements: [{ find: "if (PATH_NAME_CHARACTER.test(character)) continue;", replace: "if (!\"<>{}:=\".includes(character)) continue;" }],
     expectFailingAllowRows: [],
     expectPassingRefuseRows: ["smuggled-var-after-square-bracket", "smuggled-var-after-paren", "smuggled-var-after-pipe", "smuggled-data-after-at-proc"],
+  },
+  {
+    name: "bracket-only-placeholder-verdict",
+    description: "judging only bracketed segments in place would let the closing brace or percent of an env placeholder start a second path",
+    replacements: [{ find: "      judgedPlaceholder = isHomePlaceholderSegment(segment);", replace: "      judgedPlaceholder = isBracketedPlaceholder(segment, \"<\", \">\") || isBracketedPlaceholder(segment, \"{\", \"}\");" }],
+    expectFailingAllowRows: ["placeholder-home-braced-root-subdir", "placeholder-home-percent-root-subdir", "placeholder-home-windows-percent-root-subdir"],
+    expectPassingRefuseRows: [],
+  },
+  {
+    name: "revert-tilde-lead-in",
+    description: "with the old listed lead-in, a tilde path straight after a `]`, `)` or `;` that ends a host-path match passes",
+    replacements: [{ find: "pattern: /(?:^|[^\\p{L}\\p{N}._~/\\\\-])~", replace: "pattern: /(?:^|[\\s\"'`([=,])~" }],
+    expectFailingAllowRows: [],
+    expectPassingRefuseRows: ["tilde-after-square-close", "tilde-after-paren-close", "tilde-after-semicolon"],
   },
   {
     name: "ascii-only-name-class",

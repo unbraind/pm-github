@@ -5,7 +5,7 @@ comparison scanner `1dd1691` (the public-forms allowances), bracket-smuggle
 fix `5bf20e2`. The eight-repository measurement below (refreshed 15:53Z on
 2026-11-02), the 134-test recovery regression run and the complete fresh
 release check all predate `5bf20e2`; the review-round receipts (this
-document's timing runs, corpus counts and 28-mutation proof) were produced on
+document's timing runs, corpus counts and 30-mutation proof) were produced on
 the branch head after it.
 
 ## Inherited diff audit
@@ -62,7 +62,17 @@ mutations, plus a property test over all 26 printable ASCII punctuation
 characters. With the old list restored, that test exposes 12 of them
 (`! # $ & ( * + ? @ [ ^ |`). A read-only local comparison of the previous and
 current gate over every fleet repository's tracker files (12,002 files and
-198,914 path-bearing lines on 2026-11-03) found no added or lost host-path hits. Sysfs was previously outside the host-root signature; it is
+198,914 path-bearing lines on 2026-11-03) found no added or lost host-path hits. The fifth
+round judges whole env placeholder segments (`${USER}`, `%USERNAME%`) in place,
+like the bracketed ones, so their `}` or `%` never starts a second path. It also
+widens the `home-username` boundary to the same non-name set, so a tilde path
+written straight after a `]`, `)` or `;` that ends a host-path match still
+refuses. Sticky rule copies now keep each pattern's flags. Three must-allow rows,
+three must-refuse rows, the `bracket-only-placeholder-verdict` and
+`revert-tilde-lead-in` mutations, and a tilde property test cover the change.
+With the old boundary, the test exposes `) ; ]`. The fleet comparison against
+the fourth-round gate, including `home-username`, again found no added or lost
+hits. Sysfs was previously outside the host-root signature; it is
 now explicitly scanned so its allowance and traversal refusal are observable.
 
 ## Review round: recursion, delimiters and tail roots
@@ -91,7 +101,7 @@ corpus rows cover both directions, and every new check has its own mutation.
 
 ## Corpus and proof
 
-The shared corpus has 57 must-allow and 76 must-refuse rows. Every row runs as
+The shared corpus has 60 must-allow and 79 must-refuse rows. Every row runs as
 plain text and JSON-escaped TOON text and through a complete synthetic tracker
 diff; allow rows also run as whole JSON strings and JSONL history changes.
 Refusal findings retain their expected rule and item attribution. All corpus
@@ -121,8 +131,8 @@ flips and import failures fail the proof. Temporary copies are removed.
 | `remove-runner-workspace-posix` | 4 | 0 |
 | `remove-runner-workspace-windows` | 5 | 0 |
 | `remove-toolcache-allowance` | 1 | 0 |
-| `remove-placeholder-home-posix` | 17 | 0 |
-| `remove-placeholder-home-windows` | 3 | 0 |
+| `remove-placeholder-home-posix` | 20 | 0 |
+| `remove-placeholder-home-windows` | 4 | 0 |
 | `broaden-reserved-domain-anchor` | 0 | 7 |
 | `broaden-runner-shape-posix` | 0 | 3 |
 | `broaden-runner-shape-windows` | 0 | 2 |
@@ -134,10 +144,12 @@ flips and import failures fail the proof. Temporary copies are removed.
 | `allow-procfs-root-continuation` | 0 | 2 |
 | `broaden-proc-shape` | 0 | 3 |
 | `remove-bracket-leadins` | 0 | 1 |
-| `remove-bracket-smuggle-check` | 0 | 10 |
+| `remove-bracket-smuggle-check` | 0 | 9 |
 | `revert-delimiter-set` | 0 | 7 |
 | `revert-to-listed-delimiters` | 0 | 4 |
 | `ascii-only-name-class` | 1 | 0 |
+| `bracket-only-placeholder-verdict` | 3 | 0 |
+| `revert-tilde-lead-in` | 0 | 3 |
 | `revert-embedded-identity-list` | 0 | 8 |
 | `remove-proc-root-exception` | 2 | 0 |
 | `remove-runner-tmp-exemption` | 2 | 0 |

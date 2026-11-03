@@ -136,6 +136,9 @@ export const PUBLIC_FORMS_MUST_ALLOW: readonly PublicFormRow[] = [
   { id: "placeholder-home-dollar", line: "cache at " + posix("home", "$USER", ".cache"), allowGroup: "placeholder-home-posix" },
   { id: "placeholder-home-braced", line: "cache at " + posix("home", "${USER}", ".cache"), allowGroup: "placeholder-home-posix" },
   { id: "placeholder-home-dotted", line: "open " + posix("home", "<user.name>", "project"), allowGroup: "placeholder-home-posix" },
+  // Whole env placeholders are judged in place, so a root-named subdirectory after one stays inside the placeholder home.
+  { id: "placeholder-home-braced-root-subdir", line: "clone into " + posix("home", "${USER}", "workspace", "repo"), allowGroup: "placeholder-home-posix" },
+  { id: "placeholder-home-percent-root-subdir", line: "open " + posix("home", "%USERNAME%", "data", "x"), allowGroup: "placeholder-home-posix" },
   { id: "placeholder-home-percent", line: "open " + posix("home", "%USERNAME%", "project"), allowGroup: "placeholder-home-posix" },
   { id: "placeholder-home-in-markup", line: "see <code>" + posix("home", "<user>", "repo") + "</code>", allowGroup: "placeholder-home-posix" },
   { id: "placeholder-home-then-proc", line: "compare " + posix("home", "<user>", "notes") + ">" + posix("proc", "self", "status"), allowGroup: "placeholder-home-posix" },
@@ -146,6 +149,7 @@ export const PUBLIC_FORMS_MUST_ALLOW: readonly PublicFormRow[] = [
   { id: "placeholder-home-then-anonymous-tilde", line: "compare " + posix("home", "example", "x") + ">~/notes", allowGroup: "placeholder-home-posix" },
   { id: "placeholder-home-windows", line: "config at " + winBack("C", "Users", "example", "file"), allowGroup: "placeholder-home-windows" },
   { id: "placeholder-home-windows-fwd", line: "config at " + winFwd("C", "Users", "<user>", "file"), allowGroup: "placeholder-home-windows" },
+  { id: "placeholder-home-windows-percent-root-subdir", line: "open " + winFwd("C", "Users", "%USERNAME%", "data", "x"), allowGroup: "placeholder-home-windows" },
   { id: "placeholder-home-windows-username", line: "config at " + winBack("C", "Users", "%USERNAME%", "settings.json"), allowGroup: "placeholder-home-windows" },
 ];
 
@@ -170,6 +174,10 @@ export const PUBLIC_FORMS_MUST_REFUSE: readonly PublicFormRefuseRow[] = [
   { id: "win-users-alice", line: "crash at " + winBack("C", "Users", "alice", "debug.log"), rule: "windows-host-path", refuseGroup: "concrete-home" },
   { id: "win-users-alice-fwd", line: "crash at " + winFwd("C", "Users", "alice", "debug.log"), rule: "windows-host-path", refuseGroup: "concrete-home" },
   { id: "tilde-alice", line: "see ~alice/report.txt", rule: "home-username", refuseGroup: "concrete-home" },
+  // A `]`, `)` or `;` ends the host-path match; the tilde path written straight after it is still a username leak.
+  { id: "tilde-after-square-close", line: "see " + posix("home", "example", "x") + "]~alice/report", rule: "home-username", refuseGroup: "concrete-home" },
+  { id: "tilde-after-paren-close", line: "see " + posix("home", "example", "x") + ")~alice/report", rule: "home-username", refuseGroup: "concrete-home" },
+  { id: "tilde-after-semicolon", line: "see " + posix("home", "example", "x") + ";~alice/report", rule: "home-username", refuseGroup: "concrete-home" },
   // --- root and temp trees (temp paths can embed home paths) --------------
   { id: "pm-ops-root-file", line: "reproduce by reading " + posix("root", "file"), rule: "absolute-host-path", refuseGroup: "root-and-temp" },
   { id: "pm-ops-tmp-fence", line: "run mkdir " + posix("tmp", "fence"), rule: "absolute-host-path", refuseGroup: "root-and-temp" },

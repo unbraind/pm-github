@@ -155,6 +155,25 @@ test("no printable punctuation can hide a refused path behind a permitted prefix
   assert.deepStrictEqual(exposed, [], `punctuation that hides the refused path: ${exposed.join(" ")}`);
 });
 
+test("no printable punctuation can hide a named tilde path after a permitted prefix", () => {
+  // Whether the punctuation continues the host-path match (judged as a
+  // delimiter) or ends it (the tilde rule's own boundary), `~alice/` refuses.
+  const punctuation = Array.from({ length: 0x7f - 0x21 }, (_, offset) => String.fromCharCode(0x21 + offset))
+    .filter((character) => !/[A-Za-z0-9._~/\\-]/.test(character));
+  const exposed = punctuation.filter((character) => {
+    const line = "see " + posix("home", "example", "x") + character + "~alice/report";
+    return !scanLineForRuleHits(line).some((hit) => hit.rule === "absolute-host-path" || hit.rule === "home-username");
+  });
+  assert.deepStrictEqual(exposed, [], `punctuation that hides the tilde path: ${exposed.join(" ")}`);
+});
+
+test("whole env placeholder segments never start a second path", () => {
+  for (const line of [posix("home", "${USER}", "workspace", "repo"), posix("Users", "${USER}", "builds", "x"),
+    posix("home", "%USERNAME%", "data", "x"), "C:/Users/%USERNAME%/data/x"]) {
+    assert.deepStrictEqual(scanLineForRuleHits("see " + line), [], `${line} is a placeholder home path`);
+  }
+});
+
 test("a long chain of delimiter-started public paths fails closed in linear time", () => {
   // Each delimiter-started path copies and judges the remaining suffix, so an
   // uncapped chain is quadratic (measured: 1.4 s at 1,000 paths and 13.4 s at

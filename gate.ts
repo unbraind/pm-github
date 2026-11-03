@@ -483,8 +483,8 @@ const MAX_DELIMITER_PATH_JUDGMENTS = 64;
  * Whether a delimiter inside a matched path begins a second host path that
  * would be refused on its own.
  *
- * Angle and curly brackets are continuation characters so whole placeholder
- * segments (`<pid>`, `{user}`) are judged in place. A delimiter (any character
+ * A whole placeholder segment (`<pid>`, `{user}`, `${USER}`, `%USERNAME%`)
+ * is judged in place, so its brackets, `$` and `%` never start a second path. A delimiter (any character
  * outside {@link PATH_NAME_CHARACTER}) in any other segment — including the
  * `:` or `=` of a label or assignment prefix — can end one path and begin the
  * next (a root-account, temp, other-drive or
@@ -521,7 +521,7 @@ function hidesHostPathBehindDelimiter(matched: string): boolean {
       while (segmentEnd < matched.length && matched[segmentEnd] !== "/" && matched[segmentEnd] !== "\\") segmentEnd++;
       judgedSegmentStart = segmentStart;
       const segment = matched.slice(segmentStart, segmentEnd);
-      judgedPlaceholder = isBracketedPlaceholder(segment, "<", ">") || isBracketedPlaceholder(segment, "{", "}");
+      judgedPlaceholder = isHomePlaceholderSegment(segment);
     }
     if (judgedPlaceholder || !startsWithHostPathStart(matched, index + 1)) continue;
     // Each judgment copies and checks the remaining suffix, so bound how many
@@ -627,8 +627,11 @@ const HOST_PATH_RULES: readonly ContentRule[] = [
     // A leading tilde followed by a name AND a path separator is a username
     // leak (`~alice/report.txt`); `~/` (anonymous), `~~strikethrough~~`, and
     // prose approximations (`~most users`) are excluded by the boundary and
-    // the required trailing slash.
-    pattern: /(?:^|[\s"'`([=,])~[A-Za-z][A-Za-z0-9._-]*\/[^\s"'`<>),;\]}]*/g,
+    // the required trailing slash. The boundary is any character outside the
+    // segment-name class and the path separators, the same set the delimiter
+    // scan uses, so a `]`, `)` or `;` that ends a host-path match cannot hide
+    // a tilde path written straight after it.
+    pattern: /(?:^|[^\p{L}\p{N}._~/\\-])~[A-Za-z][A-Za-z0-9._-]*\/[^\s"'`<>),;\]}]*/gu,
   },
 ];
 
@@ -640,7 +643,8 @@ const HOST_PATH_RULES: readonly ContentRule[] = [
  * rules — and therefore without re-entering their confirms — recursively.
  */
 const STICKY_HOST_PATH_PATTERNS: ReadonlyMap<string, RegExp> = new Map(
-  HOST_PATH_RULES.map((rule) => [rule.rule, new RegExp(rule.pattern.source, "y")] as const),
+  // Keep every flag but the global one (the tilde rule needs `u`).
+  HOST_PATH_RULES.map((rule) => [rule.rule, new RegExp(rule.pattern.source, `${rule.pattern.flags.replace("g", "")}y`)] as const),
 );
 
 /** Identifier segments whose presence marks an assignment target as secret-bearing. */
