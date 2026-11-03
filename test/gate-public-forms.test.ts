@@ -129,11 +129,27 @@ test("the delimiter check answers adversarial bracket chains in bounded time", (
   const procSegment = posix("proc", "self", "x");
   const chain = "read " + (procSegment + ">").repeat(40);
   const bracketRun = "read " + procSegment + ">".repeat(20000);
-  for (const line of [chain, bracketRun]) {
+  // A long run of delimiters that never start a path stays linear: no suffix is
+  // copied or judged, and no segment end is searched twice (quadratic before).
+  const colonRun = "read " + procSegment + ":".repeat(20000);
+  for (const line of [chain, bracketRun, colonRun]) {
     const started = performance.now();
     const hits = scanLineForRuleHits(line);
     const elapsed = performance.now() - started;
     assert.deepStrictEqual(hits, []);
     assert.ok(elapsed < 200, `${line.length}-character adversarial line took ${elapsed.toFixed(1)} ms`);
   }
+});
+
+test("a long chain of delimiter-started public paths fails closed in linear time", () => {
+  // Each delimiter-started path copies and judges the remaining suffix, so an
+  // uncapped chain is quadratic (measured: 1.4 s at 1,000 paths and 13.4 s at
+  // 4,000 before the cap). Past the cap the match fails closed, so a hostile
+  // line costs at most the capped number of suffix judgments.
+  const chain = "read " + Array.from({ length: 1000 }, () => posix("proc", "self", "status")).join(":");
+  const started = performance.now();
+  const hits = scanLineForRuleHits(chain);
+  const elapsed = performance.now() - started;
+  assert.deepStrictEqual(hits.map((hit) => hit.rule), ["absolute-host-path"]);
+  assert.ok(elapsed < 1000, `${chain.length}-character delimiter chain took ${elapsed.toFixed(1)} ms`);
 });

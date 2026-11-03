@@ -90,6 +90,8 @@ export const PUBLIC_FORMS_MUST_ALLOW: readonly PublicFormRow[] = [
   { id: "proc-self-root-only", line: "resolve " + posix("proc", "self"), allowGroup: "procfs" },
   { id: "proc-digits", line: "cat " + posix("proc", "1234", "stat"), allowGroup: "procfs" },
   { id: "proc-placeholder", line: "read " + posix("proc", "<proc-id>", "maps"), allowGroup: "procfs" },
+  // 65 public procfs paths joined by colons: 64 delimiter-started judgments, exactly the cap.
+  { id: "proc-colon-chain-at-cap", line: "search " + Array.from({ length: 65 }, () => posix("proc", "self", "status")).join(":"), allowGroup: "procfs" },
   { id: "proc-self-root-entry", line: "resolve " + posix("proc", "self", "root"), allowGroup: "procfs" },
   { id: "proc-digits-root-entry", line: "readlink " + posix("proc", "1234", "root"), allowGroup: "procfs" },
   { id: "sys-bare", line: "enumerate " + posix("sys"), allowGroup: "sysfs" },
@@ -234,6 +236,8 @@ export const PUBLIC_FORMS_MUST_REFUSE: readonly PublicFormRefuseRow[] = [
   { id: "other-drive", line: "at " + winFwd("E", "a", "x", "x"), rule: "windows-host-path", refuseGroup: "other-drive" },
   { id: "c-other-root", line: "at " + winFwd("C", "Work", "example"), rule: "windows-host-path", refuseGroup: "other-drive" },
   // --- proc shapes outside the permitted form ----------------------------------
+  // 66 public procfs paths: one judgment past the cap, which fails closed.
+  { id: "proc-colon-chain-over-cap", line: "search " + Array.from({ length: 66 }, () => posix("proc", "self", "status")).join(":"), rule: "absolute-host-path", refuseGroup: "proc-shape" },
   { id: "proc-root-file", line: "read " + posix("proc", "uptime"), rule: "absolute-host-path", refuseGroup: "proc-shape" },
   { id: "proc-unclosed", line: "read " + posix("proc", "<pid", "x"), rule: "absolute-host-path", refuseGroup: "proc-shape" },
   { id: "proc-curly", line: "read " + posix("proc", "{pid}", "x"), rule: "absolute-host-path", refuseGroup: "proc-shape" },

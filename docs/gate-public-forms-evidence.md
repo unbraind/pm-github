@@ -5,7 +5,7 @@ comparison scanner `1dd1691` (the public-forms allowances), bracket-smuggle
 fix `5bf20e2`. The eight-repository measurement below (refreshed 15:53Z on
 2026-11-02), the 134-test recovery regression run and the complete fresh
 release check all predate `5bf20e2`; the review-round receipts (this
-document's timing runs, corpus counts and 24-mutation proof) were produced on
+document's timing runs, corpus counts and 25-mutation proof) were produced on
 the branch head after it.
 
 ## Inherited diff audit
@@ -47,7 +47,10 @@ runner workspace. The review round adds four mutations: the reverted
 delimiter set (`:`/`=`), the reverted embedded-identity list, the removed
 procfs root-entry exception and the removed runner `tmp` exemption, and it
 re-points the bracket-smuggle and embedded-identity mutations at the rows the
-new checks now own. Sysfs was previously outside the host-root signature; it is
+new checks now own. The second review round caps delimiter-started path
+judgments per match at 64 (a 65-path procfs chain passes, a 66-path chain
+fails closed) and adds the `remove-delimiter-judgment-cap` mutation; before the
+cap a 4,000-path chain took 13.4 s, after it 0.6 s. Sysfs was previously outside the host-root signature; it is
 now explicitly scanned so its allowance and traversal refusal are observable.
 
 ## Review round: recursion, delimiters and tail roots
@@ -76,7 +79,7 @@ corpus rows cover both directions, and every new check has its own mutation.
 
 ## Corpus and proof
 
-The shared corpus has 54 must-allow and 69 must-refuse rows. Every row runs as
+The shared corpus has 55 must-allow and 70 must-refuse rows. Every row runs as
 plain text and JSON-escaped TOON text and through a complete synthetic tracker
 diff; allow rows also run as whole JSON strings and JSONL history changes.
 Refusal findings retain their expected rule and item attribution. All corpus
@@ -98,7 +101,7 @@ flips and import failures fail the proof. Temporary copies are removed.
 | Mutation | Allow flips | Refuse flips |
 | --- | ---: | ---: |
 | `remove-sysfs-allowance` | 2 | 0 |
-| `remove-procfs-allowance` | 12 | 0 |
+| `remove-procfs-allowance` | 13 | 0 |
 | `remove-reserved-domain-allowance` | 12 | 0 |
 | `remove-git-transport-allowance` | 4 | 0 |
 | `remove-runner-workspace-posix` | 3 | 0 |
@@ -116,11 +119,12 @@ flips and import failures fail the proof. Temporary copies are removed.
 | `remove-embedded-identity-check` | 0 | 14 |
 | `broaden-proc-shape` | 0 | 3 |
 | `remove-bracket-leadins` | 0 | 1 |
-| `remove-bracket-smuggle-check` | 0 | 5 |
-| `revert-delimiter-set` | 0 | 2 |
+| `remove-bracket-smuggle-check` | 0 | 6 |
+| `revert-delimiter-set` | 0 | 3 |
 | `revert-embedded-identity-list` | 0 | 10 |
 | `remove-proc-root-exception` | 2 | 0 |
 | `remove-runner-tmp-exemption` | 2 | 0 |
+| `remove-delimiter-judgment-cap` | 0 | 1 |
 
 The proof harness also tests unreadable source, invalid baselines, source-anchor
 drift, changed row expectations, private diagnostic suppression, cleanup and

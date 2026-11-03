@@ -416,11 +416,13 @@ const HOST_PATH_DELIMITERS = "<>{}:=";
  * start on: a POSIX root slash, a tilde username, a Windows drive, or a
  * `file://` URL. Every other continuation is ordinary path content.
  *
- * @param rest - The text following one delimiter.
+ * @param text - The complete matched path.
+ * @param offset - The index directly after one delimiter.
  * @returns Whether the delimiter can end one path and begin the next.
  */
-function startsWithHostPathStart(rest: string): boolean {
-  return rest.startsWith("file://") || rest[0] === "/" || rest[0] === "~" || /^[A-Za-z]:[\\/]/.test(rest);
+function startsWithHostPathStart(text: string, offset: number): boolean {
+  const first = text[offset];
+  return text.startsWith("file://", offset) || first === "/" || first === "~" || /^[A-Za-z]:[\\/]/.test(text.slice(offset, offset + 3));
 }
 
 /**
@@ -463,6 +465,13 @@ function refusedHostPathAfterDelimiter(rest: string): boolean {
 }
 
 /**
+ * Most delimiter-started paths one match may have judged. Each judgment copies
+ * and checks the remaining suffix, so the bound keeps a match's cost linear in
+ * its length; a match with more delimiter-started paths fails closed.
+ */
+const MAX_DELIMITER_PATH_JUDGMENTS = 64;
+
+/**
  * Whether a delimiter inside a matched path begins a second host path that
  * would be refused on its own.
  *
@@ -473,10 +482,11 @@ function refusedHostPathAfterDelimiter(rest: string): boolean {
  * tilde-username path written straight after it), so the text after it is
  * judged with the public-path predicates, exactly as if it stood alone.
  *
- * The scan is deliberately linear: one pass keeps the segment start, each
- * segment's placeholder verdict is computed once, only delimiters directly
- * followed by a possible path start are judged, and the sticky rule patterns
- * are built once (see {@link STICKY_HOST_PATH_PATTERNS}) — never rebuilt per
+ * The scan is linear in the match length: one pass keeps the segment start,
+ * each segment is scanned forward once for its placeholder verdict, only
+ * delimiters directly followed by a possible path start are judged (at most
+ * {@link MAX_DELIMITER_PATH_JUDGMENTS}; more fail closed), and the sticky rule
+ * patterns are built once (see {@link STICKY_HOST_PATH_PATTERNS}) — never rebuilt per
  * delimiter and rule, and never re-entered recursively.
  *
  * @param matched - The complete matched path.
@@ -486,8 +496,8 @@ function refusedHostPathAfterDelimiter(rest: string): boolean {
 function hidesHostPathBehindDelimiter(matched: string): boolean {
   let segmentStart = 0;
   let judgedSegmentStart = -1;
-  let judgedSegmentEnd = -1;
   let judgedPlaceholder = false;
+  let judgments = 0;
   for (let index = 0; index < matched.length; index++) {
     const character = matched[index]!;
     if (character === "/" || character === "\\") {
@@ -496,16 +506,20 @@ function hidesHostPathBehindDelimiter(matched: string): boolean {
     }
     if (!HOST_PATH_DELIMITERS.includes(character)) continue;
     if (segmentStart !== judgedSegmentStart) {
-      const nextSeparators = [matched.indexOf("/", index), matched.indexOf("\\", index)]
-        .filter((position) => position !== -1);
+      // Forward scan to this segment's end: each segment is scanned once, so
+      // the whole pass stays linear in the match length.
+      let segmentEnd = index;
+      while (segmentEnd < matched.length && matched[segmentEnd] !== "/" && matched[segmentEnd] !== "\\") segmentEnd++;
       judgedSegmentStart = segmentStart;
-      judgedSegmentEnd = nextSeparators.length === 0 ? matched.length : Math.min(...nextSeparators);
-      const segment = matched.slice(segmentStart, judgedSegmentEnd);
+      const segment = matched.slice(segmentStart, segmentEnd);
       judgedPlaceholder = isBracketedPlaceholder(segment, "<", ">") || isBracketedPlaceholder(segment, "{", "}");
     }
-    if (judgedPlaceholder) continue;
-    const rest = matched.slice(index + 1);
-    if (startsWithHostPathStart(rest) && refusedHostPathAfterDelimiter(rest)) return true;
+    if (judgedPlaceholder || !startsWithHostPathStart(matched, index + 1)) continue;
+    // Each judgment copies and checks the remaining suffix, so bound how many
+    // one match may request; a match needing more fails closed.
+    judgments += 1;
+    if (judgments > MAX_DELIMITER_PATH_JUDGMENTS) return true;
+    if (refusedHostPathAfterDelimiter(matched.slice(index + 1))) return true;
   }
   return false;
 }

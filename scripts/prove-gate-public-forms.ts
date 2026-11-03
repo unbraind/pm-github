@@ -117,7 +117,7 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
     name: "remove-procfs-allowance",
     description: "procfs interface paths must fail again",
     replacements: [{ find: "if (root === \"proc\") {", replace: "if (root === \"proc\") return false; if (root === \"proc\") {" }],
-    expectFailingAllowRows: ["pm-review-title", "pm-review-body-proc-pid", "pm-review-body-proc-bare", "proc-bare", "proc-self", "proc-self-root-only", "proc-digits", "proc-placeholder", "placeholder-home-then-proc", "proc-self-root-entry", "proc-digits-root-entry", "placeholder-home-then-file-url"],
+    expectFailingAllowRows: ["pm-review-title", "pm-review-body-proc-pid", "pm-review-body-proc-bare", "proc-bare", "proc-self", "proc-self-root-only", "proc-digits", "proc-placeholder", "placeholder-home-then-proc", "proc-self-root-entry", "proc-digits-root-entry", "placeholder-home-then-file-url", "proc-colon-chain-at-cap"],
     expectPassingRefuseRows: [],
   },
   {
@@ -265,14 +265,21 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
     description: "a refused path behind any delimiter inside a non-placeholder segment would pass",
     replacements: [{ find: "function hidesHostPathBehindDelimiter(matched: string): boolean {", replace: "function hidesHostPathBehindDelimiter(matched: string): boolean { if (matched.length < 99999) return false;" }],
     expectFailingAllowRows: [],
-    expectPassingRefuseRows: ["smuggled-tilde-after-runner", "smuggled-var-after-bracket", "smuggled-var-after-colon", "smuggled-var-after-equals", "smuggled-file-url-after-placeholder"],
+    expectPassingRefuseRows: ["smuggled-tilde-after-runner", "smuggled-var-after-bracket", "smuggled-var-after-colon", "smuggled-var-after-equals", "smuggled-file-url-after-placeholder", "proc-colon-chain-over-cap"],
   },
   {
     name: "revert-delimiter-set",
     description: "without colon and equals as delimiters, a path hidden behind a label or assignment prefix passes",
     replacements: [{ find: "const HOST_PATH_DELIMITERS = \"<>{}:=\";", replace: "const HOST_PATH_DELIMITERS = \"<>{}\";" }],
     expectFailingAllowRows: [],
-    expectPassingRefuseRows: ["smuggled-var-after-colon", "smuggled-var-after-equals"],
+    expectPassingRefuseRows: ["smuggled-var-after-colon", "smuggled-var-after-equals", "proc-colon-chain-over-cap"],
+  },
+  {
+    name: "remove-delimiter-judgment-cap",
+    description: "without the judgment cap, a match with more delimiter-started paths than the bound passes instead of failing closed",
+    replacements: [{ find: "if (judgments > MAX_DELIMITER_PATH_JUDGMENTS) return true;", replace: "" }],
+    expectFailingAllowRows: [],
+    expectPassingRefuseRows: ["proc-colon-chain-over-cap"],
   },
   {
     name: "revert-embedded-identity-list",
