@@ -80,9 +80,9 @@ const HEAP_OVERRIDE = /^--max[-_]old[-_]space[-_]size(?:[-_]percentage)?(=|$)/;
  * @returns The remaining options, or undefined when none remain.
  */
 export function withoutHeapOverrides(nodeOptions: string | undefined): string | undefined {
-  // Node reads NODE_OPTIONS as whitespace-separated options whose double-quoted parts may hold spaces and
-  // backslash escapes. Judge each option by its unquoted value; keep unrelated options byte-for-byte.
-  const tokens = (nodeOptions ?? "").match(/(?:"(?:[^"\\]|\\.)*"|[^\s"])+/g) ?? [];
+  // Node splits NODE_OPTIONS on spaces only (a tab or newline stays inside an option), and double-quoted parts
+  // may hold spaces and backslash escapes. Judge each option by its unquoted value; keep the rest byte-for-byte.
+  const tokens = (nodeOptions ?? "").match(/(?:"(?:[^"\\]|\\.)*"|[^ "])+/g) ?? [];
   const unquote = (raw: string) => raw.replace(/"((?:[^"\\]|\\.)*)"/g, (_quoted, inner: string) => inner.replace(/\\(.)/g, "$1"));
   const kept: string[] = [];
   for (let index = 0; index < tokens.length; index++) {

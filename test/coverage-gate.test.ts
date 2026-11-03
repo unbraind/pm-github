@@ -199,6 +199,8 @@ test("inherited NODE_OPTIONS heap limits never reach the bounded c8 merge", () =
   assert.equal(withoutHeapOverrides("--enable-source-maps --max_old_space_size 9000 --max-old-space-size=8192 --max-old-space-size-percentage 60 --trace-warnings"),
     "--enable-source-maps --trace-warnings");
   assert.equal(withoutHeapOverrides("--max-old-space-size --trace-warnings"), "--trace-warnings");
+  // Node splits on spaces only: an unquoted tab stays inside its option.
+  assert.equal(withoutHeapOverrides("--title=build\tworker --max-old-space-size=8192"), "--title=build\tworker");
   // Quoted options are judged by their unquoted value; unrelated quoted options keep their raw text.
   assert.equal(withoutHeapOverrides('"--max-old-space-size-percentage=60" --trace-warnings'), "--trace-warnings");
   assert.equal(withoutHeapOverrides('--max-old-space-size="8192" --require "./a b.js"'), '--require "./a b.js"');
