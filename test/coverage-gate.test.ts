@@ -188,6 +188,7 @@ test("the incremental c8 merge receives its bounded heap before the entry point"
   }
   assert.equal(seen.length, 1);
   assert.equal(seen[0]![0], COVERAGE_HEAP_FLAG, "the heap flag must precede c8 so the merge process receives it");
+  assert.equal(seen[0]![0], "--max-old-space-size=3072", "the heap ceiling must match docs/bounded-coverage-merge.md");
   assert.match(seen[0]![1]!, /c8\.js$/);
   assert.ok(seen[0]!.includes("--merge-async"));
 });
