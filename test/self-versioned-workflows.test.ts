@@ -5,6 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { decideDailyRelease } from "../scripts/daily-release-plan.ts";
 
 const root = resolve(import.meta.dirname, "..");
 const files = [".github/workflows/pm-github-sync.yml", ".github/workflows/pm-github-closeout.yml"];
@@ -63,6 +64,13 @@ for (const file of files) {
     { name: "peeled tag before object", tags: `${workflowSha}\trefs/tags/v${version}^{}\n${otherSha}\trefs/tags/v${version}`, expected: version },
     { name: "unrelated and malformed tags ignored", tags: `${otherSha}\trefs/tags/v2020.1.1\n${workflowSha}\trefs/tags/vlatest\n${workflowSha}\trefs/tags/v${version}`, expected: version },
     { name: "numeric version without suffix", tags: `${workflowSha}\trefs/tags/v2027.1.2`, expected: "2027.1.2" },
+    { name: "zero-padded tag resolves to the published unpadded version", tags: `${workflowSha}\trefs/tags/v2026.11.02`, expected: "2026.11.2" },
+    { name: "zero-padded tag with suffix keeps the suffix", tags: `${workflowSha}\trefs/tags/v2027.01.01-2`, expected: "2027.1.1-2" },
+    { name: "a component past 64-bit range normalizes as text without wrapping", tags: `${workflowSha}\trefs/tags/v18446744073709551616.11.02`, expected: "18446744073709551616.11.2" },
+    { name: "an all-zero component normalizes to 0", tags: `${workflowSha}\trefs/tags/v2026.00.000`, expected: "2026.0.0" },
+    { name: "zero-padded legacy input normalizes like a tag", tags: `${otherSha}\trefs/tags/v2020.1.1`, input: "2026.11.02", expected: "2026.11.2", warning: true },
+    { name: "padded tag matches a normalized input without warning", tags: `${workflowSha}\trefs/tags/v2026.11.02`, input: "2026.11.2", expected: "2026.11.2" },
+    { name: "two padded spellings of one version are not ambiguous", tags: `${workflowSha}\trefs/tags/v2026.11.02\n${workflowSha}\trefs/tags/v2026.11.2`, expected: "2026.11.2" },
     { name: "no match with legacy input", tags: `${otherSha}\trefs/tags/v2020.1.1`, input: "2020.1.1", expected: "2020.1.1", warning: true },
     { name: "tag overrides mismatched input", tags: `${workflowSha}\trefs/tags/v${version}`, input: "2020.1.1", expected: version, warning: true },
     { name: "tag overrides malicious input safely", tags: `${workflowSha}\trefs/tags/v${version}`, input: "$(touch injected)\n::error::injected", expected: version, warning: true },
@@ -122,6 +130,44 @@ test("both reusable workflows execute identical version resolution", () => {
   assert.equal(shell(readFileSync(join(root, files[0]), "utf8"), "Resolve pm-github release version"),
     shell(readFileSync(join(root, files[1]), "utf8"), "Resolve pm-github release version"));
 });
+
+/** Every tag the release plan can emit, including zero-padded dates and -N suffixes. */
+const plannedTodays = ["2026.11.02", "2026.09.01", "2026.10.19", "2027.01.01-2"];
+
+/** Resolve one planned tag through a real workflow step and return its exported version. */
+function resolvePlannedTag(cwd: string, file: string, tag: string): string {
+  const env: NodeJS.ProcessEnv = { ...setup(cwd), REMOTE_TAGS: `${workflowSha}\trefs/tags/${tag}`,
+    REQUESTED_PM_GITHUB_VERSION: "", WORKFLOW_SHA: workflowSha, REMOTE_STATUS: "0", RUNNER_TEMP: cwd };
+  const script = shell(readFileSync(join(root, file), "utf8"), "Resolve pm-github release version");
+  const result = bash(cwd, script, env);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  return readFileSync(env.GITHUB_ENV!, "utf8");
+}
+
+test("workflow resolution equals the release plan's npm version for every planned tag", () => {
+  for (const today of plannedTodays) {
+    const plan = decideDailyRelease({ existingPrs: [], mainSha: "new-main", lastRelease: null, today });
+    for (const file of files) {
+      fixture(cwd => {
+        assert.equal(resolvePlannedTag(cwd, file, plan.tag), `PM_GITHUB_VERSION=${plan.npm_version}\n`,
+          `${plan.tag} must resolve to the npm version the release plan publishes`);
+      });
+    }
+  }
+});
+
+test("the padded-tag rows fail when the tag normalization is removed", () => fixture(cwd => {
+  const original = shell(readFileSync(join(root, files[0]), "utf8"), "Resolve pm-github release version");
+  const unnormalized = original.replace('candidate="$(normalize_pm_github_version "${candidate}")"',
+    'candidate="${candidate}"');
+  assert.notEqual(unnormalized, original, "the normalization step must exist to be removed");
+  const env: NodeJS.ProcessEnv = { ...setup(cwd), REMOTE_TAGS: `${workflowSha}\trefs/tags/v2026.11.02`,
+    REQUESTED_PM_GITHUB_VERSION: "", WORKFLOW_SHA: workflowSha, REMOTE_STATUS: "0", RUNNER_TEMP: cwd };
+  const result = bash(cwd, unnormalized, env);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.equal(readFileSync(env.GITHUB_ENV!, "utf8"), "PM_GITHUB_VERSION=2026.11.02\n",
+    "without normalization the padded tag resolves to the padded version, failing the row that expects 2026.11.2");
+}));
 
 test("release retains token behavior and never stamps or commits reusable workflows", () => {
   assert.doesNotMatch(release, /release_token|RELEASE_APP_|release-stamped|Stamp the workflow/);

@@ -142,12 +142,33 @@ jobs:
               declare "tag_commits[${ref}]=${sha}"
             fi
           done <<< "${remote_tags}"
+          # Release tags keep zero-padded date components (v2026.11.02) while the
+          # daily release plan publishes npm versions without padding (2026.11.2),
+          # so strip the padding from every component before comparing or installing.
+          # Pure string operations on operands already validated as N.N.N or N.N.N-N:
+          # no arithmetic, so no component can overflow or be evaluated.
+          normalize_pm_github_version() {
+            local version="${1}" suffix="" normalized="" part
+            if [[ "${version}" == *"-"* ]]; then
+              suffix="${version##*-}"
+              version="${version%-*}"
+            fi
+            local IFS='.'
+            read -r -a parts <<< "${version}"
+            for part in "${parts[@]}"; do
+              # Strip the leading zeros as text; an all-zero component stays 0.
+              part="${part#"${part%%[!0]*}"}"
+              normalized+="${normalized:+.}${part:-0}"
+            done
+            printf '%s' "${normalized}${suffix:+-${suffix}}"
+          }
           PM_GITHUB_VERSION=""
           for ref in "${!tag_commits[@]}"; do
             # Annotated tags must match their peeled commit, never the tag object.
             [[ "${peeled_commits[$ref]-${tag_commits[$ref]}}" == "${WORKFLOW_SHA}" ]] || continue
             candidate="${ref#refs/tags/v}"
             grep -zEq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$' < <(printf '%s\0' "${candidate}") || continue
+            candidate="$(normalize_pm_github_version "${candidate}")"
             if [[ -n "${PM_GITHUB_VERSION}" && "${PM_GITHUB_VERSION}" != "${candidate}" ]]; then
               echo "::error::Multiple release versions tag this workflow commit; refusing an ambiguous install."
               exit 1
@@ -159,10 +180,19 @@ jobs:
               echo "::error::No release tag matches this reusable workflow commit. Pin a release SHA (a commit tagged vN.N.N or vN.N.N-N)."
               exit 1
             fi
-            echo "::warning::pm-github-version is deprecated; no release tag matches this workflow commit, so using the exact legacy input. Pin a release SHA instead."
-            PM_GITHUB_VERSION="${REQUESTED_PM_GITHUB_VERSION}"
-          elif [[ -n "${REQUESTED_PM_GITHUB_VERSION}" && "${REQUESTED_PM_GITHUB_VERSION}" != "${PM_GITHUB_VERSION}" ]]; then
-            echo "::warning::pm-github-version is deprecated and differs from the workflow release tag; using the tag version."
+            echo "::warning::pm-github-version is deprecated; no release tag matches this workflow commit, so using the legacy input as a normalized version. Pin a release SHA instead."
+            grep -zEq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$' < <(printf '%s\0' "${REQUESTED_PM_GITHUB_VERSION}") || { echo "::error::pm-github-version must be an exact numeric version: N.N.N or N.N.N-N."; exit 1; }
+            PM_GITHUB_VERSION="$(normalize_pm_github_version "${REQUESTED_PM_GITHUB_VERSION}")"
+          elif [[ -n "${REQUESTED_PM_GITHUB_VERSION}" ]]; then
+            requested="${REQUESTED_PM_GITHUB_VERSION}"
+            # An unparseable legacy input stays raw: it can never equal a validated
+            # tag version, so it only warns, and the arithmetic never sees it.
+            if grep -zEq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$' < <(printf '%s\0' "${requested}"); then
+              requested="$(normalize_pm_github_version "${requested}")"
+            fi
+            if [[ "${requested}" != "${PM_GITHUB_VERSION}" ]]; then
+              echo "::warning::pm-github-version is deprecated and differs from the workflow release tag; using the tag version."
+            fi
           fi
           grep -zEq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$' < <(printf '%s\0' "${PM_GITHUB_VERSION}") || { echo "::error::pm-github-version must be an exact numeric version: N.N.N or N.N.N-N."; exit 1; }
           printf 'PM_GITHUB_VERSION=%s\n' "${PM_GITHUB_VERSION}" >> "${GITHUB_ENV}"
