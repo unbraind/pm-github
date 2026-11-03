@@ -1,0 +1,16 @@
+id: pm-github-ldc1
+title: Plain fresh import of a closed issue records an import-time closed_at in history before finalization
+description: "A non-atomic (plain) import of a closed GitHub issue into an empty tracker creates the item closed with the import instant as closed_at, then the fidelity finalizer rewrites closed_at to the real GitHub value. The final item is correct, but immutable history keeps a closure instant that never happened. The atomic path stopped doing this on fix/repeat-import-noop (pm-github-repeat-noop). Found by a property check in test/import-fidelity.test.ts that is currently scoped to atomic fresh imports; widening it to plain fresh imports fails on pm-brief-84, pm-csv-86 and pm-slack-standup-45."
+type: Issue
+status: open
+priority: 3
+tags[3]: fidelity,history,import
+created_at: "2026-11-02T17:57:09.666Z"
+updated_at: "2026-11-02T17:57:09.666Z"
+author: orchestrator
+acceptance_criteria: The closed_at property check in the lifetime test runs for plain and atomic fresh imports and passes; The check fails with the fix reverted
+expected_result: Every /metadata/closed_at write in history equals the GitHub closed_at
+actual_result: History of a plain fresh import contains a /metadata/closed_at write equal to the import time
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-github-repeat-noop,related,"2026-11-02T17:57:09.666Z",orchestrator,"cli:create:dep",detected
+body: ""
