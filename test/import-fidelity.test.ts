@@ -92,8 +92,15 @@ for (const atomic of [false, true]) {
       assert.equal(item.github_state, "closed");
       assert.equal(item.github_updated_at, issue.updated_at);
       const history = await readHistorySnapshot(getHistoryPath(pmRoot, local.id!), local.id!);
-      assert.ok(history.entries.length >= 3);
+      // A fresh atomic mirror writes create + fenced finalization only; the
+      // removed forced re-close was the extra entry that invented closed_at.
+      assert.ok(history.entries.length >= (atomic && !checkRetry ? 2 : 3));
       assert.equal(history.entries.at(-1)!.op, "import");
+      if (atomic && !checkRetry) {
+        const closedAtWrites = history.entries.flatMap(entry => entry.patch.filter(patch => patch.path === "/metadata/closed_at" && patch.value !== undefined).map(patch => patch.value));
+        assert.deepEqual([...new Set(closedAtWrites)].filter(value => value !== issue.closed_at), [], "a fresh atomic mirror never records an import-time closed_at");
+        assert.ok(closedAtWrites.includes(issue.closed_at), "a fresh atomic mirror records the source closed_at in history");
+      }
       if (checkRetry) {
         await importing(pmRoot, issue, atomic);
         assert.equal((await listItems(pmRoot)).length, 1);
