@@ -74,11 +74,22 @@ An inherited `NODE_OPTIONS` could still lift that ceiling. Node applies
 `--max-old-space-size-percentage` ahead of an explicit `--max-old-space-size`.
 On this host, `NODE_OPTIONS=--max-old-space-size-percentage=60` with the gate's
 flag gave a 19,406 MiB heap limit, against 3,264 MiB without it. The gate
-therefore removes every inherited old-space limit from `NODE_OPTIONS`: both
+therefore splits every inherited old-space limit out of `NODE_OPTIONS`: both
 spellings, the percentage form, and `=` or space-separated values. All other
-inherited options are kept. A spy test pins the sanitized environment and fails
-if the sanitizer is removed. A real-node probe checks that the effective limit
-stays at the ceiling under an inherited percentage.
+inherited options stay in the environment unchanged.
+
+The split limits are not discarded. c8 passes its environment to the nested
+`node --test` command and its workers, so dropping them would also drop a
+caller's test-worker memory limit. The gate puts them back as `--flag=value`
+arguments on the nested command, right before `--test`. Node's test runner
+forwards those arguments to every worker. On this host a worker reported
+19,406 MiB under `--max-old-space-size-percentage=60` and 1,426 MiB under
+`--max-old-space-size=1234`. A bare limit with no numeric value is dropped.
+
+A spy test pins the split environment and the nested arguments, and fails if
+either part is removed. A real-node probe checks that the merge limit stays at
+the ceiling under an inherited percentage. A second probe runs a real
+`node --test` worker and checks that it keeps an inherited 1,234 MiB limit.
 
 ## Regression and mutation evidence
 
@@ -143,4 +154,6 @@ declarations across 27 files), lint, zero duplication across the 28-module
 inventory, privacy (3,718 objects), zero production vulnerabilities, the
 75-file package dry run, canonical changelog checking, and publish attestation.
 Both privacy tests that failed against the unrelated shared-store object
-passed in the independent clone. The shared-store follow-up remains open.
+passed in the independent clone. The shared-store follow-up has since closed:
+the privacy gate passed over the shared store after the stale objects were
+removed.

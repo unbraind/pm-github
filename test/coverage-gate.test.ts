@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { collectCoverageSources, COVERAGE_HEAP_FLAG, runCoverageGate, runCoverageGateIfMain, withoutHeapOverrides, type CoverageRunner } from "../scripts/coverage-gate.ts";
+import { collectCoverageSources, COVERAGE_HEAP_FLAG, runCoverageGate, runCoverageGateIfMain, splitHeapOverrides, type CoverageRunner } from "../scripts/coverage-gate.ts";
 import { nodeToolingExecutable } from "../scripts/main-invocation.ts";
 
 /** Create an independently runnable project with one branching source and its test. */
@@ -194,22 +194,24 @@ test("the incremental c8 merge receives its bounded heap before the entry point"
 });
 
 test("inherited NODE_OPTIONS heap limits never reach the bounded c8 merge", () => {
-  assert.equal(withoutHeapOverrides(undefined), undefined);
-  assert.equal(withoutHeapOverrides("--max-old-space-size-percentage=60"), undefined);
-  assert.equal(withoutHeapOverrides("--enable-source-maps --max_old_space_size 9000 --max-old-space-size=8192 --max-old-space-size-percentage 60 --trace-warnings"),
-    "--enable-source-maps --trace-warnings");
-  assert.equal(withoutHeapOverrides("--max-old-space-size --trace-warnings"), "--trace-warnings");
+  const split = (value: string | undefined) => { const { rest, heap } = splitHeapOverrides(value); return [rest, [...heap]]; };
+  assert.deepEqual(split(undefined), [undefined, []]);
+  assert.deepEqual(split("--max-old-space-size-percentage=60"), [undefined, ["--max-old-space-size-percentage=60"]]);
+  assert.deepEqual(split("--enable-source-maps --max_old_space_size 9000 --max-old-space-size=8192 --max-old-space-size-percentage 60 --trace-warnings"),
+    ["--enable-source-maps --trace-warnings", ["--max_old_space_size=9000", "--max-old-space-size=8192", "--max-old-space-size-percentage=60"]]);
+  // A bare limit with no numeric value is dropped, never glued to the next option.
+  assert.deepEqual(split("--max-old-space-size --trace-warnings"), ["--trace-warnings", []]);
+  assert.deepEqual(split("--trace-warnings --max-old-space-size"), ["--trace-warnings", []]);
   // Node splits on spaces only: an unquoted tab stays inside its option.
-  assert.equal(withoutHeapOverrides("--title=build\tworker --max-old-space-size=8192"), "--title=build\tworker");
+  assert.deepEqual(split("--title=build\tworker --max-old-space-size=8192"), ["--title=build\tworker", ["--max-old-space-size=8192"]]);
   // Quoted options are judged by their unquoted value; unrelated quoted options keep their raw text.
-  assert.equal(withoutHeapOverrides('"--max-old-space-size-percentage=60" --trace-warnings'), "--trace-warnings");
-  assert.equal(withoutHeapOverrides('--max-old-space-size="8192" --require "./a b.js"'), '--require "./a b.js"');
-  assert.equal(withoutHeapOverrides('--max_old_space_size "9000" --title="x \\"y\\" z"'), '--title="x \\"y\\" z"');
-  assert.equal(withoutHeapOverrides("--trace-warnings --max-old-space-size"), "--trace-warnings");
+  assert.deepEqual(split('"--max-old-space-size-percentage=60" --trace-warnings'), ["--trace-warnings", ["--max-old-space-size-percentage=60"]]);
+  assert.deepEqual(split('--max-old-space-size="8192" --require "./a b.js"'), ['--require "./a b.js"', ["--max-old-space-size=8192"]]);
+  assert.deepEqual(split('--max_old_space_size "9000" --title="x \\"y\\" z"'), ['--title="x \\"y\\" z"', ["--max_old_space_size=9000"]]);
   // A different flag that shares the prefix is kept.
-  assert.equal(withoutHeapOverrides("--max-old-space-size-other=1"), "--max-old-space-size-other=1");
-  const seen: (string | undefined)[] = [];
-  const spy: CoverageRunner = (_command, _args, options) => { seen.push(options.env?.NODE_OPTIONS); return { status: 1 }; };
+  assert.deepEqual(split("--max-old-space-size-other=1"), ["--max-old-space-size-other=1", []]);
+  const seen: { env: string | undefined; args: string[] }[] = [];
+  const spy: CoverageRunner = (_command, args, options) => { seen.push({ env: options.env?.NODE_OPTIONS, args: [...args] }); return { status: 1 }; };
   const previous = process.env.NODE_OPTIONS;
   const root = coverageFixture();
   try {
@@ -217,19 +219,43 @@ test("inherited NODE_OPTIONS heap limits never reach the bounded c8 merge", () =
     assert.equal(runCoverageGate(root, spy), 1);
     process.env.NODE_OPTIONS = "--max-old-space-size-percentage=60";
     assert.equal(runCoverageGate(root, spy), 1);
+    delete process.env.NODE_OPTIONS;
+    assert.equal(runCoverageGate(root, spy), 1);
   } finally {
     if (previous === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous;
     rmSync(root, { recursive: true, force: true });
   }
-  assert.deepEqual(seen, ["--enable-source-maps", undefined]);
+  assert.deepEqual(seen.map(run => run.env), ["--enable-source-maps", undefined, undefined]);
+  // The merge keeps the ceiling alone; the nested test command gets the caller's limits back, right before --test.
+  const node = nodeToolingExecutable(process.versions);
+  assert.deepEqual(seen.map(run => run.args.slice(run.args.indexOf(node) + 1, run.args.indexOf("--test"))),
+    [["--max-old-space-size-percentage=60"], ["--max-old-space-size-percentage=60"], []]);
+  for (const run of seen) {
+    assert.equal(run.args[0], COVERAGE_HEAP_FLAG);
+    assert.ok(run.args.indexOf(node) > 0 && run.args.indexOf(node) < run.args.indexOf("--test"), "the nested node command precedes --test");
+  }
 });
 
 test("the effective merge heap stays at the documented ceiling under an inherited percentage", () => {
   const env = { ...process.env, NODE_OPTIONS: "--max-old-space-size-percentage=60" };
   const probe = ["-e", "process.stdout.write(String(require('v8').getHeapStatistics().heap_size_limit))"];
-  assert.equal(withoutHeapOverrides(env.NODE_OPTIONS), undefined);
+  assert.equal(splitHeapOverrides(env.NODE_OPTIONS).rest, undefined);
   const bounded = spawnSync(process.execPath, [COVERAGE_HEAP_FLAG, ...probe], { env: { ...env, NODE_OPTIONS: "" }, encoding: "utf8" });
   const mib = Number(bounded.stdout) / 1048576;
   // heap_size_limit adds the young generation to the old-space ceiling.
   assert.ok(mib > 0 && mib <= 3072 + 512, `bounded merge heap ${mib} MiB exceeds the 3072 MiB ceiling`);
+});
+
+test("test workers keep the caller's inherited heap limit after the split", () => {
+  const dir = mkdtempSync(join(tmpdir(), "pm-github-heap-"));
+  try {
+    writeFileSync(join(dir, "probe.test.cjs"), "require('node:test')('probe', () => { console.log('WORKER_HEAP=' + require('v8').getHeapStatistics().heap_size_limit); });\n");
+    const { rest, heap } = splitHeapOverrides("--max-old-space-size=1234 --enable-source-maps");
+    const env: NodeJS.ProcessEnv = { ...process.env, NODE_OPTIONS: rest };
+    delete env.NODE_TEST_CONTEXT;
+    const run = spawnSync(process.execPath, [...heap, "--test", "--test-concurrency=1", join(dir, "probe.test.cjs")], { cwd: dir, env, encoding: "utf8" });
+    const mib = Number(/WORKER_HEAP=(\d+)/.exec(run.stdout)?.[1]) / 1048576;
+    // The worker is a separate process: only the runner's forwarded execArgv can set its limit.
+    assert.ok(mib >= 1234 && mib <= 1234 + 512, `test worker heap ${mib} MiB does not reflect the inherited 1234 MiB limit`);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
