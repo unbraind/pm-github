@@ -19,6 +19,14 @@ import { PUBLIC_FORMS_MUST_ALLOW, PUBLIC_FORMS_MUST_REFUSE } from "./gate-public
 /** Render one corpus line as a serialized TOON tracker body line. */
 const toonLine = (line: string): string => `body: ${JSON.stringify(line)}`;
 
+/** Extract the path-like tokens of a corpus line (a POSIX root slash, a tilde username, or a Windows drive path). */
+const pathLikeTokens = (line: string): readonly string[] =>
+  [...line.matchAll(/(?:[A-Za-z]:[\\/][^\s"'`),;\]]*|~[A-Za-z0-9._-]*\/[^\s"'`),;\]]*|\/[^\s"'`),;\]]*)/g)]
+    .map((match) => match[0]);
+
+/** POSIX path assembled from parts, so no tracked blob holds a complete shape. */
+const posix = (...segments: readonly string[]): string => ["", ...segments].join("/");
+
 /** Render one corpus line as a decoded history patch row. */
 const jsonlLine = (line: string): string =>
   JSON.stringify({ patch: [{ op: "add", path: "/metadata/body", value: line }] });
@@ -90,11 +98,42 @@ test("a synthetic tracker change refuses every must-refuse row with its listed r
     );
   }
   // Findings never carry the matched content, so the report cannot echo any
-  // corpus fixture — including the concrete home path it just refused.
+  // corpus fixture — including the concrete home path it just refused. Check
+  // the path-like token of EVERY must-refuse row (every refusal group), not
+  // the whole corpus line (which contains prose the report never holds).
   const serialized = JSON.stringify(report);
   for (const row of PUBLIC_FORMS_MUST_REFUSE) {
-    if (row.refuseGroup === "concrete-home" || row.refuseGroup === "embedded-identity") {
-      assert.ok(!serialized.includes(row.line), `${row.id} must not be echoed`);
+    for (const token of pathLikeTokens(row.line)) {
+      assert.ok(!serialized.includes(token), `${row.id} path token must not be echoed`);
     }
+  }
+  // The assertion must be able to fail: every host-path row yields at least
+  // one token, and a report that DID carry one would contain it verbatim.
+  for (const row of PUBLIC_FORMS_MUST_REFUSE) {
+    if (["absolute-host-path", "windows-host-path", "home-username"].includes(row.rule)) {
+      assert.ok(pathLikeTokens(row.line).length > 0, `${row.id} must yield a path-like token`);
+    }
+  }
+  const homeRow = PUBLIC_FORMS_MUST_REFUSE.find((row) => row.id === "home-alice")!;
+  const echoedToken = pathLikeTokens(homeRow.line)[0]!;
+  assert.ok(JSON.stringify({ excerpt: echoedToken }).includes(echoedToken), "the no-echo assertion must be able to fail");
+});
+
+test("the delimiter check answers adversarial bracket chains in bounded time", () => {
+  // Two pathological inputs for the path-behind-a-delimiter check: a chain of
+  // repeated procfs-style segments each ending in a delimiter (exponential
+  // under the recursive predecessor — measured at ~2.3x per segment, so the
+  // 40-segment line does not finish), and one long bracket run (quadratic
+  // under the predecessor — 934 ms at 20000 brackets). Both must stay far
+  // below 200 ms and resolve to zero findings: every segment is public.
+  const procSegment = posix("proc", "self", "x");
+  const chain = "read " + (procSegment + ">").repeat(40);
+  const bracketRun = "read " + procSegment + ">".repeat(20000);
+  for (const line of [chain, bracketRun]) {
+    const started = performance.now();
+    const hits = scanLineForRuleHits(line);
+    const elapsed = performance.now() - started;
+    assert.deepStrictEqual(hits, []);
+    assert.ok(elapsed < 200, `${line.length}-character adversarial line took ${elapsed.toFixed(1)} ms`);
   }
 });

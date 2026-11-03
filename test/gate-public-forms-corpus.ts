@@ -90,6 +90,8 @@ export const PUBLIC_FORMS_MUST_ALLOW: readonly PublicFormRow[] = [
   { id: "proc-self-root-only", line: "resolve " + posix("proc", "self"), allowGroup: "procfs" },
   { id: "proc-digits", line: "cat " + posix("proc", "1234", "stat"), allowGroup: "procfs" },
   { id: "proc-placeholder", line: "read " + posix("proc", "<proc-id>", "maps"), allowGroup: "procfs" },
+  { id: "proc-self-root-entry", line: "resolve " + posix("proc", "self", "root"), allowGroup: "procfs" },
+  { id: "proc-digits-root-entry", line: "readlink " + posix("proc", "1234", "root"), allowGroup: "procfs" },
   { id: "sys-bare", line: "enumerate " + posix("sys"), allowGroup: "sysfs" },
   { id: "sys-tree", line: "read " + posix("sys", "class", "net", "eth0", "type"), allowGroup: "sysfs" },
   // --- reserved-domain fixture emails -----------------------------------
@@ -116,6 +118,8 @@ export const PUBLIC_FORMS_MUST_ALLOW: readonly PublicFormRow[] = [
   { id: "runner-back", line: "at D:\\a\\pm-rust\\pm-rust\\tests\\oracle\\suite.ts", allowGroup: "runner-windows" },
   { id: "runner-posix", line: "see " + posix("home", "runner", "work", "repo", "repo", "attribution.txt"), allowGroup: "runner-posix" },
   { id: "runner-macos", line: "see " + posix("Users", "runner", "work", "repo", "repo", "attribution.txt"), allowGroup: "runner-posix" },
+  { id: "runner-workspace-tmp", line: "see " + posix("home", "runner", "work", "repo", "repo", "tmp", "build.log"), allowGroup: "runner-posix" },
+  { id: "runner-workspace-tmp-win", line: "at " + winFwd("D", "a", "repo", "repo", "tmp", "build.log"), allowGroup: "runner-windows" },
   // --- hosted tool cache ---------------------------------------------------
   { id: "toolcache", line: "using " + posix("opt", "hostedtoolcache", "node", "20.5.0", "x64", "bin", "node"), allowGroup: "toolcache" },
   // --- placeholder home segments -------------------------------------------
@@ -129,6 +133,11 @@ export const PUBLIC_FORMS_MUST_ALLOW: readonly PublicFormRow[] = [
   { id: "placeholder-home-percent", line: "open " + posix("home", "%USERNAME%", "project"), allowGroup: "placeholder-home-posix" },
   { id: "placeholder-home-in-markup", line: "see <code>" + posix("home", "<user>", "repo") + "</code>", allowGroup: "placeholder-home-posix" },
   { id: "placeholder-home-then-proc", line: "compare " + posix("home", "<user>", "notes") + ">" + posix("proc", "self", "status"), allowGroup: "placeholder-home-posix" },
+  { id: "placeholder-home-then-file-url", line: "compare " + posix("home", "<user>", "notes") + ">file://" + posix("proc", "self", "status"), allowGroup: "placeholder-home-posix" },
+  { id: "placeholder-home-then-file-notes", line: "compare " + posix("home", "example", "x") + ">file:///notes", allowGroup: "placeholder-home-posix" },
+  { id: "placeholder-home-then-runner-win", line: "compare " + posix("home", "example", "x") + ">" + winFwd("D", "a", "repo", "repo", "build.log"), allowGroup: "runner-windows" },
+  { id: "placeholder-home-then-bare-drive", line: "compare " + posix("home", "example", "x") + ">" + "D:/", allowGroup: "placeholder-home-posix" },
+  { id: "placeholder-home-then-anonymous-tilde", line: "compare " + posix("home", "example", "x") + ">~/notes", allowGroup: "placeholder-home-posix" },
   { id: "placeholder-home-windows", line: "config at " + winBack("C", "Users", "example", "file"), allowGroup: "placeholder-home-windows" },
   { id: "placeholder-home-windows-fwd", line: "config at " + winFwd("C", "Users", "<user>", "file"), allowGroup: "placeholder-home-windows" },
   { id: "placeholder-home-windows-username", line: "config at " + winBack("C", "Users", "%USERNAME%", "settings.json"), allowGroup: "placeholder-home-windows" },
@@ -176,14 +185,31 @@ export const PUBLIC_FORMS_MUST_REFUSE: readonly PublicFormRefuseRow[] = [
   { id: "embedded-users-runner", line: "link " + posix("Users", "runner", "work", "a", "a", "Users", "alice"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "embedded-drive-win", line: "link " + winBack("C", "Users", "example", "C:", "Users", "alice"), rule: "windows-host-path", refuseGroup: "embedded-identity" },
   { id: "embedded-users-win-runner", line: "link " + winFwd("D", "a", "x", "x", "Users", "alice"), rule: "windows-host-path", refuseGroup: "embedded-identity" },
+  // --- account- or machine-bearing system roots inside a permitted tail ------
+  { id: "embedded-tmp", line: "leak " + posix("home", "example", "x", "tmp", "alice-notes"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
+  { id: "embedded-private", line: "leak " + posix("home", "example", "x", "private", "id_rsa"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
+  { id: "embedded-volumes", line: "leak " + posix("home", "example", "x", "Volumes", "backup"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
+  { id: "embedded-mnt", line: "leak " + posix("home", "example", "x", "mnt", "backup"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
+  { id: "embedded-media", line: "leak " + posix("home", "example", "x", "media", "usb"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
+  { id: "embedded-srv", line: "leak " + posix("home", "example", "x", "srv", "www"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
+  { id: "embedded-root-under-placeholder", line: "leak " + posix("home", "example", "x", "root", ".ssh", "id_rsa"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
+  // --- the procfs root entry continuing into a real filesystem path ----------
+  { id: "proc-root-then-tmp", line: "leak " + posix("proc", "self", "root", "tmp", "alice-notes"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
+  { id: "proc-root-then-root", line: "leak " + posix("proc", "self", "root", "root", ".ssh", "id_rsa"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
+  { id: "proc-placeholder-pid-root", line: "leak " + posix("proc", "<pid>", "root", "tmp", "alice"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   // --- a path hidden directly behind a permitted form ------------------------
   { id: "hidden-after-proc", line: "see " + posix("proc") + "<" + posix("home", "alice") + "> end", rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "hidden-after-placeholder", line: "ok " + posix("home", "example") + ">" + posix("home", "alice"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
-  // --- a refused path behind a bracket inside a non-placeholder segment ----
+  // --- a refused path behind a delimiter inside a non-placeholder segment ----
   { id: "smuggled-root-after-placeholder", line: "ok " + posix("home", "<user>", "x") + ">" + posix("root", ".ssh", "id_rsa"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "smuggled-temp-after-proc", line: "read " + posix("proc", "self", "x") + "}" + posix("tmp", "alice-notes"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "smuggled-tilde-after-runner", line: "log " + posix("home", "runner", "work", "a", "b") + ">~alice/notes", rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "smuggled-drive-after-win-placeholder", line: "ok " + winBack("C", "Users", "<user>", "x") + ">" + winBack("D", "private", "alice"), rule: "windows-host-path", refuseGroup: "embedded-identity" },
+  { id: "smuggled-root-key-after-colon", line: "ok " + posix("home", "<user>", "notes:") + posix("root", ".ssh", "id_rsa"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
+  { id: "smuggled-var-after-colon", line: "ok " + posix("home", "<user>", "notes:") + posix("var", "log", "syslog"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
+  { id: "smuggled-var-after-equals", line: "ok " + posix("home", "<user>", "notes=") + posix("var", "log", "syslog"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
+  { id: "smuggled-var-after-bracket", line: "ok " + posix("home", "<user>", "x>") + posix("var", "log", "syslog"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
+  { id: "smuggled-file-url-after-placeholder", line: "ok " + posix("home", "<user>", "x>") + "file://" + posix("var", "log", "syslog"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "sys-dot-escape", line: "read " + posix("sys", "..", "home", "alice"), rule: "absolute-host-path", refuseGroup: "dot-escape" },
   { id: "placeholder-wrong-level", line: "read " + posix("home", "alice", "<user>", "file"), rule: "absolute-host-path", refuseGroup: "concrete-home" },
   { id: "placeholder-win-wrong-level", line: "read " + winBack("C", "Users", "alice", "{user}", "file"), rule: "windows-host-path", refuseGroup: "concrete-home" },

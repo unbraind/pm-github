@@ -1,0 +1,11 @@
+id: pm-github-8mkc
+title: Approve or amend the noreply identity on the normalize-release-tag-version branch commit
+description: "The whole-store privacy gate (npm run privacy) currently exits 1 with two identity:commit findings, both from commit 42297ee on the fix/normalize-release-tag-version branch (also pushed to origin). Its author and committer use the maintainer noreply address with one letter transposed relative to the approved-git-identities entry, so the gate cannot verify it. Discovered while running the privacy check for the public-forms review round; out of scope there. Fix by amending the branch identity to the approved form or approving the address with justification, then re-running the gate."
+type: Task
+status: open
+priority: 2
+tags[3]: follow-up,gates,privacy
+created_at: "2026-11-03T02:11:51.792Z"
+updated_at: "2026-11-03T02:11:51.792Z"
+author: pi-github
+body: ""

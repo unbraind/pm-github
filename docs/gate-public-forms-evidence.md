@@ -1,6 +1,12 @@
 # Public technical forms: precision evidence
 
-Issue: gh:unbraind/pm-github#193. Baseline: `9586643`.
+Issue: gh:unbraind/pm-github#193. Scanner revisions: baseline `9586643`,
+comparison scanner `1dd1691` (the public-forms allowances), bracket-smuggle
+fix `5bf20e2`. The eight-repository measurement below (refreshed 15:53Z on
+2026-11-02), the 134-test recovery regression run and the complete fresh
+release check all predate `5bf20e2`; the review-round receipts (this
+document's timing runs, corpus counts and 24-mutation proof) were produced on
+the branch head after it.
 
 ## Inherited diff audit
 
@@ -37,24 +43,53 @@ The inherited 15-mutation proof passed before edits. The final proof adds sysfs
 removal, other SSH local parts, and placeholder-position broadenings. It also
 pins full domain-label consumption (including digit/hyphen look-alikes),
 case-insensitive bare localhost, dotted placeholder names, and an incomplete
-runner workspace. Sysfs was previously outside the host-root signature; it is
+runner workspace. The review round adds four mutations: the reverted
+delimiter set (`:`/`=`), the reverted embedded-identity list, the removed
+procfs root-entry exception and the removed runner `tmp` exemption, and it
+re-points the bracket-smuggle and embedded-identity mutations at the rows the
+new checks now own. Sysfs was previously outside the host-root signature; it is
 now explicitly scanned so its allowance and traversal refusal are observable.
+
+## Review round: recursion, delimiters and tail roots
+
+The bracket check re-entered the host-path rules through their confirms, so a
+line of about 40 repeated procfs-style segments (each ending in a delimiter)
+cost about 2^40 confirm calls, and long bracket runs made the loop quadratic
+with a fresh `RegExp` per bracket and rule. Measured on the recursive
+predecessor: 415 ms at 16 segments, 5.6 s at 20, 23 s at 22 (≈2.3x per
+segment — the 40-segment line does not finish), and 934 ms for one 20,000
+bracket run. The rewritten check is a single non-recursive pass that judges
+only delimiters directly followed by a possible path start, with sticky rule
+patterns built once: 1.1 ms for the 40-segment chain, 40 ms for the same
+20,000-bracket run, and the corpus timing test keeps both under 200 ms.
+
+Two traced refusals passed inside permitted tails and are now pinned as
+must-refuse rows: a procfs `root` entry continuing into the temp root with a
+person-named file, and a placeholder home path followed by a colon and a
+root-owned SSH key path. The delimiter set grew from brackets to `:` and `=`
+(a label or assignment prefix hides a path the same way a bracket does), and
+the embedded-identity list grew to `tmp`, `private`, `Volumes`, `mnt`,
+`media`, `srv` and `root` — the last exempt only directly after a procfs
+numeric or `self` pid, where procfs exposes the real entry. The hosted
+runner's own `tmp` scratch directory inside its workspace stays allowed;
+corpus rows cover both directions, and every new check has its own mutation.
 
 ## Corpus and proof
 
-The shared corpus has 45 must-allow and 54 must-refuse rows. Every row runs as
+The shared corpus has 54 must-allow and 69 must-refuse rows. Every row runs as
 plain text and JSON-escaped TOON text and through a complete synthetic tracker
 diff; allow rows also run as whole JSON strings and JSONL history changes.
 Refusal findings retain their expected rule and item attribution. All corpus
 names and account paths are synthetic and assembled at runtime.
 
 Angle and curly brackets continue a path so whole placeholder segments are
-judged in place. A bracket inside any other segment can end one path and
-start the next, so the text after it is judged again by every host-path rule:
-a refused root-account, temp, other-drive or tilde-username path behind a permitted prefix
-keeps the whole match refused (`smuggled-*` rows), while a placeholder path
-in markup or followed by a public procfs path stays allowed
-(`placeholder-home-in-markup`, `placeholder-home-then-proc`).
+judged in place. A delimiter — bracket, label colon or assignment equals —
+inside any other segment can end one path and start the next, so the text
+after it is judged with the public-path predicates exactly as if it stood
+alone: a refused root-account, temp, other-drive or tilde-username path behind
+a permitted prefix keeps the whole match refused (`smuggled-*` rows), while a
+placeholder path in markup or followed by a public procfs path, runner
+workspace or `file://` URL stays allowed (`placeholder-home-*` rows).
 
 Run `node scripts/prove-gate-public-forms.ts`. Each disposable gate mutation
 must flip exactly its recorded row IDs; missing/duplicate anchors, unexpected
@@ -63,25 +98,29 @@ flips and import failures fail the proof. Temporary copies are removed.
 | Mutation | Allow flips | Refuse flips |
 | --- | ---: | ---: |
 | `remove-sysfs-allowance` | 2 | 0 |
-| `remove-procfs-allowance` | 9 | 0 |
+| `remove-procfs-allowance` | 12 | 0 |
 | `remove-reserved-domain-allowance` | 12 | 0 |
 | `remove-git-transport-allowance` | 4 | 0 |
-| `remove-runner-workspace-posix` | 2 | 0 |
-| `remove-runner-workspace-windows` | 3 | 0 |
+| `remove-runner-workspace-posix` | 3 | 0 |
+| `remove-runner-workspace-windows` | 5 | 0 |
 | `remove-toolcache-allowance` | 1 | 0 |
-| `remove-placeholder-home-posix` | 10 | 0 |
+| `remove-placeholder-home-posix` | 16 | 0 |
 | `remove-placeholder-home-windows` | 3 | 0 |
 | `broaden-reserved-domain-anchor` | 0 | 7 |
 | `broaden-runner-shape-posix` | 0 | 3 |
-| `broaden-runner-shape-windows` | 0 | 3 |
+| `broaden-runner-shape-windows` | 0 | 2 |
 | `broaden-git-transport-local-part` | 0 | 2 |
 | `broaden-placeholder-position-posix` | 0 | 1 |
 | `broaden-placeholder-position-windows` | 0 | 1 |
 | `remove-escape-segment-check` | 0 | 5 |
-| `remove-embedded-identity-check` | 0 | 4 |
+| `remove-embedded-identity-check` | 0 | 14 |
 | `broaden-proc-shape` | 0 | 3 |
 | `remove-bracket-leadins` | 0 | 1 |
-| `remove-bracket-smuggle-check` | 0 | 4 |
+| `remove-bracket-smuggle-check` | 0 | 5 |
+| `revert-delimiter-set` | 0 | 2 |
+| `revert-embedded-identity-list` | 0 | 10 |
+| `remove-proc-root-exception` | 2 | 0 |
+| `remove-runner-tmp-exemption` | 2 | 0 |
 
 The proof harness also tests unreadable source, invalid baselines, source-anchor
 drift, changed row expectations, private diagnostic suppression, cleanup and
@@ -103,7 +142,8 @@ required 1500). The refresh reproduced every prior rule/hash count.
 Paginated every repository's `issues?state=all&per_page=100` and
 `issues/comments?per_page=100`; excluded pull requests and their comments.
 Scanned every issue title/body and every issue comment line with the old
-scanner from `9586643` and the updated scanner, without an allowlist. Counts
+scanner from `9586643` and the comparison scanner at `1dd1691`, without an
+allowlist. Counts
 are match occurrences, with identical rule/hash pairs aggregated below. Raw
 API responses stay outside tracked evidence. No issue bodies or comments were
 written to GitHub.

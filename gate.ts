@@ -305,19 +305,41 @@ function isEscapePathSegment(segment: string, posix: boolean): boolean {
   return posix && segment.includes("\\");
 }
 
-/** Identity-bearing roots that must never appear inside a permitted tail. */
-const EMBEDDED_IDENTITY_SEGMENTS: readonly string[] = ["home", "Users"];
+/**
+ * Identity-bearing roots that must never appear inside a permitted tail: the
+ * two home roots, a Windows drive letter, and the account- or machine-bearing
+ * system roots (`tmp`, macOS `private`/`Volumes`, and the mount roots) that a
+ * real filesystem path continues into once a permitted prefix has passed.
+ * `root` is included because it names the root account's home tree everywhere
+ * except the one position procfs exposes it (see {@link isPublicPosixPath}).
+ */
+const EMBEDDED_IDENTITY_SEGMENTS: readonly string[] = ["home", "Users", "tmp", "private", "Volumes", "mnt", "media", "srv", "root"];
 
 /**
- * Whether any segment of a permitted tail embeds a fresh identity root (a
- * home root or a Windows drive), which would smuggle a concrete account past
- * the allowed prefix (for example `…/x/home/alice`).
+ * Whether any segment of a permitted tail embeds a fresh identity root (a home
+ * root, an account-bearing system root, or a Windows drive), which would
+ * smuggle a concrete account past the allowed prefix (for example
+ * `…/x/home/alice` or `…/root/tmp/alice-notes`).
  *
  * @param segments - The segments after a shape's recognized prefix.
  * @returns True when the tail must keep the whole path a refusal.
  */
 function embedsIdentityRoot(segments: readonly string[]): boolean {
   return segments.some((segment) => EMBEDDED_IDENTITY_SEGMENTS.includes(segment) || /^[A-Za-z]:$/.test(segment));
+}
+
+/**
+ * Runner-tail segments with the hosted runner's own `tmp` directory removed.
+ *
+ * The GitHub-hosted runner creates a real scratch `tmp` directory inside its
+ * workspace, so that one segment is runner infrastructure rather than an
+ * identity root there; every other identity segment keeps refusing the tail.
+ *
+ * @param segments - The segments after a runner workspace's recognized prefix.
+ * @returns The tail segments the embedded-identity check must judge.
+ */
+function runnerTailSegments(segments: readonly string[]): readonly string[] {
+  return segments.filter((segment) => segment !== "tmp");
 }
 
 /**
@@ -341,14 +363,21 @@ function isPublicPosixPath(matched: string): boolean {
   if (segments.some((segment) => isEscapePathSegment(segment, true))) return false;
   if (root === "sys") return !embedsIdentityRoot(segments.slice(1));
   if (root === "proc") {
-    return (first === "" || first === "self" || /^\d+$/.test(first) || isBracketedPlaceholder(first, "<", ">")) &&
-      !embedsIdentityRoot(segments.slice(2));
+    if (first === "" || first === "self" || /^\d+$/.test(first) || isBracketedPlaceholder(first, "<", ">")) {
+      // `root` directly after a numeric or `self` pid directory is the real
+      // procfs root entry (the process's own root), so it is exempt there; as
+      // a tail segment everywhere else it names the root account's tree.
+      const tail = segments.slice(2);
+      const exemptRootEntry = (first === "self" || /^\d+$/.test(first)) && tail[0] === "root";
+      return !embedsIdentityRoot(exemptRootEntry ? tail.slice(1) : tail);
+    }
+    return false;
   }
   if (root === "opt") return first === "hostedtoolcache" && !embedsIdentityRoot(segments.slice(2));
   if (root !== "home" && root !== "Users") return false;
   if (isHomePlaceholderSegment(first)) return !embedsIdentityRoot(segments.slice(2));
   return first === "runner" && segments[2] === "work" && (segments[3] ?? "") !== "" && (segments[4] ?? "") !== "" &&
-    !embedsIdentityRoot(segments.slice(5));
+    !embedsIdentityRoot(runnerTailSegments(segments.slice(5)));
 }
 
 /**
@@ -371,35 +400,112 @@ function isPublicWindowsPath(matched: string): boolean {
     return root === "Users" && isHomePlaceholderSegment(first) && !embedsIdentityRoot(segments.slice(2));
   }
   return drive.toLowerCase() === "d:" && root === "a" && first !== "" && (segments[2] ?? "") !== "" &&
-    !embedsIdentityRoot(segments.slice(3));
+    !embedsIdentityRoot(runnerTailSegments(segments.slice(3)));
 }
 
 /**
- * Whether a bracket inside a matched path begins a second host path that
+ * Characters that can end one path and begin the next inside a matched host
+ * path: the two bracket pairs (which continue a path while they wrap a whole
+ * placeholder segment), plus the colon and equals of a label or assignment
+ * prefix (`cwd:`, `path=`) written straight into a permitted tail.
+ */
+const HOST_PATH_DELIMITERS = "<>{}:=";
+
+/**
+ * Whether the text after a delimiter begins with a shape a host-path rule can
+ * start on: a POSIX root slash, a tilde username, a Windows drive, or a
+ * `file://` URL. Every other continuation is ordinary path content.
+ *
+ * @param rest - The text following one delimiter.
+ * @returns Whether the delimiter can end one path and begin the next.
+ */
+function startsWithHostPathStart(rest: string): boolean {
+  return rest.startsWith("file://") || rest[0] === "/" || rest[0] === "~" || /^[A-Za-z]:[\\/]/.test(rest);
+}
+
+/**
+ * Whether the text after a delimiter is a host path a standalone scan would
+ * refuse.
+ *
+ * The sticky rule patterns match at one fixed offset (the start of `rest`, or
+ * the URL path of a `file://` prefix) and reproduce exactly the rule match
+ * that would begin there; the verdict then uses ONLY the non-recursive
+ * public-path predicates — never `rule.confirm`, whose re-entry into the
+ * delimiter check branches exponentially on adversarial bracket chains. That
+ * is sound because every delimiter of the match is examined on its own: a
+ * refused path always begins directly after some delimiter, so it is always
+ * judged at that delimiter without re-judging the suffixes around it.
+ *
+ * @param rest - The text following one delimiter.
+ * @returns True when the suffix is a host path the gate refuses standalone.
+ */
+function refusedHostPathAfterDelimiter(rest: string): boolean {
+  const posix = STICKY_HOST_PATH_PATTERNS.get("absolute-host-path")!;
+  const windows = STICKY_HOST_PATH_PATTERNS.get("windows-host-path")!;
+  const tilde = STICKY_HOST_PATH_PATTERNS.get("home-username")!;
+  if (rest.startsWith("file://")) {
+    posix.lastIndex = "file://".length;
+    const hit = posix.exec(rest);
+    return hit !== null && !isPublicPosixPath(hit[0]);
+  }
+  if (rest[0] === "/") {
+    posix.lastIndex = 0;
+    const hit = posix.exec(rest);
+    return hit !== null && !isPublicPosixPath(hit[0]);
+  }
+  if (rest[0] === "~") {
+    tilde.lastIndex = 0;
+    return tilde.exec(rest) !== null;
+  }
+  windows.lastIndex = 0;
+  const hit = windows.exec(rest);
+  return hit !== null && !isPublicWindowsPath(hit[0]);
+}
+
+/**
+ * Whether a delimiter inside a matched path begins a second host path that
  * would be refused on its own.
  *
  * Angle and curly brackets are continuation characters so whole placeholder
- * segments (`<pid>`, `{user}`) are judged in place. A bracket in any other
- * segment can end one path and begin the next (a root-account, temp, second
- * drive or tilde-username path written straight after it), so the text after
- * it is judged again by every host-path rule, exactly as if it stood alone.
+ * segments (`<pid>`, `{user}`) are judged in place. A delimiter in any other
+ * segment — including the `:` or `=` of a label or assignment prefix — can
+ * end one path and begin the next (a root-account, temp, other-drive or
+ * tilde-username path written straight after it), so the text after it is
+ * judged with the public-path predicates, exactly as if it stood alone.
+ *
+ * The scan is deliberately linear: one pass keeps the segment start, each
+ * segment's placeholder verdict is computed once, only delimiters directly
+ * followed by a possible path start are judged, and the sticky rule patterns
+ * are built once (see {@link STICKY_HOST_PATH_PATTERNS}) — never rebuilt per
+ * delimiter and rule, and never re-entered recursively.
  *
  * @param matched - The complete matched path.
- * @returns True when a path behind a non-placeholder bracket must refuse the
+ * @returns True when a path behind a non-placeholder delimiter must refuse the
  *          whole match.
  */
-function hidesHostPathBehindBracket(matched: string): boolean {
+function hidesHostPathBehindDelimiter(matched: string): boolean {
+  let segmentStart = 0;
+  let judgedSegmentStart = -1;
+  let judgedSegmentEnd = -1;
+  let judgedPlaceholder = false;
   for (let index = 0; index < matched.length; index++) {
-    if (!"<>{}".includes(matched[index]!)) continue;
-    const segmentStart = Math.max(matched.lastIndexOf("/", index), matched.lastIndexOf("\\", index)) + 1;
-    const nextSeparator = matched.slice(index).search(/[\\/]/);
-    const segment = matched.slice(segmentStart, nextSeparator === -1 ? matched.length : index + nextSeparator);
-    if (isBracketedPlaceholder(segment, "<", ">") || isBracketedPlaceholder(segment, "{", "}")) continue;
-    const rest = matched.slice(index + 1);
-    for (const rule of HOST_PATH_RULES) {
-      const hit = new RegExp(rule.pattern.source, "y").exec(rest);
-      if (hit && (!rule.confirm || rule.confirm(hit[0]))) return true;
+    const character = matched[index]!;
+    if (character === "/" || character === "\\") {
+      segmentStart = index + 1;
+      continue;
     }
+    if (!HOST_PATH_DELIMITERS.includes(character)) continue;
+    if (segmentStart !== judgedSegmentStart) {
+      const nextSeparators = [matched.indexOf("/", index), matched.indexOf("\\", index)]
+        .filter((position) => position !== -1);
+      judgedSegmentStart = segmentStart;
+      judgedSegmentEnd = nextSeparators.length === 0 ? matched.length : Math.min(...nextSeparators);
+      const segment = matched.slice(segmentStart, judgedSegmentEnd);
+      judgedPlaceholder = isBracketedPlaceholder(segment, "<", ">") || isBracketedPlaceholder(segment, "{", "}");
+    }
+    if (judgedPlaceholder) continue;
+    const rest = matched.slice(index + 1);
+    if (startsWithHostPathStart(rest) && refusedHostPathAfterDelimiter(rest)) return true;
   }
   return false;
 }
@@ -479,9 +585,10 @@ const HOST_PATH_RULES: readonly ContentRule[] = [
     // directly behind a permitted form (an allowed root followed by `>` or
     // `;`) is still matched on its own. Angle brackets are continuation
     // characters (they carry placeholder segments such as `<pid>`), never a
-    // silent stop; the confirm then judges the complete path.
+    // silent stop; the confirm then judges the complete path and refuses a
+    // second host path hiding behind any delimiter inside it.
     pattern: /(?<=^|[\s"'`([=,{<>),;\]}]|[A-Za-z0-9_]{2}:|file:\/\/)\/(?:home|Users|root|tmp|var|etc|opt|srv|mnt|media|private|Volumes|usr|run|proc|sys|data|nix|scratch|workspace|builds|Library|System)(?=\/|$|[\s"'`<>),;\]}])(?:\/[^\s"'`),;\]]*)?/g,
-    confirm: (matched) => !isPublicPosixPath(matched) || hidesHostPathBehindBracket(matched),
+    confirm: (matched) => !isPublicPosixPath(matched) || hidesHostPathBehindDelimiter(matched),
   },
   {
     rule: "windows-host-path",
@@ -490,7 +597,7 @@ const HOST_PATH_RULES: readonly ContentRule[] = [
     // segments (`<placeholder>` after a Users root) are matched whole and
     // judged by the confirm instead of truncating the match before them.
     pattern: /(?:(?<![A-Za-z0-9_:/])|(?<=file:\/\/\/))[A-Za-z]:[\\/][^\s"'`),;\]]+/g,
-    confirm: (matched) => !isPublicWindowsPath(matched) || hidesHostPathBehindBracket(matched),
+    confirm: (matched) => !isPublicWindowsPath(matched) || hidesHostPathBehindDelimiter(matched),
   },
   {
     rule: "home-username",
@@ -501,6 +608,17 @@ const HOST_PATH_RULES: readonly ContentRule[] = [
     pattern: /(?:^|[\s"'`([=,])~[A-Za-z][A-Za-z0-9._-]*\/[^\s"'`<>),;\]}]*/g,
   },
 ];
+
+/**
+ * Sticky copies of the host-path rule patterns, built once per process and
+ * reused for every delimiter suffix. A sticky match at the start of a suffix
+ * (or at the URL path of a `file://` prefix) reproduces exactly the rule match
+ * that would begin there, so suffixes are judged without re-running the
+ * rules — and therefore without re-entering their confirms — recursively.
+ */
+const STICKY_HOST_PATH_PATTERNS: ReadonlyMap<string, RegExp> = new Map(
+  HOST_PATH_RULES.map((rule) => [rule.rule, new RegExp(rule.pattern.source, "y")] as const),
+);
 
 /** Identifier segments whose presence marks an assignment target as secret-bearing. */
 const SECRET_IDENTIFIER_SEGMENTS: readonly string[] = [

@@ -8,11 +8,13 @@
  * has teeth: each single allowance, removed from a disposable mutated copy of
  * gate.ts, must flip EXACTLY that allowance's must-allow rows to failing, and
  * each broadened allowance (dropped domain anchors, dropped runner shape,
- * dropped traversal/encoding/embedding checks, dropped bracket lead-ins) must
- * flip exactly the must-refuse rows it would have admitted. A mutation whose
- * flipped rows differ from the recorded expectation fails the proof, as does a
- * mutation whose source anchor no longer exists, so the table cannot silently
- * drift away from the scanner it claims to measure.
+ * dropped traversal/encoding/embedding checks, dropped bracket lead-ins, a
+ * reverted delimiter set, a reverted embedded-identity list, a removed procfs
+ * root exception or runner tmp exemption) must flip exactly the must-refuse
+ * rows it would have admitted. A mutation whose flipped rows differ from the
+ * recorded expectation fails the proof, as does a mutation whose source
+ * anchor no longer exists, so the table cannot silently drift away from the
+ * scanner it claims to measure.
  *
  * Mutated copies run outside the repository in an operating-system temporary
  * directory and are deleted afterwards; no repository file is modified. The
@@ -115,7 +117,7 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
     name: "remove-procfs-allowance",
     description: "procfs interface paths must fail again",
     replacements: [{ find: "if (root === \"proc\") {", replace: "if (root === \"proc\") return false; if (root === \"proc\") {" }],
-    expectFailingAllowRows: ["pm-review-title", "pm-review-body-proc-pid", "pm-review-body-proc-bare", "proc-bare", "proc-self", "proc-self-root-only", "proc-digits", "proc-placeholder", "placeholder-home-then-proc"],
+    expectFailingAllowRows: ["pm-review-title", "pm-review-body-proc-pid", "pm-review-body-proc-bare", "proc-bare", "proc-self", "proc-self-root-only", "proc-digits", "proc-placeholder", "placeholder-home-then-proc", "proc-self-root-entry", "proc-digits-root-entry", "placeholder-home-then-file-url"],
     expectPassingRefuseRows: [],
   },
   {
@@ -139,14 +141,14 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
     name: "remove-runner-workspace-posix",
     description: "hosted-runner workspaces under either home root must fail again",
     replacements: [{ find: "return first === \"runner\" && segments[2] === \"work\"", replace: "return false && first === \"runner\" && segments[2] === \"work\"" }],
-    expectFailingAllowRows: ["runner-posix", "runner-macos"],
+    expectFailingAllowRows: ["runner-posix", "runner-macos", "runner-workspace-tmp"],
     expectPassingRefuseRows: [],
   },
   {
     name: "remove-runner-workspace-windows",
     description: "the hosted-runner drive workspaces must fail again",
     replacements: [{ find: "return drive.toLowerCase() === \"d:\" && root === \"a\" &&", replace: "return false && drive.toLowerCase() === \"d:\" && root === \"a\" &&" }],
-    expectFailingAllowRows: ["pm-rust-runner-fwd", "runner-fwd-angle", "runner-back"],
+    expectFailingAllowRows: ["pm-rust-runner-fwd", "runner-fwd-angle", "runner-back", "runner-workspace-tmp-win", "placeholder-home-then-runner-win"],
     expectPassingRefuseRows: [],
   },
   {
@@ -160,7 +162,7 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
     name: "remove-placeholder-home-posix",
     description: "placeholder account segments after POSIX home roots must fail again",
     replacements: [{ find: "if (isHomePlaceholderSegment(first)) return !embedsIdentityRoot(segments.slice(2));", replace: "if (isHomePlaceholderSegment(first)) return false;" }],
-    expectFailingAllowRows: ["pm-swarm-placeholder-home", "placeholder-home-bare", "placeholder-home-angle", "placeholder-users-curly", "placeholder-home-dollar", "placeholder-home-braced", "placeholder-home-dotted", "placeholder-home-percent", "placeholder-home-in-markup", "placeholder-home-then-proc"],
+    expectFailingAllowRows: ["pm-swarm-placeholder-home", "placeholder-home-bare", "placeholder-home-angle", "placeholder-users-curly", "placeholder-home-dollar", "placeholder-home-braced", "placeholder-home-dotted", "placeholder-home-percent", "placeholder-home-in-markup", "placeholder-home-then-proc", "placeholder-home-then-file-url", "placeholder-home-then-file-notes", "placeholder-home-then-runner-win", "placeholder-home-then-bare-drive", "placeholder-home-then-anonymous-tilde", "placeholder-home-windows-fwd"],
     expectPassingRefuseRows: [],
   },
   {
@@ -198,7 +200,7 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
       replace: "true &&",
     }],
     expectFailingAllowRows: [],
-    expectPassingRefuseRows: ["other-drive", "runner-win-short", "smuggled-drive-after-win-placeholder"],
+    expectPassingRefuseRows: ["other-drive", "runner-win-short"],
   },
   {
     name: "broaden-git-transport-local-part",
@@ -239,7 +241,7 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
     description: "identity roots hidden behind a permitted prefix would pass",
     replacements: [{ find: "function embedsIdentityRoot(segments: readonly string[]): boolean {", replace: "function embedsIdentityRoot(segments: readonly string[]): boolean { if (segments.length < 9999) return false;" }],
     expectFailingAllowRows: [],
-    expectPassingRefuseRows: ["embedded-home", "embedded-users-runner", "embedded-drive-win", "embedded-users-win-runner"],
+    expectPassingRefuseRows: ["embedded-home", "embedded-users-runner", "embedded-drive-win", "embedded-users-win-runner", "embedded-tmp", "embedded-private", "embedded-volumes", "embedded-mnt", "embedded-media", "embedded-srv", "embedded-root-under-placeholder", "proc-root-then-tmp", "proc-root-then-root", "proc-placeholder-pid-root"],
   },
   {
     name: "broaden-proc-shape",
@@ -260,10 +262,44 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
   },
   {
     name: "remove-bracket-smuggle-check",
-    description: "a refused path behind a bracket inside a non-placeholder segment would pass",
-    replacements: [{ find: "function hidesHostPathBehindBracket(matched: string): boolean {", replace: "function hidesHostPathBehindBracket(matched: string): boolean { if (matched.length < 99999) return false;" }],
+    description: "a refused path behind any delimiter inside a non-placeholder segment would pass",
+    replacements: [{ find: "function hidesHostPathBehindDelimiter(matched: string): boolean {", replace: "function hidesHostPathBehindDelimiter(matched: string): boolean { if (matched.length < 99999) return false;" }],
     expectFailingAllowRows: [],
-    expectPassingRefuseRows: ["smuggled-root-after-placeholder", "smuggled-temp-after-proc", "smuggled-tilde-after-runner", "smuggled-drive-after-win-placeholder"],
+    expectPassingRefuseRows: ["smuggled-tilde-after-runner", "smuggled-var-after-bracket", "smuggled-var-after-colon", "smuggled-var-after-equals", "smuggled-file-url-after-placeholder"],
+  },
+  {
+    name: "revert-delimiter-set",
+    description: "without colon and equals as delimiters, a path hidden behind a label or assignment prefix passes",
+    replacements: [{ find: "const HOST_PATH_DELIMITERS = \"<>{}:=\";", replace: "const HOST_PATH_DELIMITERS = \"<>{}\";" }],
+    expectFailingAllowRows: [],
+    expectPassingRefuseRows: ["smuggled-var-after-colon", "smuggled-var-after-equals"],
+  },
+  {
+    name: "revert-embedded-identity-list",
+    description: "without the system roots, a refused root inside a permitted tail passes",
+    replacements: [{
+      find: "const EMBEDDED_IDENTITY_SEGMENTS: readonly string[] = [\"home\", \"Users\", \"tmp\", \"private\", \"Volumes\", \"mnt\", \"media\", \"srv\", \"root\"];",
+      replace: "const EMBEDDED_IDENTITY_SEGMENTS: readonly string[] = [\"home\", \"Users\"];",
+    }],
+    expectFailingAllowRows: [],
+    expectPassingRefuseRows: ["embedded-tmp", "embedded-private", "embedded-volumes", "embedded-mnt", "embedded-media", "embedded-srv", "embedded-root-under-placeholder", "proc-root-then-tmp", "proc-root-then-root", "proc-placeholder-pid-root"],
+  },
+  {
+    name: "remove-proc-root-exception",
+    description: "without the procfs root-entry exception, the real root entry must fail again",
+    replacements: [{
+      find: "const exemptRootEntry = (first === \"self\" || /^\\d+$/.test(first)) && tail[0] === \"root\";",
+      replace: "const exemptRootEntry = false;",
+    }],
+    expectFailingAllowRows: ["proc-self-root-entry", "proc-digits-root-entry"],
+    expectPassingRefuseRows: [],
+  },
+  {
+    name: "remove-runner-tmp-exemption",
+    description: "without the runner tmp exemption, the hosted runner's own scratch directory must fail again",
+    replacements: [{ find: "return segments.filter((segment) => segment !== \"tmp\");", replace: "return segments;" }],
+    expectFailingAllowRows: ["runner-workspace-tmp", "runner-workspace-tmp-win"],
+    expectPassingRefuseRows: [],
   },
 ];
 
