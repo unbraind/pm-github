@@ -119,6 +119,8 @@ export const PUBLIC_FORMS_MUST_ALLOW: readonly PublicFormRow[] = [
   { id: "runner-fwd-angle", line: "at D:/a/<repo>/<repo>/tests/unit.test.ts", allowGroup: "runner-windows" },
   { id: "runner-back", line: "at D:\\a\\pm-rust\\pm-rust\\tests\\oracle\\suite.ts", allowGroup: "runner-windows" },
   { id: "runner-posix", line: "see " + posix("home", "runner", "work", "repo", "repo", "attribution.txt"), allowGroup: "runner-posix" },
+  // `@` before a name (a scoped package) is not followed by a path start, so it is never judged.
+  { id: "runner-scoped-package", line: "see " + posix("home", "runner", "work", "repo", "repo", "node_modules", "@scope", "pkg", "index.js"), allowGroup: "runner-posix" },
   { id: "runner-macos", line: "see " + posix("Users", "runner", "work", "repo", "repo", "attribution.txt"), allowGroup: "runner-posix" },
   { id: "runner-workspace-tmp", line: "see " + posix("home", "runner", "work", "repo", "repo", "tmp", "build.log"), allowGroup: "runner-posix" },
   { id: "runner-workspace-tmp-win", line: "at " + winFwd("D", "a", "repo", "repo", "tmp", "build.log"), allowGroup: "runner-windows" },
@@ -127,6 +129,8 @@ export const PUBLIC_FORMS_MUST_ALLOW: readonly PublicFormRow[] = [
   // --- placeholder home segments -------------------------------------------
   { id: "pm-swarm-placeholder-home", line: "fixture paths " + posix("home", "example", "file") + " and " + posix("Users", "example", "file"), allowGroup: "placeholder-home-posix" },
   { id: "placeholder-home-bare", line: "resolve " + posix("home", "example"), allowGroup: "placeholder-home-posix" },
+  // Non-ASCII letters are segment characters, not delimiters: a refused-looking root below one stays a subdirectory.
+  { id: "placeholder-home-unicode-segment", line: "open " + posix("home", "<user>", "café", "var", "log"), allowGroup: "placeholder-home-posix" },
   { id: "placeholder-home-angle", line: "open " + posix("home", "<user>", "project"), allowGroup: "placeholder-home-posix" },
   { id: "placeholder-users-curly", line: "open " + posix("Users", "{user}", "config"), allowGroup: "placeholder-home-posix" },
   { id: "placeholder-home-dollar", line: "cache at " + posix("home", "$USER", ".cache"), allowGroup: "placeholder-home-posix" },
@@ -213,6 +217,10 @@ export const PUBLIC_FORMS_MUST_REFUSE: readonly PublicFormRefuseRow[] = [
   { id: "smuggled-var-after-colon", line: "ok " + posix("home", "<user>", "notes:") + posix("var", "log", "syslog"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "smuggled-var-after-equals", line: "ok " + posix("home", "<user>", "notes=") + posix("var", "log", "syslog"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "smuggled-var-after-bracket", line: "ok " + posix("home", "<user>", "x>") + posix("var", "log", "syslog"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
+  { id: "smuggled-var-after-square-bracket", line: "ok " + posix("home", "example", "x[") + posix("var", "log", "syslog"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
+  { id: "smuggled-var-after-paren", line: "ok " + posix("home", "example", "x(") + posix("var", "log", "syslog"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
+  { id: "smuggled-var-after-pipe", line: "ok " + posix("home", "example", "x|") + posix("var", "folders", "xy", "abc123", "T"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
+  { id: "smuggled-data-after-at-proc", line: "ok " + posix("proc", "self", "x@") + posix("data", "alice-project"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "smuggled-file-url-after-placeholder", line: "ok " + posix("home", "<user>", "x>") + "file://" + posix("var", "log", "syslog"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "sys-dot-escape", line: "read " + posix("sys", "..", "home", "alice"), rule: "absolute-host-path", refuseGroup: "dot-escape" },
   { id: "placeholder-wrong-level", line: "read " + posix("home", "alice", "<user>", "file"), rule: "absolute-host-path", refuseGroup: "concrete-home" },

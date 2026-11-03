@@ -5,7 +5,7 @@ comparison scanner `1dd1691` (the public-forms allowances), bracket-smuggle
 fix `5bf20e2`. The eight-repository measurement below (refreshed 15:53Z on
 2026-11-02), the 134-test recovery regression run and the complete fresh
 release check all predate `5bf20e2`; the review-round receipts (this
-document's timing runs, corpus counts and 26-mutation proof) were produced on
+document's timing runs, corpus counts and 28-mutation proof) were produced on
 the branch head after it.
 
 ## Inherited diff audit
@@ -53,7 +53,16 @@ fails closed) and adds the `remove-delimiter-judgment-cap` mutation; before the
 cap a 4,000-path chain took 13.4 s, after it 0.6 s. The third review round
 limits the procfs root entry to the entry itself, because it re-exposes the
 whole filesystem (`/proc/self/root/var/…` names `/var/…`), and adds the
-`allow-procfs-root-continuation` mutation with two must-refuse rows. Sysfs was previously outside the host-root signature; it is
+`allow-procfs-root-continuation` mutation with two must-refuse rows. The fourth
+round replaces the explicit delimiter list with the segment-name class, so
+unlisted punctuation cannot hide a second path. It adds four must-refuse rows
+(`[`, `(`, `|`, `@`) and two must-allow rows: a non-ASCII segment and a scoped
+package. It also adds the `revert-to-listed-delimiters` and `ascii-only-name-class`
+mutations, plus a property test over all 26 printable ASCII punctuation
+characters. With the old list restored, that test exposes 12 of them
+(`! # $ & ( * + ? @ [ ^ |`). A read-only local comparison of the previous and
+current gate over every fleet repository's tracker files (12,002 files and
+198,914 path-bearing lines on 2026-11-03) found no added or lost host-path hits. Sysfs was previously outside the host-root signature; it is
 now explicitly scanned so its allowance and traversal refusal are observable.
 
 ## Review round: recursion, delimiters and tail roots
@@ -82,14 +91,16 @@ corpus rows cover both directions, and every new check has its own mutation.
 
 ## Corpus and proof
 
-The shared corpus has 55 must-allow and 72 must-refuse rows. Every row runs as
+The shared corpus has 57 must-allow and 76 must-refuse rows. Every row runs as
 plain text and JSON-escaped TOON text and through a complete synthetic tracker
 diff; allow rows also run as whole JSON strings and JSONL history changes.
 Refusal findings retain their expected rule and item attribution. All corpus
 names and account paths are synthetic and assembled at runtime.
 
 Angle and curly brackets continue a path so whole placeholder segments are
-judged in place. A delimiter — bracket, label colon or assignment equals —
+judged in place. A delimiter — any character outside the segment-name class
+(letters and digits in any script, `.`, `_`, `~`, `-`), so a bracket, label
+colon, assignment equals, `[`, `(`, `|`, `@` and every other punctuation mark —
 inside any other segment can end one path and start the next, so the text
 after it is judged with the public-path predicates exactly as if it stood
 alone: a refused root-account, temp, other-drive or tilde-username path behind
@@ -107,10 +118,10 @@ flips and import failures fail the proof. Temporary copies are removed.
 | `remove-procfs-allowance` | 13 | 0 |
 | `remove-reserved-domain-allowance` | 12 | 0 |
 | `remove-git-transport-allowance` | 4 | 0 |
-| `remove-runner-workspace-posix` | 3 | 0 |
+| `remove-runner-workspace-posix` | 4 | 0 |
 | `remove-runner-workspace-windows` | 5 | 0 |
 | `remove-toolcache-allowance` | 1 | 0 |
-| `remove-placeholder-home-posix` | 16 | 0 |
+| `remove-placeholder-home-posix` | 17 | 0 |
 | `remove-placeholder-home-windows` | 3 | 0 |
 | `broaden-reserved-domain-anchor` | 0 | 7 |
 | `broaden-runner-shape-posix` | 0 | 3 |
@@ -123,8 +134,10 @@ flips and import failures fail the proof. Temporary copies are removed.
 | `allow-procfs-root-continuation` | 0 | 2 |
 | `broaden-proc-shape` | 0 | 3 |
 | `remove-bracket-leadins` | 0 | 1 |
-| `remove-bracket-smuggle-check` | 0 | 6 |
-| `revert-delimiter-set` | 0 | 3 |
+| `remove-bracket-smuggle-check` | 0 | 10 |
+| `revert-delimiter-set` | 0 | 7 |
+| `revert-to-listed-delimiters` | 0 | 4 |
+| `ascii-only-name-class` | 1 | 0 |
 | `revert-embedded-identity-list` | 0 | 8 |
 | `remove-proc-root-exception` | 2 | 0 |
 | `remove-runner-tmp-exemption` | 2 | 0 |

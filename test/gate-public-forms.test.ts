@@ -141,6 +141,20 @@ test("the delimiter check answers adversarial bracket chains in bounded time", (
   }
 });
 
+test("no printable punctuation can hide a refused path behind a permitted prefix", () => {
+  // Every printable ASCII character outside the segment-name class either ends
+  // the match (so the refused path is matched on its own) or is a delimiter
+  // whose following path is judged; neither lets the refused root pass.
+  const punctuation = Array.from({ length: 0x7f - 0x21 }, (_, offset) => String.fromCharCode(0x21 + offset))
+    .filter((character) => !/[A-Za-z0-9._~/\\-]/.test(character));
+  assert.equal(punctuation.length, 26);
+  const exposed = punctuation.filter((character) => {
+    const line = "ok " + posix("home", "example", "x" + character) + posix("var", "log", "syslog");
+    return !scanLineForRuleHits(line).some((hit) => hit.rule === "absolute-host-path");
+  });
+  assert.deepStrictEqual(exposed, [], `punctuation that hides the refused path: ${exposed.join(" ")}`);
+});
+
 test("a long chain of delimiter-started public paths fails closed in linear time", () => {
   // Each delimiter-started path copies and judges the remaining suffix, so an
   // uncapped chain is quadratic (measured: 1.4 s at 1,000 paths and 13.4 s at

@@ -407,12 +407,17 @@ function isPublicWindowsPath(matched: string): boolean {
 }
 
 /**
- * Characters that can end one path and begin the next inside a matched host
- * path: the two bracket pairs (which continue a path while they wrap a whole
- * placeholder segment), plus the colon and equals of a label or assignment
- * prefix (`cwd:`, `path=`) written straight into a permitted tail.
+ * Characters of an ordinary path segment name: letters and digits in any
+ * script, plus `.`, `_`, `~` and `-`. Every other character inside a matched
+ * host path is a delimiter that can end one path and begin the next — the two
+ * bracket pairs (which continue a path while they wrap a whole placeholder
+ * segment), the colon and equals of a label or assignment prefix (`cwd:`,
+ * `path=`), and any other punctuation (`[`, `(`, `|`, `@`, `#`, `?`, `&`, `*`,
+ * `!`, `+`, …) written straight into a permitted tail. Naming the segment
+ * characters rather than the delimiters keeps unlisted punctuation from hiding
+ * a second path; only a delimiter directly followed by a path start is judged.
  */
-const HOST_PATH_DELIMITERS = "<>{}:=";
+const PATH_NAME_CHARACTER = /[\p{L}\p{N}._~-]/u;
 
 /**
  * Whether the text after a delimiter begins with a shape a host-path rule can
@@ -479,9 +484,10 @@ const MAX_DELIMITER_PATH_JUDGMENTS = 64;
  * would be refused on its own.
  *
  * Angle and curly brackets are continuation characters so whole placeholder
- * segments (`<pid>`, `{user}`) are judged in place. A delimiter in any other
- * segment — including the `:` or `=` of a label or assignment prefix — can
- * end one path and begin the next (a root-account, temp, other-drive or
+ * segments (`<pid>`, `{user}`) are judged in place. A delimiter (any character
+ * outside {@link PATH_NAME_CHARACTER}) in any other segment — including the
+ * `:` or `=` of a label or assignment prefix — can end one path and begin the
+ * next (a root-account, temp, other-drive or
  * tilde-username path written straight after it), so the text after it is
  * judged with the public-path predicates, exactly as if it stood alone.
  *
@@ -507,7 +513,7 @@ function hidesHostPathBehindDelimiter(matched: string): boolean {
       segmentStart = index + 1;
       continue;
     }
-    if (!HOST_PATH_DELIMITERS.includes(character)) continue;
+    if (PATH_NAME_CHARACTER.test(character)) continue;
     if (segmentStart !== judgedSegmentStart) {
       // Forward scan to this segment's end: each segment is scanned once, so
       // the whole pass stays linear in the match length.
