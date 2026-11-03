@@ -6,7 +6,7 @@ import { decodeHTML } from "entities";
 import {
   canonicalDocument, createHistoryEntry, SETTINGS_DEFAULTS, resolveItemTypeRegistry, mutateItem, normalizeItemId, normalizeStatusInput, parseTags, toNonEmptyImportString, toImportTags,
 } from "@unbrained/pm-cli/sdk";
-import { CommandError, fetchJSON, githubApiBase, githubGraphQL, parseNextLink, parseProvenanceTag, type GhIssue, type PmItem } from "./index.ts";
+import { CommandError, fetchJSON, githubApiBase, githubGraphQL, mapState, parseNextLink, parseProvenanceTag, type GhIssue, type PmItem } from "./index.ts";
 
 /**
  * Select the latest external edit or different lifecycle generation in immutable history.
@@ -14,17 +14,22 @@ import { CommandError, fetchJSON, githubApiBase, githubGraphQL, parseNextLink, p
  * keeps the selected revision stable, including after an interrupted governed update.
  * @internal Shared by transaction planning and deterministic history-shape tests.
  */
-export function selectImportContextIndex(entries: readonly { message?: string; patch: readonly { path: string; value?: unknown }[] }[], status: string, statuses?: GithubStatusRegistry): number {
+export function selectImportContextIndex(entries: readonly { message?: string; context?: { item_transaction_step?: unknown }; patch: readonly { path: string; value?: unknown }[] }[], status: string, statuses?: GithubStatusRegistry): number {
   let currentStatus: unknown;
   let selected = -1;
   for (const [index, event] of entries.entries()) {
+    let changedStatus = false;
     for (const patch of event.patch) {
-      if (patch.path === "/metadata/status") currentStatus = patch.value;
+      if (patch.path === "/metadata/status") { currentStatus = patch.value; changedStatus = true; }
     }
     const message = event.message ?? "";
-    const owned = /^(?:pm-github import create |bulk-item-transaction github-import-|Compensate interrupted bulk transaction github-import-|Preserve GitHub source lifecycle for issue #\d+$)/.test(message);
+    // The SDK close router's content update can omit the message, but retains
+    // the governed transaction step in immutable history context.
+    const step = event.context?.item_transaction_step;
+    const owned = /^(?:pm-github import create |bulk-item-transaction github-import-|Compensate interrupted bulk transaction github-import-|Preserve GitHub source lifecycle for issue #\d+$)/.test(message)
+      || (typeof step === "string" && /^bulk-item-transaction github-import-/.test(step));
     const transient = /^(?:pm-github import create |Compensate interrupted bulk transaction github-import-)|^bulk-item-transaction github-import-.* compensate$/.test(message);
-    if (!owned || (currentStatus !== undefined && normalizeImportValue("status", currentStatus, undefined, statuses) !== normalizeImportValue("status", status, undefined, statuses) && !transient)) selected = index;
+    if (!owned || (changedStatus && currentStatus !== undefined && normalizeImportValue("status", currentStatus, undefined, statuses) !== normalizeImportValue("status", status, undefined, statuses) && !transient)) selected = index;
   }
   return selected;
 }
@@ -482,8 +487,11 @@ export async function persistImportFidelity(pmPath: string, id: string, fidelity
     message: `Preserve GitHub source lifecycle for issue #${fidelity.github_number}`,
     mutate: document => {
       const before = canonicalDocument(document);
-      for (const [field, value] of Object.entries(importFidelityFields(fidelity, linkOnly))) {
-        if (normalizeFields && JSON.stringify(normalizeImportValue(field, ownValue(document.metadata, field), undefined, workspace.statuses)) === JSON.stringify(normalizeImportValue(field, value, undefined, workspace.statuses))) continue;
+      const fields = { ...importFidelityFields(fidelity, linkOnly),
+        ...(!linkOnly ? { status: normalizeStatusInput(mapState(fidelity.github_state, fidelity.github_state_reason), workspace.statuses) } : {}) };
+      for (const [field, value] of Object.entries(fields)) {
+        const current = ownValue(document.metadata, field);
+        if (Object.is(current, value) || (normalizeFields && JSON.stringify(normalizeImportValue(field, current, undefined, workspace.statuses)) === JSON.stringify(normalizeImportValue(field, value, undefined, workspace.statuses)))) continue;
         if (value === undefined) delete document.metadata[field];
         else setOwnValue(document.metadata, field, value);
       }

@@ -1485,14 +1485,14 @@ export function buildAtomicImportMutations(
     ...importTagOptions(entry),
     ...(entry.assignee ? { assignee: entry.assignee } : {}),
     ...(entry.milestone ? { sprint: entry.milestone } : {}),
-    ...((!closing && githubStatusIsTerminal(entry.status, statuses)) ? { closeReason: entry.fidelity?.github_close_reason ?? `GitHub issue #${entry.issueNumber} closed` } : {}),
+    ...(((!entry.fidelity || updateOnly) && !closing && githubStatusIsTerminal(entry.status, statuses)) ? { closeReason: entry.fidelity?.github_close_reason ?? `GitHub issue #${entry.issueNumber} closed` } : {}),
   };
 
-  // Explicit terminal reconciliation also handles canceled -> completed. The
-  // supported force option permits that source-authoritative repeat closure;
-  // finalization restores the real dates before the transaction commits.
-  const statusOptions = closing
-    ? entry.fidelity ? { status: entry.status, closeReason: entry.fidelity.github_close_reason, force: true } : {}
+  // Source lifecycle is applied together in the fenced finalizer. A forced
+  // native close invents an import-time closed_at even for an already-closed
+  // item. Keep this plan independent of current status so replay stays stable.
+  const statusOptions = closing || (!updateOnly && entry.fidelity && githubStatusIsTerminal(entry.status, statuses))
+    ? {}
     : { status: entry.status };
   const managedItemId = deriveAtomicItemId(
     repo,
@@ -1508,7 +1508,7 @@ export function buildAtomicImportMutations(
   // create step treats an existing stable id as already applied; update then
   // makes later content-bearing transactions refresh the item normally.
   if (!updateOnly && (!entry.match?.id || entry.match.id === managedItemId)) {
-    const createStatus = closing ? "open" : entry.status;
+    const createStatus = closing || (entry.fidelity && githubStatusIsTerminal(entry.status, statuses)) ? "open" : entry.status;
     const mutations: BulkItemMutation[] = [{
       op: "create",
       id: managedItemId,
@@ -6802,7 +6802,7 @@ const defineExtension = <TModule extends ExtensionModule>(module: TModule): TMod
 
 export default defineExtension({
   name: "pm-github",
-  version: "2026.11.1",
+  version: "2026.11.2",
 
   activate(api: ExtensionApi) {
     // -----------------------------------------------------------------------
