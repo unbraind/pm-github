@@ -67,6 +67,29 @@ export function collectCoverageSources(root: string, target: string): string[] {
 /** Measured incremental merge ceiling and margin: docs/bounded-coverage-merge.md. */
 export const COVERAGE_HEAP_FLAG = "--max-old-space-size=3072";
 
+const HEAP_OVERRIDE = /^--max[-_]old[-_]space[-_]size(?:[-_]percentage)?(=|$)/;
+
+/**
+ * Remove inherited V8 old-space limits from NODE_OPTIONS.
+ *
+ * Node applies `--max-old-space-size-percentage` ahead of an explicit
+ * `--max-old-space-size`, so an inherited percentage would lift the merge
+ * above {@link COVERAGE_HEAP_FLAG}. Both spellings and both value forms are removed.
+ *
+ * @param nodeOptions - The inherited NODE_OPTIONS value.
+ * @returns The remaining options, or undefined when none remain.
+ */
+export function withoutHeapOverrides(nodeOptions: string | undefined): string | undefined {
+  const kept: string[] = [];
+  const tokens = (nodeOptions ?? "").split(/\s+/).filter(Boolean);
+  for (let index = 0; index < tokens.length; index++) {
+    const match = HEAP_OVERRIDE.exec(tokens[index]!);
+    if (!match) { kept.push(tokens[index]!); continue; }
+    if (match[1] === "" && /^\d+(?:\.\d+)?$/.test(tokens[index + 1] ?? "")) index++;
+  }
+  return kept.length > 0 ? kept.join(" ") : undefined;
+}
+
 /**
  * Run the strict all-source gate and return its exit status.
  *
@@ -89,6 +112,9 @@ export function runCoverageGate(root: string, runner: CoverageRunner = spawnSync
     const c8 = join(dirname(createRequire(import.meta.url).resolve("c8/package.json")), "bin", "c8.js");
     const coverageEnv: NodeJS.ProcessEnv = { ...process.env, TZ: "UTC" };
     delete coverageEnv.NODE_TEST_CONTEXT;
+    const nodeOptions = withoutHeapOverrides(coverageEnv.NODE_OPTIONS);
+    if (nodeOptions === undefined) delete coverageEnv.NODE_OPTIONS;
+    else coverageEnv.NODE_OPTIONS = nodeOptions;
     const node = nodeToolingExecutable(process.versions);
     // c8 12 incrementally merges one receipt into its accumulator at a time.
     // The default retains every raw child receipt, including excluded code.

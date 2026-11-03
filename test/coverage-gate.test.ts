@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { collectCoverageSources, COVERAGE_HEAP_FLAG, runCoverageGate, runCoverageGateIfMain, type CoverageRunner } from "../scripts/coverage-gate.ts";
+import { collectCoverageSources, COVERAGE_HEAP_FLAG, runCoverageGate, runCoverageGateIfMain, withoutHeapOverrides, type CoverageRunner } from "../scripts/coverage-gate.ts";
 import { nodeToolingExecutable } from "../scripts/main-invocation.ts";
 
 /** Create an independently runnable project with one branching source and its test. */
@@ -191,4 +191,39 @@ test("the incremental c8 merge receives its bounded heap before the entry point"
   assert.equal(seen[0]![0], "--max-old-space-size=3072", "the heap ceiling must match docs/bounded-coverage-merge.md");
   assert.match(seen[0]![1]!, /c8\.js$/);
   assert.ok(seen[0]!.includes("--merge-async"));
+});
+
+test("inherited NODE_OPTIONS heap limits never reach the bounded c8 merge", () => {
+  assert.equal(withoutHeapOverrides(undefined), undefined);
+  assert.equal(withoutHeapOverrides("--max-old-space-size-percentage=60"), undefined);
+  assert.equal(withoutHeapOverrides("--enable-source-maps --max_old_space_size 9000 --max-old-space-size=8192 --max-old-space-size-percentage 60 --trace-warnings"),
+    "--enable-source-maps --trace-warnings");
+  assert.equal(withoutHeapOverrides("--max-old-space-size --trace-warnings"), "--trace-warnings");
+  assert.equal(withoutHeapOverrides("--trace-warnings --max-old-space-size"), "--trace-warnings");
+  // A different flag that shares the prefix is kept.
+  assert.equal(withoutHeapOverrides("--max-old-space-size-other=1"), "--max-old-space-size-other=1");
+  const seen: (string | undefined)[] = [];
+  const spy: CoverageRunner = (_command, _args, options) => { seen.push(options.env?.NODE_OPTIONS); return { status: 1 }; };
+  const previous = process.env.NODE_OPTIONS;
+  const root = coverageFixture();
+  try {
+    process.env.NODE_OPTIONS = "--max-old-space-size-percentage=60 --enable-source-maps";
+    assert.equal(runCoverageGate(root, spy), 1);
+    process.env.NODE_OPTIONS = "--max-old-space-size-percentage=60";
+    assert.equal(runCoverageGate(root, spy), 1);
+  } finally {
+    if (previous === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = previous;
+    rmSync(root, { recursive: true, force: true });
+  }
+  assert.deepEqual(seen, ["--enable-source-maps", undefined]);
+});
+
+test("the effective merge heap stays at the documented ceiling under an inherited percentage", () => {
+  const env = { ...process.env, NODE_OPTIONS: "--max-old-space-size-percentage=60" };
+  const probe = ["-e", "process.stdout.write(String(require('v8').getHeapStatistics().heap_size_limit))"];
+  assert.equal(withoutHeapOverrides(env.NODE_OPTIONS), undefined);
+  const bounded = spawnSync(process.execPath, [COVERAGE_HEAP_FLAG, ...probe], { env: { ...env, NODE_OPTIONS: "" }, encoding: "utf8" });
+  const mib = Number(bounded.stdout) / 1048576;
+  // heap_size_limit adds the young generation to the old-space ceiling.
+  assert.ok(mib > 0 && mib <= 3072 + 512, `bounded merge heap ${mib} MiB exceeds the 3072 MiB ceiling`);
 });

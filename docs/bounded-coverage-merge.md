@@ -70,6 +70,16 @@ comparison rather than a claim that RSS equals V8 heap. The cap leaves room
 for runtime variation while staying below the requested 6 GiB heap target.
 The heap argument still precedes the c8 entry point.
 
+An inherited `NODE_OPTIONS` could still lift that ceiling. Node applies
+`--max-old-space-size-percentage` ahead of an explicit `--max-old-space-size`.
+On this host, `NODE_OPTIONS=--max-old-space-size-percentage=60` with the gate's
+flag gave a 19,406 MiB heap limit, against 3,264 MiB without it. The gate
+therefore removes every inherited old-space limit from `NODE_OPTIONS`: both
+spellings, the percentage form, and `=` or space-separated values. All other
+inherited options are kept. A spy test pins the sanitized environment and fails
+if the sanitizer is removed. A real-node probe checks that the effective limit
+stays at the ceiling under an inherited percentage.
+
 ## Regression and mutation evidence
 
 The existing real-c8 test now exercises 512 synthetic excluded receipts
