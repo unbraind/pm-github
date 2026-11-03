@@ -199,6 +199,10 @@ test("inherited NODE_OPTIONS heap limits never reach the bounded c8 merge", () =
   assert.equal(withoutHeapOverrides("--enable-source-maps --max_old_space_size 9000 --max-old-space-size=8192 --max-old-space-size-percentage 60 --trace-warnings"),
     "--enable-source-maps --trace-warnings");
   assert.equal(withoutHeapOverrides("--max-old-space-size --trace-warnings"), "--trace-warnings");
+  // Quoted options are judged by their unquoted value; unrelated quoted options keep their raw text.
+  assert.equal(withoutHeapOverrides('"--max-old-space-size-percentage=60" --trace-warnings'), "--trace-warnings");
+  assert.equal(withoutHeapOverrides('--max-old-space-size="8192" --require "./a b.js"'), '--require "./a b.js"');
+  assert.equal(withoutHeapOverrides('--max_old_space_size "9000" --title="x \\"y\\" z"'), '--title="x \\"y\\" z"');
   assert.equal(withoutHeapOverrides("--trace-warnings --max-old-space-size"), "--trace-warnings");
   // A different flag that shares the prefix is kept.
   assert.equal(withoutHeapOverrides("--max-old-space-size-other=1"), "--max-old-space-size-other=1");

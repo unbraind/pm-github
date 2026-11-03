@@ -74,18 +74,21 @@ const HEAP_OVERRIDE = /^--max[-_]old[-_]space[-_]size(?:[-_]percentage)?(=|$)/;
  *
  * Node applies `--max-old-space-size-percentage` ahead of an explicit
  * `--max-old-space-size`, so an inherited percentage would lift the merge
- * above {@link COVERAGE_HEAP_FLAG}. Both spellings and both value forms are removed.
+ * above {@link COVERAGE_HEAP_FLAG}. Both spellings, both value forms and quoted forms are removed.
  *
  * @param nodeOptions - The inherited NODE_OPTIONS value.
  * @returns The remaining options, or undefined when none remain.
  */
 export function withoutHeapOverrides(nodeOptions: string | undefined): string | undefined {
+  // Node reads NODE_OPTIONS as whitespace-separated options whose double-quoted parts may hold spaces and
+  // backslash escapes. Judge each option by its unquoted value; keep unrelated options byte-for-byte.
+  const tokens = (nodeOptions ?? "").match(/(?:"(?:[^"\\]|\\.)*"|[^\s"])+/g) ?? [];
+  const unquote = (raw: string) => raw.replace(/"((?:[^"\\]|\\.)*)"/g, (_quoted, inner: string) => inner.replace(/\\(.)/g, "$1"));
   const kept: string[] = [];
-  const tokens = (nodeOptions ?? "").split(/\s+/).filter(Boolean);
   for (let index = 0; index < tokens.length; index++) {
-    const match = HEAP_OVERRIDE.exec(tokens[index]!);
+    const match = unquote(tokens[index]!).match(HEAP_OVERRIDE);
     if (!match) { kept.push(tokens[index]!); continue; }
-    if (match[1] === "" && /^\d+(?:\.\d+)?$/.test(tokens[index + 1] ?? "")) index++;
+    if (match[1] === "" && /^\d+(?:\.\d+)?$/.test(unquote(tokens[index + 1] ?? ""))) index++;
   }
   return kept.length > 0 ? kept.join(" ") : undefined;
 }
