@@ -198,6 +198,8 @@ export const PUBLIC_FORMS_MUST_REFUSE: readonly PublicFormRefuseRow[] = [
   // --- the procfs root entry continuing into a real filesystem path ----------
   { id: "proc-root-then-tmp", line: "leak " + posix("proc", "self", "root", "tmp", "alice-notes"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "proc-root-then-root", line: "leak " + posix("proc", "self", "root", "root", ".ssh", "id_rsa"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
+  { id: "proc-root-then-var-folders", line: "leak " + posix("proc", "self", "root", "var", "folders", "xy", "abc123", "T"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
+  { id: "proc-digits-root-then-data", line: "leak " + posix("proc", "1234", "root", "data", "alice"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "proc-placeholder-pid-root", line: "leak " + posix("proc", "<pid>", "root", "tmp", "alice"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   // --- a path hidden directly behind a permitted form ------------------------
   { id: "hidden-after-proc", line: "see " + posix("proc") + "<" + posix("home", "alice") + "> end", rule: "absolute-host-path", refuseGroup: "embedded-identity" },

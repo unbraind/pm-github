@@ -365,11 +365,14 @@ function isPublicPosixPath(matched: string): boolean {
   if (root === "proc") {
     if (first === "" || first === "self" || /^\d+$/.test(first) || isBracketedPlaceholder(first, "<", ">")) {
       // `root` directly after a numeric or `self` pid directory is the real
-      // procfs root entry (the process's own root), so it is exempt there; as
-      // a tail segment everywhere else it names the root account's tree.
+      // procfs root entry (the process's own root). It re-exposes the whole
+      // filesystem, so only the entry itself is public: anything after it
+      // names a host path. As a tail segment everywhere else it names the
+      // root account's tree.
       const tail = segments.slice(2);
       const exemptRootEntry = (first === "self" || /^\d+$/.test(first)) && tail[0] === "root";
-      return !embedsIdentityRoot(exemptRootEntry ? tail.slice(1) : tail);
+      if (exemptRootEntry) return tail.slice(1).every((segment) => segment === "");
+      return !embedsIdentityRoot(tail);
     }
     return false;
   }

@@ -241,7 +241,17 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
     description: "identity roots hidden behind a permitted prefix would pass",
     replacements: [{ find: "function embedsIdentityRoot(segments: readonly string[]): boolean {", replace: "function embedsIdentityRoot(segments: readonly string[]): boolean { if (segments.length < 9999) return false;" }],
     expectFailingAllowRows: [],
-    expectPassingRefuseRows: ["embedded-home", "embedded-users-runner", "embedded-drive-win", "embedded-users-win-runner", "embedded-tmp", "embedded-private", "embedded-volumes", "embedded-mnt", "embedded-media", "embedded-srv", "embedded-root-under-placeholder", "proc-root-then-tmp", "proc-root-then-root", "proc-placeholder-pid-root"],
+    expectPassingRefuseRows: ["embedded-home", "embedded-users-runner", "embedded-drive-win", "embedded-users-win-runner", "embedded-tmp", "embedded-private", "embedded-volumes", "embedded-mnt", "embedded-media", "embedded-srv", "embedded-root-under-placeholder", "proc-placeholder-pid-root"],
+  },
+  {
+    name: "allow-procfs-root-continuation",
+    description: "a path continuing past the procfs root entry would pass whenever its next root is not an identity root",
+    replacements: [{
+      find: "if (exemptRootEntry) return tail.slice(1).every((segment) => segment === \"\");",
+      replace: "if (exemptRootEntry) return !embedsIdentityRoot(tail.slice(1));",
+    }],
+    expectFailingAllowRows: [],
+    expectPassingRefuseRows: ["proc-root-then-var-folders", "proc-digits-root-then-data"],
   },
   {
     name: "broaden-proc-shape",
@@ -289,7 +299,7 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
       replace: "const EMBEDDED_IDENTITY_SEGMENTS: readonly string[] = [\"home\", \"Users\"];",
     }],
     expectFailingAllowRows: [],
-    expectPassingRefuseRows: ["embedded-tmp", "embedded-private", "embedded-volumes", "embedded-mnt", "embedded-media", "embedded-srv", "embedded-root-under-placeholder", "proc-root-then-tmp", "proc-root-then-root", "proc-placeholder-pid-root"],
+    expectPassingRefuseRows: ["embedded-tmp", "embedded-private", "embedded-volumes", "embedded-mnt", "embedded-media", "embedded-srv", "embedded-root-under-placeholder", "proc-placeholder-pid-root"],
   },
   {
     name: "remove-proc-root-exception",

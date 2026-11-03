@@ -60,15 +60,23 @@ test("mutation drift, import failures and unexpected flips fail without leaking 
   assert.deepEqual(readdirSync(scratch), [], "every disposable mutation directory must be removed");
 });
 
-test("main forwards a failed proof's stderr and status and skips imports", async t => {
+test("main forwards a failed proof's stderr and status and skips imports", async () => {
+  // Plain stubs restored in finally: Bun's node:test shim has no context mock API.
   const previousCode = process.exitCode;
-  t.after(() => { process.exitCode = previousCode; });
+  const originalError = console.error;
+  const originalLog = console.log;
   const output: string[] = [];
-  t.mock.method(console, "error", (line: string) => output.push(line));
-  t.mock.method(console, "log", () => assert.fail("an empty stdout must stay empty"));
-  await main([process.execPath, proofUrl.pathname], proofUrl.href,
-    async () => ({ exitCode: 1, stdout: "", stderr: "synthetic failure" }));
-  assert.equal(process.exitCode, 1);
-  assert.deepEqual(output, ["synthetic failure"]);
-  await main([], proofUrl.href, async () => { assert.fail("import must not run the proof"); });
+  console.error = (line: string) => { output.push(line); };
+  console.log = () => { assert.fail("an empty stdout must stay empty"); };
+  try {
+    await main([process.execPath, proofUrl.pathname], proofUrl.href,
+      async () => ({ exitCode: 1, stdout: "", stderr: "synthetic failure" }));
+    assert.equal(process.exitCode, 1);
+    assert.deepEqual(output, ["synthetic failure"]);
+    await main([], proofUrl.href, async () => { assert.fail("import must not run the proof"); });
+  } finally {
+    console.error = originalError;
+    console.log = originalLog;
+    process.exitCode = previousCode;
+  }
 });
