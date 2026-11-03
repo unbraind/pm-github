@@ -1,0 +1,32 @@
+id: pm-github-4gak
+title: Reusable workflows fail after pm package install when callers pin zero-padded release tags like v2026.11.02
+description: "Release tags are date-shaped and zero-padded (v2026.11.02), but the daily release plan publishes npm versions without padding (2026.11.2). pm-github-sync.yml and pm-github-closeout.yml derive PM_GITHUB_VERSION from the tag on the workflow commit and compare it with the installed package.json version using strict !==, so every caller pinned to a padded tag fails the install verification. v2026.11.01 and v2026.11.02 already fail; every tag for days 1-9 of a month and every month before October would fail too. Normalize the tag version in both workflows, share the rule with the release plan, and cover it in test/self-versioned-workflows.test.ts."
+type: Issue
+status: in_progress
+priority: 1
+tags[4]: changelog-unreleased,regression,release,workflows
+created_at: "2026-11-03T01:04:50.042Z"
+updated_at: "2026-11-03T01:36:28.378Z"
+assignee: pi-ollama
+claim_principal: pi-ollama
+author: pi-ollama
+comments[3]{created_at,author,text}:
+  "2026-11-03T01:04:59.139Z",pi-ollama,"Fix plan: (1) normalize zero-padded tag candidates and the deprecated pm-github-version input in both reusable workflows' resolve steps with pure bash (10# arithmetic on pre-validated numeric components, -N suffix preserved), before the ambiguity check and the legacy-input comparison; (2) export normalizeReleaseVersion from scripts/daily-release-plan.ts and route npm_version through it; (3) add self-versioned-workflows rows for padded tag, padded tag with suffix, padded legacy input, padded tag matching a normalized input without warning, and two tags normalizing to one version not being ambiguous, plus a revert proof and a table test asserting the workflow resolution equals the plan's npm_version for tags like v2026.11.02, v2026.09.01, v2026.10.19, v2027.01.01-2; (4) regenerate the changelog. Existing refusals and the strict N.N.N(--N)? validation stay untouched."
+  "2026-11-03T01:36:26.093Z",pi-ollama,"Implemented. Both reusable workflows now strip zero padding from each numeric component of the tag candidate (before the ambiguity check) and of the deprecated pm-github-version input (after validating it as N.N.N/N.N.N-N, so arithmetic never evaluates untrusted text; an unparseable input stays raw and can only warn). A -N suffix is preserved, the strict validation and every existing refusal remain, and both resolve steps stay byte-identical. scripts/daily-release-plan.ts now exports normalizeReleaseVersion and routes npm_version and the released-version comparison through it, so the tag-to-npm-version rule is shared with the workflows. New self-versioned-workflows rows cover a padded tag (v2026.11.02 -> 2026.11.2), a padded tag with suffix (v2027.01.01-2 -> 2027.1.1-2), a padded legacy input, a padded tag matching a normalized input without warning, and two tags on one commit normalizing to the same version not being ambiguous; a revert test removes the normalization call and shows the padded tag then resolves to 2026.11.02, failing the row; a table test asserts the workflow resolution equals decideDailyRelease().npm_version for tags the plan emits from 2026.11.02, 2026.09.01, 2026.10.19 and 2027.01.01-2. The Unreleased changelog section gained the docs note through the normal changelog regeneration after fetching tags."
+  "2026-11-03T01:36:28.375Z",pi-ollama,"Gate results: node --test test/self-versioned-workflows.test.ts -> 55/55 pass; node --test test/daily-release-plan.test.ts -> 23/23 pass; node --test test/release-workflow.test.ts -> 9/9 pass; npm run typecheck -> pass; npm run lint -> pass. node --test test/closeout-workflow.test.ts fails locally, but identically on pristine main at the branch point (same assertions on the first 27 failures, suite also exceeds local timeouts), while upstream CI on that same main commit is green, so it is a pre-existing shared-host environment issue and not a regression of this change; recorded as follow-up item pm-github-gaq8. release:check and the coverage gate were not run locally per the shared-host memory constraint."
+files[6]{path,scope}:
+  .github/workflows/pm-github-closeout.yml,project
+  .github/workflows/pm-github-sync.yml,project
+  CHANGELOG.md,project
+  scripts/daily-release-plan.ts,project
+  test/daily-release-plan.test.ts,project
+  test/self-versioned-workflows.test.ts,project
+tests[5]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test test/self-versioned-workflows.test.ts test/daily-release-plan.test.ts,project,pi-ollama,"2026-11-03T01:33:27.162Z",local_mutation,fix/normalize-release-tag-version
+  node --test test/release-workflow.test.ts,project,pi-ollama,"2026-11-03T01:33:28.886Z",local_mutation,fix/normalize-release-tag-version
+  npm run typecheck,project,pi-ollama,"2026-11-03T01:33:30.988Z",local_mutation,fix/normalize-release-tag-version
+  npm run lint,project,pi-ollama,"2026-11-03T01:33:33.378Z",local_mutation,fix/normalize-release-tag-version
+  node --test test/closeout-workflow.test.ts,project,pi-ollama,"2026-11-03T01:33:37.927Z",local_mutation,fix/normalize-release-tag-version
+docs[1]{path,scope}:
+  CHANGELOG.md,project
+body: ""

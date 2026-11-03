@@ -1,0 +1,11 @@
+id: pm-github-gaq8
+title: closeout-workflow.test.ts fails wholesale on the local shared host while CI stays green on main
+description: "Running the closeout workflow suite on the package worktree fails nearly every test on pristine main (assertions receive git branch-switch output and a pm 'Command failed' receipt instead of expected diagnostics), while the CI workflow on the same main commit is green. The suite also exceeds 4 minutes locally and hits local timeouts. Root-cause the host-local incompatibility (host git version prints advice output the fixtures do not expect) or make the fixtures version-tolerant; out of scope for the release-tag normalization work."
+type: Issue
+status: open
+priority: 2
+tags[2]: regression,test
+created_at: "2026-11-03T01:36:20.521Z"
+updated_at: "2026-11-03T01:36:20.521Z"
+author: pi-ollama
+body: ""

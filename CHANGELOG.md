@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Reusable workflows fail after pm package install when callers pin zero-padded release tags like v2026.11.02 ([pm-github-4gak](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-4gak.toon))
+
 ## 2026.11.1 - 2026-11-01
 
 ### Fixed

@@ -16,6 +16,9 @@ test("first release uses today's stable npm version and current main", () => {
   assert.deepEqual(decideDailyRelease(input), { should_release: true, action: "create", tag: "v2026.10.18",
     npm_version: "2026.10.18", base_sha: "new-main", release_branch: "release/2026.10.18", pr_number: "", superseded_pr_numbers: "" });
   assert.equal(decideDailyRelease({ ...input, today: "2026.01.02" }).npm_version, "2026.1.2");
+  const rescheduled = decideDailyRelease({ ...input, today: "2027.01.01-2" });
+  assert.equal(rescheduled.tag, "v2027.01.01-2");
+  assert.equal(rescheduled.npm_version, "2027.1.1-2");
 });
 
 test("an existing stale PR is rebuilt from current main and today's date", () => {
