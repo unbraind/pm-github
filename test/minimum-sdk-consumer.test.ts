@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { nodeToolingExecutable } from "../scripts/main-invocation.ts";
@@ -59,17 +59,33 @@ test("packed package type-checks and imports against its exact declared minimum 
     const minimum = manifest.pm_min_version;
     assert.match(minimum, /^\d+\.\d+\.\d+$/);
     assert.equal(pkg.peerDependencies[cli], `>=${minimum}`);
-    assert.equal(pkg.devDependencies[cli], `>=${minimum}`);
+    assert.match(pkg.devDependencies[cli]!, /^\d+\.\d+\.\d+$/, "the development pin is independent of the consumer floor");
     const packed = JSON.parse(run("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", scratch], repo, environment)) as { filename: string }[];
     assert.equal(packed.length, 1);
     const consumer = join(scratch, "consumer");
     mkdirSync(consumer);
     writeFileSync(join(consumer, "package.json"), JSON.stringify({ name: "minimum-sdk-fixture", version: "0.0.0", private: true, type: "module",
-      dependencies: { ...pkg.dependencies, ...pkg.devDependencies, [cli]: minimum, "pm-github": `file:${join(scratch, packed[0]!.filename)}` } }));
+      dependencies: { ...pkg.dependencies, typescript: pkg.devDependencies.typescript, "@types/node": pkg.devDependencies["@types/node"],
+        [cli]: minimum, "pm-github": `file:${join(scratch, packed[0]!.filename)}` } }));
     console.log(`minimum SDK ${minimum}: installing isolated packed consumer`);
     run("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--no-package-lock"], consumer, environment);
     const installed = JSON.parse(readFileSync(join(consumer, "node_modules/@unbrained/pm-cli/package.json"), "utf8")) as { version: string };
     assert.equal(installed.version, minimum, "the floor fixture must not silently resolve the development SDK");
+    // Operational scripts need real pm-ops types, but its peer graph belongs to tooling.
+    // A synthetic tool deliberately requires the newer dev SDK: flattening this
+    // graph into the consumer would reproduce ERESOLVE even without pm-ops.
+    const tooling = join(scratch, "tooling"), peerTool = join(scratch, "dev-peer");
+    mkdirSync(tooling); mkdirSync(peerTool);
+    writeFileSync(join(peerTool, "package.json"), JSON.stringify({ name: "minimum-sdk-dev-peer", version: "0.0.0",
+      peerDependencies: { [cli]: pkg.devDependencies[cli] } }));
+    writeFileSync(join(tooling, "package.json"), JSON.stringify({ name: "minimum-sdk-tooling", version: "0.0.0", private: true,
+      dependencies: { "pm-ops": pkg.devDependencies["pm-ops"], [cli]: pkg.devDependencies[cli], "minimum-sdk-dev-peer": `file:${peerTool}` } }));
+    run("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--no-package-lock"], tooling, environment);
+    const toolingSdk = JSON.parse(readFileSync(join(tooling, "node_modules/@unbrained/pm-cli/package.json"), "utf8")) as { version: string };
+    assert.equal(toolingSdk.version, pkg.devDependencies[cli], "the incompatible tool peer must resolve independently");
+    assert.notEqual(toolingSdk.version, minimum, "the regression fixture must exercise distinct SDK graphs");
+    symlinkSync(join(tooling, "node_modules/pm-ops"), join(consumer, "node_modules/pm-ops"), "junction");
+
     writeFileSync(join(consumer, "import.mjs"), 'import extension from "pm-github"; if (!extension) throw new Error("Missing packed extension");\n');
     console.log(`minimum SDK ${minimum}: linking the entire packed extension`);
     run(process.execPath, ["import.mjs"], consumer, { ...environment, PATH: consumer });

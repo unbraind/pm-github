@@ -359,8 +359,8 @@ See [SDK adoption evidence](docs/sdk-adoption-1025.md).
 decoding first appeared in 2026.10.9, while the transaction `match` guard used
 by identity repair first appeared in 2026.10.17. The declared minimum must
 support both. Older hosts refuse installation or activation through matching
-peer/development minimum ranges and the top-level manifest floor. Development
-keeps an exact, integrity-locked SDK resolution. CI separately installs the exact
+peer dependency minimum and the top-level manifest floor. Development uses
+an independent exact, integrity-locked SDK pin. CI separately installs the exact
 minimum from npm, type-checks all production and operational SDK imports, then
 loads and exercises the packed artifact in a non-git tracker. See the
 [published SDK evidence](docs/sdk-minimum.md).

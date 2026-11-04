@@ -2,10 +2,29 @@ id: pm-github-gevp
 title: Minimum-SDK consumer fixture installs development-tool peers it cannot satisfy
 description: "Tracks gh:unbraind/pm-github#199 (filed 2026-10-29, missed by the blind issue watch; the three failures already covered by gh:unbraind/pm-github#197 are tracked separately). test/minimum-sdk-consumer.test.ts spreads all devDependencies into the consumer root and then overrides the CLI to the declared minimum (2026.10.17), while the manifest now installs pm-ops 2026.10.26 whose peer requires CLI >=2026.10.20 — an unsatisfiable graph, npm ERESOLVE before any packed import or declaration check runs. The PR #194 checks still fail as of run 41330041504. Fix the fixture to install only runtime dependencies plus the enforced minimum CLI (isolating the witness from development-tool peer requirements) so the packed extension, authored SDK imports and shipped declarations are verified at the floor independently of the development lock."
 type: Issue
-status: open
+status: in_progress
 priority: 2
-tags[3]: ci,fixtures,"gh:unbraind/pm-github#199"
+tags[7]: ci,dependencies,fixtures,"gh:unbraind/pm-github#194","gh:unbraind/pm-github#199",migration,sdk
 created_at: "2026-11-02T09:17:16.438Z"
-updated_at: "2026-11-02T09:17:16.438Z"
+updated_at: "2026-11-04T19:32:51.536Z"
+assignee: codex-toolchain-1104
+claim_principal: codex-toolchain-1104
 author: pi-glm
+comments[5]{created_at,author,text}:
+  "2026-11-04T19:20:31.399Z",codex-toolchain-1104,"Root cause (coupling): two compatibility assertions required the development SDK to equal the peer minimum range. The brief requires an exact development pin independently of the declared runtime minimum. Baseline compatibility-floor.test.ts fails on exact 2026.11.4 versus >=2026.10.17. Retain the declared minimum and enforce exact development pin/lock identity plus numerical compatibility; the packed consumer still verifies the exact minimum artifact."
+  "2026-11-04T19:23:04.630Z",codex-toolchain-1104,"Root cause (test fixture, issue 199): reproduced npm ERESOLVE on the adopted pins before packed import/type checks. The full devDependency spread now first conflicts on pm-changelog 2026.10.31 requiring CLI >=2026.10.23 versus the 2026.10.17 consumer; pm-ops has the same class of contamination. Install production dependencies plus compiler/Node types in the consumer, and place real operational pm-ops types in a separate fixture tooling graph. A synthetic dev tool requires exact SDK 2026.11.4 there while the consumer must retain exact SDK 2026.10.17. No force/legacy-peer-deps flags or minimum increase."
+  "2026-11-04T19:29:04.511Z",codex-toolchain-1104,"The isolated minimum consumer passed 1/1: exact SDK 2026.10.17 installed, entire packed extension linked, all production/operational source and shipped declarations compiled, and native label/tag behavior passed without git. Real pm-ops tooling and a synthetic peer resolved exact SDK 2026.11.4 independently. Exact development pin/floor tests pass 4/4. Full gate remains separate from the atomic-finalization blocker."
+  "2026-11-04T19:31:19.726Z",codex-toolchain-1104,"Negative control after isolation: in a disposable source copy, changing only the manifest/peer minimum to real SDK 2026.10.15 fails the complete witness on a missing SDK type/runtime contract, not ERESOLVE. This preserves the comprehensive minimum gate rather than masking it with a stub or peer override. The synthetic incompatible tooling peer still resolves separately. Linked pin/floor tests pass 4/4."
+  "2026-11-04T19:32:51.536Z",codex-toolchain-1104,Updated current minimum-SDK documentation and README to separate the declared minimum from the exact development pin; removed the stale current-lock version from prose. Historical dated validation reports retain their original artifact versions. docs/atomic-finalization-sdk.md identifies current 2026.11.4 and remaining #1656 requirement; daily-sync recovery now identifies GH-1628 as fixed in 2026.10.31 while preserving historical reproductions.
+files[5]{path,scope}:
+  docs/sdk-minimum.md,project
+  package-lock.json,project
+  package.json,project
+  test/compatibility-floor.test.ts,project
+  test/minimum-sdk-consumer.test.ts,project
+tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  nice -n 10 node --test test/compatibility-floor.test.ts,project,120,codex-toolchain-1104,"2026-11-04T19:29:07.418Z",local_mutation,dependabot/npm_and_yarn/pm-toolchain-838740a1aa
+docs[2]{path,scope}:
+  docs/sdk-minimum.md,project
+  README.md,project
 body: ""

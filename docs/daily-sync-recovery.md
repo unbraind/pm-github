@@ -4,7 +4,7 @@ The 2026-10-29 audit read the latest `pm-github-sync.yml` run and each job's log
 
 The importer compares both stored and desired fields using the shared SDK-aware type, status, assignment, tag, body and timestamp normalization. It omits each unchanged item from fresh atomic batches and from plain updates. Pending transactions retain their complete plan for recovery. Native comment synchronization still runs when item content is unchanged. Gated dry runs now scan the same rendered plan before returning, including in a plain non-git tracker.
 
-The SDK independently resets `closed_at` and `updated_at` on an identical forced closed-state update, through both `update` and `commitItemMutations`. Standalone synthetic non-git reproductions confirmed this on both the pinned SDK 2026.10.25 and current 2026.10.28. The reproduction is recorded in [pm-cli issue #1628](https://github.com/unbraind/pm-cli/issues/1628). The package avoids invoking those mutations for normalized no-ops.
+SDK 2026.10.25 and 2026.10.28 reset `closed_at` and `updated_at` on an identical forced closed-state update, through both `update` and `commitItemMutations`, as confirmed by standalone synthetic non-git reproductions. The upstream timestamp fix shipped in SDK 2026.10.31 (GH-1628). The reproduction is recorded in [pm-cli issue #1628](https://github.com/unbraind/pm-cli/issues/1628). The package avoids invoking those mutations for normalized no-ops.
 
 ## Source-content triage
 

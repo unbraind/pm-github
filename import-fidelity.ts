@@ -465,8 +465,8 @@ export function normalizeImportValue(field: string, value: unknown, types = defa
   // are formatting, while leading indentation remains meaningful content.
   if (field === "body" && typeof value === "string") return value.replace(/^\n+/, "").trimEnd();
   if (field === "assignee" || field === "sprint") {
-    const text = toNonEmptyImportString(value) ?? "";
-    return text === "none" ? "" : text;
+    // GH-1614: typed identities stay literal; an absent value represents a clear.
+    return toNonEmptyImportString(value) ?? "";
   }
   if (/^(?:github_)?(?:created|updated|closed|completed)_at$/.test(field) && typeof value === "string" && Number.isFinite(Date.parse(value))) return Date.parse(value);
   return value;

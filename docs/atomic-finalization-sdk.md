@@ -1,6 +1,6 @@
 # Atomic source finalization and SDK compensation
 
-The toolchain PR resolves `@unbrained/pm-cli` 2026.10.28. Its compensation
+The toolchain PR resolves `@unbrained/pm-cli` 2026.11.4. Its compensation
 contract changed in 2026.10.26, in the GH-1591 fix, **guarded terminal updates
 conflict with their own scalar write and misreport compensation**.
 
@@ -67,3 +67,29 @@ The existing pm item `pm-github-quay` retains this blocker for coordinator
 review and an upstream API discussion. No upstream regression is asserted:
 the new refusal is the documented safety behavior, while the importer needs a
 supported way to preserve its stronger atomic finalization property.
+
+## Recheck on SDK 2026.11.4
+
+The focused existing three-case matrix reports **1 passed, 2 failed**:
+
+- Source-lifecycle restoration and removal of newly created items after finalization: failed.
+- Terminal refresh plan cleanup, fresh invocation: passed.
+- Terminal refresh plan cleanup, recovered invocation: failed.
+
+The standalone public SDK shape above also reproduces an `AggregateError` and
+retained `compensating` journal. The item still has `title: "Changed"` and
+`description: "Source finalization"`; the importer requires the original
+pre-batch document. The ownership refusal remains protective behavior.
+
+[pm-cli#1656](https://github.com/unbraind/pm-cli/issues/1656) is still required
+for a supported transaction-owned lifecycle finalizer. SDK 2026.11.4 adds
+expected-item-revision guards (GH-1576), but those guards do not add a durable
+raw-document step to the create/update/close/release union. A custom coordinator
+would have to reimplement native step ownership, recovery and compensation;
+that is not a safe narrow replacement for this bulk helper. Registering a new
+write hook also must preserve the caller's active hooks and bind replay to the
+original plan; changing global hook registries is not a finalization contract.
+
+No observer reordering, post-commit finalization, forged SDK markers, forced
+rollback or compensation assertion changes are used. The remaining production
+integration blocker is explicit; this PR does not certify atomic finalization.

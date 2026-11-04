@@ -1,26 +1,52 @@
 id: pm-github-quay
-title: "SDK 2026.10.26 adoption: three real-SDK compensation tests fail on the pending toolchain PR"
-description: "Tracks gh:unbraind/pm-github#197 (filed 2026-10-29, missed by the blind issue watch). The open toolchain PR #194 (head 858cb976dc) resolves SDK 2026.10.26 and its test(22)/test(26)/bun-release(22)/(26) checks still fail (latest run 41330041504, 2026-11-01). Three real-SDK atomic-compensation cases (import-fidelity restoration after finalization; terminal-failure plan cleanup, fresh and recovery variants) receive 'compensation was incomplete' instead of completed compensation when an ordinary error is injected at committing; the suspected interaction is source-lifecycle finalization appending a Persistent import event inside the commit hook before the injected transition. Diagnose whether the host finalization contract or the test injection changed, fix, and keep the 100% thresholds."
+title: Adopt SDK 2026.11.4 contracts while retaining atomic import rollback guarantees
+description: "PR 194 now targets exact pm-cli 2026.11.4, pm-ops 2026.11.4 and pm-changelog 2026.10.31. GH-1614 literal identity normalization is fixed with real-SDK revert proof. The current compensation matrix is 1 passed and 2 failed: fresh refresh cleanup passes; source-lifecycle rollback after finalization and recovered refresh-plan cleanup remain blocked by GH-1591 transaction ownership. pm-cli#1656 must supply a supported journaled lifecycle finalizer. Preserve all rollback, peer-write safety and replay-plan assertions; never bypass ownership guards. Minimum consumer isolation is tracked by pm-github-gevp and issue 199."
 type: Issue
 status: in_progress
 priority: 2
-tags[4]: ci,"gh:unbraind/pm-github#194","gh:unbraind/pm-github#197",sdk-adoption
+tags[8]: ci,dependencies,"gh:unbraind/pm-cli#1656","gh:unbraind/pm-github#194","gh:unbraind/pm-github#197",migration,sdk,sdk-adoption
 created_at: "2026-11-02T09:17:15.200Z"
-updated_at: "2026-11-03T10:04:05.814Z"
+updated_at: "2026-11-04T19:34:45.812Z"
+assignee: codex-toolchain-1104
+claim_principal: codex-toolchain-1104
 author: pi-glm
-comments[4]{created_at,author,text}:
+comments[9]{created_at,author,text}:
   "2026-11-03T09:27:51.980Z",codex-toolchain-1103,"Reproduced the real-SDK compensation failure on the actual lockfile SDK 2026.10.28 (manifest remains >=2026.10.17). Root cause is the pm-cli 2026.10.26 GH-1591 ownership-proof hardening in src/sdk/item-transaction.ts. Before .26, compensateByRestore forced a timestamp restore. Since .26, hasOwnedCompensationEffects requires exclusive step ownership or a sibling compensation restoring the exact forward-state hash. commitGithubImportTransaction calls persistImportFidelity from its committing observer; that appends a separate import event (Preserve GitHub source lifecycle), so an ordinary subsequent observer failure correctly refuses rollback with transaction_partial_mutation rather than overwriting an unowned event. Classification: production integration depends on the former broad compensation behavior. Do not loosen the assertion or disable the SDK safety guard. Investigating a supported journaled finalizer; callback reordering or moving fidelity after commit would stop testing rollback after finalization and weaken the import guarantee."
   "2026-11-03T09:30:06.714Z",codex-toolchain-1103,"Supported API review: BulkItemMutation accepts create/update/close/release, and onTransition is an observer, not a journaled custom mutation. Exact lifecycle timestamps currently require persistImportFidelity/mutateItem. No safe small production fix was found on the existing supported SDK range: post-commit finalization weakens rollback, callback reordering bypasses the failing boundary, and spoofed internal markers or force restoration bypass ownership safety. Added docs/atomic-finalization-sdk.md with versions, GH-1591 source comparison, minimal public SDK call shape, actual refusal and required journaled-finalizer support. Keep the existing regression red and report this as a production integration blocker with an upstream API requirement, not an asserted SDK regression. No upstream issue was filed."
   "2026-11-03T09:45:26.334Z",codex-toolchain-1103,"Minimal public SDK reproducer verified on installed 2026.10.28: one bulk UPDATE, then client.update in committing, then an ordinary thrown error. Result is AggregateError compensation failed with transaction_partial_mutation; the item retains title Changed and description Source finalization, journal status compensating. This confirms the ownership-proof boundary independently of GitHub HTTP fixtures and source lifecycle timestamp handling. The synthetic tracker was removed after read-back. Typecheck and lint pass; npm test and the focused linked regression are running with the documented expected failure. Coverage/release gates were not run."
   "2026-11-03T10:04:00.584Z",codex-toolchain-1103,"Final bounded gates: npm test ran build/build:test for about 34 minutes and reported 343 tests, 282 pass, zero assertion failures, 61 canceled when stopped before later files; this does not cover the known import-fidelity regression. The focused real-SDK import-fidelity regression explicitly fails with incomplete compensation, including through pm test. A separate minimal public SDK call reproduces the same transaction_partial_mutation and compensating journal. Typecheck, lint, privacy and changelog regeneration/check pass. Coverage and release:check were not run. Pushing documentation and complete diagnostic evidence only; the production finalizer integration remains blocked on a supported journaled raw lifecycle step. No assertions, ownership guards or production behavior were weakened. Coordinator should decide the upstream API request; no new upstream issue was filed."
-files[5]{path,scope}:
+  "2026-11-04T19:19:00.125Z",codex-toolchain-1104,"Re-checking PR 194 after merging origin/main and adopting registry-confirmed pm-cli 2026.11.4, pm-ops 2026.11.4, pm-changelog 2026.10.31. Read issues 197 and 199 plus docs/atomic-finalization-sdk.md first. Preserve every compensation assertion and SDK ownership guard; verify the known failure on the current SDK before selecting a supported fix. Only focused tests run while the preceding package final coverage gate is active."
+  "2026-11-04T19:23:09.230Z",codex-toolchain-1104,"Root cause (production): pm-cli 2026.10.30 GH-1614 preserves typed assignee sentinel strings. normalizeImportValue erased none in assignment/sprint comparison, potentially hiding a real identity update as unchanged. New real-SDK identity regression fails 0/1 against the original source. Preserve literals, retain explicit absent/unset clears, and update exact unchanged-comparison assertions to distinguish empty and literal none values."
+  "2026-11-04T19:25:15.713Z",codex-toolchain-1104,"Current SDK recheck: the three existing focused compensation cases report 1 pass and 2 failures. Fresh refresh cleanup now passes; source-lifecycle rollback after finalization and recovered refresh-plan cleanup still fail with cannot safely compensate incomplete step. Classification: production integration relies on pre-GH-1591 broad rollback; the CLI ownership refusal is protective behavior, not an asserted upstream regression. Still needs pm-cli#1656 for a journaled owned lifecycle finalizer. SDK 2026.11.4 expected revision guards (GH-1576) do not extend the bulk mutation union or supply that ownership. Keep the remaining assertions unchanged."
+  "2026-11-04T19:26:31.438Z",codex-toolchain-1104,Independent minimal public SDK recheck on 2026.11.4 confirms AggregateError with transaction_partial_mutation and retained compensating journal. One bulk update followed by client.update in committing and an ordinary thrown error leaves title Changed and description Source finalization instead of restoring Original. Documented exact remaining #1656 requirement without asserting the protective refusal itself is a CLI regression. Corrected sentinel/unchanged comparison tests pass 19/19.
+  "2026-11-04T19:31:23.209Z",codex-toolchain-1104,"Explicitly reverted only import-fidelity.ts to origin/main, confirmed the new real-SDK typed-identity test fails 0/1 (empty versus literal none), and restored the fix. Corrected focused identity/scheduled-refusal tests pass 19/19, and the linked sentinel test rerun passes. Typecheck and lint pass. Atomic lifecycle rollback and recovered refresh cleanup remain unchanged failing acceptance cases pending #1656."
+files[9]{path,scope}:
   docs/atomic-finalization-sdk.md,project
   import-fidelity.ts,project
   index.ts,project
+  package-lock.json,project
+  package.json,project
   test/import-fidelity.test.ts,project
   test/refresh.test.ts,project
-tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
-  "node --test --test-name-pattern=\"real SDK atomic compensation restores\" test/import-fidelity.test.ts",project,codex-toolchain-1103,"2026-11-03T09:28:30.719Z",local_mutation,dependabot/npm_and_yarn/pm-toolchain-838740a1aa
-docs[1]{path,scope}:
+  test/scheduled-refusals.test.ts,project
+  test/typed-sentinel-normalization.test.ts,project
+tests[2]:
+  - command: "node --test --test-name-pattern=\"real SDK atomic compensation restores\" test/import-fidelity.test.ts"
+    scope: project
+    provenance:
+      author: codex-toolchain-1103
+      created_at: "2026-11-03T09:28:30.719Z"
+      source_kind: local_mutation
+      source_ref: dependabot/npm_and_yarn/pm-toolchain-838740a1aa
+  - command: nice -n 10 node --test test/typed-sentinel-normalization.test.ts
+    scope: project
+    timeout_seconds: 120
+    provenance:
+      author: codex-toolchain-1104
+      created_at: "2026-11-04T19:26:34.668Z"
+      source_kind: local_mutation
+      source_ref: dependabot/npm_and_yarn/pm-toolchain-838740a1aa
+docs[2]{path,scope}:
   docs/atomic-finalization-sdk.md,project
+  docs/daily-sync-recovery.md,project
 body: ""
