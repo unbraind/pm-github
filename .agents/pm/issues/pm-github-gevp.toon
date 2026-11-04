@@ -6,9 +6,11 @@ status: in_progress
 priority: 2
 tags[7]: ci,dependencies,fixtures,"gh:unbraind/pm-github#194","gh:unbraind/pm-github#199",migration,sdk
 created_at: "2026-11-02T09:17:16.438Z"
-updated_at: "2026-11-04T20:54:42.430Z"
+updated_at: "2026-11-04T21:08:31.998Z"
+assignee: codex-toolchain-1104
+claim_principal: codex-toolchain-1104
 author: pi-glm
-comments[7]{created_at,author,text}:
+comments[9]{created_at,author,text}:
   "2026-11-04T19:20:31.399Z",codex-toolchain-1104,"Root cause (coupling): two compatibility assertions required the development SDK to equal the peer minimum range. The brief requires an exact development pin independently of the declared runtime minimum. Baseline compatibility-floor.test.ts fails on exact 2026.11.4 versus >=2026.10.17. Retain the declared minimum and enforce exact development pin/lock identity plus numerical compatibility; the packed consumer still verifies the exact minimum artifact."
   "2026-11-04T19:23:04.630Z",codex-toolchain-1104,"Root cause (test fixture, issue 199): reproduced npm ERESOLVE on the adopted pins before packed import/type checks. The full devDependency spread now first conflicts on pm-changelog 2026.10.31 requiring CLI >=2026.10.23 versus the 2026.10.17 consumer; pm-ops has the same class of contamination. Install production dependencies plus compiler/Node types in the consumer, and place real operational pm-ops types in a separate fixture tooling graph. A synthetic dev tool requires exact SDK 2026.11.4 there while the consumer must retain exact SDK 2026.10.17. No force/legacy-peer-deps flags or minimum increase."
   "2026-11-04T19:29:04.511Z",codex-toolchain-1104,"The isolated minimum consumer passed 1/1: exact SDK 2026.10.17 installed, entire packed extension linked, all production/operational source and shipped declarations compiled, and native label/tag behavior passed without git. Real pm-ops tooling and a synthetic peer resolved exact SDK 2026.11.4 independently. Exact development pin/floor tests pass 4/4. Full gate remains separate from the atomic-finalization blocker."
@@ -16,6 +18,8 @@ comments[7]{created_at,author,text}:
   "2026-11-04T19:32:51.536Z",codex-toolchain-1104,Updated current minimum-SDK documentation and README to separate the declared minimum from the exact development pin; removed the stale current-lock version from prose. Historical dated validation reports retain their original artifact versions. docs/atomic-finalization-sdk.md identifies current 2026.11.4 and remaining #1656 requirement; daily-sync recovery now identifies GH-1628 as fixed in 2026.10.31 while preserving historical reproductions.
   "2026-11-04T19:46:00.242Z",codex-toolchain-1104,The missing-contract negative control reaches source/identity.ts compilation on real SDK 2026.10.15 and fails TS2353 because BulkItemUpdateMutation.match is absent. The 2026.10.17 positive witness passes unchanged native assertions. This directly verifies that tooling isolation removes peer contamination while preserving the genuine minimum requirement.
   "2026-11-04T20:54:37.841Z",codex-toolchain-1104,"Issue #199 verification remains green after typed parent fixture migration: the real minimum-SDK packed consumer passes 1/1 on 2026.10.17 with isolated current tooling. A disposable 2026.10.15 floor control installs successfully and fails authored SDK match typing (TS2353), proving compilation still detects unsupported SDK APIs rather than failing dependency resolution. Latest typecheck and lint pass. This consumer fix is independent of the unresolved finalization and plain-writer issues tracked in pm-github-quay."
+  "2026-11-04T21:00:35.063Z",codex-toolchain-1104,Resumed PR 194 validation only. Existing minimum-SDK isolation remains unchanged and will be rechecked with the previously cancelled consumer test. No issue closure is authorized.
+  "2026-11-04T21:08:31.996Z",codex-toolchain-1104,"Minimum consumer recheck passes 1/1 on real SDK 2026.10.17. Added a real installed CLI --stdin-json assignment update/readback to prove the new plain-writer transport works at the declared floor, alongside existing complete source/declaration checks and packed operational import probes. Current tooling remains isolated from the minimum host."
 files[5]{path,scope}:
   docs/sdk-minimum.md,project
   package-lock.json,project

@@ -108,6 +108,7 @@ test("packed package type-checks and imports against its exact declared minimum 
     run(node, [join(consumer, "node_modules/typescript/bin/tsc"), "--project", "tsconfig.json"], consumer, environment);
     writeFileSync(join(consumer, "probe.mjs"), `import assert from "node:assert/strict";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
 import extension, { planGithubLabelMigration, validateGithubLabelMigrationReport, buildAtomicImportMutations } from "pm-github";
 import { init, create, update, get, mutateItem, readSettings, encodePmTableRows, normalizeItemId } from "@unbrained/pm-cli/sdk";
 assert.ok(extension);
@@ -115,6 +116,12 @@ const root = join(process.cwd(), "tracker");
 await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { pmRoot: root, cwd: process.cwd(), noExtensions: true });
 const scope = { clearDeps: true, unset: ["parent", "sprint", "release", "goal", "objective"] };
 const item = (await create({ title: "Minimum SDK witness", type: "Task", tags: "bug", ...scope }, { pmRoot: root })).item;
+const assigned = spawnSync(process.execPath, [join(process.cwd(), "node_modules/.bin/pm"), "--path", root, "update", item.id, "--stdin-json"], {
+  encoding: "utf8", input: JSON.stringify({ assignee: "floor-witness", sprint: "literal milestone" }),
+});
+assert.equal(assigned.status, 0, assigned.stderr + assigned.stdout);
+assert.equal((await get(item.id, {}, { pmRoot: root })).item.assignee, "floor-witness");
+assert.equal((await get(item.id, {}, { pmRoot: root })).item.sprint, "literal milestone");
 const input = { repo: "fixture/repo", sources: [{ id: "LABEL", name: "bug, BUG" }], change: { kind: "rename", name: "planned/defect" },
   filters: [], mappings: [], choices: { tags: "keep", filters: "keep", mappings: "keep" } };
 const readCatalog = async () => ({ complete: true, labels: input.sources });
