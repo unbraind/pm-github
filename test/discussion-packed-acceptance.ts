@@ -25,6 +25,7 @@ function run(command: string, args: string[], cwd: string, environment: NodeJS.P
 }
 
 const repository = join(import.meta.dirname, "..");
+const cliVersion = (JSON.parse(readFileSync(join(repository, "package.json"), "utf8")) as { devDependencies: Record<string, string> }).devDependencies["@unbrained/pm-cli"]!;
 const scratch = mkdtempSync(join(tmpdir(), "pm-discussion-packed-"));
 const environment = publicEnvironment();
 try {
@@ -35,12 +36,12 @@ try {
   const sha256 = createHash("sha256").update(readFileSync(artifact)).digest("hex");
   const local = join(scratch, "local"); mkdirSync(local);
   writeFileSync(join(local, "package.json"), '{"private":true,"type":"module"}');
-  run("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", "@unbrained/pm-cli@2026.10.28", artifact], local, environment);
+  run("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund", `@unbrained/pm-cli@${cliVersion}`, artifact], local, environment);
   const npmGlobal = join(scratch, "npm-global");
-  run("npm", ["install", "--global", "--prefix", npmGlobal, "--ignore-scripts", "--no-audit", "--no-fund", "@unbrained/pm-cli@2026.10.28", artifact], scratch, environment);
+  run("npm", ["install", "--global", "--prefix", npmGlobal, "--ignore-scripts", "--no-audit", "--no-fund", `@unbrained/pm-cli@${cliVersion}`, artifact], scratch, environment);
   const bunInstall = join(scratch, "bun");
   const bunEnvironment = { ...environment, BUN_INSTALL: bunInstall };
-  run("bun", ["add", "--global", "--ignore-scripts", "@unbrained/pm-cli@2026.10.28", artifact], scratch, bunEnvironment);
+  run("bun", ["add", "--global", "--ignore-scripts", `@unbrained/pm-cli@${cliVersion}`, artifact], scratch, bunEnvironment);
   const nodeModules = join(local, "node_modules");
   const modes = [
     { name: "project-local", command: join(nodeModules, ".bin/pm"), args: [], pkg: join(nodeModules, "pm-github"), cwd: local, environment },
@@ -79,5 +80,5 @@ try {
     });
   }
   assert.equal(createHash("sha256").update(readFileSync(artifact)).digest("hex"), sha256);
-  console.log(JSON.stringify({ cli: "2026.10.28", artifact_sha256: sha256, modes: receipts.length, receipts }));
+  console.log(JSON.stringify({ cli: cliVersion, artifact_sha256: sha256, modes: receipts.length, receipts }));
 } finally { rmSync(scratch, { recursive: true, force: true }); }
