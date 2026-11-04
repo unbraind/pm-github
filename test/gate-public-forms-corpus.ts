@@ -153,6 +153,7 @@ export const PUBLIC_FORMS_MUST_ALLOW: readonly PublicFormRow[] = [
   { id: "placeholder-home-windows-fwd", line: "config at " + winFwd("C", "Users", "<user>", "file"), allowGroup: "placeholder-home-windows" },
   { id: "placeholder-home-windows-percent-root-subdir", line: "open " + winFwd("C", "Users", "%USERNAME%", "data", "x"), allowGroup: "placeholder-home-windows" },
   { id: "placeholder-home-windows-username", line: "config at " + winBack("C", "Users", "%USERNAME%", "settings.json"), allowGroup: "placeholder-home-windows" },
+  { id: "placeholder-home-windows-mixed-separators", line: "config at " + winFwd("C", "Users", "<user>") + "\\AppData\\Roaming", allowGroup: "placeholder-home-windows" },
 ];
 
 /** The rule each must-refuse row expects, narrowed for callers. */
@@ -175,6 +176,7 @@ export const PUBLIC_FORMS_MUST_REFUSE: readonly PublicFormRefuseRow[] = [
   { id: "users-alice", line: "crash at " + posix("Users", "alice", "report.txt"), rule: "absolute-host-path", refuseGroup: "concrete-home" },
   { id: "win-users-alice", line: "crash at " + winBack("C", "Users", "alice", "debug.log"), rule: "windows-host-path", refuseGroup: "concrete-home" },
   { id: "win-users-alice-fwd", line: "crash at " + winFwd("C", "Users", "alice", "debug.log"), rule: "windows-host-path", refuseGroup: "concrete-home" },
+  { id: "win-users-alice-mixed", line: "crash at " + winFwd("C", "Users") + "\\alice/debug.log", rule: "windows-host-path", refuseGroup: "concrete-home" },
   { id: "tilde-alice", line: "see ~alice/report.txt", rule: "home-username", refuseGroup: "concrete-home" },
   // A `]`, `)` or `;` ends the host-path match; the tilde path written straight after it is still a username leak.
   { id: "tilde-after-square-close", line: "see " + posix("home", "example", "x") + "]~alice/report", rule: "home-username", refuseGroup: "concrete-home" },
@@ -226,6 +228,7 @@ export const PUBLIC_FORMS_MUST_REFUSE: readonly PublicFormRefuseRow[] = [
   { id: "smuggled-temp-after-proc", line: "read " + posix("proc", "self", "x") + "}" + posix("tmp", "alice-notes"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "smuggled-tilde-after-runner", line: "log " + posix("home", "runner", "work", "a", "b") + ">~alice/notes", rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "smuggled-drive-after-win-placeholder", line: "ok " + winBack("C", "Users", "<user>", "x") + ">" + winBack("D", "private", "alice"), rule: "windows-host-path", refuseGroup: "embedded-identity" },
+  { id: "smuggled-root-after-mixed-win-placeholder", line: "ok " + winFwd("C", "Users", "<user>") + "\\x>" + posix("root", ".ssh", "id_rsa"), rule: "windows-host-path", refuseGroup: "embedded-identity" },
   { id: "smuggled-root-key-after-colon", line: "ok " + posix("home", "<user>", "notes:") + posix("root", ".ssh", "id_rsa"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "smuggled-var-after-colon", line: "ok " + posix("home", "<user>", "notes:") + posix("var", "log", "syslog"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "smuggled-var-after-equals", line: "ok " + posix("home", "<user>", "notes=") + posix("var", "log", "syslog"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },

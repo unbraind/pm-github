@@ -162,14 +162,14 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
     name: "remove-placeholder-home-posix",
     description: "placeholder account segments after POSIX home roots must fail again",
     replacements: [{ find: "if (isHomePlaceholderSegment(first)) return !embedsIdentityRoot(segments.slice(2));", replace: "if (isHomePlaceholderSegment(first)) return false;" }],
-    expectFailingAllowRows: ["pm-swarm-placeholder-home", "placeholder-home-bare", "placeholder-home-unicode-segment", "placeholder-home-combining-mark-segment", "placeholder-home-astral-letter-segment", "placeholder-home-angle", "placeholder-users-curly", "placeholder-home-dollar", "placeholder-home-braced", "placeholder-home-dotted", "placeholder-home-braced-root-subdir", "placeholder-home-percent-root-subdir", "placeholder-home-percent", "placeholder-home-in-markup", "placeholder-home-then-proc", "placeholder-home-then-file-url", "placeholder-home-then-file-notes", "placeholder-home-then-runner-win", "placeholder-home-then-bare-drive", "placeholder-home-then-anonymous-tilde", "placeholder-home-windows-fwd", "placeholder-home-windows-percent-root-subdir"],
+    expectFailingAllowRows: ["pm-swarm-placeholder-home", "placeholder-home-bare", "placeholder-home-unicode-segment", "placeholder-home-combining-mark-segment", "placeholder-home-astral-letter-segment", "placeholder-home-angle", "placeholder-users-curly", "placeholder-home-dollar", "placeholder-home-braced", "placeholder-home-dotted", "placeholder-home-braced-root-subdir", "placeholder-home-percent-root-subdir", "placeholder-home-percent", "placeholder-home-in-markup", "placeholder-home-then-proc", "placeholder-home-then-file-url", "placeholder-home-then-file-notes", "placeholder-home-then-runner-win", "placeholder-home-then-bare-drive", "placeholder-home-then-anonymous-tilde"],
     expectPassingRefuseRows: [],
   },
   {
     name: "remove-placeholder-home-windows",
     description: "placeholder account segments after a Windows Users root must fail again",
     replacements: [{ find: "return root === \"Users\" && isHomePlaceholderSegment(first) &&", replace: "return false && root === \"Users\" && isHomePlaceholderSegment(first) &&" }],
-    expectFailingAllowRows: ["placeholder-home-windows", "placeholder-home-windows-fwd", "placeholder-home-windows-percent-root-subdir", "placeholder-home-windows-username"],
+    expectFailingAllowRows: ["placeholder-home-windows", "placeholder-home-windows-fwd", "placeholder-home-windows-percent-root-subdir", "placeholder-home-windows-username", "placeholder-home-windows-mixed-separators"],
     expectPassingRefuseRows: [],
   },
   {
@@ -334,6 +334,13 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
     description: "scanning UTF-16 code units splits an astral letter into two delimiters and refuses a placeholder home's subdirectory",
     replacements: [{ find: "    const character = String.fromCodePoint(matched.codePointAt(index)!);\n    // Step over the low half of an astral character so it is judged once.\n    if (character.length === 2) index++;\n", replace: "    const character = matched[index]!;\n" }],
     expectFailingAllowRows: ["placeholder-home-astral-letter-segment"],
+    expectPassingRefuseRows: [],
+  },
+  {
+    name: "judge-drive-colon",
+    description: "judging the drive colon as a delimiter reads a mixed-separator Windows home as one POSIX segment and refuses it",
+    replacements: [{ find: "const scanStart = /^[A-Za-z]:[\\\\/]/.test(matched) ? 2 : 0;", replace: "const scanStart = 0;" }],
+    expectFailingAllowRows: ["placeholder-home-windows-mixed-separators"],
     expectPassingRefuseRows: [],
   },
   {

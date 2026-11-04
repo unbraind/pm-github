@@ -492,6 +492,8 @@ const MAX_DELIMITER_PATH_JUDGMENTS = 64;
  * next (a root-account, temp, other-drive or
  * tilde-username path written straight after it), so the text after it is
  * judged with the public-path predicates, exactly as if it stood alone.
+ * The colon of a leading Windows drive prefix (`C:/…`) is the exception: it
+ * belongs to the matched path itself, which the Windows predicate judged whole.
  *
  * The scan is linear in the match length: one pass keeps the segment start,
  * each segment is scanned forward once for its placeholder verdict, only
@@ -509,7 +511,12 @@ function hidesHostPathBehindDelimiter(matched: string): boolean {
   let judgedSegmentStart = -1;
   let judgedPlaceholder = false;
   let judgments = 0;
-  for (let index = 0; index < matched.length; index++) {
+  // A Windows match begins with its own drive prefix, and the Windows
+  // predicate has already judged that whole path, so the drive colon starts
+  // no second path. Judging the rest as a POSIX path would keep a mixed
+  // separator segment (`<user>\AppData`) whole and refuse a public form.
+  const scanStart = /^[A-Za-z]:[\\/]/.test(matched) ? 2 : 0;
+  for (let index = scanStart; index < matched.length; index++) {
     const character = String.fromCodePoint(matched.codePointAt(index)!);
     // Step over the low half of an astral character so it is judged once.
     if (character.length === 2) index++;

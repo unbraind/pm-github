@@ -5,7 +5,7 @@ comparison scanner `1dd1691` (the public-forms allowances), bracket-smuggle
 fix `5bf20e2`. The eight-repository measurement below (refreshed 15:53Z on
 2026-11-02), the 134-test recovery regression run and the complete fresh
 release check all predate `5bf20e2`; the review-round receipts (this
-document's timing runs, corpus counts and 30-mutation proof) were produced on
+document's timing runs, corpus counts and mutation proof) were produced on
 the branch head after it.
 
 ## Inherited diff audit
@@ -81,6 +81,17 @@ refuses concrete numeric pids, which no fleet tracker contains. It adds the
 `allow-numeric-pid` mutations and a `/proc/` trailing-slash row. Sysfs was
 previously outside the host-root signature; it is
 now explicitly scanned so its allowance and traversal refusal are observable.
+The seventh round stops treating the colon of a leading Windows drive prefix
+as a delimiter. The Windows predicate has already judged that whole path, but
+the scan judged the rest again as a POSIX path. There a mixed-separator
+segment such as `<user>\AppData` stays one segment, so a public form was
+refused. A one-million-case differential fuzz, biased toward public prefixes,
+found 29,828 lines that the old scan refused and the new one allows. The old
+scan already allowed every one of them when written with a single separator
+style, and no line gained a refusal. The `judge-drive-colon` mutation, one
+must-allow row and two must-refuse rows cover the change. Forward-slash
+Windows homes no longer depend on the POSIX placeholder allowance, so
+`remove-placeholder-home-posix` now flips two fewer rows.
 
 ## Review round: recursion, delimiters and tail roots
 
@@ -108,7 +119,7 @@ corpus rows cover both directions, and every new check has its own mutation.
 
 ## Corpus and proof
 
-The shared corpus has 61 must-allow and 83 must-refuse rows, and the proof runs 34 mutations. Every row runs as
+The shared corpus has 62 must-allow and 85 must-refuse rows, and the proof runs 35 mutations. Every row runs as
 plain text and JSON-escaped TOON text and through a complete synthetic tracker
 diff; allow rows also run as whole JSON strings and JSONL history changes.
 Refusal findings retain their expected rule and item attribution. All corpus
@@ -145,8 +156,8 @@ flips and import failures fail the proof. Temporary copies are removed.
 | `remove-runner-workspace-posix` | 4 | 0 |
 | `remove-runner-workspace-windows` | 5 | 0 |
 | `remove-toolcache-allowance` | 1 | 0 |
-| `remove-placeholder-home-posix` | 22 | 0 |
-| `remove-placeholder-home-windows` | 4 | 0 |
+| `remove-placeholder-home-posix` | 20 | 0 |
+| `remove-placeholder-home-windows` | 5 | 0 |
 | `broaden-reserved-domain-anchor` | 0 | 8 |
 | `broaden-runner-shape-posix` | 0 | 3 |
 | `broaden-runner-shape-windows` | 0 | 2 |
@@ -167,6 +178,7 @@ flips and import failures fail the proof. Temporary copies are removed.
 | `ascii-only-name-class` | 3 | 0 |
 | `no-combining-marks` | 1 | 0 |
 | `code-unit-name-scan` | 1 | 0 |
+| `judge-drive-colon` | 1 | 0 |
 | `nonempty-email-labels` | 0 | 1 |
 | `remove-delimiter-judgment-cap` | 0 | 1 |
 | `revert-embedded-identity-list` | 0 | 8 |
