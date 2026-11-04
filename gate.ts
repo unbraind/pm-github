@@ -220,9 +220,333 @@ const CREDENTIAL_RULES: readonly ContentRule[] = [
   { rule: "private-key-block", pattern: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/g },
 ];
 
+// ---------------------------------------------------------------------------
+// Public technical forms — the exact allowances shared by the personal-data
+// and host-path rules. Each helper answers ONE narrow question; the confirms
+// compose them so removing or broadening a single allowance is independently
+// observable (see scripts/prove-gate-public-forms.ts).
+// ---------------------------------------------------------------------------
+
 /**
- * Personal-data signatures: an email that is not a no-reply address, and phone
- * numbers in their two common written shapes.
+ * Documentation-only email domains reserved by RFC 2606/6761 (plus the
+ * special-use `localhost` name): mail on them can never reach a real person,
+ * so an address is a fixture rather than personal data. Compared exactly and
+ * case-insensitively against the whole domain, so registrable look-alikes
+ * (`notexample.com`, `example.com.evil.io`) stay refusals.
+ */
+const RESERVED_EMAIL_DOMAINS: readonly string[] = ["example.com", "example.net", "example.org", "localhost"];
+
+/** Reserved top-level labels whose subdomains are also documentation-only. */
+const RESERVED_EMAIL_DOMAIN_SUFFIXES: readonly string[] = [".example", ".invalid", ".test", ".localhost"];
+
+/**
+ * Whether an email domain (lowercased, the whole text after the at-sign) is
+ * documentation-only per RFC 2606/6761.
+ *
+ * @param domain - The complete lowercased domain after the at-sign.
+ * @returns True for `example.com`/`example.net`/`example.org`/`localhost`
+ *          exactly, or any domain whose final label is `example`, `invalid`,
+ *          `test` or `localhost`.
+ */
+function isReservedDocumentationDomain(domain: string): boolean {
+  return RESERVED_EMAIL_DOMAINS.includes(domain) ||
+    RESERVED_EMAIL_DOMAIN_SUFFIXES.some((suffix) => domain.endsWith(suffix));
+}
+
+/**
+ * Home-root child segments that name no account: the documentation name, the
+ * shell/env placeholder users, and bracketed placeholders handled separately.
+ */
+const HOME_PLACEHOLDER_SEGMENTS: readonly string[] = ["example", "$USER", "${USER}", "%USERNAME%"];
+
+/**
+ * Whether a path segment is a bracketed placeholder such as `<user>` or
+ * `{user}`: matched brackets around a nonempty placeholder body.
+ *
+ * @param segment - One slash-separated path segment.
+ * @param open - The required opening bracket character.
+ * @param close - The required closing bracket character.
+ * @returns True when the segment is exactly `open + body + close`.
+ */
+function isBracketedPlaceholder(segment: string, open: string, close: string): boolean {
+  return segment.length > open.length + close.length && segment.startsWith(open) && segment.endsWith(close) &&
+    /^[^<> {}\\/\s]+$/.test(segment.slice(open.length, segment.length - close.length));
+}
+
+/**
+ * Whether a segment directly after a home root names no account.
+ *
+ * @param segment - The first path segment after `/home/`, `/Users/` or a
+ *                  Windows `Users` root.
+ * @returns True for `example`, `$USER`, `${USER}`, `%USERNAME%` and bracketed
+ *          `<placeholder>`/`{placeholder}` segments.
+ */
+function isHomePlaceholderSegment(segment: string): boolean {
+  return HOME_PLACEHOLDER_SEGMENTS.includes(segment) ||
+    isBracketedPlaceholder(segment, "<", ">") || isBracketedPlaceholder(segment, "{", "}");
+}
+
+/**
+ * Whether one path segment can smuggle traversal or hidden content past a
+ * permitted shape.
+ *
+ * Exact `.`/`..` segments traverse out of the permitted root; percent signs
+ * can decode to them or hide other content outside the one Windows env
+ * placeholder; a backslash inside a POSIX path is content, never a separator,
+ * so it could re-split the path under a different reading and is refused.
+ *
+ * @param segment - One separator-split path segment.
+ * @param posix - Whether the path was split on forward slashes only.
+ * @returns True when the segment must keep the whole path a refusal.
+ */
+function isEscapePathSegment(segment: string, posix: boolean): boolean {
+  if (segment === "." || segment === "..") return true;
+  if (segment !== "%USERNAME%" && segment.includes("%")) return true;
+  return posix && segment.includes("\\");
+}
+
+/**
+ * Identity-bearing roots that must never appear inside a permitted tail: the
+ * two home roots, a Windows drive letter, and the account- or machine-bearing
+ * system roots (`tmp`, macOS `private`/`Volumes`, and the mount roots) that a
+ * real filesystem path continues into once a permitted prefix has passed.
+ * `root` is included because it names the root account's home tree everywhere
+ * except the one position procfs exposes it (see {@link isPublicPosixPath}).
+ */
+const EMBEDDED_IDENTITY_SEGMENTS: readonly string[] = ["home", "Users", "tmp", "private", "Volumes", "mnt", "media", "srv", "root"];
+
+/**
+ * Whether any segment of a permitted tail embeds a fresh identity root (a home
+ * root, an account-bearing system root, or a Windows drive), which would
+ * smuggle a concrete account past the allowed prefix (for example
+ * `…/x/home/alice` or `…/root/tmp/alice-notes`).
+ *
+ * @param segments - The segments after a shape's recognized prefix.
+ * @returns True when the tail must keep the whole path a refusal.
+ */
+function embedsIdentityRoot(segments: readonly string[]): boolean {
+  return segments.some((segment) => EMBEDDED_IDENTITY_SEGMENTS.includes(segment) || /^[A-Za-z]:$/.test(segment));
+}
+
+/**
+ * Runner-tail segments with the hosted runner's own `tmp` directory removed.
+ *
+ * The GitHub-hosted runner creates a real scratch `tmp` directory inside its
+ * workspace, so that one segment is runner infrastructure rather than an
+ * identity root there; every other identity segment keeps refusing the tail.
+ *
+ * @param segments - The segments after a runner workspace's recognized prefix.
+ * @returns The tail segments the embedded-identity check must judge.
+ */
+function runnerTailSegments(segments: readonly string[]): readonly string[] {
+  return segments.filter((segment) => segment !== "tmp");
+}
+
+/**
+ * Whether an absolute POSIX path is a public, non-identifying technical form.
+ *
+ * Admits exactly the procfs interface paths (`/proc` itself, `/proc/self/…`
+ * and `/proc/<placeholder>/…`; a concrete numeric pid names one host's process
+ * and stays a refusal), the GitHub-hosted runner
+ * workspaces (the fixed hosted account's `work/<seg>/<seg>/…` subtree under
+ * either home root), the hosted tool cache (`/opt/hostedtoolcache/…`) and
+ * placeholder home roots (`<placeholder>` children of either home root).
+ * Every other root — a concrete account, `/root`, `/tmp`, `/var` and friends —
+ * and any path with a traversal or encoding escape, or an identity root
+ * embedded in its tail, stays a refusal.
+ *
+ * @param matched - The complete matched path, starting at its leading slash.
+ * @returns True when the path carries no host or account identity.
+ */
+function isPublicPosixPath(matched: string): boolean {
+  const segments = matched.slice(1).split("/");
+  const [root = "", first = ""] = segments;
+  if (segments.some((segment) => isEscapePathSegment(segment, true))) return false;
+  if (root === "sys") return !embedsIdentityRoot(segments.slice(1));
+  if (root === "proc") {
+    if (first === "" || first === "self" || isBracketedPlaceholder(first, "<", ">")) {
+      // `root` directly after the `self` pid directory is the real
+      // procfs root entry (the process's own root). It re-exposes the whole
+      // filesystem, so only the entry itself is public: anything after it
+      // names a host path. As a tail segment everywhere else it names the
+      // root account's tree.
+      const tail = segments.slice(2);
+      const exemptRootEntry = first === "self" && tail[0] === "root";
+      if (exemptRootEntry) return tail.slice(1).every((segment) => segment === "");
+      return !embedsIdentityRoot(tail);
+    }
+    return false;
+  }
+  if (root === "opt") return first === "hostedtoolcache" && !embedsIdentityRoot(segments.slice(2));
+  if (root !== "home" && root !== "Users") return false;
+  if (isHomePlaceholderSegment(first)) return !embedsIdentityRoot(segments.slice(2));
+  return first === "runner" && segments[2] === "work" && (segments[3] ?? "") !== "" && (segments[4] ?? "") !== "" &&
+    !embedsIdentityRoot(runnerTailSegments(segments.slice(5)));
+}
+
+/**
+ * Whether a Windows drive path is a public, non-identifying technical form.
+ *
+ * Admits exactly the GitHub-hosted runner workspaces (`D:\a\<seg>\<seg>\…`
+ * with either separator) and placeholder home roots
+ * (`C:\Users\<placeholder>\…`). Any other drive, root or account segment, and
+ * any path with a traversal or encoding escape, or an identity root embedded
+ * in its tail, stays a refusal.
+ *
+ * @param matched - The complete matched path, starting at its drive letter.
+ * @returns True when the path carries no host or account identity.
+ */
+function isPublicWindowsPath(matched: string): boolean {
+  const [drive = "", ...segments] = matched.split(/[\\/]/);
+  const [root = "", first = ""] = segments;
+  if (segments.some((segment) => isEscapePathSegment(segment, false))) return false;
+  if (drive.toLowerCase() === "c:") {
+    return root === "Users" && isHomePlaceholderSegment(first) && !embedsIdentityRoot(segments.slice(2));
+  }
+  return drive.toLowerCase() === "d:" && root === "a" && first !== "" && (segments[2] ?? "") !== "" &&
+    !embedsIdentityRoot(runnerTailSegments(segments.slice(3)));
+}
+
+/**
+ * Characters of an ordinary path segment name: letters (with their combining
+ * marks) and digits in any script, plus `.`, `_`, `~` and `-`. Each is judged
+ * as a whole code point, so an astral letter is a name character too. Every other character inside a matched
+ * host path is a delimiter that can end one path and begin the next — the two
+ * bracket pairs (which continue a path while they wrap a whole placeholder
+ * segment), the colon and equals of a label or assignment prefix (`cwd:`,
+ * `path=`), and any other punctuation (`[`, `(`, `|`, `@`, `#`, `?`, `&`, `*`,
+ * `!`, `+`, …) written straight into a permitted tail. Naming the segment
+ * characters rather than the delimiters keeps unlisted punctuation from hiding
+ * a second path; only a delimiter directly followed by a path start is judged.
+ */
+const PATH_NAME_CHARACTER = /[\p{L}\p{M}\p{N}._~-]/u;
+
+/**
+ * Whether the text after a delimiter begins with a shape a host-path rule can
+ * start on: a POSIX root slash, a tilde username, a Windows drive, or a
+ * `file://` URL. Every other continuation is ordinary path content.
+ *
+ * @param text - The complete matched path.
+ * @param offset - The index directly after one delimiter.
+ * @returns Whether the delimiter can end one path and begin the next.
+ */
+function startsWithHostPathStart(text: string, offset: number): boolean {
+  const first = text[offset];
+  return text.startsWith("file://", offset) || first === "/" || first === "~" || /^[A-Za-z]:[\\/]/.test(text.slice(offset, offset + 3));
+}
+
+/**
+ * Whether the text after a delimiter is a host path a standalone scan would
+ * refuse.
+ *
+ * The sticky rule patterns match at one fixed offset (the start of `rest`, or
+ * the URL path of a `file://` prefix) and reproduce exactly the rule match
+ * that would begin there; the verdict then uses ONLY the non-recursive
+ * public-path predicates — never `rule.confirm`, whose re-entry into the
+ * delimiter check branches exponentially on adversarial bracket chains. That
+ * is sound because every delimiter of the match is examined on its own: a
+ * refused path always begins directly after some delimiter, so it is always
+ * judged at that delimiter without re-judging the suffixes around it.
+ *
+ * @param rest - The text following one delimiter.
+ * @returns True when the suffix is a host path the gate refuses standalone.
+ */
+function refusedHostPathAfterDelimiter(rest: string): boolean {
+  const posix = STICKY_HOST_PATH_PATTERNS.get("absolute-host-path")!;
+  const windows = STICKY_HOST_PATH_PATTERNS.get("windows-host-path")!;
+  const tilde = STICKY_HOST_PATH_PATTERNS.get("home-username")!;
+  if (rest.startsWith("file://")) {
+    posix.lastIndex = "file://".length;
+    const hit = posix.exec(rest);
+    return hit !== null && !isPublicPosixPath(hit[0]);
+  }
+  if (rest[0] === "/") {
+    posix.lastIndex = 0;
+    const hit = posix.exec(rest);
+    return hit !== null && !isPublicPosixPath(hit[0]);
+  }
+  if (rest[0] === "~") {
+    tilde.lastIndex = 0;
+    return tilde.exec(rest) !== null;
+  }
+  windows.lastIndex = 0;
+  const hit = windows.exec(rest);
+  return hit !== null && !isPublicWindowsPath(hit[0]);
+}
+
+/**
+ * Most delimiter-started paths one match may have judged. Each judgment copies
+ * and checks the remaining suffix, so the bound keeps a match's cost linear in
+ * its length; a match with more delimiter-started paths fails closed.
+ */
+const MAX_DELIMITER_PATH_JUDGMENTS = 64;
+
+/**
+ * Whether a delimiter inside a matched path begins a second host path that
+ * would be refused on its own.
+ *
+ * A whole placeholder segment (`<pid>`, `{user}`, `${USER}`, `%USERNAME%`)
+ * is judged in place, so its brackets, `$` and `%` never start a second path. A delimiter (any character
+ * outside {@link PATH_NAME_CHARACTER}) in any other segment — including the
+ * `:` or `=` of a label or assignment prefix — can end one path and begin the
+ * next (a root-account, temp, other-drive or
+ * tilde-username path written straight after it), so the text after it is
+ * judged with the public-path predicates, exactly as if it stood alone.
+ * The colon of a leading Windows drive prefix (`C:/…`) is the exception: it
+ * belongs to the matched path itself, which the Windows predicate judged whole.
+ *
+ * The scan is linear in the match length: one pass keeps the segment start,
+ * each segment is scanned forward once for its placeholder verdict, only
+ * delimiters directly followed by a possible path start are judged (at most
+ * {@link MAX_DELIMITER_PATH_JUDGMENTS}; more fail closed), and the sticky rule
+ * patterns are built once (see {@link STICKY_HOST_PATH_PATTERNS}) — never rebuilt per
+ * delimiter and rule, and never re-entered recursively.
+ *
+ * @param matched - The complete matched path.
+ * @returns True when a path behind a non-placeholder delimiter must refuse the
+ *          whole match.
+ */
+function hidesHostPathBehindDelimiter(matched: string): boolean {
+  let segmentStart = 0;
+  let judgedSegmentStart = -1;
+  let judgedPlaceholder = false;
+  let judgments = 0;
+  // A Windows match begins with its own drive prefix, and the Windows
+  // predicate has already judged that whole path, so the drive colon starts
+  // no second path. Judging the rest as a POSIX path would keep a mixed
+  // separator segment (`<user>\AppData`) whole and refuse a public form.
+  const scanStart = /^[A-Za-z]:[\\/]/.test(matched) ? 2 : 0;
+  for (let index = scanStart; index < matched.length; index++) {
+    const character = String.fromCodePoint(matched.codePointAt(index)!);
+    // Step over the low half of an astral character so it is judged once.
+    if (character.length === 2) index++;
+    if (character === "/" || character === "\\") {
+      segmentStart = index + 1;
+      continue;
+    }
+    if (PATH_NAME_CHARACTER.test(character)) continue;
+    if (segmentStart !== judgedSegmentStart) {
+      // Forward scan to this segment's end: each segment is scanned once, so
+      // the whole pass stays linear in the match length.
+      let segmentEnd = index;
+      while (segmentEnd < matched.length && matched[segmentEnd] !== "/" && matched[segmentEnd] !== "\\") segmentEnd++;
+      judgedSegmentStart = segmentStart;
+      const segment = matched.slice(segmentStart, segmentEnd);
+      judgedPlaceholder = isHomePlaceholderSegment(segment);
+    }
+    if (judgedPlaceholder || !startsWithHostPathStart(matched, index + 1)) continue;
+    // Each judgment copies and checks the remaining suffix, so bound how many
+    // one match may request; a match needing more fails closed.
+    judgments += 1;
+    if (judgments > MAX_DELIMITER_PATH_JUDGMENTS) return true;
+    if (refusedHostPathAfterDelimiter(matched.slice(index + 1))) return true;
+  }
+  return false;
+}
+
+/**
+ * Personal-data signatures: an email that is not a no-reply or documentation
+ * address, and phone numbers in their two common written shapes.
  */
 const PERSONAL_DATA_RULES: readonly ContentRule[] = [
   {
@@ -233,13 +557,18 @@ const PERSONAL_DATA_RULES: readonly ContentRule[] = [
     // contact address, even before a colon and a space, is still matched.
     // The ssh:// form permits only the git service account with a URL path.
     // The lookbehind keeps a match from starting inside a local part.
-    pattern: /(?<![A-Za-z0-9._%+-])(?!(?<=ssh:\/\/)git@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?=\/|:\d+\/))(?!git@[A-Za-z0-9.-]+\.[A-Za-z]{2,}:[A-Za-z0-9_~./-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g,
+    pattern: /(?<![A-Za-z0-9._%+-])(?!(?<=ssh:\/\/)git@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?=\/|:\d+\/))(?!git@[A-Za-z0-9.-]+\.[A-Za-z]{2,}:[A-Za-z0-9_~./-])[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9.-][A-Za-z0-9-]*(?:\.[A-Za-z0-9-]*)*\.[A-Za-z]{2}[A-Za-z0-9-]*|[Ll][Oo][Cc][Aa][Ll][Hh][Oo][Ss][Tt])(?![A-Za-z0-9-]|\.[A-Za-z0-9])/g,
     // GitHub, GitLab and most mail systems use a "noreply" domain or local part
     // for automated identities; anything else in imported issue text is a real
-    // person's address and fails closed.
+    // person's address and fails closed. RFC 2606/6761 documentation domains
+    // (matched exactly after the at-sign) never deliver to a person, so fixture
+    // addresses on them are public examples rather than personal data; every
+    // registrable look-alike (`notexample.com`, `example.com.evil.io`) still
+    // fails closed.
     confirm: (matched) => {
       const [local, domain] = matched.toLowerCase().split("@");
-      return !/^(?:no-?reply)$/.test(local!) && !/(?:^|\.)no-?reply(?:\.|$)/.test(domain!);
+      if (/^(?:no-?reply)$/.test(local!) || /(?:^|\.)no-?reply(?:\.|$)/.test(domain!)) return false;
+      return !isReservedDocumentationDomain(domain!);
     },
   },
   {
@@ -271,7 +600,10 @@ const PERSONAL_DATA_RULES: readonly ContentRule[] = [
  * and home-directory usernames (`~user`, but never the anonymous `~/`), which
  * would publish the machine and account that produced an import. The list is
  * the POSIX/Windows set a developer workstation actually leaks, mirroring the
- * repository's own object-store privacy gate.
+ * repository's own object-store privacy gate. Each path rule also carries a
+ * `confirm` that keeps exactly the public, non-identifying technical forms
+ * (see the public-forms helpers above) from failing; everything a real
+ * person's machine produces still fails closed.
  */
 const HOST_PATH_RULES: readonly ContentRule[] = [
   {
@@ -283,22 +615,52 @@ const HOST_PATH_RULES: readonly ContentRule[] = [
     // not `/home`). The lead-in is a lookbehind so the match is the path
     // itself; it also admits `file://` URLs and `label:` prefixes (`cwd:/home/…`),
     // whose two-character minimum leaves drive letters to the Windows rule.
-    pattern: /(?<=^|[\s"'`([=,{]|[A-Za-z0-9_]{2}:|file:\/\/)\/(?:home|Users|root|tmp|var|etc|opt|srv|mnt|media|private|Volumes|usr|run|proc|data|nix|scratch|workspace|builds|Library|System)(?=\/|$|[\s"'`<>),;\]}])(?:\/[^\s"'`<>),;\]}]*)?/g,
+    // Every opening or closing bracket is a lead-in too, so a path hidden
+    // directly behind a permitted form (an allowed root followed by `>` or
+    // `;`) is still matched on its own. Angle brackets are continuation
+    // characters (they carry placeholder segments such as `<pid>`), never a
+    // silent stop; the confirm then judges the complete path and refuses a
+    // second host path hiding behind any delimiter inside it. A closing tag
+    // that names one bare word (`</var>`, `</root>`) is markup, not a path:
+    // its slash never starts a match, and a match ends before it, so the tag
+    // can never pass as a path segment. `</home/alice>` is still matched.
+    pattern: /(?<=^|[\s"'`([=,{<>),;\]}]|[A-Za-z0-9_]{2}:|file:\/\/)(?!(?<=<)\/[A-Za-z]+>)\/(?:home|Users|root|tmp|var|etc|opt|srv|mnt|media|private|Volumes|usr|run|proc|sys|data|nix|scratch|workspace|builds|Library|System)(?=\/|$|[\s"'`<>),;\]}])(?:\/(?:(?!<\/[A-Za-z]+>)[^\s"'`),;\]])*)?/g,
+    confirm: (matched) => !isPublicPosixPath(matched) || hidesHostPathBehindDelimiter(matched),
   },
   {
     rule: "windows-host-path",
     // A drive letter at a token start, or as a `file:///C:/…` URL path.
-    pattern: /(?:(?<![A-Za-z0-9_:/])|(?<=file:\/\/\/))[A-Za-z]:[\\/][^\s"'`<>),;\]}]+/g,
+    // Angle brackets are continuation characters here too, so placeholder
+    // segments (`<placeholder>` after a Users root) are matched whole and
+    // judged by the confirm instead of truncating the match before them. A
+    // match ends before a bare closing tag (`</var>`), as in the POSIX rule.
+    pattern: /(?:(?<![A-Za-z0-9_:/])|(?<=file:\/\/\/))[A-Za-z]:[\\/](?:(?!<\/[A-Za-z]+>)[^\s"'`),;\]])+/g,
+    confirm: (matched) => !isPublicWindowsPath(matched) || hidesHostPathBehindDelimiter(matched),
   },
   {
     rule: "home-username",
     // A leading tilde followed by a name AND a path separator is a username
     // leak (`~alice/report.txt`); `~/` (anonymous), `~~strikethrough~~`, and
     // prose approximations (`~most users`) are excluded by the boundary and
-    // the required trailing slash.
-    pattern: /(?:^|[\s"'`([=,])~[A-Za-z][A-Za-z0-9._-]*\/[^\s"'`<>),;\]}]*/g,
+    // the required trailing slash. The boundary is any character outside the
+    // segment-name class and the path separators, the same set the delimiter
+    // scan uses, so a `]`, `)` or `;` that ends a host-path match cannot hide
+    // a tilde path written straight after it.
+    pattern: /(?:^|[^\p{L}\p{N}._~/\\-])~[A-Za-z][A-Za-z0-9._-]*\/[^\s"'`<>),;\]}]*/gu,
   },
 ];
+
+/**
+ * Sticky copies of the host-path rule patterns, built once per process and
+ * reused for every delimiter suffix. A sticky match at the start of a suffix
+ * (or at the URL path of a `file://` prefix) reproduces exactly the rule match
+ * that would begin there, so suffixes are judged without re-running the
+ * rules — and therefore without re-entering their confirms — recursively.
+ */
+const STICKY_HOST_PATH_PATTERNS: ReadonlyMap<string, RegExp> = new Map(
+  // Keep every flag but the global one (the tilde rule needs `u`).
+  HOST_PATH_RULES.map((rule) => [rule.rule, new RegExp(rule.pattern.source, `${rule.pattern.flags.replace("g", "")}y`)] as const),
+);
 
 /** Identifier segments whose presence marks an assignment target as secret-bearing. */
 const SECRET_IDENTIFIER_SEGMENTS: readonly string[] = [

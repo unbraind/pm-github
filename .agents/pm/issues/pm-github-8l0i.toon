@@ -1,0 +1,12 @@
+id: pm-github-8l0i
+title: Refuse host paths written with a doubled leading slash
+description: "The absolute-host-path rule anchors its root alternation on a single leading slash preceded by a lead-in character. A path written with two or three leading slashes before a home root and an account name, or before the root account's key directory, is therefore not matched in prose. POSIX resolves such a path to the same location, so it leaks the same account detail. Main, the pm-github-01n8 branch and its round-8 head all miss it. Inside an already matched placeholder path the doubled slash is refused, so only standalone mentions are affected. Found while reviewing the closing-tag change on pm-github#213; kept out of that PR to keep its scope."
+type: Issue
+status: open
+priority: 1
+tags[3]: follow-up,gates,privacy
+created_at: "2026-11-04T05:08:54.510Z"
+updated_at: "2026-11-04T05:08:54.510Z"
+author: orchestrator
+acceptance_criteria: A standalone host path with two or more leading slashes before any host root is refused exactly like its single-slash form; Protocol-relative URLs and other double-slash prose that names no host root stay allowed; Corpus rows cover both directions and a mutation that drops the change flips them
+body: ""

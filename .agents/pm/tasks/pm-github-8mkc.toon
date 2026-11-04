@@ -1,0 +1,14 @@
+id: pm-github-8mkc
+title: Approve or amend the noreply identity on the normalize-release-tag-version branch commit
+description: "The whole-store privacy gate (npm run privacy) currently exits 1 with two identity:commit findings, both from commit 42297ee on the fix/normalize-release-tag-version branch (also pushed to origin). Its author and committer use the maintainer noreply address with one letter transposed relative to the approved-git-identities entry, so the gate cannot verify it. Discovered while running the privacy check for the public-forms review round; out of scope there. Fix by amending the branch identity to the approved form or approving the address with justification, then re-running the gate."
+type: Task
+status: closed
+priority: 2
+tags[3]: follow-up,gates,privacy
+created_at: "2026-11-03T02:11:51.792Z"
+updated_at: "2026-11-03T03:04:04.202Z"
+closed_at: "2026-11-03T03:04:04.063Z"
+completed_at: "2026-11-03T03:04:04.063Z"
+author: pi-github
+close_reason: "Resolved at the source: the two pm-github#214 commits carrying the mistyped noreply identity (42297ee and its follow-up) were rewritten with the correct SteveBot identity and force-pushed with lease as 4150565 and be73b42; the trees are byte-identical. No published branch carries the wrong identity any more. A local object store can still hold the unreachable old object until reflog expiry and gc, but a fresh CI clone never sees it."
+body: ""

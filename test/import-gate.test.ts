@@ -53,7 +53,7 @@ const SYNC_BRANCH = "automation/pm-github-sync";
 
 // --- Fake-but-well-formed malicious fixtures, assembled from parts.
 const GH_TOKEN = "ghp_" + "A".repeat(36);
-const PERSONAL_EMAIL = "alice.person@example.org";
+const PERSONAL_EMAIL = "alice.person@example.dev";
 const HOME_PATH = "/" + "home" + "/alice/report.txt";
 const HIGH_ENTROPY_SECRET = "Zj9kP2mQ7xW4" + "nB8vC5tR1sD";
 
