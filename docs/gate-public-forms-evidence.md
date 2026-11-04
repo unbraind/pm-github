@@ -92,6 +92,21 @@ style, and no line gained a refusal. The `judge-drive-colon` mutation, one
 must-allow row and two must-refuse rows cover the change. Forward-slash
 Windows homes no longer depend on the POSIX placeholder allowance, so
 `remove-placeholder-home-posix` now flips two fewer rows.
+The eighth round stops a closing tag that names one word (`</var>`,
+`</root>`, `</data>`) from reading as a bare host root. The `<` lead-in had
+let `<var>x</var>` and XML such as `<root>x</root>` refuse, though main
+allowed them. Such a tag now never starts a match, and a match ends before
+it. Letting the match run through the tag instead would have made the tag
+count as a path segment. A short runner path such as `D:/a/x` then passed
+when written as `<root>D:/a/x</root>`; a fuzz of that first design found
+2,019 such cases. With the tag ending the match, a 600,000-case fuzz against
+the seventh-round gate found 137,346 newly allowed lines. Each one was already
+allowed with its closing tags replaced by spaces, and none gained a refusal.
+Over every fleet tracker (15,206 files, 268,892 path-bearing lines) no hit
+was added or lost. Four must-allow rows, five must-refuse rows and the
+`match-bare-closing-tags`, `closing-tag-inside-posix-path` and
+`closing-tag-inside-windows-path` mutations cover the change. A closing tag
+that carries a path (`</home/alice>`) is still matched; main missed it.
 
 ## Review round: recursion, delimiters and tail roots
 
@@ -119,7 +134,7 @@ corpus rows cover both directions, and every new check has its own mutation.
 
 ## Corpus and proof
 
-The shared corpus has 62 must-allow and 85 must-refuse rows, and the proof runs 35 mutations. Every row runs as
+The shared corpus has 66 must-allow and 90 must-refuse rows, and the proof runs 38 mutations. Every row runs as
 plain text and JSON-escaped TOON text and through a complete synthetic tracker
 diff; allow rows also run as whole JSON strings and JSONL history changes.
 Refusal findings retain their expected rule and item attribution. All corpus
@@ -154,13 +169,13 @@ flips and import failures fail the proof. Temporary copies are removed.
 | `remove-reserved-domain-allowance` | 12 | 0 |
 | `remove-git-transport-allowance` | 4 | 0 |
 | `remove-runner-workspace-posix` | 4 | 0 |
-| `remove-runner-workspace-windows` | 5 | 0 |
+| `remove-runner-workspace-windows` | 6 | 0 |
 | `remove-toolcache-allowance` | 1 | 0 |
-| `remove-placeholder-home-posix` | 20 | 0 |
+| `remove-placeholder-home-posix` | 21 | 0 |
 | `remove-placeholder-home-windows` | 5 | 0 |
 | `broaden-reserved-domain-anchor` | 0 | 8 |
-| `broaden-runner-shape-posix` | 0 | 3 |
-| `broaden-runner-shape-windows` | 0 | 2 |
+| `broaden-runner-shape-posix` | 0 | 4 |
+| `broaden-runner-shape-windows` | 0 | 3 |
 | `broaden-git-transport-local-part` | 0 | 2 |
 | `broaden-placeholder-position-posix` | 0 | 1 |
 | `broaden-placeholder-position-windows` | 0 | 1 |
@@ -169,7 +184,7 @@ flips and import failures fail the proof. Temporary copies are removed.
 | `allow-procfs-root-continuation` | 0 | 1 |
 | `broaden-proc-shape` | 0 | 4 |
 | `allow-numeric-pid` | 0 | 1 |
-| `remove-bracket-leadins` | 0 | 1 |
+| `remove-bracket-leadins` | 0 | 4 |
 | `remove-bracket-smuggle-check` | 0 | 9 |
 | `revert-delimiter-set` | 0 | 7 |
 | `revert-to-listed-delimiters` | 0 | 4 |
@@ -179,6 +194,9 @@ flips and import failures fail the proof. Temporary copies are removed.
 | `no-combining-marks` | 1 | 0 |
 | `code-unit-name-scan` | 1 | 0 |
 | `judge-drive-colon` | 1 | 0 |
+| `match-bare-closing-tags` | 4 | 0 |
+| `closing-tag-inside-posix-path` | 1 | 0 |
+| `closing-tag-inside-windows-path` | 1 | 0 |
 | `nonempty-email-labels` | 0 | 1 |
 | `remove-delimiter-judgment-cap` | 0 | 1 |
 | `revert-embedded-identity-list` | 0 | 8 |

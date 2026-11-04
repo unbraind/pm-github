@@ -148,7 +148,7 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
     name: "remove-runner-workspace-windows",
     description: "the hosted-runner drive workspaces must fail again",
     replacements: [{ find: "return drive.toLowerCase() === \"d:\" && root === \"a\" &&", replace: "return false && drive.toLowerCase() === \"d:\" && root === \"a\" &&" }],
-    expectFailingAllowRows: ["pm-rust-runner-fwd", "runner-fwd-angle", "runner-back", "runner-workspace-tmp-win", "placeholder-home-then-runner-win"],
+    expectFailingAllowRows: ["pm-rust-runner-fwd", "runner-fwd-angle", "runner-back", "runner-workspace-tmp-win", "placeholder-home-then-runner-win", "runner-win-in-closing-tag"],
     expectPassingRefuseRows: [],
   },
   {
@@ -162,7 +162,7 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
     name: "remove-placeholder-home-posix",
     description: "placeholder account segments after POSIX home roots must fail again",
     replacements: [{ find: "if (isHomePlaceholderSegment(first)) return !embedsIdentityRoot(segments.slice(2));", replace: "if (isHomePlaceholderSegment(first)) return false;" }],
-    expectFailingAllowRows: ["pm-swarm-placeholder-home", "placeholder-home-bare", "placeholder-home-unicode-segment", "placeholder-home-combining-mark-segment", "placeholder-home-astral-letter-segment", "placeholder-home-angle", "placeholder-users-curly", "placeholder-home-dollar", "placeholder-home-braced", "placeholder-home-dotted", "placeholder-home-braced-root-subdir", "placeholder-home-percent-root-subdir", "placeholder-home-percent", "placeholder-home-in-markup", "placeholder-home-then-proc", "placeholder-home-then-file-url", "placeholder-home-then-file-notes", "placeholder-home-then-runner-win", "placeholder-home-then-bare-drive", "placeholder-home-then-anonymous-tilde"],
+    expectFailingAllowRows: ["pm-swarm-placeholder-home", "placeholder-home-bare", "placeholder-home-unicode-segment", "placeholder-home-combining-mark-segment", "placeholder-home-astral-letter-segment", "placeholder-home-angle", "placeholder-users-curly", "placeholder-home-dollar", "placeholder-home-braced", "placeholder-home-dotted", "placeholder-home-braced-root-subdir", "placeholder-home-percent-root-subdir", "placeholder-home-percent", "placeholder-home-in-markup", "placeholder-home-then-proc", "placeholder-home-then-file-url", "placeholder-home-then-file-notes", "placeholder-home-then-runner-win", "placeholder-home-then-bare-drive", "placeholder-home-then-anonymous-tilde", "placeholder-home-in-closing-tag"],
     expectPassingRefuseRows: [],
   },
   {
@@ -190,7 +190,7 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
       replace: "first === \"runner\" &&",
     }],
     expectFailingAllowRows: [],
-    expectPassingRefuseRows: ["runner-other-path", "runner-work-none", "runner-work-short"],
+    expectPassingRefuseRows: ["runner-other-path", "runner-work-none", "runner-work-short", "runner-work-short-before-closing-tag"],
   },
   {
     name: "broaden-runner-shape-windows",
@@ -200,7 +200,7 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
       replace: "true &&",
     }],
     expectFailingAllowRows: [],
-    expectPassingRefuseRows: ["other-drive", "runner-win-short"],
+    expectPassingRefuseRows: ["other-drive", "runner-win-short", "runner-win-short-before-closing-tag"],
   },
   {
     name: "broaden-git-transport-local-part",
@@ -278,7 +278,7 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
     description: "without bracket lead-ins, a path hidden directly behind a permitted form escapes",
     replacements: [{ find: "pattern: /(?<=^|[\\s\"'`([=,{<>),;\\]}]", replace: "pattern: /(?<=^|[\\s\"'`([=,{]" }],
     expectFailingAllowRows: [],
-    expectPassingRefuseRows: ["hidden-after-proc"],
+    expectPassingRefuseRows: ["hidden-after-proc", "closing-tag-concrete-home", "smuggled-temp-after-closing-tag", "runner-work-short-before-closing-tag"],
   },
   {
     name: "remove-bracket-smuggle-check",
@@ -341,6 +341,27 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
     description: "judging the drive colon as a delimiter reads a mixed-separator Windows home as one POSIX segment and refuses it",
     replacements: [{ find: "const scanStart = /^[A-Za-z]:[\\\\/]/.test(matched) ? 2 : 0;", replace: "const scanStart = 0;" }],
     expectFailingAllowRows: ["placeholder-home-windows-mixed-separators"],
+    expectPassingRefuseRows: [],
+  },
+  {
+    name: "match-bare-closing-tags",
+    description: "letting a closing tag's slash start a match reads markup such as </root> as a bare host root",
+    replacements: [{ find: "(?!(?<=<)\\/[A-Za-z]+>)", replace: "" }],
+    expectFailingAllowRows: ["closing-tag-bare-root", "closing-tag-markup-elements", "placeholder-home-in-closing-tag", "runner-win-in-closing-tag"],
+    expectPassingRefuseRows: [],
+  },
+  {
+    name: "closing-tag-inside-posix-path",
+    description: "letting a POSIX match run through a closing tag makes the tag a path segment and judges its slash as a second path",
+    replacements: [{ find: "(?:\\/(?:(?!<\\/[A-Za-z]+>)[^\\s\"'`),;\\]])*)?/g", replace: "(?:\\/[^\\s\"'`),;\\]]*)?/g" }],
+    expectFailingAllowRows: ["placeholder-home-in-closing-tag"],
+    expectPassingRefuseRows: [],
+  },
+  {
+    name: "closing-tag-inside-windows-path",
+    description: "letting a Windows match run through a closing tag makes the tag a path segment and judges its slash as a second path",
+    replacements: [{ find: "[A-Za-z]:[\\\\/](?:(?!<\\/[A-Za-z]+>)[^\\s\"'`),;\\]])+/g", replace: "[A-Za-z]:[\\\\/][^\\s\"'`),;\\]]+/g" }],
+    expectFailingAllowRows: ["runner-win-in-closing-tag"],
     expectPassingRefuseRows: [],
   },
   {

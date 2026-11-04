@@ -20,7 +20,8 @@ export type PublicAllowGroup =
   | "runner-windows"
   | "toolcache"
   | "placeholder-home-posix"
-  | "placeholder-home-windows";
+  | "placeholder-home-windows"
+  | "markup-closing-tag";
 
 /** Refusal family a must-refuse row guards (used by the broadening mutations). */
 export type PublicRefuseGroup =
@@ -154,6 +155,10 @@ export const PUBLIC_FORMS_MUST_ALLOW: readonly PublicFormRow[] = [
   { id: "placeholder-home-windows-percent-root-subdir", line: "open " + winFwd("C", "Users", "%USERNAME%", "data", "x"), allowGroup: "placeholder-home-windows" },
   { id: "placeholder-home-windows-username", line: "config at " + winBack("C", "Users", "%USERNAME%", "settings.json"), allowGroup: "placeholder-home-windows" },
   { id: "placeholder-home-windows-mixed-separators", line: "config at " + winFwd("C", "Users", "<user>") + "\\AppData\\Roaming", allowGroup: "placeholder-home-windows" },
+  { id: "closing-tag-bare-root", line: "see <root>x</root> in the config", allowGroup: "markup-closing-tag" },
+  { id: "closing-tag-markup-elements", line: "wrap it in <var>x</var> or <data>1</data>", allowGroup: "markup-closing-tag" },
+  { id: "placeholder-home-in-closing-tag", line: "<var>" + posix("home", "<user>", "x") + "</var>", allowGroup: "markup-closing-tag" },
+  { id: "runner-win-in-closing-tag", line: "<var>" + winFwd("D", "a", "repo", "repo", "build.log") + "</var>", allowGroup: "markup-closing-tag" },
 ];
 
 /** The rule each must-refuse row expects, narrowed for callers. */
@@ -177,6 +182,7 @@ export const PUBLIC_FORMS_MUST_REFUSE: readonly PublicFormRefuseRow[] = [
   { id: "win-users-alice", line: "crash at " + winBack("C", "Users", "alice", "debug.log"), rule: "windows-host-path", refuseGroup: "concrete-home" },
   { id: "win-users-alice-fwd", line: "crash at " + winFwd("C", "Users", "alice", "debug.log"), rule: "windows-host-path", refuseGroup: "concrete-home" },
   { id: "win-users-alice-mixed", line: "crash at " + winFwd("C", "Users") + "\\alice/debug.log", rule: "windows-host-path", refuseGroup: "concrete-home" },
+  { id: "closing-tag-concrete-home", line: "see <" + posix("home", "alice") + ">", rule: "absolute-host-path", refuseGroup: "concrete-home" },
   { id: "tilde-alice", line: "see ~alice/report.txt", rule: "home-username", refuseGroup: "concrete-home" },
   // A `]`, `)` or `;` ends the host-path match; the tilde path written straight after it is still a username leak.
   { id: "tilde-after-square-close", line: "see " + posix("home", "example", "x") + "]~alice/report", rule: "home-username", refuseGroup: "concrete-home" },
@@ -229,6 +235,8 @@ export const PUBLIC_FORMS_MUST_REFUSE: readonly PublicFormRefuseRow[] = [
   { id: "smuggled-tilde-after-runner", line: "log " + posix("home", "runner", "work", "a", "b") + ">~alice/notes", rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "smuggled-drive-after-win-placeholder", line: "ok " + winBack("C", "Users", "<user>", "x") + ">" + winBack("D", "private", "alice"), rule: "windows-host-path", refuseGroup: "embedded-identity" },
   { id: "smuggled-root-after-mixed-win-placeholder", line: "ok " + winFwd("C", "Users", "<user>") + "\\x>" + posix("root", ".ssh", "id_rsa"), rule: "windows-host-path", refuseGroup: "embedded-identity" },
+  { id: "smuggled-root-in-closing-tag", line: "ok " + posix("home", "<user>", "x") + "<" + posix("root", ".ssh") + ">", rule: "absolute-host-path", refuseGroup: "embedded-identity" },
+  { id: "smuggled-temp-after-closing-tag", line: "ok </tmp>" + posix("tmp", "alice-notes"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "smuggled-root-key-after-colon", line: "ok " + posix("home", "<user>", "notes:") + posix("root", ".ssh", "id_rsa"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "smuggled-var-after-colon", line: "ok " + posix("home", "<user>", "notes:") + posix("var", "log", "syslog"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "smuggled-var-after-equals", line: "ok " + posix("home", "<user>", "notes=") + posix("var", "log", "syslog"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
@@ -263,6 +271,8 @@ export const PUBLIC_FORMS_MUST_REFUSE: readonly PublicFormRefuseRow[] = [
   { id: "runner-work-none", line: "scratch at " + posix("home", "runner", "work"), rule: "absolute-host-path", refuseGroup: "runner-shape" },
   { id: "runner-work-short", line: "scratch at " + posix("home", "runner", "work", "a"), rule: "absolute-host-path", refuseGroup: "runner-shape" },
   { id: "runner-win-short", line: "at " + winFwd("D", "a", "x"), rule: "windows-host-path", refuseGroup: "runner-shape" },
+  { id: "runner-work-short-before-closing-tag", line: "<root>" + posix("home", "runner", "work", "a") + "</root>", rule: "absolute-host-path", refuseGroup: "runner-shape" },
+  { id: "runner-win-short-before-closing-tag", line: "<root>" + winFwd("D", "a", "x") + "</root>", rule: "windows-host-path", refuseGroup: "runner-shape" },
   { id: "other-drive", line: "at " + winFwd("E", "a", "x", "x"), rule: "windows-host-path", refuseGroup: "other-drive" },
   { id: "c-other-root", line: "at " + winFwd("C", "Work", "example"), rule: "windows-host-path", refuseGroup: "other-drive" },
   // --- proc shapes outside the permitted form ----------------------------------

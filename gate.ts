@@ -620,8 +620,11 @@ const HOST_PATH_RULES: readonly ContentRule[] = [
     // `;`) is still matched on its own. Angle brackets are continuation
     // characters (they carry placeholder segments such as `<pid>`), never a
     // silent stop; the confirm then judges the complete path and refuses a
-    // second host path hiding behind any delimiter inside it.
-    pattern: /(?<=^|[\s"'`([=,{<>),;\]}]|[A-Za-z0-9_]{2}:|file:\/\/)\/(?:home|Users|root|tmp|var|etc|opt|srv|mnt|media|private|Volumes|usr|run|proc|sys|data|nix|scratch|workspace|builds|Library|System)(?=\/|$|[\s"'`<>),;\]}])(?:\/[^\s"'`),;\]]*)?/g,
+    // second host path hiding behind any delimiter inside it. A closing tag
+    // that names one bare word (`</var>`, `</root>`) is markup, not a path:
+    // its slash never starts a match, and a match ends before it, so the tag
+    // can never pass as a path segment. `</home/alice>` is still matched.
+    pattern: /(?<=^|[\s"'`([=,{<>),;\]}]|[A-Za-z0-9_]{2}:|file:\/\/)(?!(?<=<)\/[A-Za-z]+>)\/(?:home|Users|root|tmp|var|etc|opt|srv|mnt|media|private|Volumes|usr|run|proc|sys|data|nix|scratch|workspace|builds|Library|System)(?=\/|$|[\s"'`<>),;\]}])(?:\/(?:(?!<\/[A-Za-z]+>)[^\s"'`),;\]])*)?/g,
     confirm: (matched) => !isPublicPosixPath(matched) || hidesHostPathBehindDelimiter(matched),
   },
   {
@@ -629,8 +632,9 @@ const HOST_PATH_RULES: readonly ContentRule[] = [
     // A drive letter at a token start, or as a `file:///C:/…` URL path.
     // Angle brackets are continuation characters here too, so placeholder
     // segments (`<placeholder>` after a Users root) are matched whole and
-    // judged by the confirm instead of truncating the match before them.
-    pattern: /(?:(?<![A-Za-z0-9_:/])|(?<=file:\/\/\/))[A-Za-z]:[\\/][^\s"'`),;\]]+/g,
+    // judged by the confirm instead of truncating the match before them. A
+    // match ends before a bare closing tag (`</var>`), as in the POSIX rule.
+    pattern: /(?:(?<![A-Za-z0-9_:/])|(?<=file:\/\/\/))[A-Za-z]:[\\/](?:(?!<\/[A-Za-z]+>)[^\s"'`),;\]])+/g,
     confirm: (matched) => !isPublicWindowsPath(matched) || hidesHostPathBehindDelimiter(matched),
   },
   {
