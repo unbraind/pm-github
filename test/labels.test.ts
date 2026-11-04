@@ -51,7 +51,7 @@ async function tracker(run: (root: string, directory: string) => Promise<void>) 
 }
 /** Seed all fixture items with explicit relationships, preventing ambient focus inheritance. */
 async function item(root: string, title: string, tags: string[], id?: string) {
-  return (await create({ id, title, type: "Task", tags: tags.join(","), parent: "none", unset: ["sprint", "release", "goal", "objective"], clearDeps: true }, { pmRoot: root })).item;
+  return (await create({ id, title, type: "Task", tags: tags.join(","), unset: ["parent", "sprint", "release", "goal", "objective"], clearDeps: true }, { pmRoot: root })).item;
 }
 
 test("same display intent stays distinct; every affected identity and choice is explicit", async () => tracker(async root => {
@@ -296,10 +296,10 @@ test("approval revalidates current target revisions and exact label IDs, never a
     await assert.rejects(planGithubLabelMigration(root, input, { readCatalog: async () => ({ complete: true, labels }), approval: plan.approval }), code("stale_labels"));
   }
   await assert.rejects(planGithubLabelMigration(root, input, { readCatalog: async () => ({ complete: true, labels: [source, target] }), approval: plan.approval }), code("stale_plan"));
-  await update(created.id, { title: "Peer edited", parent: "none", clearDeps: true }, { pmRoot: root });
+  await update(created.id, { title: "Peer edited", unset: ["parent"], clearDeps: true }, { pmRoot: root });
   await assert.rejects(planGithubLabelMigration(root, input, { readCatalog, approval: plan.approval }), code("stale_plan"));
   const edited = await planGithubLabelMigration(root, input, { readCatalog });
-  await update(created.id, { title: created.title, parent: "none", clearDeps: true }, { pmRoot: root });
+  await update(created.id, { title: created.title, unset: ["parent"], clearDeps: true }, { pmRoot: root });
   await assert.rejects(planGithubLabelMigration(root, input, { readCatalog, approval: edited.approval }), code("stale_plan"));
   await assert.rejects(planGithubLabelMigration(root, input, { readCatalog, approval: plan.approval }), code("stale_plan"));
 }));

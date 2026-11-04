@@ -6,11 +6,11 @@ status: in_progress
 priority: 2
 tags[8]: ci,dependencies,"gh:unbraind/pm-cli#1656","gh:unbraind/pm-github#194","gh:unbraind/pm-github#197",migration,sdk,sdk-adoption
 created_at: "2026-11-02T09:17:15.200Z"
-updated_at: "2026-11-04T19:34:45.812Z"
+updated_at: "2026-11-04T20:06:22.289Z"
 assignee: codex-toolchain-1104
 claim_principal: codex-toolchain-1104
 author: pi-glm
-comments[9]{created_at,author,text}:
+comments[12]{created_at,author,text}:
   "2026-11-03T09:27:51.980Z",codex-toolchain-1103,"Reproduced the real-SDK compensation failure on the actual lockfile SDK 2026.10.28 (manifest remains >=2026.10.17). Root cause is the pm-cli 2026.10.26 GH-1591 ownership-proof hardening in src/sdk/item-transaction.ts. Before .26, compensateByRestore forced a timestamp restore. Since .26, hasOwnedCompensationEffects requires exclusive step ownership or a sibling compensation restoring the exact forward-state hash. commitGithubImportTransaction calls persistImportFidelity from its committing observer; that appends a separate import event (Preserve GitHub source lifecycle), so an ordinary subsequent observer failure correctly refuses rollback with transaction_partial_mutation rather than overwriting an unowned event. Classification: production integration depends on the former broad compensation behavior. Do not loosen the assertion or disable the SDK safety guard. Investigating a supported journaled finalizer; callback reordering or moving fidelity after commit would stop testing rollback after finalization and weaken the import guarantee."
   "2026-11-03T09:30:06.714Z",codex-toolchain-1103,"Supported API review: BulkItemMutation accepts create/update/close/release, and onTransition is an observer, not a journaled custom mutation. Exact lifecycle timestamps currently require persistImportFidelity/mutateItem. No safe small production fix was found on the existing supported SDK range: post-commit finalization weakens rollback, callback reordering bypasses the failing boundary, and spoofed internal markers or force restoration bypass ownership safety. Added docs/atomic-finalization-sdk.md with versions, GH-1591 source comparison, minimal public SDK call shape, actual refusal and required journaled-finalizer support. Keep the existing regression red and report this as a production integration blocker with an upstream API requirement, not an asserted SDK regression. No upstream issue was filed."
   "2026-11-03T09:45:26.334Z",codex-toolchain-1103,"Minimal public SDK reproducer verified on installed 2026.10.28: one bulk UPDATE, then client.update in committing, then an ordinary thrown error. Result is AggregateError compensation failed with transaction_partial_mutation; the item retains title Changed and description Source finalization, journal status compensating. This confirms the ownership-proof boundary independently of GitHub HTTP fixtures and source lifecycle timestamp handling. The synthetic tracker was removed after read-back. Typecheck and lint pass; npm test and the focused linked regression are running with the documented expected failure. Coverage/release gates were not run."
@@ -20,13 +20,24 @@ comments[9]{created_at,author,text}:
   "2026-11-04T19:25:15.713Z",codex-toolchain-1104,"Current SDK recheck: the three existing focused compensation cases report 1 pass and 2 failures. Fresh refresh cleanup now passes; source-lifecycle rollback after finalization and recovered refresh-plan cleanup still fail with cannot safely compensate incomplete step. Classification: production integration relies on pre-GH-1591 broad rollback; the CLI ownership refusal is protective behavior, not an asserted upstream regression. Still needs pm-cli#1656 for a journaled owned lifecycle finalizer. SDK 2026.11.4 expected revision guards (GH-1576) do not extend the bulk mutation union or supply that ownership. Keep the remaining assertions unchanged."
   "2026-11-04T19:26:31.438Z",codex-toolchain-1104,Independent minimal public SDK recheck on 2026.11.4 confirms AggregateError with transaction_partial_mutation and retained compensating journal. One bulk update followed by client.update in committing and an ordinary thrown error leaves title Changed and description Source finalization instead of restoring Original. Documented exact remaining #1656 requirement without asserting the protective refusal itself is a CLI regression. Corrected sentinel/unchanged comparison tests pass 19/19.
   "2026-11-04T19:31:23.209Z",codex-toolchain-1104,"Explicitly reverted only import-fidelity.ts to origin/main, confirmed the new real-SDK typed-identity test fails 0/1 (empty versus literal none), and restored the fix. Corrected focused identity/scheduled-refusal tests pass 19/19, and the linked sentinel test rerun passes. Typecheck and lint pass. Atomic lifecycle rollback and recovered refresh cleanup remain unchanged failing acceptance cases pending #1656."
-files[9]{path,scope}:
+  "2026-11-04T19:45:56.072Z",codex-toolchain-1104,"Verified auxiliary gates on fix commit 065d3f8: typecheck, lint, privacy (8569 local objects), docstrings (28 files, 269 declarations), production dependency audit (zero vulnerabilities), changelog regeneration/check, and zero-duplication gate pass. dist is not tracked in this repository; built it for artifact acceptance. Only package.json/package-lock.json carry current development pins; current explanatory docs separate minimums from the independent pin and retain dated historical receipts. Full npm test will run serially after the preceding package coverage attempt ends."
+  "2026-11-04T20:01:26.371Z",codex-toolchain-1104,"Root cause (test): SDK 2026.10.30 GH-1614 rejects typed parent: none. Focused baselines: discussion-model 0/1, discussions 0/16, labels 3/13, label-import-model 0/3; the targeted 500-native-comma project writer also fails at its root fixture. Converted only those explicit resets to unset parent, merging it into existing unset lists. Existing hierarchy assignments, 500-sequence/native-tag models, preservation assertions and exact counts remain intact. Updated shared fixture, packed acceptance and manual validation companions consistently; the minimum-host probe now uses the portable explicit unset too."
+  "2026-11-04T20:06:22.288Z",codex-toolchain-1104,"After fixture migration, the representative native discussion/label cases pass 2/2, build:test and lint pass, and the full exact-minimum consumer passes 1/1 again with explicit unset parent on SDK 2026.10.17. The longer focused 500-sequence batch was interrupted before completion to keep only one heavy suite active; it is not claimed passing. Full inventory remains queued for the serial npm test run."
+files[17]{path,scope}:
   docs/atomic-finalization-sdk.md,project
   import-fidelity.ts,project
   index.ts,project
   package-lock.json,project
   package.json,project
+  test/discussion-model.test.ts,project
+  test/discussion-packed-acceptance.ts,project
+  test/discussions.test.ts,project
+  test/helpers/discussions.ts,project
   test/import-fidelity.test.ts,project
+  test/label-import-model.test.ts,project
+  test/label-migration-real-data.ts,project
+  test/labels.test.ts,project
+  test/project-sync.test.ts,project
   test/refresh.test.ts,project
   test/scheduled-refusals.test.ts,project
   test/typed-sentinel-normalization.test.ts,project

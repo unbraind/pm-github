@@ -55,7 +55,7 @@ try {
     const root = join(directory, "tracker");
     await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { cwd: directory, pmRoot: root, noExtensions: true });
     const client = new PmClient({ pmRoot: root, noExtensions: true, author: "fixture" });
-    const item = (await client.create({ type: "Task", title: "Packed context", parent: "none", clearDeps: true, unset: ["sprint", "release", "goal", "objective"] })).item.id;
+    const item = (await client.create({ type: "Task", title: "Packed context", clearDeps: true, unset: ["parent", "sprint", "release", "goal", "objective"] })).item.id;
     const installed = await boundedCli(mode.command, [...mode.args, "--path", root, "package", "install", artifact, "--project", "--json"], mode.cwd, { ...mode.environment, PM_AUTHOR: "fixture", PM_PATH: root }, 120000);
     assert.equal(installed.code, 0, installed.stderr + installed.stdout);
     const source = discussionSource();

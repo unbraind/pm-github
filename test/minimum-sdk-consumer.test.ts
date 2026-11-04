@@ -113,7 +113,7 @@ import { init, create, update, get, mutateItem, readSettings, encodePmTableRows,
 assert.ok(extension);
 const root = join(process.cwd(), "tracker");
 await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { pmRoot: root, cwd: process.cwd(), noExtensions: true });
-const scope = { parent: "none", clearDeps: true, unset: ["sprint", "release", "goal", "objective"] };
+const scope = { clearDeps: true, unset: ["parent", "sprint", "release", "goal", "objective"] };
 const item = (await create({ title: "Minimum SDK witness", type: "Task", tags: "bug", ...scope }, { pmRoot: root })).item;
 const input = { repo: "fixture/repo", sources: [{ id: "LABEL", name: "bug, BUG" }], change: { kind: "rename", name: "planned/defect" },
   filters: [], mappings: [], choices: { tags: "keep", filters: "keep", mappings: "keep" } };

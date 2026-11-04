@@ -18,7 +18,7 @@ test("shared importer conversion covers legacy refresh deltas and every native m
   try {
     await withEnv({ PM_PATH: root, PM_AUTHOR: "fixture", GIT_CEILING_DIRECTORIES: dirname(directory), PATH: directory }, async () => {
       await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { pmRoot: root, cwd: directory, noExtensions: true });
-      const scope = { parent: "none", clearDeps: true, unset: ["sprint", "release", "goal", "objective"] };
+      const scope = { clearDeps: true, unset: ["parent", "sprint", "release", "goal", "objective"] };
       const repo = "fixture/repo";
       const raw = [" One,TWO ", "ONE", " GH:FIXTURE/REPO#1 "];
       const expected = (await create({ title: "SDK reference", type: "Task", tags: raw.join(","), ...scope }, { pmRoot: root })).item;
@@ -84,8 +84,8 @@ test("500 random label sets predict the importer's actual SDK tag changes and ap
   try {
     await withEnv({ PM_PATH: root, PM_AUTHOR: "fixture", GIT_CEILING_DIRECTORIES: dirname(directory), PATH: directory }, async () => {
       await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { pmRoot: root, cwd: directory, noExtensions: true });
-      const native = (await create({ title: "Import witness", type: "Task", parent: "none", clearDeps: true,
-        unset: ["sprint", "release", "goal", "objective"] }, { pmRoot: root })).item;
+      const native = (await create({ title: "Import witness", type: "Task", clearDeps: true,
+        unset: ["parent", "sprint", "release", "goal", "objective"] }, { pmRoot: root })).item;
       const settings = await readSettings(root);
       const options = parseImportOptions({});
       const repo = "fixture/repo";
@@ -104,8 +104,8 @@ test("500 random label sets predict the importer's actual SDK tag changes and ap
         const mutation = plan.mutations[0]!;
         assert.equal(mutation.op, "update");
         if (mutation.op !== "update") throw new Error("Expected an existing-target import");
-        await update(native.id, { ...mutation.options, parent: "none", clearDeps: true,
-          unset: ["sprint", "release", "goal", "objective"] }, { pmRoot: root });
+        await update(native.id, { ...mutation.options, clearDeps: true,
+          unset: ["parent", "sprint", "release", "goal", "objective"] }, { pmRoot: root });
         const actual = (await get(native.id, {}, { pmRoot: root })).item;
         current.set(native.id, actual);
         assert.deepEqual(entry.tags, actual.tags, "the importer preview must expose exactly the tags its writer produces");
@@ -168,7 +168,7 @@ test("500 native tag arrays keep literal identities and refresh decisions equal 
   try {
     await withEnv({ PM_PATH: root, PM_AUTHOR: "fixture", GIT_CEILING_DIRECTORIES: dirname(directory), PATH: directory }, async () => {
       await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { pmRoot: root, cwd: directory, noExtensions: true });
-      const scope = { parent: "none", clearDeps: true, unset: ["sprint", "release", "goal", "objective"] };
+      const scope = { clearDeps: true, unset: ["parent", "sprint", "release", "goal", "objective"] };
       const target = (await create({ title: "Native witness", type: "Task", ...scope }, { pmRoot: root })).item;
       const settings = await readSettings(root);
       const repo = "fixture/repo";
