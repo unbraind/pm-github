@@ -50,7 +50,7 @@ test("GH-1614 plain create and update preserve literal assignments and repeat wi
     const items = (await client.list({ includeBody: true })).items;
     assert.equal(items.length, 4);
     for (const issue of source) {
-      const item = items.find(item => item.tags?.includes(`gh:fixture/project#${issue.number}`))!;
+      const item = items.find(item => Array.isArray(item.tags) && item.tags.includes(`gh:fixture/project#${issue.number}`))!;
       assert.equal(item.assignee, issue.assignee!.login);
       assert.equal(item.sprint, issue.milestone!.title);
     }
