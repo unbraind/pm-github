@@ -345,8 +345,9 @@ function runnerTailSegments(segments: readonly string[]): readonly string[] {
 /**
  * Whether an absolute POSIX path is a public, non-identifying technical form.
  *
- * Admits exactly the procfs interface paths (`/proc` itself, `/proc/self/…`,
- * `/proc/<digits>/…` and `/proc/<placeholder>/…`), the GitHub-hosted runner
+ * Admits exactly the procfs interface paths (`/proc` itself, `/proc/self/…`
+ * and `/proc/<placeholder>/…`; a concrete numeric pid names one host's process
+ * and stays a refusal), the GitHub-hosted runner
  * workspaces (the fixed hosted account's `work/<seg>/<seg>/…` subtree under
  * either home root), the hosted tool cache (`/opt/hostedtoolcache/…`) and
  * placeholder home roots (`<placeholder>` children of either home root).
@@ -363,14 +364,14 @@ function isPublicPosixPath(matched: string): boolean {
   if (segments.some((segment) => isEscapePathSegment(segment, true))) return false;
   if (root === "sys") return !embedsIdentityRoot(segments.slice(1));
   if (root === "proc") {
-    if (first === "" || first === "self" || /^\d+$/.test(first) || isBracketedPlaceholder(first, "<", ">")) {
-      // `root` directly after a numeric or `self` pid directory is the real
+    if (first === "" || first === "self" || isBracketedPlaceholder(first, "<", ">")) {
+      // `root` directly after the `self` pid directory is the real
       // procfs root entry (the process's own root). It re-exposes the whole
       // filesystem, so only the entry itself is public: anything after it
       // names a host path. As a tail segment everywhere else it names the
       // root account's tree.
       const tail = segments.slice(2);
-      const exemptRootEntry = (first === "self" || /^\d+$/.test(first)) && tail[0] === "root";
+      const exemptRootEntry = first === "self" && tail[0] === "root";
       if (exemptRootEntry) return tail.slice(1).every((segment) => segment === "");
       return !embedsIdentityRoot(tail);
     }

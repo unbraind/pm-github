@@ -117,7 +117,7 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
     name: "remove-procfs-allowance",
     description: "procfs interface paths must fail again",
     replacements: [{ find: "if (root === \"proc\") {", replace: "if (root === \"proc\") return false; if (root === \"proc\") {" }],
-    expectFailingAllowRows: ["pm-review-title", "pm-review-body-proc-pid", "pm-review-body-proc-bare", "proc-bare", "proc-self", "proc-self-root-only", "proc-digits", "proc-placeholder", "placeholder-home-then-proc", "proc-self-root-entry", "proc-digits-root-entry", "placeholder-home-then-file-url", "proc-colon-chain-at-cap"],
+    expectFailingAllowRows: ["pm-review-title", "pm-review-body-proc-pid", "pm-review-body-proc-bare", "proc-bare", "proc-trailing-slash", "proc-self", "proc-self-root-only", "proc-placeholder", "placeholder-home-then-proc", "proc-self-root-entry", "placeholder-home-then-file-url", "proc-colon-chain-at-cap"],
     expectPassingRefuseRows: [],
   },
   {
@@ -251,17 +251,27 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
       replace: "if (exemptRootEntry) return !embedsIdentityRoot(tail.slice(1));",
     }],
     expectFailingAllowRows: [],
-    expectPassingRefuseRows: ["proc-root-then-var-folders", "proc-digits-root-then-data"],
+    expectPassingRefuseRows: ["proc-root-then-var-folders"],
   },
   {
     name: "broaden-proc-shape",
     description: "admitting any first segment would admit arbitrary procfs look-alikes",
     replacements: [{
-      find: "first === \"\" || first === \"self\" || /^\\d+$/.test(first) || isBracketedPlaceholder(first, \"<\", \">\")",
+      find: "first === \"\" || first === \"self\" || isBracketedPlaceholder(first, \"<\", \">\")",
       replace: "first !== \"________never________\"",
     }],
     expectFailingAllowRows: [],
-    expectPassingRefuseRows: ["proc-root-file", "proc-unclosed", "proc-curly"],
+    expectPassingRefuseRows: ["proc-root-file", "proc-unclosed", "proc-curly", "proc-digits"],
+  },
+  {
+    name: "allow-numeric-pid",
+    description: "admitting a numeric pid directory would pass a concrete host process's procfs paths",
+    replacements: [{
+      find: "first === \"\" || first === \"self\" || isBracketedPlaceholder(first, \"<\", \">\")",
+      replace: "first === \"\" || first === \"self\" || /^\\d+$/.test(first) || isBracketedPlaceholder(first, \"<\", \">\")",
+    }],
+    expectFailingAllowRows: [],
+    expectPassingRefuseRows: ["proc-digits"],
   },
   {
     name: "remove-bracket-leadins",
@@ -354,10 +364,10 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
     name: "remove-proc-root-exception",
     description: "without the procfs root-entry exception, the real root entry must fail again",
     replacements: [{
-      find: "const exemptRootEntry = (first === \"self\" || /^\\d+$/.test(first)) && tail[0] === \"root\";",
+      find: "const exemptRootEntry = first === \"self\" && tail[0] === \"root\";",
       replace: "const exemptRootEntry = false;",
     }],
-    expectFailingAllowRows: ["proc-self-root-entry", "proc-digits-root-entry"],
+    expectFailingAllowRows: ["proc-self-root-entry"],
     expectPassingRefuseRows: [],
   },
   {

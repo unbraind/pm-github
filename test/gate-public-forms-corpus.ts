@@ -86,14 +86,13 @@ export const PUBLIC_FORMS_MUST_ALLOW: readonly PublicFormRow[] = [
   { id: "pm-review-body-proc-pid", line: "polls the descendant's `" + posix("proc", "<pid>", "stat") + "`", allowGroup: "procfs" },
   { id: "pm-review-body-proc-bare", line: "without creating processes, reading " + posix("proc") + ", or sending signals", allowGroup: "procfs" },
   { id: "proc-bare", line: "inspect " + posix("proc"), allowGroup: "procfs" },
+  { id: "proc-trailing-slash", line: "inspect " + posix("proc") + "/", allowGroup: "procfs" },
   { id: "proc-self", line: "check " + posix("proc", "self", "status"), allowGroup: "procfs" },
   { id: "proc-self-root-only", line: "resolve " + posix("proc", "self"), allowGroup: "procfs" },
-  { id: "proc-digits", line: "cat " + posix("proc", "1234", "stat"), allowGroup: "procfs" },
   { id: "proc-placeholder", line: "read " + posix("proc", "<proc-id>", "maps"), allowGroup: "procfs" },
   // 65 public procfs paths joined by colons: 64 delimiter-started judgments, exactly the cap.
   { id: "proc-colon-chain-at-cap", line: "search " + Array.from({ length: 65 }, () => posix("proc", "self", "status")).join(":"), allowGroup: "procfs" },
   { id: "proc-self-root-entry", line: "resolve " + posix("proc", "self", "root"), allowGroup: "procfs" },
-  { id: "proc-digits-root-entry", line: "readlink " + posix("proc", "1234", "root"), allowGroup: "procfs" },
   { id: "sys-bare", line: "enumerate " + posix("sys"), allowGroup: "sysfs" },
   { id: "sys-tree", line: "read " + posix("sys", "class", "net", "eth0", "type"), allowGroup: "sysfs" },
   // --- reserved-domain fixture emails -----------------------------------
@@ -214,6 +213,9 @@ export const PUBLIC_FORMS_MUST_REFUSE: readonly PublicFormRefuseRow[] = [
   { id: "proc-root-then-tmp", line: "leak " + posix("proc", "self", "root", "tmp", "alice-notes"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "proc-root-then-root", line: "leak " + posix("proc", "self", "root", "root", ".ssh", "id_rsa"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "proc-root-then-var-folders", line: "leak " + posix("proc", "self", "root", "var", "folders", "xy", "abc123", "T"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
+  // A concrete numeric pid names one host's process (pm-github#193 keeps concrete process details refused).
+  { id: "proc-digits", line: "cat " + posix("proc", "1234", "stat"), rule: "absolute-host-path", refuseGroup: "proc-shape" },
+  { id: "proc-digits-root-entry", line: "readlink " + posix("proc", "1234", "root"), rule: "absolute-host-path", refuseGroup: "proc-shape" },
   { id: "proc-digits-root-then-data", line: "leak " + posix("proc", "1234", "root", "data", "alice"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "proc-placeholder-pid-root", line: "leak " + posix("proc", "<pid>", "root", "tmp", "alice"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   // --- a path hidden directly behind a permitted form ------------------------

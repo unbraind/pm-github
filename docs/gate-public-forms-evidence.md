@@ -72,7 +72,14 @@ three must-refuse rows, the `bracket-only-placeholder-verdict` and
 `revert-tilde-lead-in` mutations, and a tilde property test cover the change.
 With the old boundary, the test exposes `) ; ]`. The fleet comparison against
 the fourth-round gate, including `home-username`, again found no added or lost
-hits. Sysfs was previously outside the host-root signature; it is
+hits. The sixth round makes the email domain linear-time without changing
+what it reports (a 64,000-character label run took 18.7 s and now takes
+about 2 ms; a 300,000-case fuzz found no difference). It treats combining
+marks and astral letters as name characters judged by whole code points, and
+refuses concrete numeric pids, which no fleet tracker contains. It adds the
+`no-combining-marks`, `code-unit-name-scan`, `nonempty-email-labels` and
+`allow-numeric-pid` mutations and a `/proc/` trailing-slash row. Sysfs was
+previously outside the host-root signature; it is
 now explicitly scanned so its allowance and traversal refusal are observable.
 
 ## Review round: recursion, delimiters and tail roots
@@ -94,22 +101,29 @@ person-named file, and a placeholder home path followed by a colon and a
 root-owned SSH key path. The delimiter set grew from brackets to `:` and `=`
 (a label or assignment prefix hides a path the same way a bracket does), and
 the embedded-identity list grew to `tmp`, `private`, `Volumes`, `mnt`,
-`media`, `srv` and `root` — the last exempt only directly after a procfs
-numeric or `self` pid, where procfs exposes the real entry. The hosted
+`media`, `srv` and `root` — the last exempt only directly after the procfs
+`self` pid, where procfs exposes the real entry. The hosted
 runner's own `tmp` scratch directory inside its workspace stays allowed;
 corpus rows cover both directions, and every new check has its own mutation.
 
 ## Corpus and proof
 
-The shared corpus has 60 must-allow and 79 must-refuse rows. Every row runs as
+The shared corpus has 61 must-allow and 83 must-refuse rows, and the proof runs 34 mutations. Every row runs as
 plain text and JSON-escaped TOON text and through a complete synthetic tracker
 diff; allow rows also run as whole JSON strings and JSONL history changes.
 Refusal findings retain their expected rule and item attribution. All corpus
 names and account paths are synthetic and assembled at runtime.
 
+A concrete numeric pid (`/proc/1234/…`) names one host's process, so it is a
+refusal, as pm-github#193 requires ("preserve refusal of … concrete
+process/account details"). `/proc`, `/proc/`, `/proc/self/…` and
+`/proc/<placeholder>/…` stay allowed; the `allow-numeric-pid` mutation proves
+the refusal is load-bearing.
+
 Angle and curly brackets continue a path so whole placeholder segments are
 judged in place. A delimiter — any character outside the segment-name class
-(letters and digits in any script, `.`, `_`, `~`, `-`), so a bracket, label
+(letters with their combining marks and digits in any script, judged as whole
+code points, plus `.`, `_`, `~`, `-`), so a bracket, label
 colon, assignment equals, `[`, `(`, `|`, `@` and every other punctuation mark —
 inside any other segment can end one path and start the next, so the text
 after it is judged with the public-path predicates exactly as if it stood
@@ -125,15 +139,15 @@ flips and import failures fail the proof. Temporary copies are removed.
 | Mutation | Allow flips | Refuse flips |
 | --- | ---: | ---: |
 | `remove-sysfs-allowance` | 2 | 0 |
-| `remove-procfs-allowance` | 13 | 0 |
+| `remove-procfs-allowance` | 12 | 0 |
 | `remove-reserved-domain-allowance` | 12 | 0 |
 | `remove-git-transport-allowance` | 4 | 0 |
 | `remove-runner-workspace-posix` | 4 | 0 |
 | `remove-runner-workspace-windows` | 5 | 0 |
 | `remove-toolcache-allowance` | 1 | 0 |
-| `remove-placeholder-home-posix` | 20 | 0 |
+| `remove-placeholder-home-posix` | 22 | 0 |
 | `remove-placeholder-home-windows` | 4 | 0 |
-| `broaden-reserved-domain-anchor` | 0 | 7 |
+| `broaden-reserved-domain-anchor` | 0 | 8 |
 | `broaden-runner-shape-posix` | 0 | 3 |
 | `broaden-runner-shape-windows` | 0 | 2 |
 | `broaden-git-transport-local-part` | 0 | 2 |
@@ -141,19 +155,23 @@ flips and import failures fail the proof. Temporary copies are removed.
 | `broaden-placeholder-position-windows` | 0 | 1 |
 | `remove-escape-segment-check` | 0 | 5 |
 | `remove-embedded-identity-check` | 0 | 12 |
-| `allow-procfs-root-continuation` | 0 | 2 |
-| `broaden-proc-shape` | 0 | 3 |
+| `allow-procfs-root-continuation` | 0 | 1 |
+| `broaden-proc-shape` | 0 | 4 |
+| `allow-numeric-pid` | 0 | 1 |
 | `remove-bracket-leadins` | 0 | 1 |
 | `remove-bracket-smuggle-check` | 0 | 9 |
 | `revert-delimiter-set` | 0 | 7 |
 | `revert-to-listed-delimiters` | 0 | 4 |
-| `ascii-only-name-class` | 1 | 0 |
 | `bracket-only-placeholder-verdict` | 3 | 0 |
 | `revert-tilde-lead-in` | 0 | 3 |
-| `revert-embedded-identity-list` | 0 | 8 |
-| `remove-proc-root-exception` | 2 | 0 |
-| `remove-runner-tmp-exemption` | 2 | 0 |
+| `ascii-only-name-class` | 3 | 0 |
+| `no-combining-marks` | 1 | 0 |
+| `code-unit-name-scan` | 1 | 0 |
+| `nonempty-email-labels` | 0 | 1 |
 | `remove-delimiter-judgment-cap` | 0 | 1 |
+| `revert-embedded-identity-list` | 0 | 8 |
+| `remove-proc-root-exception` | 1 | 0 |
+| `remove-runner-tmp-exemption` | 2 | 0 |
 
 The proof harness also tests unreadable source, invalid baselines, source-anchor
 drift, changed row expectations, private diagnostic suppression, cleanup and
