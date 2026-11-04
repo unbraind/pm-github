@@ -3,17 +3,20 @@ title: Allow public technical forms in the tracker privacy gate
 description: "Permit only the specified public interfaces, reserved-domain fixtures, git SSH transport, hosted runner workspaces and placeholder home segments; retain concrete host and personal email refusals. Verify inherited tests, exact mutation proof, full eight-repository measurement and unchanged release gates."
 type: Issue
 pm_format_version: 2
-status: in_progress
+status: closed
 priority: 1
 tags[4]: changelog-unreleased,gate,"gh:unbraind/pm-github#193",privacy
 created_at: "2026-11-02T13:12:32.087Z"
-updated_at: "2026-11-04T05:10:48.367Z"
+updated_at: "2026-11-04T06:31:10.465Z"
+closed_at: "2026-11-04T06:31:10.425Z"
+completed_at: "2026-11-04T06:31:10.425Z"
 author: codex-sol
 estimated_minutes: 180
 acceptance_criteria: "Every specified public technical form passes plain, serialized and full tracker scans; concrete host data and non-reserved personal email refusals remain intact; exact removal and broadening mutations pass; eight-repository rule/hash measurement and README boundaries are documented; unchanged release gates pass; branch pushed once without a PR or closing this item."
 repro_steps: Run the original embedded issue snippets through scanLineForRuleHits at baseline 9586643 and compare to the public technical forms corpus.
-expected_result: Public technical fixtures pass while concrete host and personal data remain refused.
-actual_result: "The baseline refuses procfs documentation, reserved-domain fixtures, hosted runner workspaces and placeholder home examples."
+resolution: Implemented and merged in #213 (459677e).
+expected_result: The change described by this item is on main.
+actual_result: "Merged in #213 as 459677e; checks successful at head 9828fb8: CodeQL, bun-release (22), bun-release (26), codeql, semgrep-cloud-platform/scan, test (22), test (26)."
 component: tracker privacy gate
 comments[36]{created_at,author,text}:
   "2026-11-02T13:12:47.776Z",codex-sol,"Audited the inherited gate and all three changed existing test files. Existing example.org replacements use non-reserved example.dev and retain refusal semantics. The daily-sync test instead moved two refusal cases into allowances; restore equivalent non-reserved refusals while retaining reserved-domain allow cases. Also verify exact domain boundaries, runner workspace segments, placeholders and traversal before extending proof coverage. No upstream writes beyond the authorized final branch push."
@@ -100,4 +103,5 @@ tests[4]:
 docs[2]{path,scope}:
   docs/gate-public-forms-evidence.md,project
   README.md,project
+close_reason: "Delivered by #213 \"Let the import privacy gate pass public technical forms without opening new leaks\" (merged as 459677e). Checks successful at the PR head 9828fb8: CodeQL, bun-release (22), bun-release (26), codeql, semgrep-cloud-platform/scan, test (22), test (26)."
 body: ""
