@@ -6,6 +6,8 @@ The importer compares both stored and desired fields using the shared SDK-aware 
 
 SDK 2026.10.25 and 2026.10.28 reset `closed_at` and `updated_at` on an identical forced closed-state update, through both `update` and `commitItemMutations`, as confirmed by standalone synthetic non-git reproductions. The upstream timestamp fix shipped in SDK 2026.10.31 (GH-1628). The reproduction is recorded in [pm-cli issue #1628](https://github.com/unbraind/pm-cli/issues/1628). The package avoids invoking those mutations for normalized no-ops.
 
+The SDK 2026.11.4 recheck still fails the plain repeat-import property at seed 17: the second identical import changes `updated_at`. GH-1614 makes typed assignment values literal, but the plain importer still sends `--assignee none` through the CLI, where it clears the field. A synthetic comparison confirms that the CLI omits the assignee while typed `update({ assignee: "none" })` stores the literal identity. The corrected typed comparator exposes this production mismatch; it does not certify the plain writer. `pm-github-quay` tracks the remaining migration, and the exact no-op assertions remain unchanged.
+
 ## Source-content triage
 
 No matched values are retained here. No source issue or comment was edited. These are confirmed policy refusals; some are deliberately synthetic examples rather than personal information. The orchestrator owns their source-content remediation.
