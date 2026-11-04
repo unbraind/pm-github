@@ -81,6 +81,8 @@ test("main forwards a failed proof's stderr and status and skips imports", async
   } finally {
     console.error = originalError;
     console.log = originalLog;
-    process.exitCode = previousCode;
+    // Bun ignores `process.exitCode = undefined`, so restoring the unset
+    // value would leave the synthetic 1 behind and fail the whole Bun run.
+    process.exitCode = previousCode ?? 0;
   }
 });
