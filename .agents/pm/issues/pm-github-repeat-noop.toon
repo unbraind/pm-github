@@ -2,12 +2,17 @@ id: pm-github-repeat-noop
 title: Make repeated gated imports byte-identical for closed items
 description: "Reproduce and repair unchanged closed-item planning and lifecycle churn; retain source lifecycle, real changes, recoverability and publication gates. Measure packed imports in three disposable public clones."
 type: Issue
-status: in_progress
+status: closed
 priority: 2
 tags[1]: "gh:unbraind/pm-github#175"
 created_at: "2026-11-02T11:19:42.471Z"
-updated_at: "2026-11-02T20:53:32.576Z"
+updated_at: "2026-11-04T07:59:12.663Z"
+closed_at: "2026-11-04T07:59:12.654Z"
+completed_at: "2026-11-04T07:59:12.654Z"
 author: codex-sol
+resolution: Implemented and merged in #212 (10e9fdd).
+expected_result: The change described by this item is on main.
+actual_result: "Merged in #212 as 10e9fdd; checks successful at head b65b35b: CodeQL, bun-release (22), bun-release (26), codeql, semgrep-cloud-platform/scan, test (22), test (26)."
 comments[25]{created_at,author,text}:
   "2026-11-02T11:19:44.760Z",codex-sol,"Read #175, pm-github-c093 and pm-github-aiok. Initial shared core API budget: 4441. Work is isolated from the canonical checkout and gate.ts. Required evidence: synthetic SDK regression, source planner/finalizer repair, oldest/current host checks, revert-only proof, packed three-repo measurement, unchanged release gates."
   "2026-11-02T11:25:32.397Z",codex-sol,"Current-main finding: #198 already filters normalized unchanged entries, including mixed batches. Initial real packed pm-slack clone repeat passed (0 item transactions; git diff exit 0); caller origin now locks host 2026.10.27. Synthetic mixed closed/open repeat also passes with host 2026.10.25. Original reported shipped 2026.10.28 behavior remains distinct. Remaining source defect: atomic full-fidelity content edits force an already-closed item through native close again, transiently replacing its closure before finalization restores it. Tests will guard absence of that redundant close and preserve real changes/replay."
@@ -45,4 +50,5 @@ tests[2]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
 docs[2]{path,scope}:
   .github/workflows/pm-github-sync.yml,project
   docs/repeat-import-noop.md,project
+close_reason: "Delivered by #212 \"Keep real closure dates and transaction identity when re-importing closed issues\" (merged as 10e9fdd). Checks successful at the PR head b65b35b: CodeQL, bun-release (22), bun-release (26), codeql, semgrep-cloud-platform/scan, test (22), test (26)."
 body: ""
