@@ -101,10 +101,13 @@ test("a synthetic tracker change refuses every must-refuse row with its listed r
   // corpus fixture — including the concrete home path it just refused. Check
   // the path-like token of EVERY must-refuse row (every refusal group), not
   // the whole corpus line (which contains prose the report never holds).
+  // JSON doubles every backslash, so compare each token in its JSON-escaped
+  // form; otherwise a Windows path echoed into the report could never match.
   const serialized = JSON.stringify(report);
+  const escapedToken = (token: string) => JSON.stringify(token).slice(1, -1);
   for (const row of PUBLIC_FORMS_MUST_REFUSE) {
     for (const token of pathLikeTokens(row.line)) {
-      assert.ok(!serialized.includes(token), `${row.id} path token must not be echoed`);
+      assert.ok(!serialized.includes(escapedToken(token)), `${row.id} path token must not be echoed`);
     }
   }
   // The assertion must be able to fail: every host-path row yields at least
@@ -116,7 +119,13 @@ test("a synthetic tracker change refuses every must-refuse row with its listed r
   }
   const homeRow = PUBLIC_FORMS_MUST_REFUSE.find((row) => row.id === "home-alice")!;
   const echoedToken = pathLikeTokens(homeRow.line)[0]!;
-  assert.ok(JSON.stringify({ excerpt: echoedToken }).includes(echoedToken), "the no-echo assertion must be able to fail");
+  assert.ok(JSON.stringify({ excerpt: echoedToken }).includes(escapedToken(echoedToken)), "the no-echo assertion must be able to fail");
+  // A backslash token must be detectable too: raw, it never occurs in JSON.
+  const windowsRow = PUBLIC_FORMS_MUST_REFUSE.find((row) => row.id === "win-users-alice")!;
+  const echoedWindowsToken = pathLikeTokens(windowsRow.line)[0]!;
+  assert.ok(echoedWindowsToken.includes("\\"), "the Windows self-check token must contain a backslash");
+  assert.ok(!JSON.stringify({ excerpt: echoedWindowsToken }).includes(echoedWindowsToken), "a raw backslash token is invisible in JSON");
+  assert.ok(JSON.stringify({ excerpt: echoedWindowsToken }).includes(escapedToken(echoedWindowsToken)), "the escaped no-echo assertion must be able to fail");
 });
 
 test("the delimiter check answers adversarial bracket chains in bounded time", () => {
