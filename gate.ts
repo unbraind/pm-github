@@ -407,8 +407,9 @@ function isPublicWindowsPath(matched: string): boolean {
 }
 
 /**
- * Characters of an ordinary path segment name: letters and digits in any
- * script, plus `.`, `_`, `~` and `-`. Every other character inside a matched
+ * Characters of an ordinary path segment name: letters (with their combining
+ * marks) and digits in any script, plus `.`, `_`, `~` and `-`. Each is judged
+ * as a whole code point, so an astral letter is a name character too. Every other character inside a matched
  * host path is a delimiter that can end one path and begin the next — the two
  * bracket pairs (which continue a path while they wrap a whole placeholder
  * segment), the colon and equals of a label or assignment prefix (`cwd:`,
@@ -417,7 +418,7 @@ function isPublicWindowsPath(matched: string): boolean {
  * characters rather than the delimiters keeps unlisted punctuation from hiding
  * a second path; only a delimiter directly followed by a path start is judged.
  */
-const PATH_NAME_CHARACTER = /[\p{L}\p{N}._~-]/u;
+const PATH_NAME_CHARACTER = /[\p{L}\p{M}\p{N}._~-]/u;
 
 /**
  * Whether the text after a delimiter begins with a shape a host-path rule can
@@ -508,7 +509,9 @@ function hidesHostPathBehindDelimiter(matched: string): boolean {
   let judgedPlaceholder = false;
   let judgments = 0;
   for (let index = 0; index < matched.length; index++) {
-    const character = matched[index]!;
+    const character = String.fromCodePoint(matched.codePointAt(index)!);
+    // Step over the low half of an astral character so it is judged once.
+    if (character.length === 2) index++;
     if (character === "/" || character === "\\") {
       segmentStart = index + 1;
       continue;
@@ -546,7 +549,7 @@ const PERSONAL_DATA_RULES: readonly ContentRule[] = [
     // contact address, even before a colon and a space, is still matched.
     // The ssh:// form permits only the git service account with a URL path.
     // The lookbehind keeps a match from starting inside a local part.
-    pattern: /(?<![A-Za-z0-9._%+-])(?!(?<=ssh:\/\/)git@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?=\/|:\d+\/))(?!git@[A-Za-z0-9.-]+\.[A-Za-z]{2,}:[A-Za-z0-9_~./-])[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9.-]+\.[A-Za-z]{2,}[A-Za-z0-9-]*|[Ll][Oo][Cc][Aa][Ll][Hh][Oo][Ss][Tt])(?![A-Za-z0-9-]|\.[A-Za-z0-9])/g,
+    pattern: /(?<![A-Za-z0-9._%+-])(?!(?<=ssh:\/\/)git@[A-Za-z0-9.-]+\.[A-Za-z]{2,}(?=\/|:\d+\/))(?!git@[A-Za-z0-9.-]+\.[A-Za-z]{2,}:[A-Za-z0-9_~./-])[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9.-][A-Za-z0-9-]*(?:\.[A-Za-z0-9-]*)*\.[A-Za-z]{2}[A-Za-z0-9-]*|[Ll][Oo][Cc][Aa][Ll][Hh][Oo][Ss][Tt])(?![A-Za-z0-9-]|\.[A-Za-z0-9])/g,
     // GitHub, GitLab and most mail systems use a "noreply" domain or local part
     // for automated identities; anything else in imported issue text is a real
     // person's address and fails closed. RFC 2606/6761 documentation domains

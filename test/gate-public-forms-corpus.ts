@@ -131,6 +131,9 @@ export const PUBLIC_FORMS_MUST_ALLOW: readonly PublicFormRow[] = [
   { id: "placeholder-home-bare", line: "resolve " + posix("home", "example"), allowGroup: "placeholder-home-posix" },
   // Non-ASCII letters are segment characters, not delimiters: a refused-looking root below one stays a subdirectory.
   { id: "placeholder-home-unicode-segment", line: "open " + posix("home", "<user>", "café", "var", "log"), allowGroup: "placeholder-home-posix" },
+  // A decomposed accent (combining mark) and an astral letter are name characters, not delimiters.
+  { id: "placeholder-home-combining-mark-segment", line: "open " + posix("home", "<user>", "cafe\u0301", "var", "log"), allowGroup: "placeholder-home-posix" },
+  { id: "placeholder-home-astral-letter-segment", line: "open " + posix("home", "<user>", "x\u{1D49C}", "var", "log"), allowGroup: "placeholder-home-posix" },
   { id: "placeholder-home-angle", line: "open " + posix("home", "<user>", "project"), allowGroup: "placeholder-home-posix" },
   { id: "placeholder-users-curly", line: "open " + posix("Users", "{user}", "config"), allowGroup: "placeholder-home-posix" },
   { id: "placeholder-home-dollar", line: "cache at " + posix("home", "$USER", ".cache"), allowGroup: "placeholder-home-posix" },
@@ -229,12 +232,16 @@ export const PUBLIC_FORMS_MUST_REFUSE: readonly PublicFormRefuseRow[] = [
   { id: "smuggled-var-after-paren", line: "ok " + posix("home", "example", "x(") + posix("var", "log", "syslog"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "smuggled-var-after-pipe", line: "ok " + posix("home", "example", "x|") + posix("var", "folders", "xy", "abc123", "T"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "smuggled-data-after-at-proc", line: "ok " + posix("proc", "self", "x@") + posix("data", "alice-project"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
+  // An astral symbol that is not a letter stays a delimiter, judged as one code point.
+  { id: "smuggled-root-after-astral-symbol", line: "ok " + posix("home", "<user>", "x\u{1F642}") + posix("root", "file"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "smuggled-file-url-after-placeholder", line: "ok " + posix("home", "<user>", "x>") + "file://" + posix("var", "log", "syslog"), rule: "absolute-host-path", refuseGroup: "embedded-identity" },
   { id: "sys-dot-escape", line: "read " + posix("sys", "..", "home", "alice"), rule: "absolute-host-path", refuseGroup: "dot-escape" },
   { id: "placeholder-wrong-level", line: "read " + posix("home", "alice", "<user>", "file"), rule: "absolute-host-path", refuseGroup: "concrete-home" },
   { id: "placeholder-win-wrong-level", line: "read " + winBack("C", "Users", "alice", "{user}", "file"), rule: "windows-host-path", refuseGroup: "concrete-home" },
   { id: "lookalike-domain-digit", line: "contact user@example.com2", rule: "email-address", refuseGroup: "lookalike-email" },
   { id: "lookalike-domain-hyphen", line: "contact user@host.test-other", rule: "email-address", refuseGroup: "lookalike-email" },
+  // Empty domain labels stay reportable after the linear-time rewrite.
+  { id: "email-empty-domain-label", line: "contact user@coma..example.com", rule: "email-address", refuseGroup: "lookalike-email" },
   { id: "ssh-other-local", line: "clone ssh://alice@github.com/owner/repo.git", rule: "email-address", refuseGroup: "contact-address" },
   // --- real and look-alike contact addresses ----------------------------------
   { id: "lookalike-suffix", line: "contact user@example.com.evil.io", rule: "email-address", refuseGroup: "lookalike-email" },

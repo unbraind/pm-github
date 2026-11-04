@@ -141,6 +141,20 @@ test("the delimiter check answers adversarial bracket chains in bounded time", (
   }
 });
 
+test("the email signature scans a long label run in linear time", () => {
+  // The previous domain pattern let its final label's letters split between two
+  // overlapping classes, so a long run followed by ".1" backtracked
+  // quadratically (1,282 ms at 16,000 letters, 4x per doubling). Both lines are
+  // far beyond any real address, and neither is one.
+  for (const line of ["mail a@x." + "b".repeat(64000) + ".1", "mail a@" + "b.".repeat(16000) + "c".repeat(32000) + ".1"]) {
+    const started = performance.now();
+    const hits = scanLineForRuleHits(line).filter(hit => hit.rule === "email-address");
+    const elapsed = performance.now() - started;
+    assert.deepStrictEqual(hits, []);
+    assert.ok(elapsed < 200, `${line.length}-character email-shaped line took ${elapsed.toFixed(1)} ms`);
+  }
+});
+
 test("no printable punctuation can hide a refused path behind a permitted prefix", () => {
   // Every printable ASCII character outside the segment-name class either ends
   // the match (so the refused path is matched on its own) or is a delimiter

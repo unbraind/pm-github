@@ -162,7 +162,7 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
     name: "remove-placeholder-home-posix",
     description: "placeholder account segments after POSIX home roots must fail again",
     replacements: [{ find: "if (isHomePlaceholderSegment(first)) return !embedsIdentityRoot(segments.slice(2));", replace: "if (isHomePlaceholderSegment(first)) return false;" }],
-    expectFailingAllowRows: ["pm-swarm-placeholder-home", "placeholder-home-bare", "placeholder-home-unicode-segment", "placeholder-home-angle", "placeholder-users-curly", "placeholder-home-dollar", "placeholder-home-braced", "placeholder-home-dotted", "placeholder-home-braced-root-subdir", "placeholder-home-percent-root-subdir", "placeholder-home-percent", "placeholder-home-in-markup", "placeholder-home-then-proc", "placeholder-home-then-file-url", "placeholder-home-then-file-notes", "placeholder-home-then-runner-win", "placeholder-home-then-bare-drive", "placeholder-home-then-anonymous-tilde", "placeholder-home-windows-fwd", "placeholder-home-windows-percent-root-subdir"],
+    expectFailingAllowRows: ["pm-swarm-placeholder-home", "placeholder-home-bare", "placeholder-home-unicode-segment", "placeholder-home-combining-mark-segment", "placeholder-home-astral-letter-segment", "placeholder-home-angle", "placeholder-users-curly", "placeholder-home-dollar", "placeholder-home-braced", "placeholder-home-dotted", "placeholder-home-braced-root-subdir", "placeholder-home-percent-root-subdir", "placeholder-home-percent", "placeholder-home-in-markup", "placeholder-home-then-proc", "placeholder-home-then-file-url", "placeholder-home-then-file-notes", "placeholder-home-then-runner-win", "placeholder-home-then-bare-drive", "placeholder-home-then-anonymous-tilde", "placeholder-home-windows-fwd", "placeholder-home-windows-percent-root-subdir"],
     expectPassingRefuseRows: [],
   },
   {
@@ -180,7 +180,7 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
       { find: "RESERVED_EMAIL_DOMAIN_SUFFIXES.some((suffix) => domain.endsWith(suffix));", replace: "RESERVED_EMAIL_DOMAIN_SUFFIXES.some((suffix) => domain.includes(suffix.slice(1)));" },
     ],
     expectFailingAllowRows: [],
-    expectPassingRefuseRows: ["lookalike-suffix", "lookalike-prefix", "lookalike-subdomain", "person-noreply-lookalike", "git-contact-colon-prose", "lookalike-domain-digit", "lookalike-domain-hyphen"],
+    expectPassingRefuseRows: ["email-empty-domain-label", "lookalike-suffix", "lookalike-prefix", "lookalike-subdomain", "person-noreply-lookalike", "git-contact-colon-prose", "lookalike-domain-digit", "lookalike-domain-hyphen"],
   },
   {
     name: "broaden-runner-shape-posix",
@@ -308,9 +308,30 @@ export const PUBLIC_FORM_MUTATIONS: readonly MutationSpec[] = [
   {
     name: "ascii-only-name-class",
     description: "an ASCII-only segment-name class would treat non-ASCII letters as delimiters and refuse a placeholder home's subdirectory",
-    replacements: [{ find: "const PATH_NAME_CHARACTER = /[\\p{L}\\p{N}._~-]/u;", replace: "const PATH_NAME_CHARACTER = /[A-Za-z0-9._~-]/;" }],
-    expectFailingAllowRows: ["placeholder-home-unicode-segment"],
+    replacements: [{ find: "const PATH_NAME_CHARACTER = /[\\p{L}\\p{M}\\p{N}._~-]/u;", replace: "const PATH_NAME_CHARACTER = /[A-Za-z0-9._~-]/;" }],
+    expectFailingAllowRows: ["placeholder-home-unicode-segment", "placeholder-home-combining-mark-segment", "placeholder-home-astral-letter-segment"],
     expectPassingRefuseRows: [],
+  },
+  {
+    name: "no-combining-marks",
+    description: "without combining marks in the segment-name class, a decomposed accent is a delimiter and refuses a placeholder home's subdirectory",
+    replacements: [{ find: "const PATH_NAME_CHARACTER = /[\\p{L}\\p{M}\\p{N}._~-]/u;", replace: "const PATH_NAME_CHARACTER = /[\\p{L}\\p{N}._~-]/u;" }],
+    expectFailingAllowRows: ["placeholder-home-combining-mark-segment"],
+    expectPassingRefuseRows: [],
+  },
+  {
+    name: "code-unit-name-scan",
+    description: "scanning UTF-16 code units splits an astral letter into two delimiters and refuses a placeholder home's subdirectory",
+    replacements: [{ find: "    const character = String.fromCodePoint(matched.codePointAt(index)!);\n    // Step over the low half of an astral character so it is judged once.\n    if (character.length === 2) index++;\n", replace: "    const character = matched[index]!;\n" }],
+    expectFailingAllowRows: ["placeholder-home-astral-letter-segment"],
+    expectPassingRefuseRows: [],
+  },
+  {
+    name: "nonempty-email-labels",
+    description: "requiring non-empty domain labels would stop reporting an address with an empty label",
+    replacements: [{ find: "@(?:[A-Za-z0-9.-][A-Za-z0-9-]*(?:\\.[A-Za-z0-9-]*)*\\.[A-Za-z]{2}[A-Za-z0-9-]*|", replace: "@(?:[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,}[A-Za-z0-9-]*|" }],
+    expectFailingAllowRows: [],
+    expectPassingRefuseRows: ["email-empty-domain-label"],
   },
   {
     name: "remove-delimiter-judgment-cap",
