@@ -64,8 +64,48 @@ export function collectCoverageSources(root: string, target: string): string[] {
   });
 }
 
-/** Heap ceiling for c8 aggregation on public Linux runners with 16 GB RAM. */
-export const COVERAGE_HEAP_FLAG = "--max-old-space-size=12288";
+/** Measured incremental merge ceiling and margin: docs/bounded-coverage-merge.md. */
+export const COVERAGE_HEAP_FLAG = "--max-old-space-size=3072";
+
+const HEAP_OVERRIDE = /^--max[-_]old[-_]space[-_]size(?:[-_]percentage)?(=|$)/;
+
+/** Inherited NODE_OPTIONS split into the old-space limits and everything else. */
+export interface InheritedNodeOptions {
+  /** The remaining options, byte-for-byte, or undefined when none remain. */
+  readonly rest: string | undefined;
+  /** The removed limits as unquoted `--flag=value` arguments, in their original order. */
+  readonly heap: readonly string[];
+}
+
+/**
+ * Split inherited V8 old-space limits out of NODE_OPTIONS.
+ *
+ * Node applies `--max-old-space-size-percentage` ahead of an explicit
+ * `--max-old-space-size`, so an inherited percentage would lift the merge
+ * above {@link COVERAGE_HEAP_FLAG}. Both spellings, both value forms and quoted
+ * forms are split out. The gate hands them back to the nested `node --test`
+ * command, whose runner forwards them to every test worker. A bare limit with
+ * no numeric value is dropped.
+ *
+ * @param nodeOptions - The inherited NODE_OPTIONS value.
+ * @returns The remaining options and the removed limits.
+ */
+export function splitHeapOverrides(nodeOptions: string | undefined): InheritedNodeOptions {
+  // Node splits NODE_OPTIONS on spaces only (a tab or newline stays inside an option), and double-quoted parts
+  // may hold spaces and backslash escapes. Judge each option by its unquoted value; keep the rest byte-for-byte.
+  const tokens = (nodeOptions ?? "").match(/(?:"(?:[^"\\]|\\.)*"|[^ "])+/g) ?? [];
+  const unquote = (raw: string) => raw.replace(/"((?:[^"\\]|\\.)*)"/g, (_quoted, inner: string) => inner.replace(/\\(.)/g, "$1"));
+  const kept: string[] = [];
+  const heap: string[] = [];
+  for (let index = 0; index < tokens.length; index++) {
+    const option = unquote(tokens[index]!);
+    const match = option.match(HEAP_OVERRIDE);
+    if (!match) { kept.push(tokens[index]!); continue; }
+    if (match[1] === "=") heap.push(option);
+    else if (/^\d+(?:\.\d+)?$/.test(unquote(tokens[index + 1] ?? ""))) heap.push(`${option}=${unquote(tokens[++index]!)}`);
+  }
+  return { rest: kept.length > 0 ? kept.join(" ") : undefined, heap };
+}
 
 /**
  * Run the strict all-source gate and return its exit status.
@@ -89,16 +129,18 @@ export function runCoverageGate(root: string, runner: CoverageRunner = spawnSync
     const c8 = join(dirname(createRequire(import.meta.url).resolve("c8/package.json")), "bin", "c8.js");
     const coverageEnv: NodeJS.ProcessEnv = { ...process.env, TZ: "UTC" };
     delete coverageEnv.NODE_TEST_CONTEXT;
+    // The merge runs under the gate's ceiling alone; the test workers keep the caller's limits.
+    const inherited = splitHeapOverrides(coverageEnv.NODE_OPTIONS);
+    if (inherited.rest === undefined) delete coverageEnv.NODE_OPTIONS;
+    else coverageEnv.NODE_OPTIONS = inherited.rest;
     const node = nodeToolingExecutable(process.versions);
-    // c8 merges the raw V8 coverage of every spawned process, including each
-    // real pm CLI child the sync-pipeline tests start. That merge exceeded Node's
-    // former 8 GiB ceiling on Node 26 after all 1,337 tests passed, even with
-    // matrix setup shared. Leave runner headroom with a 12 GiB heap ceiling.
-    // This changes resources only: thresholds, includes and the test set stay unchanged.
-    const result = runner(node, [COVERAGE_HEAP_FLAG, c8, "--100", "--all", "--exclude-after-remap", "--extension=.ts", "--extension=.js",
+    // c8 12 incrementally merges one receipt into its accumulator at a time.
+    // The default retains every raw child receipt, including excluded code.
+    // Keep c8's native remapping and inclusion logic; do not pre-filter URLs.
+    const result = runner(node, [COVERAGE_HEAP_FLAG, c8, "--merge-async", "--100", "--all", "--exclude-after-remap", "--extension=.ts", "--extension=.js",
       `--reports-dir=${reports}`, `--temp-directory=${join(reports, "v8")}`,
       "--reporter=text", "--reporter=lcov", "--reporter=json-summary", "--reporter=json",
-      ...sources.map(file => `--include=${file}`), node, "--test", "--test-concurrency=2", ...config.tests],
+      ...sources.map(file => `--include=${file}`), node, ...inherited.heap, "--test", "--test-concurrency=2", ...config.tests],
       { cwd: root, stdio: "inherit", env: coverageEnv });
     if (result.error || result.status !== 0) {
       rmSync(join(reports, "lcov.info"), { force: true });

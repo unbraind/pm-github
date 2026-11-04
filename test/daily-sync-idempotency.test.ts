@@ -72,7 +72,7 @@ test("gated preview and apply share privacy verdicts for generated non-git sourc
       assert.equal(initialized.status, 0, initialized.stderr);
       const source = issues(seed);
       const refuses = seed % 3 === 2;
-      source[0] = { ...source[0]!, body: refuses ? "contact " + "fixture" + "@example.invalid" : "const re = /private paused = true;/; GET /api/items" };
+      source[0] = { ...source[0]!, body: refuses ? "contact " + "fixture" + "@example.dev" : "const re = /private paused = true;/; GET /api/items" };
       const deps = { fetchIssues: async () => source, resolveToken: () => undefined };
       const options = parseImportOptions({ atomic: true, gate: true, "dry-run": true });
       const before = snapshot(root);

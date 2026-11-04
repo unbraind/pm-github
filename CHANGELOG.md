@@ -1,10 +1,18 @@
 # Changelog
 
-## Unreleased
+## 2026.11.4 - 2026-11-04
 
 ### Fixed
 
+- Make repeated gated imports byte-identical for closed items ([pm-github-repeat-noop](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-repeat-noop.toon))
 - Reusable workflows fail after pm package install when callers pin zero-padded release tags like v2026.11.02 ([pm-github-4gak](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-4gak.toon))
+- Allow public technical forms in the tracker privacy gate ([pm-github-01n8](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-01n8.toon))
+- Resolve an unrelated unreachable commit identity reported by whole-store privacy checks ([pm-github-privacy-store-followup](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-privacy-store-followup.toon))
+
+### Other
+
+- Bound coverage aggregation memory and compare default-heap CI behavior ([pm-github-vhi6](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-vhi6.toon))
+- Approve or amend the noreply identity on the normalize-release-tag-version branch commit ([pm-github-8mkc](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-8mkc.toon))
 
 ## 2026.11.1 - 2026-11-01
 

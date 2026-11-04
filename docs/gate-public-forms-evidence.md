@@ -1,0 +1,294 @@
+# Public technical forms: precision evidence
+
+Issue: gh:unbraind/pm-github#193. Scanner revisions: baseline `9586643`,
+comparison scanner `1dd1691` (the public-forms allowances), bracket-smuggle
+fix `5bf20e2`. The eight-repository measurement below (refreshed 15:53Z on
+2026-11-02), the 134-test recovery regression run and the complete fresh
+release check all predate `5bf20e2`; the review-round receipts (this
+document's timing runs, corpus counts and mutation proof) were produced on
+the branch head after it.
+
+## Inherited diff audit
+
+Read every inherited change in `gate.ts`, `test/gate.test.ts`,
+`test/daily-sync-privacy.test.ts` and `test/import-gate.test.ts` before editing.
+The gate/import tests replaced reserved `example.org` addresses with
+non-reserved, real-looking `example.dev` addresses and retained their refusal
+assertions. The daily-sync test moved two refusal fixtures to the allow table;
+this continuation restores both refusal cases with `example.dev` addresses and
+keeps reserved-domain allowance tests separately. No refusal assertion was
+removed or weakened in the final diff. The handoff changed three existing test
+files plus `gate.ts`. The complete recovery suite found one more reserved-email
+refusal fixture in `test/daily-sync-idempotency.test.ts`; it now uses
+non-reserved `example.dev` with all refusal and zero-write assertions intact.
+The minimum-SDK source witness now copies the shared corpus dependency used by
+the operational proof. It continues to check every production/operational
+module and shipped declaration, with no source exemption or assertion removed.
+Its optional `PM_GITHUB_TEST_NETWORK_ATTEMPT_TIMEOUT_MS` accepts only a bounded
+positive integer and permits only that transport timer after clearing inherited
+Node flags. The repaired pair passed all four tests, including the exact
+published minimum-SDK compile and runtime witness, using a 5000 ms timer.
+Credentials, registry provenance and every consumer assertion remain intact.
+
+The disk-full recovery audit compiled TypeScript and parsed both requested
+item reads and every JSONL history record. The unrelated `pm-github-rv9m`
+validation-warning comment and its paired history change were reverted; the
+reason is recorded on `pm-github-01n8`. That issue is the only item in this
+tree tagged for #193. Open triage PR #211 at `56a20d4` adds items for #197,
+#199 and #202, with no second #193 owner.
+The final complete SDK read inspected 162 items and found exactly that one
+owner by tag or explicit issue URL.
+
+The inherited 15-mutation proof passed before edits. The final proof adds sysfs
+removal, other SSH local parts, and placeholder-position broadenings. It also
+pins full domain-label consumption (including digit/hyphen look-alikes),
+case-insensitive bare localhost, dotted placeholder names, and an incomplete
+runner workspace. The review round adds four mutations: the reverted
+delimiter set (`:`/`=`), the reverted embedded-identity list, the removed
+procfs root-entry exception and the removed runner `tmp` exemption, and it
+re-points the bracket-smuggle and embedded-identity mutations at the rows the
+new checks now own. The second review round caps delimiter-started path
+judgments per match at 64 (a 65-path procfs chain passes, a 66-path chain
+fails closed) and adds the `remove-delimiter-judgment-cap` mutation; before the
+cap a 4,000-path chain took 13.4 s, after it 0.6 s. The third review round
+limits the procfs root entry to the entry itself, because it re-exposes the
+whole filesystem (`/proc/self/root/var/…` names `/var/…`), and adds the
+`allow-procfs-root-continuation` mutation with two must-refuse rows. The fourth
+round replaces the explicit delimiter list with the segment-name class, so
+unlisted punctuation cannot hide a second path. It adds four must-refuse rows
+(`[`, `(`, `|`, `@`) and two must-allow rows: a non-ASCII segment and a scoped
+package. It also adds the `revert-to-listed-delimiters` and `ascii-only-name-class`
+mutations, plus a property test over all 26 printable ASCII punctuation
+characters. With the old list restored, that test exposes 12 of them
+(`! # $ & ( * + ? @ [ ^ |`). A read-only local comparison of the previous and
+current gate over every fleet repository's tracker files (12,002 files and
+198,914 path-bearing lines on 2026-11-03) found no added or lost host-path hits. The fifth
+round judges whole env placeholder segments (`${USER}`, `%USERNAME%`) in place,
+like the bracketed ones, so their `}` or `%` never starts a second path. It also
+widens the `home-username` boundary to the same non-name set, so a tilde path
+written straight after a `]`, `)` or `;` that ends a host-path match still
+refuses. Sticky rule copies now keep each pattern's flags. Three must-allow rows,
+three must-refuse rows, the `bracket-only-placeholder-verdict` and
+`revert-tilde-lead-in` mutations, and a tilde property test cover the change.
+With the old boundary, the test exposes `) ; ]`. The fleet comparison against
+the fourth-round gate, including `home-username`, again found no added or lost
+hits. The sixth round makes the email domain linear-time without changing
+what it reports (a 64,000-character label run took 18.7 s and now takes
+about 2 ms; a 300,000-case fuzz found no difference). It treats combining
+marks and astral letters as name characters judged by whole code points, and
+refuses concrete numeric pids, which no fleet tracker contains. It adds the
+`no-combining-marks`, `code-unit-name-scan`, `nonempty-email-labels` and
+`allow-numeric-pid` mutations and a `/proc/` trailing-slash row. Sysfs was
+previously outside the host-root signature; it is
+now explicitly scanned so its allowance and traversal refusal are observable.
+The seventh round stops treating the colon of a leading Windows drive prefix
+as a delimiter. The Windows predicate has already judged that whole path, but
+the scan judged the rest again as a POSIX path. There a mixed-separator
+segment such as `<user>\AppData` stays one segment, so a public form was
+refused. A one-million-case differential fuzz, biased toward public prefixes,
+found 29,828 lines that the old scan refused and the new one allows. The old
+scan already allowed every one of them when written with a single separator
+style, and no line gained a refusal. The `judge-drive-colon` mutation, one
+must-allow row and two must-refuse rows cover the change. Forward-slash
+Windows homes no longer depend on the POSIX placeholder allowance, so
+`remove-placeholder-home-posix` now flips two fewer rows.
+The eighth round stops a closing tag that names one word (`</var>`,
+`</root>`, `</data>`) from reading as a bare host root. The `<` lead-in had
+let `<var>x</var>` and XML such as `<root>x</root>` refuse, though main
+allowed them. Such a tag now never starts a match, and a match ends before
+it. Letting the match run through the tag instead would have made the tag
+count as a path segment. A short runner path such as `D:/a/x` then passed
+when written as `<root>D:/a/x</root>`; a fuzz of that first design found
+2,019 such cases. With the tag ending the match, a 600,000-case fuzz against
+the seventh-round gate found 137,346 newly allowed lines. Each one was already
+allowed with its closing tags replaced by spaces, and none gained a refusal.
+Over every fleet tracker (15,206 files, 268,892 path-bearing lines) no hit
+was added or lost. Four must-allow rows, five must-refuse rows and the
+`match-bare-closing-tags`, `closing-tag-inside-posix-path` and
+`closing-tag-inside-windows-path` mutations cover the change. A closing tag
+that carries a path (`</home/alice>`) is still matched; main missed it.
+
+## Review round: recursion, delimiters and tail roots
+
+The bracket check re-entered the host-path rules through their confirms, so a
+line of about 40 repeated procfs-style segments (each ending in a delimiter)
+cost about 2^40 confirm calls, and long bracket runs made the loop quadratic
+with a fresh `RegExp` per bracket and rule. Measured on the recursive
+predecessor: 415 ms at 16 segments, 5.6 s at 20, 23 s at 22 (≈2.3x per
+segment — the 40-segment line does not finish), and 934 ms for one 20,000
+bracket run. The rewritten check is a single non-recursive pass that judges
+only delimiters directly followed by a possible path start, with sticky rule
+patterns built once: 1.1 ms for the 40-segment chain, 40 ms for the same
+20,000-bracket run, and the corpus timing test keeps both under 200 ms.
+
+Two traced refusals passed inside permitted tails and are now pinned as
+must-refuse rows: a procfs `root` entry continuing into the temp root with a
+person-named file, and a placeholder home path followed by a colon and a
+root-owned SSH key path. The delimiter set grew from brackets to `:` and `=`
+(a label or assignment prefix hides a path the same way a bracket does), and
+the embedded-identity list grew to `tmp`, `private`, `Volumes`, `mnt`,
+`media`, `srv` and `root` — the last exempt only directly after the procfs
+`self` pid, where procfs exposes the real entry. The hosted
+runner's own `tmp` scratch directory inside its workspace stays allowed;
+corpus rows cover both directions, and every new check has its own mutation.
+
+## Corpus and proof
+
+The shared corpus has 66 must-allow and 90 must-refuse rows, and the proof runs 38 mutations. Every row runs as
+plain text and JSON-escaped TOON text and through a complete synthetic tracker
+diff; allow rows also run as whole JSON strings and JSONL history changes.
+Refusal findings retain their expected rule and item attribution. All corpus
+names and account paths are synthetic and assembled at runtime.
+
+A concrete numeric pid (`/proc/1234/…`) names one host's process, so it is a
+refusal, as pm-github#193 requires ("preserve refusal of … concrete
+process/account details"). `/proc`, `/proc/`, `/proc/self/…` and
+`/proc/<placeholder>/…` stay allowed; the `allow-numeric-pid` mutation proves
+the refusal is load-bearing.
+
+Angle and curly brackets continue a path so whole placeholder segments are
+judged in place. A delimiter — any character outside the segment-name class
+(letters with their combining marks and digits in any script, judged as whole
+code points, plus `.`, `_`, `~`, `-`), so a bracket, label
+colon, assignment equals, `[`, `(`, `|`, `@` and every other punctuation mark —
+inside any other segment can end one path and start the next, so the text
+after it is judged with the public-path predicates exactly as if it stood
+alone: a refused root-account, temp, other-drive or tilde-username path behind
+a permitted prefix keeps the whole match refused (`smuggled-*` rows), while a
+placeholder path in markup or followed by a public procfs path, runner
+workspace or `file://` URL stays allowed (`placeholder-home-*` rows).
+
+Run `node scripts/prove-gate-public-forms.ts`. Each disposable gate mutation
+must flip exactly its recorded row IDs; missing/duplicate anchors, unexpected
+flips and import failures fail the proof. Temporary copies are removed.
+
+| Mutation | Allow flips | Refuse flips |
+| --- | ---: | ---: |
+| `remove-sysfs-allowance` | 2 | 0 |
+| `remove-procfs-allowance` | 12 | 0 |
+| `remove-reserved-domain-allowance` | 12 | 0 |
+| `remove-git-transport-allowance` | 4 | 0 |
+| `remove-runner-workspace-posix` | 4 | 0 |
+| `remove-runner-workspace-windows` | 6 | 0 |
+| `remove-toolcache-allowance` | 1 | 0 |
+| `remove-placeholder-home-posix` | 21 | 0 |
+| `remove-placeholder-home-windows` | 5 | 0 |
+| `broaden-reserved-domain-anchor` | 0 | 8 |
+| `broaden-runner-shape-posix` | 0 | 4 |
+| `broaden-runner-shape-windows` | 0 | 3 |
+| `broaden-git-transport-local-part` | 0 | 2 |
+| `broaden-placeholder-position-posix` | 0 | 1 |
+| `broaden-placeholder-position-windows` | 0 | 1 |
+| `remove-escape-segment-check` | 0 | 5 |
+| `remove-embedded-identity-check` | 0 | 12 |
+| `allow-procfs-root-continuation` | 0 | 1 |
+| `broaden-proc-shape` | 0 | 4 |
+| `allow-numeric-pid` | 0 | 1 |
+| `remove-bracket-leadins` | 0 | 4 |
+| `remove-bracket-smuggle-check` | 0 | 9 |
+| `revert-delimiter-set` | 0 | 7 |
+| `revert-to-listed-delimiters` | 0 | 4 |
+| `bracket-only-placeholder-verdict` | 3 | 0 |
+| `revert-tilde-lead-in` | 0 | 3 |
+| `ascii-only-name-class` | 3 | 0 |
+| `no-combining-marks` | 1 | 0 |
+| `code-unit-name-scan` | 1 | 0 |
+| `judge-drive-colon` | 1 | 0 |
+| `match-bare-closing-tags` | 4 | 0 |
+| `closing-tag-inside-posix-path` | 1 | 0 |
+| `closing-tag-inside-windows-path` | 1 | 0 |
+| `nonempty-email-labels` | 0 | 1 |
+| `remove-delimiter-judgment-cap` | 0 | 1 |
+| `revert-embedded-identity-list` | 0 | 8 |
+| `remove-proc-root-exception` | 1 | 0 |
+| `remove-runner-tmp-exemption` | 2 | 0 |
+
+The proof harness also tests unreadable source, invalid baselines, source-anchor
+drift, changed row expectations, private diagnostic suppression, cleanup and
+main-invocation stdout/stderr/exit behavior.
+
+The recovery PM-linked regression run passed all 134 tests with zero failures,
+cancellations or skips (2358 seconds). Its earlier 1800-second runner cap
+interrupted one file after 125 passes and zero assertion failures; increasing
+only the linked timeout to 7200 seconds produced the complete result. The
+command and every assertion were preserved. Owned timeout leftovers were
+independently attributed and removed; the successful rerun's dedicated scratch
+root was also removed.
+
+## Eight-repository measurement
+
+Read-only REST measurement refreshed at 15:53Z on 2026-11-02 using `gh api`.
+Core quota was 2349 before collection and 2152 afterwards (never below the
+required 1500). The refresh reproduced every prior rule/hash count.
+Paginated every repository's `issues?state=all&per_page=100` and
+`issues/comments?per_page=100`; excluded pull requests and their comments.
+Scanned every issue title/body and every issue comment line with the old
+scanner from `9586643` and the comparison scanner at `1dd1691`, without an
+allowlist. Counts
+are match occurrences, with identical rule/hash pairs aggregated below. Raw
+API responses stay outside tracked evidence. No issue bodies or comments were
+written to GitHub.
+
+Current text reflects the earlier seven issue-body edits. Original snippets
+already embedded in the shared corpus are a separate comparison; they are
+never added to current-text counts. They are bounded excerpts, not recovered
+historical full issues or historical comments. The pre-existing SSH transport
+allowance already passes the pm-jev original snippet.
+
+| Repo | Issues | Comments | Current before | Current after | Original snippet rows | Snippet before | Snippet after |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| pm-review | 4 | 1 | 3 | 0 | 3 | 3 | 0 |
+| pm-context | 9 | 18 | 0 | 0 | 1 | 1 | 0 |
+| pm-jev | 2 | 2 | 0 | 0 | 1 | 0 | 0 |
+| pm-rust | 4 | 7 | 0 | 0 | 1 | 1 | 0 |
+| pm-swarm | 6 | 7 | 0 | 0 | 1 | 2 | 0 |
+| pm-ops | 9 | 2 | 0 | 0 | 2 | 2 | 2 |
+| pm-vcs | 8 | 18 | 0 | 0 | 0 | 0 | 0 |
+| pm-changelog | 26 | 27 | 0 | 0 | 0 | 0 | 0 |
+
+All current after counts are zero. The only remaining original-snippet findings
+are the pm-ops root and temporary paths, deliberately retained as refusals.
+The following inventory lists every nonzero rule/hash pair; repositories not
+listed have zero findings in that comparison. Hashes are SHA-256 of the
+matched content; no matched text is recorded.
+
+| Source | Repo | Rule | Hash | Before | After |
+| --- | --- | --- | --- | ---: | ---: |
+| Current | pm-review | absolute-host-path | `71ad1dfa1de556decbd6d7314196552e349d66067b49ab6bf8d4865faa663441` | 2 | 0 |
+| Current | pm-review | absolute-host-path | `9d69c4b8ab582c9d38d6afabf34fef9dfa3e0e41cd717aecb748c541dfe43508` | 1 | 0 |
+| Original snippet | pm-review | absolute-host-path | `71ad1dfa1de556decbd6d7314196552e349d66067b49ab6bf8d4865faa663441` | 2 | 0 |
+| Original snippet | pm-review | absolute-host-path | `9d69c4b8ab582c9d38d6afabf34fef9dfa3e0e41cd717aecb748c541dfe43508` | 1 | 0 |
+| Original snippet | pm-context | email-address | `cc6d96611cffa9f02c3626f0b9ee897dc171e2d540a5cae349d4ec316104997b` | 1 | 0 |
+| Original snippet | pm-rust | windows-host-path | `0001cdf3ebc04c14a667ec0b3c18772a5232b7c5ff39d2d8a37b257858e58577` | 1 | 0 |
+| Original snippet | pm-swarm | absolute-host-path | `b7e6512807f60bced94b564e94168800ce0e7027207bb8f7db7bc3920cc6667b` | 1 | 0 |
+| Original snippet | pm-swarm | absolute-host-path | `b56b104578dd00431c4793de18349a132898799574d22afaf2c74722bb83e8da` | 1 | 0 |
+| Original snippet | pm-ops | absolute-host-path | `9efd9fc7399ad80acfb4ac0c2ba77920f370d9e554337b28c457c96362fe2811` | 1 | 1 |
+| Original snippet | pm-ops | absolute-host-path | `9ef9a9c7fe4a9ef1b186339d0fcfc17270432fd5e4b53ee5cc3de4d0af1b199a` | 1 | 1 |
+
+## Completed verification
+
+The complete fresh release check passed all 1609 tests with zero failures,
+cancellations or skips. It retained all 29 authored modules and exact coverage:
+13776/13776 lines and statements, 437/437 functions and 5184/5184 branches,
+with zero skipped source. Documentation checked 268 declarations; duplication
+was zero at the unchanged 50-token threshold; the privacy audit checked 7982
+objects with no findings; production audit found zero vulnerabilities. Pack
+dry-run contained 75 files, changelog consistency passed, and the release
+workflow's one publish invocation carried provenance.
+
+The successful command used process-local resource and transport controls:
+
+```sh
+NODE_OPTIONS='--max-old-space-size-percentage=55 --network-family-autoselection-attempt-timeout=5000' \
+PM_GITHUB_TEST_NETWORK_ATTEMPT_TIMEOUT_MS=5000 \
+NPM_CONFIG_USERCONFIG=/dev/null npm run release:check
+```
+
+The initial complete attempt had two fixture failures described above and
+exhausted the configured 12 GiB aggregation heap. A separate saved-receipt
+diagnostic reached exact coverage at 16 GiB; it was not counted as a passing
+release run. The command above reran every test and gate. Default-cap and CI
+memory acceptance remain on existing follow-up `pm-github-vhi6`, which stays
+open. No threshold, source exemption or assertion was relaxed. All free-space
+checks satisfied the required floor, and owned external scratch roots were
+removed.
