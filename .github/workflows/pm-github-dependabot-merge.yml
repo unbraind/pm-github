@@ -1,0 +1,120 @@
+name: Verified Dependabot squash auto-merge
+
+on:
+  workflow_call:
+    inputs:
+      extra-allowed-groups:
+        description: "Additional exact Dependabot groups, comma or whitespace separated"
+        type: string
+        required: false
+        default: ""
+    secrets:
+      merge_token:
+        description: "Optional write-capable token; also configure as a Dependabot secret for pull_request runs"
+        required: false
+
+permissions: {}
+
+concurrency:
+  group: pm-github-dependabot-merge-${{ github.repository }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  dependabot-merge:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.merge_token || github.token }}
+      REPOSITORY: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      EVENT_NAME: ${{ github.event_name }}
+      EVENT_ACTOR: ${{ github.actor }}
+      TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+      PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+      EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
+      EXTRA_GROUPS: ${{ inputs.extra-allowed-groups }}
+    steps:
+      # Revoke before even setting up Node or downloading policy. If the state
+      # read fails, attempt revocation anyway; inability to revoke must be visible.
+      - name: Revoke previous auto-merge before tooling
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "${REPOSITORY}" =~ ^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$ && "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
+          armed="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.auto_merge != null' 2>/dev/null)" || armed=true
+          if [[ "${armed}" != false ]]; then
+            if ! gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --disable-auto 2>/dev/null; then
+              echo '::error::Cannot revoke auto-merge; check token write permissions immediately.'
+              exit 1
+            fi
+          fi
+          echo 'Previous auto-merge requests cleared before tooling.' >> "${GITHUB_STEP_SUMMARY}"
+      - name: Setup policy runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+      # Never check out caller/PR code. Policy comes from this workflow's commit.
+      - name: Load trusted merge policy
+        id: policy
+        env:
+          WORKFLOW_SHA: ${{ job.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          policy_sha="${WORKFLOW_SHA}"
+          # A local-path pull_request call resolves workflow_sha from the PR.
+          # Its executable policy must instead come from the trusted default branch.
+          if [[ "${REPOSITORY}" == unbraind/pm-github ]]; then
+            policy_sha="$(gh api repos/unbraind/pm-github/git/ref/heads/main --jq '.object.sha')" || policy_sha=""
+          fi
+          if [[ ! "${policy_sha}" =~ ^[a-f0-9]{40}$ ]] || ! gh api "repos/unbraind/pm-github/contents/scripts/dependabot-merge.ts?ref=${policy_sha}" \
+            -H 'Accept: application/vnd.github.raw+json' > "${RUNNER_TEMP}/dependabot-merge.ts"; then
+            armed="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.auto_merge != null' 2>/dev/null)" || armed=true
+            if [[ "${armed}" != false ]] && ! gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --disable-auto 2>/dev/null; then
+              echo '::error::Cannot revoke auto-merge after policy load failure; check token write permissions immediately.'
+              exit 1
+            fi
+            echo '::notice::Cannot load trusted merge policy; auto-merge not armed.'
+            echo 'Cannot load trusted merge policy; auto-merge not armed.' >> "${GITHUB_STEP_SUMMARY}"
+            printf 'loaded=false\n' >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          cat > "${RUNNER_TEMP}/run-dependabot-merge.mts" <<'TS'
+          import { appendFileSync } from 'node:fs';
+          import { runDependabotMerge } from './dependabot-merge.ts';
+          const e = process.env;
+          const result = runDependabotMerge({
+            repository: e.REPOSITORY!, number: e.PR_NUMBER!, event: e.EVENT_NAME!,
+            actor: e.EVENT_ACTOR!, triggeringActor: e.TRIGGERING_ACTOR!, author: e.PR_AUTHOR!,
+            head: e.EVENT_HEAD!, phase: e.PHASE!, metadataOutcome: e.METADATA_OUTCOME ?? '',
+            group: e.DEPENDENCY_GROUP ?? '', updateType: e.UPDATE_TYPE ?? '', extraGroups: e.EXTRA_GROUPS!,
+          });
+          appendFileSync(e.GITHUB_STEP_SUMMARY!, `### Dependabot merge policy\n\n${result.message}\n`);
+          console.log(`::notice::${result.message.replaceAll('%', '%25').replaceAll('\r', '%0D').replaceAll('\n', '%0A')}`);
+          TS
+          printf 'loaded=true\n' >> "${GITHUB_OUTPUT}"
+
+      - name: Revoke previous auto-merge before metadata
+        if: steps.policy.outputs.loaded == 'true'
+        env:
+          PHASE: revoke
+        run: node "${RUNNER_TEMP}/run-dependabot-merge.mts"
+
+      - name: Fetch Dependabot metadata
+        id: metadata
+        if: steps.policy.outputs.loaded == 'true' && github.event_name == 'pull_request' && github.actor == 'dependabot[bot]' && github.triggering_actor == 'dependabot[bot]' && github.event.pull_request.user.login == 'dependabot[bot]'
+        continue-on-error: true
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        with:
+          github-token: ${{ env.GH_TOKEN }}
+
+      - name: Audit all commits and apply merge policy
+        if: steps.policy.outputs.loaded == 'true'
+        env:
+          PHASE: evaluate
+          METADATA_OUTCOME: ${{ steps.metadata.outcome }}
+          DEPENDENCY_GROUP: ${{ steps.metadata.outputs.dependency-group }}
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+        run: node "${RUNNER_TEMP}/run-dependabot-merge.mts"
