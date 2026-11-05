@@ -1,7 +1,7 @@
 /** Execute the production merge policy against API receipts and its real workflow launcher. */
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -240,7 +240,7 @@ test("custom-token arm event preserves the request; a foreign synchronize event 
 /** Kill only after the blocking child signals readiness; host startup time is irrelevant. */
 function installFixtureTimeout(dir: string): void {
   writeFileSync(join(dir, "timeout"), `#!/bin/bash
-[[ "$1" == --signal=KILL && "$2" == "\${DEPENDABOT_GH_TIMEOUT_SECONDS-60}s" ]] || exit 97
+[[ "$1" == --signal=KILL && "$2" == 60s ]] || exit 97
 case "$MODE" in
   *hang*) shift 2; exec "${process.execPath}" "$TIMEOUT_SUPERVISOR" "$@" ;;
   *) exec /usr/bin/timeout "$@" ;;
@@ -269,8 +269,8 @@ child.on('close', (code, signal) => {
 }
 
 /** Runtime bindings for the readiness-controlled deadline fixture. */
-function timeoutEnvironment(dir: string, mode: string): Record<string, string> {
-  return { DEPENDABOT_GH_TIMEOUT_SECONDS: mode === "default-timeout" ? "60" : "7", TIMEOUT_SUPERVISOR: join(dir, "timeout-supervisor.cjs"), KILL_RECEIPTS: join(dir, "kills") };
+function timeoutEnvironment(dir: string): Record<string, string> {
+  return { TIMEOUT_SUPERVISOR: join(dir, "timeout-supervisor.cjs"), KILL_RECEIPTS: join(dir, "kills") };
 }
 
 /** Require actual child termination, not merely an invocation or elapsed time. */
@@ -281,7 +281,7 @@ function assertHangKills(dir: string, mode: string): void {
 for (const mode of ["external", "local", "remote-self", "audit", "audit-load-failed", "load-failed", "invalid-sha", "load-hang", "fallback-read-hang", "fallback-disable-hang", "load-retry"]) {
   test(`real workflow loader/launcher: ${mode}`, () => {
     const dir = mkdtempSync(join(tmpdir(), "dependabot-policy-"));
-    const env = { ...process.env, ...timeoutEnvironment(dir, mode), PATH: dir + ":" + process.env.PATH, RUNNER_TEMP: dir,
+    const env = { ...process.env, ...timeoutEnvironment(dir), PATH: dir + ":" + process.env.PATH, RUNNER_TEMP: dir,
       RETRY_MARKER: join(dir, "retried"), POLICY_SOURCE: join(root, "scripts/dependabot-merge.ts"), WORKFLOW_SHA: mode === "invalid-sha" ? "bad" : mode === "local" ? trusted : head,
       WORKFLOW_REF: `unbraind/pm-github/.github/workflows/pm-github-dependabot-merge.yml@${mode.startsWith("local") ? "refs/pull/7/merge" : head}`,
       CALLER_REF: "refs/pull/7/merge",
@@ -358,7 +358,7 @@ test("CLI adapter resolves a unique fixture command against the current PATH", (
   } finally { process.env.PATH = old; rmSync(dir, { recursive: true, force: true }); }
 });
 
-for (const mode of ["default-timeout", "armed", "clear", "closed", "malformed-api", "api-error", "denied", "hang-read", "hang-disable", "retry-disable"]) {
+for (const mode of ["armed", "clear", "closed", "malformed-api", "api-error", "denied", "hang-read", "hang-disable", "retry-disable"]) {
   test(`pre-tooling revocation shell: ${mode}`, () => {
     const dir = mkdtempSync(join(tmpdir(), "dependabot-revoke-"));
     try {
@@ -384,9 +384,8 @@ else
 fi
 `, { mode: 0o755 });
       installFixtureTimeout(dir);
-      const env = { ...process.env, ...timeoutEnvironment(dir, mode), PATH: dir + ":" + process.env.PATH, RETRY_MARKER: join(dir, "retried"), REPOSITORY: "acme/widgets", PR_NUMBER: "7",
+      const env = { ...process.env, ...timeoutEnvironment(dir), PATH: dir + ":" + process.env.PATH, RETRY_MARKER: join(dir, "retried"), REPOSITORY: "acme/widgets", PR_NUMBER: "7",
         MODE: mode, RECEIPTS: join(dir, "receipts"), GITHUB_STEP_SUMMARY: join(dir, "summary") };
-      if (mode === "default-timeout") delete (env as NodeJS.ProcessEnv).DEPENDABOT_GH_TIMEOUT_SECONDS;
       const result = spawnSync("bash", ["-c", shell], { cwd: dir, env, encoding: "utf8", timeout: 120_000, killSignal: "SIGKILL" });
       assert.equal(result.status, mode === "denied" || mode === "hang-disable" ? 1 : 0, result.stderr);
       if (mode === "denied" || mode === "hang-disable") assert.match(result.stdout, /Cannot revoke auto-merge/);
@@ -403,27 +402,6 @@ fi
 }
 
 
-
-test("both workflow shells reject invalid deadline overrides before any CLI call", () => {
-  const source = parse(readFileSync(join(root, ".github/workflows/pm-github-dependabot-merge.yml"), "utf8")) as {
-    jobs: Record<string, { steps: { name: string; run?: string }[] }>;
-  };
-  const dir = mkdtempSync(join(tmpdir(), "dependabot-invalid-deadline-"));
-  try {
-    const receipt = join(dir, "called");
-    writeFileSync(join(dir, "gh"), `#!/bin/bash\nprintf called > "$CLI_RECEIPT"\n`, { mode: 0o755 });
-    for (const step of source.jobs["dependabot-merge"]!.steps.filter(step => step.name === "Revoke previous auto-merge before tooling" || step.name === "Load trusted merge policy")) {
-      for (const invalid of ["", "0", "-1", "1.5", "61", "Infinity", "1e2", " 7", "07", "7\n"]) {
-        const result = spawnSync("bash", ["-c", step.run!], { encoding: "utf8", env: {
-          ...process.env, PATH: dir + ":" + process.env.PATH, DEPENDABOT_GH_TIMEOUT_SECONDS: invalid, CLI_RECEIPT: receipt,
-        } });
-        assert.equal(result.status, 1, result.stderr);
-        assert.match(result.stdout, /timeout must be an integer from 1 to 60 seconds/);
-        assert.equal(existsSync(receipt), false);
-      }
-    }
-  } finally { rmSync(dir, { recursive: true, force: true }); }
-});
 
 test("README describes the actual author guard without an owner restriction", () => {
   const readme = readFileSync(join(root, "README.md"), "utf8");

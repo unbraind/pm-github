@@ -904,10 +904,11 @@ Foreign commits revoke auto-merge and produce a successful job, a summary and
 `::notice` listing **short SHA and author login only**. Disallowed metadata,
 unsupported arm events (including `pull_request`), API failures and incomplete
 pagination also leave auto-merge unarmed with a clear notice. Every CLI call is
-limited to three attempts of 60 seconds each by default. Trusted runtime bindings
-may shorten each deadline with `DEPENDABOT_GH_TIMEOUT_SECONDS` (integer 1–60);
-the policy adapter also accepts a millisecond timeout option. Invalid deadlines
-fail before starting a CLI call. Failed attempts discard partial
+limited to three attempts of 60 seconds each by default. The TypeScript policy
+adapter reads `DEPENDABOT_GH_TIMEOUT_SECONDS` (integer 1–60, default 60) and also
+accepts a millisecond timeout option. Invalid adapter deadlines fail before
+starting a CLI call. Pre-tooling shell calls retain a fixed 60-second deadline.
+Failed attempts discard partial
 output. A timed-out state read still attempts revocation. An
 inability to revoke is an operational failure that warns the request may remain
 armed, rather than a false successful safety claim.
