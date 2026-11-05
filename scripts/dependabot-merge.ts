@@ -59,7 +59,8 @@ function login(value: string | undefined): string {
 }
 
 /**
- * Revoke first and independently re-read provenance before a head-bound arm.
+ * Revoke before arming and independently re-read provenance for a head-bound arm.
+ * Audit-only calls preserve verified requests and never arm a new request.
  * Every refusal revokes even after an API failure. Inability to revoke throws:
  * the job must not claim success with an unsafe request potentially still armed.
  */
@@ -82,7 +83,8 @@ export function runDependabotMerge(input: MergeInput, gh: (args: readonly string
       catch { throw new Error("Auto-merge revocation denied or unavailable after bounded retries; request may still be armed. Check token write permissions and retry immediately."); }
     }
   };
-  revoke();
+  const audit = input.phase === "audit";
+  if (!audit) revoke();
   if (input.phase === "revoke") return { armed: false, message: "Previous auto-merge request revoked before metadata." };
   let message: string;
   try {
@@ -105,7 +107,10 @@ export function runDependabotMerge(input: MergeInput, gh: (args: readonly string
     const identities = foreign.map(commit => `${commit.sha.slice(0, 12)} ${login(commit.author?.login)}`);
     const allowedGroups = ["pm-toolchain", ...input.extraGroups.split(/[\s,]+/).filter(Boolean)];
     if (foreign.length > 0) message = `Foreign or unverified commits: ${identities.join(", ")}.`;
-    else if (input.event !== "pull_request") message = "Only pull_request callers are supported; pull_request_target is refused.";
+    else if (audit && before.state === "open" && after.state === "open" && before.user.login === bot && after.user.login === bot) {
+      return { armed: false, message: `Verified Dependabot head ${after.head.sha.slice(0, 12)} retained; audit never arms auto-merge.` };
+    }
+    else if (input.event !== "pull_request_target" || audit) message = "Only trusted pull_request_target callers can arm auto-merge.";
     else if (input.actor !== bot || input.triggeringActor !== bot || input.author !== bot || before.user.login !== bot || after.user.login !== bot) message = "PR author and event/re-run actors must all be dependabot[bot].";
     else if (before.state !== "open" || after.state !== "open" || !shaPattern.test(input.head) || input.head !== after.head.sha) message = "PR is closed or the event head is stale.";
     else if (input.metadataOutcome !== "success") message = "Dependabot metadata unavailable or failed; auto-merge not armed.";
@@ -122,4 +127,28 @@ export function runDependabotMerge(input: MergeInput, gh: (args: readonly string
   }
   revoke();
   return { armed: false, message };
+}
+
+/** Audit every armed Dependabot PR independently of suppressed push events; never arm a request. */
+export function auditDependabotMerges(repository: string, gh: (args: readonly string[]) => string = githubCli): MergeResult {
+  if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(repository)) throw new Error("Invalid audit repository.");
+  let pulls: { number: number; user: { login: string }; auto_merge: unknown }[];
+  try {
+    const receipt = gh(["api", `repos/${repository}/pulls?state=open&per_page=100`, "--paginate", "--jq", ".[] | @json"]).trim();
+    pulls = receipt === "" ? [] : receipt.split("\n").map(line => JSON.parse(line));
+  } catch { throw new Error("Cannot read complete PR audit listing; retry immediately."); }
+  if (!pulls.every(pr => pr && Number.isSafeInteger(pr.number) && pr.number > 0 && typeof pr.user?.login === "string" && Object.hasOwn(pr, "auto_merge"))) {
+    throw new Error("Incomplete PR audit listing; retry immediately.");
+  }
+  const results: string[] = [];
+  let failures = 0;
+  for (const pr of pulls.filter(pr => pr.user.login === bot && pr.auto_merge !== null)) {
+    try {
+      const result = runDependabotMerge({ repository, number: String(pr.number), phase: "audit", event: "schedule",
+        actor: "", triggeringActor: "", author: bot, head: "", metadataOutcome: "", group: "", updateType: "", extraGroups: "" }, gh);
+      results.push(`#${pr.number}: ${result.message}`);
+    } catch { failures++; }
+  }
+  if (failures > 0) throw new Error(`Cannot complete ${failures} auto-merge revocations; requests may still be armed. Retry immediately.`);
+  return { armed: false, message: results.join("\n") || "No armed Dependabot requests to audit." };
 }

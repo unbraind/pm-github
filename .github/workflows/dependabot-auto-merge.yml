@@ -1,17 +1,34 @@
 name: dependabot-auto-merge
 
 on:
-  pull_request:
+  # Trusted default-branch workflow; never execute PR-local workflow code.
+  pull_request_target:
     types: [opened, reopened, synchronize, ready_for_review, edited]
+
+  # Independent of GITHUB_TOKEN-generated synchronize runs awaiting approval.
+  schedule:
+    - cron: "3-58/5 * * * *"
+  workflow_dispatch:
 
 permissions: {}
 
 jobs:
   verified-auto-merge:
-    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.user.login == 'dependabot[bot]'
     permissions:
       contents: write
       pull-requests: write
     uses: ./.github/workflows/pm-github-dependabot-merge.yml
+    secrets:
+      merge_token: ${{ secrets.DEPENDABOT_MERGE_TOKEN }}
+
+  audit-armed-requests:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: ./.github/workflows/pm-github-dependabot-merge.yml
+    with:
+      audit-only: true
     secrets:
       merge_token: ${{ secrets.DEPENDABOT_MERGE_TOKEN }}

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { parse } from "yaml";
-import { githubCli, runDependabotMerge, type MergeInput } from "../scripts/dependabot-merge.ts";
+import { auditDependabotMerges, githubCli, runDependabotMerge, type MergeInput } from "../scripts/dependabot-merge.ts";
 
 const root = resolve(import.meta.dirname, "..");
 const bot = "dependabot[bot]";
@@ -15,7 +15,7 @@ const trusted = "b".repeat(40);
 
 /** Model only remote API responses and mutation receipts; execute the actual policy. */
 function fixture() {
-  const input: MergeInput = { repository: "acme/widgets", number: "7", event: "pull_request", actor: bot,
+  const input: MergeInput = { repository: "acme/widgets", number: "7", event: "pull_request_target", actor: bot,
     triggeringActor: bot, author: bot, head, phase: "evaluate", metadataOutcome: "success",
     group: "", updateType: "version-update:semver-patch", extraGroups: "" };
   const commit = { sha: head, author: { login: bot }, committer: { login: "web-flow" }, commit: { verification: { verified: true, reason: "valid" } } };
@@ -25,7 +25,7 @@ function fixture() {
   let reads = 0;
   const f = { input, commit, state, pages, calls, failCommits: false, failReads: false, failArm: false, failRevoke: false,
     rawPages: undefined as string | undefined, onRead: (_read: number) => {},
-    execute: () => runDependabotMerge(input, args => {
+    execute: () => runDependabotMerge(input, f.gh), gh: (args: readonly string[]): string => {
       calls.push([...args]);
       if (args[0] === "api" && args[1]!.includes("/commits?")) {
         assert.ok(args.includes("--paginate")); assert.ok(args.includes("--jq"));
@@ -48,7 +48,7 @@ function fixture() {
         state.auto_merge = {};
       }
       return "";
-    }) };
+    } };
   return f;
 }
 
@@ -93,7 +93,7 @@ for (const [name, mutate] of [
 }
 
 for (const changes of [
-  { event: "pull_request_target" }, { event: "workflow_dispatch" }, { actor: "outside" },
+  { event: "pull_request" }, { event: "workflow_dispatch" }, { actor: "outside" },
   { triggeringActor: "outside" }, { author: "outside" }, { head: "c".repeat(40) }, { head: "invalid" },
   { metadataOutcome: "failure" }, { metadataOutcome: "skipped" },
   { updateType: "version-update:semver-major" }, { updateType: "" },
@@ -218,14 +218,14 @@ test("workflow policy: pinned actions, minimal grants, no PR checkout or interpo
   const caller = readFileSync(join(root, ".github/workflows/dependabot-auto-merge.yml"), "utf8");
   assert.match(caller, /uses: \.\/\.github\/workflows\/pm-github-dependabot-merge.yml/);
   assert.match(caller, /synchronize/);
-  assert.match(caller, /if: github\.event\.pull_request\.user\.login == 'dependabot\[bot\]'/);
-  assert.doesNotMatch(caller, /github\.(?:actor|triggering_actor)|pull_request_target/);
+  assert.match(caller, /if: github\.event_name == 'pull_request_target' && github\.event\.pull_request\.user\.login == 'dependabot\[bot\]'/);
+  assert.doesNotMatch(caller, /github\.(?:actor|triggering_actor)/);
   assert.doesNotMatch(caller, /auto_merge_enabled/, "custom-token arm events must not revoke their own request");
 });
 
 test("custom-token arm event preserves the request; a foreign synchronize event revokes it", () => {
-  const caller = parse(readFileSync(join(root, ".github/workflows/dependabot-auto-merge.yml"), "utf8")) as { on: { pull_request: { types: string[] } } };
-  const subscribed = caller.on.pull_request.types;
+  const caller = parse(readFileSync(join(root, ".github/workflows/dependabot-auto-merge.yml"), "utf8")) as { on: { pull_request_target: { types: string[] } } };
+  const subscribed = caller.on.pull_request_target.types;
   const f = fixture(); f.state.auto_merge = null;
   assert.equal(f.execute().armed, true);
   // PAT/App-generated events belong to the credential owner, not Dependabot.
@@ -248,15 +248,15 @@ exec /usr/bin/timeout --signal=KILL "$duration" "$@"
 `, { mode: 0o755 });
 }
 
-for (const mode of ["external", "local", "remote-self", "load-failed", "invalid-sha", "local-ref-failed", "load-hang", "fallback-read-hang", "fallback-disable-hang", "load-retry"]) {
+for (const mode of ["external", "local", "remote-self", "audit", "audit-load-failed", "load-failed", "invalid-sha", "load-hang", "fallback-read-hang", "fallback-disable-hang", "load-retry"]) {
   test(`real workflow loader/launcher: ${mode}`, () => {
     const dir = mkdtempSync(join(tmpdir(), "dependabot-policy-"));
     const env = { ...process.env, PATH: dir + ":" + process.env.PATH, RUNNER_TEMP: dir,
-      RETRY_MARKER: join(dir, "retried"), POLICY_SOURCE: join(root, "scripts/dependabot-merge.ts"), WORKFLOW_SHA: mode === "invalid-sha" ? "bad" : head,
+      RETRY_MARKER: join(dir, "retried"), POLICY_SOURCE: join(root, "scripts/dependabot-merge.ts"), WORKFLOW_SHA: mode === "invalid-sha" ? "bad" : mode === "local" ? trusted : head,
       WORKFLOW_REF: `unbraind/pm-github/.github/workflows/pm-github-dependabot-merge.yml@${mode.startsWith("local") ? "refs/pull/7/merge" : head}`,
       CALLER_REF: "refs/pull/7/merge",
-      REPOSITORY: mode.startsWith("local") || mode === "remote-self" ? "unbraind/pm-github" : "acme/widgets", PR_NUMBER: "7", MODE: mode,
-      GITHUB_STEP_SUMMARY: join(dir, "summary"), EVENT_NAME: "pull_request", EVENT_ACTOR: "outside", TRIGGERING_ACTOR: "outside",
+      REPOSITORY: mode.startsWith("local") || mode === "remote-self" ? "unbraind/pm-github" : "acme/widgets", PR_NUMBER: mode.startsWith("audit") ? "" : "7", MODE: mode,
+      GITHUB_STEP_SUMMARY: join(dir, "summary"), EVENT_NAME: "pull_request_target", AUDIT_ONLY: String(mode.startsWith("audit")), EVENT_ACTOR: "outside", TRIGGERING_ACTOR: "outside",
       GITHUB_OUTPUT: join(dir, "output"),
       PR_AUTHOR: bot, EVENT_HEAD: head, EXTRA_GROUPS: "", PHASE: "evaluate", RECEIPTS: join(dir, "receipts") };
     try {
@@ -268,7 +268,8 @@ case "$*" in
   *contents/scripts*)
     [[ "$MODE" != load-hang ]] || { trap '' TERM; sleep 2; exit 0; }
     [[ "$MODE" != load-retry || -f "$RETRY_MARKER" ]] || { touch "$RETRY_MARKER"; printf partial; exit 1; }
-    [[ "$MODE" != load-failed && "$MODE" != fallback-* ]] || exit 1; cat "$POLICY_SOURCE" ;;
+    [[ "$MODE" != load-failed && "$MODE" != audit-load-failed && "$MODE" != fallback-* ]] || exit 1; cat "$POLICY_SOURCE" ;;
+  *'/pulls?'*) printf '%s' '{"number":7,"user":{"login":"${bot}"},"auto_merge":{}}' ;;
   *'/commits?'*) printf '%s' '{"sha":"${head}","author":{"login":"outside"},"committer":{"login":"outside"}}' ;;
   'api '*) [[ "$MODE" != fallback-read-hang ]] || { trap '' TERM; sleep 2; exit 0; }; printf '%s' '{"state":"open","user":{"login":"${bot}"},"head":{"sha":"${head}"},"commits":1,"auto_merge":null}' ;;
   'pr merge '*) [[ "$MODE" != fallback-disable-hang ]] || { trap '' TERM; sleep 2; exit 0; } ;;
@@ -276,10 +277,13 @@ case "$*" in
 esac
 `, { mode: 0o755 });
       const loaded = spawnSync("bash", ["-c", loader()], { cwd: dir, env, encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL" });
-      const failed = ["load-failed", "invalid-sha", "local-ref-failed", "load-hang", "fallback-read-hang"].includes(mode);
-      assert.equal(loaded.status, mode === "fallback-disable-hang" ? 1 : 0, loaded.stderr);
+      const failed = ["load-failed", "invalid-sha", "load-hang", "fallback-read-hang"].includes(mode);
+      assert.equal(loaded.status, mode === "fallback-disable-hang" || mode === "audit-load-failed" ? 1 : 0, loaded.stderr);
       const receipts = readFileSync(env.RECEIPTS, "utf8");
-      if (mode === "fallback-disable-hang") {
+      if (mode === "audit-load-failed") {
+        assert.match(loaded.stdout, /Cannot load trusted audit policy/);
+        assert.doesNotMatch(receipts, /pr merge|pulls\//);
+      } else if (mode === "fallback-disable-hang") {
         assert.match(loaded.stdout, /Cannot revoke auto-merge after policy load failure and 3 bounded attempts/);
         assert.equal(receipts.split("\n").filter(line => line.startsWith("pr merge ")).length, 3);
       } else if (failed) {
@@ -294,7 +298,7 @@ esac
         if (mode === "remote-self") assert.doesNotMatch(receipts, /git\/ref\/heads\/main/);
         const run = spawnSync(process.execPath, [join(dir, "run-dependabot-merge.mts")], { cwd: dir, env, encoding: "utf8" });
         assert.equal(run.status, 0, run.stderr);
-        assert.match(run.stdout, /::notice::Foreign or unverified commits: aaaaaaaaaaaa outside/);
+        assert.match(run.stdout, /::notice::(?:#7: )?Foreign or unverified commits: aaaaaaaaaaaa outside/);
         assert.match(readFileSync(env.GITHUB_STEP_SUMMARY, "utf8"), /aaaaaaaaaaaa outside/);
         // Load the original module for coverage, with the fake gh available at
         // child startup even if a runtime caches its initial command lookup.
@@ -390,3 +394,140 @@ for (const mode of ["retry", "exhausted", "timeout"]) {
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 }
+
+
+/** Supply paginated PR-list receipts while exercising the shared production provenance checks. */
+function auditFixture() {
+  const f = fixture();
+  const pulls: unknown[] = [{ number: 7, user: { login: bot }, auto_merge: {} }];
+  const gh = (args: readonly string[]): string => {
+    if (args[1]?.includes("/pulls?")) {
+      assert.ok(args.includes("--paginate"));
+      return pulls.map(pr => JSON.stringify(pr)).join("\n");
+    }
+    return f.gh(args);
+  };
+  return { f, pulls, gh, execute: () => auditDependabotMerges(f.input.repository, gh) };
+}
+
+test("independent audit preserves verified requests and never arms them", () => {
+  const a = auditFixture();
+  assert.match(a.execute().message, /Verified Dependabot head.*retained/);
+  assert.notEqual(a.f.state.auto_merge, null);
+  assert.ok(!a.f.calls.some(args => args[0] === "pr"));
+});
+
+test("scheduled audit revokes a foreign push when its synchronize run never executes", () => {
+  const caller = parse(readFileSync(join(root, ".github/workflows/dependabot-auto-merge.yml"), "utf8")) as {
+    on: { schedule: { cron: string }[]; workflow_dispatch: unknown; pull_request_target: { types: string[] } };
+    jobs: Record<string, { if: string; with?: { "audit-only": boolean } }>;
+  };
+  assert.equal(caller.on.schedule[0]!.cron, "3-58/5 * * * *");
+  assert.ok(Object.hasOwn(caller.on, "workflow_dispatch"));
+  assert.equal(caller.jobs["audit-armed-requests"]!.if, "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'");
+  assert.equal(caller.jobs["audit-armed-requests"]!.with!["audit-only"], true);
+  assert.ok(caller.on.pull_request_target.types.includes("synchronize"));
+  const a = auditFixture(); a.f.commit.author.login = "github-actions[bot]";
+  // No synchronize policy run: a workflow-generated push leaves the old request armed.
+  assert.notEqual(a.f.state.auto_merge, null);
+  assert.match(a.execute().message, /Foreign or unverified commits/);
+  assert.equal(a.f.state.auto_merge, null);
+  assert.ok(!a.f.calls.some(args => args.includes("--auto")));
+});
+
+test("audit and arm use identical provenance verdicts over varied API snapshots", () => {
+  for (let i = 0; i < 40; i++) {
+    const a = auditFixture(); const f = fixture();
+    for (const next of [a.f, f]) {
+      next.commit.author.login = i % 2 ? bot : "outside";
+      next.commit.committer.login = i % 3 ? "web-flow" : "outside";
+      next.commit.commit.verification.verified = i % 5 !== 0;
+      next.commit.commit.verification.reason = i % 7 ? "valid" : "unsigned";
+    }
+    const eligible = f.execute().armed;
+    a.execute();
+    assert.equal(a.f.state.auto_merge !== null, eligible);
+    assert.ok(!a.f.calls.some(args => args.includes("--auto")));
+  }
+});
+
+for (const change of ["closed-before", "closed-after", "foreign-before", "foreign-after", "changed-head", "api-error"] as const) {
+  test(`independent audit refuses stale or unverifiable snapshots: ${change}`, () => {
+    const a = auditFixture();
+    if (change === "closed-before") a.f.state.state = "closed";
+    if (change === "foreign-before") a.f.state.user.login = "outside";
+    if (change === "closed-after") a.f.onRead = n => { if (n === 2) a.f.state.state = "closed"; };
+    if (change === "foreign-after") a.f.onRead = n => { if (n === 2) a.f.state.user.login = "outside"; };
+    if (change === "changed-head") a.f.onRead = n => { if (n === 2) a.f.state.head.sha = trusted; };
+    if (change === "api-error") a.f.failCommits = true;
+    a.execute();
+    assert.ok(!a.f.calls.some(args => args.includes("--auto")));
+    if (!change.startsWith("closed")) assert.equal(a.f.state.auto_merge, null);
+  });
+}
+
+test("audit ignores unarmed and other authors' requests, and handles an empty listing", () => {
+  const a = auditFixture();
+  a.pulls[0] = { number: 7, user: { login: bot }, auto_merge: null };
+  a.pulls.push({ number: 8, user: { login: "outside" }, auto_merge: {} });
+  assert.match(a.execute().message, /No armed Dependabot requests/);
+  a.pulls.length = 0;
+  assert.equal(a.execute().armed, false);
+  assert.equal(a.f.calls.length, 0);
+});
+
+for (const pr of [null, {}, { number: 0 }, { number: 1, user: null }, { number: 1, user: { login: bot } }]) {
+  test(`audit refuses an incomplete listing before any mutation: ${JSON.stringify(pr)}`, () => {
+    const a = auditFixture(); a.pulls[0] = pr;
+    assert.throws(a.execute, /Incomplete PR audit listing/);
+    assert.equal(a.f.calls.length, 0);
+  });
+}
+
+test("audit listing errors and malformed pagination fail with sanitized messages", () => {
+  assert.throws(() => auditDependabotMerges("--bad"), /Invalid audit repository/);
+  for (const receipt of ["private malformed", "{}\npartial"]) {
+    assert.throws(() => auditDependabotMerges("acme/widgets", () => receipt), /^Error: Cannot read complete PR audit listing; retry immediately\.$/);
+  }
+  assert.throws(() => auditDependabotMerges("acme/widgets", () => { throw new Error("private remote error"); }), /Cannot read complete PR audit listing/);
+});
+
+test("audit continues other PRs after denied revocation and reports operational failure", () => {
+  const a = auditFixture(); a.pulls.push({ number: 8, user: { login: bot }, auto_merge: {} });
+  a.f.commit.author.login = "outside"; a.f.failRevoke = true;
+  assert.throws(a.execute, /Cannot complete 2 auto-merge revocations/);
+  assert.equal(a.f.calls.filter(args => args.includes("--disable-auto")).length, 2);
+});
+
+test("activation tracker reflects active workflow and keeps fleet acceptance separate", () => {
+  const chore = readFileSync(join(root, ".agents/pm/chores/pm-github-dependabot-activation.toon"), "utf8");
+  const description = chore.split("description: ")[1]!.split("\ntype:")[0]!;
+  const criteria = chore.split("acceptance_criteria: ")[1]!.split("\nblocked_by:")[0]!;
+  assert.match(description, /now reports.*active/);
+  assert.match(description, /fleet caller adoption separate/);
+  assert.doesNotMatch(criteria, /enable the previously disabled/);
+  for (const requirement of ["token", "protected-branch", "live", "fleet", "event policy", "scheduled audit"]) assert.ok(criteria.includes(requirement));
+});
+
+
+test("trusted caller and audit launcher cannot run PR workflow code or accidentally arm during a sweep", () => {
+  const caller = parse(readFileSync(join(root, ".github/workflows/dependabot-auto-merge.yml"), "utf8")) as {
+    on: Record<string, unknown>; jobs: Record<string, { uses: string }>;
+  };
+  assert.ok(Object.hasOwn(caller.on, "pull_request_target"));
+  assert.ok(!Object.hasOwn(caller.on, "pull_request"));
+  for (const job of Object.values(caller.jobs)) assert.equal(job.uses, "./.github/workflows/pm-github-dependabot-merge.yml");
+  const reusable = parse(readFileSync(join(root, ".github/workflows/pm-github-dependabot-merge.yml"), "utf8")) as {
+    jobs: Record<string, { env: Record<string, string>; steps: { name: string; if?: string; run?: string; env?: Record<string, string> }[] }>;
+  };
+  const job = reusable.jobs["dependabot-merge"]!;
+  assert.equal(job.env.AUDIT_ONLY, "${{ inputs.audit-only }}");
+  for (const step of job.steps.filter(step => step.name.includes("Revoke previous") || step.name === "Fetch Dependabot metadata")) {
+    assert.match(step.if!, /!inputs.audit-only/);
+  }
+  assert.match(job.steps.find(step => step.name === "Fetch Dependabot metadata")!.if!, /github.event_name == 'pull_request_target'/);
+  const load = job.steps.find(step => step.name === "Load trusted merge policy")!;
+  assert.equal(load.env!.WORKFLOW_SHA, "${{ job.workflow_sha }}");
+  assert.doesNotMatch(load.run!, /git\/ref\/heads|EVENT_HEAD.*contents|CALLER_REF/);
+  assert.match(load.run!, /e\.AUDIT_ONLY === 'true' \? auditDependabotMerges/);
+});

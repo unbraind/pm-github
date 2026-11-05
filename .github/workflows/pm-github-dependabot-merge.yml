@@ -3,6 +3,11 @@ name: Verified Dependabot squash auto-merge
 on:
   workflow_call:
     inputs:
+      audit-only:
+        description: "Inspect all armed Dependabot requests without ever arming; for trusted scheduled callers"
+        type: boolean
+        required: false
+        default: false
       extra-allowed-groups:
         description: "Additional exact Dependabot groups, comma or whitespace separated"
         type: string
@@ -10,13 +15,13 @@ on:
         default: ""
     secrets:
       merge_token:
-        description: "Optional write-capable token; also configure as a Dependabot secret for pull_request runs"
+        description: "Optional write-capable token; also configure as a Dependabot secret when required by event policy"
         required: false
 
 permissions: {}
 
 concurrency:
-  group: pm-github-dependabot-merge-${{ github.repository }}-${{ github.event.pull_request.number }}
+  group: pm-github-dependabot-merge-${{ github.repository }}-${{ inputs.audit-only && 'audit' || github.event.pull_request.number }}
   cancel-in-progress: false
 
 jobs:
@@ -36,11 +41,13 @@ jobs:
       TRIGGERING_ACTOR: ${{ github.triggering_actor }}
       PR_AUTHOR: ${{ github.event.pull_request.user.login }}
       EVENT_HEAD: ${{ github.event.pull_request.head.sha }}
+      AUDIT_ONLY: ${{ inputs.audit-only }}
       EXTRA_GROUPS: ${{ inputs.extra-allowed-groups }}
     steps:
       # Revoke before even setting up Node or downloading policy. If the state
       # read fails, attempt revocation anyway; inability to revoke must be visible.
       - name: Revoke previous auto-merge before tooling
+        if: ${{ !inputs.audit-only }}
         shell: bash
         run: |
           set -euo pipefail
@@ -75,8 +82,6 @@ jobs:
         id: policy
         env:
           WORKFLOW_SHA: ${{ job.workflow_sha }}
-          WORKFLOW_REF: ${{ job.workflow_ref }}
-          CALLER_REF: ${{ github.ref }}
         shell: bash
         run: |
           set -euo pipefail
@@ -93,15 +98,12 @@ jobs:
             return 1
           }
           policy_sha="${WORKFLOW_SHA}"
-          # A local-path pull_request call resolves workflow_sha from the PR.
-          # Its executable policy must instead come from the trusted default branch.
-          if [[ "${REPOSITORY}" == unbraind/pm-github && "${EVENT_NAME}" == pull_request &&
-                "${WORKFLOW_REF}" == "unbraind/pm-github/.github/workflows/pm-github-dependabot-merge.yml@${CALLER_REF}" &&
-                "${CALLER_REF}" == "refs/pull/${PR_NUMBER}/merge" ]]; then
-            policy_sha="$(bounded_gh api repos/unbraind/pm-github/git/ref/heads/main --jq '.object.sha')" || policy_sha=""
-          fi
           if [[ ! "${policy_sha}" =~ ^[a-f0-9]{40}$ ]] || ! bounded_gh api "repos/unbraind/pm-github/contents/scripts/dependabot-merge.ts?ref=${policy_sha}" \
             -H 'Accept: application/vnd.github.raw+json' > "${RUNNER_TEMP}/dependabot-merge.ts"; then
+            if [[ "${AUDIT_ONLY}" == true ]]; then
+              echo '::error::Cannot load trusted audit policy; requests may still be armed. Retry immediately.'
+              exit 1
+            fi
             armed="$(bounded_gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq 'if .state == "closed" then false elif .state == "open" and has("auto_merge") then .auto_merge != null else error("Unverifiable PR state") end')" || armed=true
             if [[ "${armed}" != false ]] && ! bounded_gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --disable-auto; then
               echo '::error::Cannot revoke auto-merge after policy load failure and 3 bounded attempts; request may still be armed. Check token write permissions immediately.'
@@ -114,9 +116,9 @@ jobs:
           fi
           cat > "${RUNNER_TEMP}/run-dependabot-merge.mts" <<'TS'
           import { appendFileSync } from 'node:fs';
-          import { runDependabotMerge } from './dependabot-merge.ts';
+          import { auditDependabotMerges, runDependabotMerge } from './dependabot-merge.ts';
           const e = process.env;
-          const result = runDependabotMerge({
+          const result = e.AUDIT_ONLY === 'true' ? auditDependabotMerges(e.REPOSITORY!) : runDependabotMerge({
             repository: e.REPOSITORY!, number: e.PR_NUMBER!, event: e.EVENT_NAME!,
             actor: e.EVENT_ACTOR!, triggeringActor: e.TRIGGERING_ACTOR!, author: e.PR_AUTHOR!,
             head: e.EVENT_HEAD!, phase: e.PHASE!, metadataOutcome: e.METADATA_OUTCOME ?? '',
@@ -128,7 +130,7 @@ jobs:
           printf 'loaded=true\n' >> "${GITHUB_OUTPUT}"
 
       - name: Revoke previous auto-merge before metadata
-        if: steps.policy.outputs.loaded == 'true'
+        if: steps.policy.outputs.loaded == 'true' && !inputs.audit-only
         env:
           PHASE: revoke
         run: node "${RUNNER_TEMP}/run-dependabot-merge.mts"
@@ -136,7 +138,7 @@ jobs:
       - name: Fetch Dependabot metadata
         timeout-minutes: 5
         id: metadata
-        if: steps.policy.outputs.loaded == 'true' && github.event_name == 'pull_request' && github.actor == 'dependabot[bot]' && github.triggering_actor == 'dependabot[bot]' && github.event.pull_request.user.login == 'dependabot[bot]'
+        if: steps.policy.outputs.loaded == 'true' && !inputs.audit-only && github.event_name == 'pull_request_target' && github.actor == 'dependabot[bot]' && github.triggering_actor == 'dependabot[bot]' && github.event.pull_request.user.login == 'dependabot[bot]'
         continue-on-error: true
         uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
         with:
