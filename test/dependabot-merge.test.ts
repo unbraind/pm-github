@@ -253,7 +253,7 @@ case "$*" in
   *) exit 2 ;;
 esac
 `, { mode: 0o755 });
-      const loaded = spawnSync("bash", ["-c", loader()], { env, encoding: "utf8" });
+      const loaded = spawnSync("bash", ["-c", loader()], { cwd: dir, env, encoding: "utf8" });
       const failed = ["load-failed", "invalid-sha", "local-ref-failed"].includes(mode);
       assert.equal(loaded.status, 0, loaded.stderr);
       const receipts = readFileSync(env.RECEIPTS, "utf8");
@@ -264,7 +264,7 @@ esac
       }
       else {
         assert.match(receipts, new RegExp(`ref=${mode === "local" ? trusted : head}`));
-        const run = spawnSync(process.execPath, [join(dir, "run-dependabot-merge.mts")], { env, encoding: "utf8" });
+        const run = spawnSync(process.execPath, [join(dir, "run-dependabot-merge.mts")], { cwd: dir, env, encoding: "utf8" });
         assert.equal(run.status, 0, run.stderr);
         assert.match(run.stdout, /::notice::Foreign or unverified commits: aaaaaaaaaaaa outside/);
         assert.match(readFileSync(env.GITHUB_STEP_SUMMARY, "utf8"), /aaaaaaaaaaaa outside/);
@@ -273,7 +273,7 @@ esac
         const probe = join(dir, "adapter-probe.mts");
         writeFileSync(probe, readFileSync(join(dir, "run-dependabot-merge.mts"), "utf8")
           .replace("from './dependabot-merge.ts'", "from " + JSON.stringify(new URL("../scripts/dependabot-merge.ts", import.meta.url).href)));
-        const defaultRun = spawnSync(process.execPath, [probe], { env: { ...env, PHASE: "revoke" }, encoding: "utf8" });
+        const defaultRun = spawnSync(process.execPath, [probe], { cwd: dir, env: { ...env, PHASE: "revoke" }, encoding: "utf8" });
         assert.equal(defaultRun.status, 0, defaultRun.stderr);
       }
     } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -295,7 +295,7 @@ test("CLI adapter resolves a unique fixture command against the current PATH", (
   } finally { process.env.PATH = old; rmSync(dir, { recursive: true, force: true }); }
 });
 
-for (const mode of ["armed", "clear", "api-error", "denied"]) {
+for (const mode of ["armed", "clear", "closed", "malformed-api", "api-error", "denied"]) {
   test(`pre-tooling revocation shell: ${mode}`, () => {
     const dir = mkdtempSync(join(tmpdir(), "dependabot-revoke-"));
     try {
@@ -306,17 +306,23 @@ for (const mode of ["armed", "clear", "api-error", "denied"]) {
 printf '%s\\n' "$*" >> "$RECEIPTS"
 if [[ "$1" == api ]]; then
   [[ "$MODE" != api-error ]] || exit 1
-  if [[ "$MODE" == clear ]]; then echo false; else echo true; fi
+  case "$MODE" in
+    clear) payload='{"state":"open","auto_merge":null}' ;;
+    closed) payload='{"state":"closed","auto_merge":{}}' ;;
+    malformed-api) payload='{}' ;;
+    *) payload='{"state":"open","auto_merge":{}}' ;;
+  esac
+  printf '%s' "$payload" | jq -r "$4"
 else [[ "$MODE" != denied ]]; fi
 `, { mode: 0o755 });
       const env = { ...process.env, PATH: dir + ":" + process.env.PATH, REPOSITORY: "acme/widgets", PR_NUMBER: "7",
         MODE: mode, RECEIPTS: join(dir, "receipts"), GITHUB_STEP_SUMMARY: join(dir, "summary") };
-      const result = spawnSync("bash", ["-c", shell], { env, encoding: "utf8" });
+      const result = spawnSync("bash", ["-c", shell], { cwd: dir, env, encoding: "utf8" });
       assert.equal(result.status, mode === "denied" ? 1 : 0, result.stderr);
       if (mode === "denied") assert.match(result.stdout, /Cannot revoke auto-merge/);
       else assert.match(readFileSync(env.GITHUB_STEP_SUMMARY, "utf8"), /cleared before tooling/);
       const receipts = readFileSync(env.RECEIPTS, "utf8");
-      if (mode === "clear") assert.doesNotMatch(receipts, /--disable-auto/);
+      if (mode === "clear" || mode === "closed") assert.doesNotMatch(receipts, /--disable-auto/);
       else assert.match(receipts, /--disable-auto/);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });

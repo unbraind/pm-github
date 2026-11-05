@@ -43,7 +43,7 @@ jobs:
         run: |
           set -euo pipefail
           [[ "${REPOSITORY}" =~ ^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$ && "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
-          armed="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state != "closed" and .auto_merge != null' 2>/dev/null)" || armed=true
+          armed="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq 'if .state == "closed" then false elif .state == "open" and has("auto_merge") then .auto_merge != null else error("Unverifiable PR state") end' 2>/dev/null)" || armed=true
           if [[ "${armed}" != false ]]; then
             if ! gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --disable-auto 2>/dev/null; then
               echo '::error::Cannot revoke auto-merge; check token write permissions immediately.'
@@ -71,7 +71,7 @@ jobs:
           fi
           if [[ ! "${policy_sha}" =~ ^[a-f0-9]{40}$ ]] || ! gh api "repos/unbraind/pm-github/contents/scripts/dependabot-merge.ts?ref=${policy_sha}" \
             -H 'Accept: application/vnd.github.raw+json' > "${RUNNER_TEMP}/dependabot-merge.ts"; then
-            armed="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state != "closed" and .auto_merge != null' 2>/dev/null)" || armed=true
+            armed="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq 'if .state == "closed" then false elif .state == "open" and has("auto_merge") then .auto_merge != null else error("Unverifiable PR state") end' 2>/dev/null)" || armed=true
             if [[ "${armed}" != false ]] && ! gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --disable-auto 2>/dev/null; then
               echo '::error::Cannot revoke auto-merge after policy load failure; check token write permissions immediately.'
               exit 1
