@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Security
+
+- Reusable Dependabot merge workflow with complete commit provenance ([pm-github-dependabot-merge](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-dependabot-merge.toon))
+
 ## 2026.11.4 - 2026-11-04
 
 ### Fixed

@@ -832,9 +832,134 @@ The `gate` receipt reports the verdict, scanned file count, findings, and allowl
 
 With `--json`, successful reports go to stdout; failures use the host CLI's JSON error envelope on stderr, with the redacted gate report serialized in `detail` (`jq ' .detail | fromjson ' gate-error.json`). Unreadable inputs produce a nonzero JSON refusal.
 
+## Verified Dependabot auto-merge
+
+Use [the reusable merge workflow](.github/workflows/pm-github-dependabot-merge.yml)
+instead of copying merge logic into each repository. It clears existing
+auto-merge before tooling or metadata, then requests squash auto-merge only for
+`pull_request_target` events whose PR author, event actor and re-run actor are all
+`dependabot[bot]`. It reads **every page** of the PR commits API and requires
+each commit's API-linked author to be Dependabot and its committer to be either
+Dependabot or `web-flow`. Every commit must also have GitHub verification
+`verified: true, reason: valid`; account attribution alone can be forged through
+Git email fields.
+The verified `web-flow` case was checked against real fleet PR data, including
+the Dependabot commit in `pm-context#211`.
+
+The commit list must match the PR's positive commit count, contain unique full
+SHAs, end at its current head and remain stable across fresh API reads. Only
+successful `dependabot/fetch-metadata` classification permits the `pm-toolchain`
+group, extra explicitly allowed groups, or semver minor/patch updates. Major
+updates outside those groups wait for review. The arm request includes
+`--match-head-commit`; another read revokes it if the head changes while arming.
+
+```yaml
+name: dependabot-auto-merge
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review, edited]
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+permissions: {}
+jobs:
+  verified-auto-merge:
+    if: github.event_name == 'pull_request_target' && github.event.pull_request.user.login == 'dependabot[bot]'
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: unbraind/pm-github/.github/workflows/pm-github-dependabot-merge.yml@RELEASE_COMMIT_SHA # pm-github RELEASE_VERSION
+    with:
+      extra-allowed-groups: "" # Optional exact names, separated by commas or whitespace
+    secrets:
+      merge_token: ${{ secrets.DEPENDABOT_MERGE_TOKEN }}
+  audit-armed-requests:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: unbraind/pm-github/.github/workflows/pm-github-dependabot-merge.yml@RELEASE_COMMIT_SHA # pm-github RELEASE_VERSION
+    with:
+      audit-only: true
+    secrets:
+      merge_token: ${{ secrets.DEPENDABOT_MERGE_TOKEN }}
+```
+
+Replace `RELEASE_COMMIT_SHA` with the full 40-character SHA of the reviewed
+release **containing this workflow**, and `RELEASE_VERSION` with that release's
+version. This workflow is new; earlier releases do not contain it. Configure
+Dependabot's `github-actions` ecosystem to maintain the SHA and same-line
+`# pm-github <version>` comment. No release is created by this change.
+
+GitHub documents [read-only tokens for Dependabot-triggered pull requests](https://docs.github.com/en/code-security/reference/supply-chain-security/troubleshoot-dependabot/dependabot-on-actions).
+Provide `DEPENDABOT_MERGE_TOKEN` as both an Actions secret and a Dependabot
+secret, restricted to the calling repository with Contents and Pull requests
+write permissions. The optional `merge_token` falls back to `github.token`;
+that fallback can arm or revoke only when repository/event policy actually
+grants the necessary writes. Reusable workflows cannot elevate caller
+permissions. Keep auto-merge enabled in repository settings and required checks
+and review rules on the protected base branch.
+
+Foreign commits revoke auto-merge and produce a successful job, a summary and
+`::notice` listing **short SHA and author login only**. Disallowed metadata,
+unsupported arm events (including `pull_request`), API failures and incomplete
+pagination also leave auto-merge unarmed with a clear notice. Every CLI call is
+limited to three attempts of 60 seconds each by default. The TypeScript policy
+adapter reads `DEPENDABOT_GH_TIMEOUT_SECONDS` (integer 1–60, default 60) and also
+accepts a millisecond timeout option. Invalid adapter deadlines fail before
+starting a CLI call. Pre-tooling shell calls retain a fixed 60-second deadline.
+Failed attempts discard partial
+output. A timed-out state read still attempts revocation. An
+inability to revoke is an operational failure that warns the request may remain
+armed, rather than a false successful safety claim.
+No PR files, Git author names/emails, commit messages or raw API errors are
+printed. Actions are SHA-pinned and no PR code is checked out or executed.
+The caller runs on `pull_request_target`, so its YAML and local reusable
+workflow come from the trusted default branch. Remote callers pin the reusable
+workflow to a reviewed release SHA. In both cases the standalone policy is
+fetched from that exact `job.workflow_sha`; no policy override reads a mutable
+branch or PR revision. Before this change reaches the default branch, the new
+trusted caller does not run. Configure an Actions event policy permitting
+`pull_request_target` where required; GitHub's default public-repository policy
+is scheduled for enforcement on December 2, 2026. See
+[GitHub's trusted-trigger guidance](https://docs.github.com/en/actions/reference/security/securely-using-pull_request_target).
+
+Migration: replace the **entire** copied `dependabot-auto-merge.yml` with the
+caller above. Retain `synchronize` and the PR-author-only caller guard. Other
+PR automation keeps its own merge requests; a foreign push to a Dependabot PR
+still runs because the PR author remains Dependabot. An actor guard on the
+calling job would skip that foreign push and prevent revocation.
+Keep `auto_merge_enabled` out of the caller's event types: a custom token's arm
+event belongs to its automation account and would immediately revoke its own
+request under the strict Dependabot actor policy.
+Remove any other workflow that arms Dependabot auto-merge, and clear existing
+requests when adopting the caller; installing a workflow does not retroactively
+trigger it for every open PR. This repository uses the supported local path.
+
+Keep the scheduled audit job when adopting the caller. GitHub can suppress
+workflow-generated events or park their `pull_request` runs awaiting approval;
+changing only the PR trigger does not establish an independent revocation path.
+The daily schedule and manual dispatch audit every armed Dependabot PR,
+including every page of its commits, with the same provenance validator used to
+arm. Unsafe or unverifiable snapshots are revoked; valid requests are preserved.
+Fleet callers must not schedule the audit more often than hourly; prefer daily
+plus `workflow_dispatch` to preserve shared runner capacity. Stagger daily run
+times across repositories. Use manual dispatch when an immediate sweep is needed.
+Audits never arm requests or depend on PR actor/metadata. Listing, policy-load
+or revocation failures fail visibly. Scheduled runs can be delayed or disabled
+by GitHub, so this is eventual revocation and requires operational monitoring,
+not an atomic merge guard. See [GitHub's token event rules](https://docs.github.com/en/actions/concepts/security/github_token).
+
+GitHub auto-merge is asynchronous. This workflow verifies the head it arms and
+revokes on subsequent events; it cannot atomically prevent GitHub merging a
+later push before the next workflow runs. A literal guarantee for future
+commits also needs server-enforced branch protection/review requirements that
+remain unsatisfied for unreviewed commits. Do not treat an earlier successful
+policy run as approval of a later head.
+
 ## Self-versioned workflows and Dependabot
 
-Both reusable workflows resolve their own **exact** pm-github release version at
+The sync and closeout reusable workflows resolve their own **exact** pm-github release version at
 runtime and verify the installed package version. GitHub's documented
 [`job.workflow_sha`](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts#job-context)
 is the commit of the workflow that defines the current job, including a reusable
@@ -896,8 +1021,8 @@ The group pattern is the repository name, covering both reusable workflow paths.
 Use exactly `pm-toolchain`: the fleet's existing
 [dependabot-auto-merge.yml](.github/workflows/dependabot-auto-merge.yml) enables
 `gh pr merge --auto --squash` for Dependabot PRs in that group, including calendar
-version major changes. The workflow checks the Dependabot author and repository
-owner, then the metadata group or minor/patch update type. Commit prefix and
+version major changes. The workflow checks the Dependabot author, then the
+metadata group or minor/patch update type. Commit prefix and
 labels do not control merge eligibility; the explicit values above keep PRs
 consistent. Ensure the two labels exist (GitHub ignores unknown custom labels).
 Repository auto-merge must be enabled and required branch-protection checks must

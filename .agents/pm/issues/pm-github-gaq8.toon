@@ -6,6 +6,14 @@ status: open
 priority: 2
 tags[2]: regression,test
 created_at: "2026-11-03T01:36:20.521Z"
-updated_at: "2026-11-03T01:36:20.521Z"
+updated_at: "2026-11-05T14:37:47.768Z"
 author: pi-ollama
+comments[3]{created_at,author,text}:
+  "2026-11-05T08:35:28.981Z",codex-agent,"PR 221 review-round baseline confirmation: with Node 26.13.0/npm 11.20.0, public npm config and isolated Git config, the single schedule-without-repository-payload scenario fails on both the branch and a disposable origin/main snapshot (650797d). Exact command: nice -n 10 node --test --test-concurrency=2 --test-name-pattern=\"schedule without repository payload\" test/closeout-workflow.test.ts . Failure is npm EUSAGE: npm ci requires a package-lock in the synthetic caller, despite the fixture npm shim. The closeout workflow and test are byte-identical between branch and main. This is an environment-specific baseline fixture failure, not attributed to the Dependabot policy changes. No fixture or threshold was weakened. Full release evidence is being collected separately in CI on c21d40e."
+  "2026-11-05T14:11:20.358Z",codex-agent,"Correction to the 2026-11-05 baseline comment: withdraw the attribution of npm EUSAGE to the closeout workflow npm ci call. At reviewed head fadf64d, test/closeout-workflow.test.ts creates an npm shim that exits zero for ci --ignore-scripts and prepends its command directory to the workflow PATH; the workflow uses that exact invocation. The historical failing process invocation and resolved executable were not captured, so its actual cause is unestablished. The lockfile diagnosis and environment-specific causal claim are unsupported. This correction retains the original hashed event unchanged; the existing baseline issue remains open for investigation."
+  "2026-11-05T14:37:47.768Z",codex-agent,"Current verification following the append-only correction: npm run release:check on Node 24.19.0/npm 11.17.0 with isolated HOME/Git configuration and public npm config passed the unchanged schedule without repository payload scenario (226775 ms), including its two closeout publication runs. The full gate is still running. This is a present-run pass, not a reconstruction or diagnosis of the historical EUSAGE process; its invocation and resolved executable remain unknown."
+files[1]{path,scope,note}:
+  test/closeout-workflow.test.ts,project,Evidence for npm shim and workflow PATH
+docs[1]{path,scope,note}:
+  .github/workflows/pm-github-closeout.yml,project,Exact npm ci invocation intercepted by fixture
 body: ""
