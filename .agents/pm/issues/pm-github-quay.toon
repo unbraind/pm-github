@@ -7,9 +7,9 @@ status: in_progress
 priority: 2
 tags[8]: ci,dependencies,"gh:unbraind/pm-cli#1656","gh:unbraind/pm-github#194","gh:unbraind/pm-github#197",migration,sdk,sdk-adoption
 created_at: "2026-11-02T09:17:15.200Z"
-updated_at: "2026-11-05T01:45:56.220Z"
+updated_at: "2026-11-05T06:15:42.880Z"
 author: pi-glm
-comments[29]{created_at,author,text}:
+comments[34]{created_at,author,text}:
   "2026-11-03T09:27:51.980Z",codex-toolchain-1103,"Reproduced the real-SDK compensation failure on the actual lockfile SDK 2026.10.28 (manifest remains >=2026.10.17). Root cause is the pm-cli 2026.10.26 GH-1591 ownership-proof hardening in src/sdk/item-transaction.ts. Before .26, compensateByRestore forced a timestamp restore. Since .26, hasOwnedCompensationEffects requires exclusive step ownership or a sibling compensation restoring the exact forward-state hash. commitGithubImportTransaction calls persistImportFidelity from its committing observer; that appends a separate import event (Preserve GitHub source lifecycle), so an ordinary subsequent observer failure correctly refuses rollback with transaction_partial_mutation rather than overwriting an unowned event. Classification: production integration depends on the former broad compensation behavior. Do not loosen the assertion or disable the SDK safety guard. Investigating a supported journaled finalizer; callback reordering or moving fidelity after commit would stop testing rollback after finalization and weaken the import guarantee."
   "2026-11-03T09:30:06.714Z",codex-toolchain-1103,"Supported API review: BulkItemMutation accepts create/update/close/release, and onTransition is an observer, not a journaled custom mutation. Exact lifecycle timestamps currently require persistImportFidelity/mutateItem. No safe small production fix was found on the existing supported SDK range: post-commit finalization weakens rollback, callback reordering bypasses the failing boundary, and spoofed internal markers or force restoration bypass ownership safety. Added docs/atomic-finalization-sdk.md with versions, GH-1591 source comparison, minimal public SDK call shape, actual refusal and required journaled-finalizer support. Keep the existing regression red and report this as a production integration blocker with an upstream API requirement, not an asserted SDK regression. No upstream issue was filed."
   "2026-11-03T09:45:26.334Z",codex-toolchain-1103,"Minimal public SDK reproducer verified on installed 2026.10.28: one bulk UPDATE, then client.update in committing, then an ordinary thrown error. Result is AggregateError compensation failed with transaction_partial_mutation; the item retains title Changed and description Source finalization, journal status compensating. This confirms the ownership-proof boundary independently of GitHub HTTP fixtures and source lifecycle timestamp handling. The synthetic tracker was removed after read-back. Typecheck and lint pass; npm test and the focused linked regression are running with the documented expected failure. Coverage/release gates were not run."
@@ -39,30 +39,61 @@ comments[29]{created_at,author,text}:
   "2026-11-04T22:40:34.751Z",codex-toolchain-1104,"Completed full Node 26 npm test on source head 8b11727: 1646 tests, 1644 pass, 0 fail, 0 cancelled, exactly 2 skips, 0 todo, duration 5277066 ms. Both skips are the previously reproduced pm-cli#1656 cases; the fresh-refresh compensation case executes and passes. Every one of the 21 original assertion failures now emits a passing result, and all 50 previously cancelled file entries were included in the completed 72-file run. No host-load timeout occurred, so none is classified that way. All 186 workflow decision rows and the 500-sequence models remain intact. Typecheck and lint follow the full run; coverage is authorized only after these succeed."
   "2026-11-05T01:42:49.038Z",codex-toolchain-1104,"Coverage gate completed with exit 0: all 29 authored modules, exact 14180/14180 lines and statements, 445/445 functions, 5277/5277 branches, zero skipped source entries and unchanged four 100-percent thresholds. Instrumented test phase: 1646 tests, 1644 pass, zero failures/cancellations, the same two pm-cli#1656 skips, 7936886 ms. Native merge kept all 3883 receipts; no pre-filter, ignore or assertion weakening. Full 71-entry classification is documented. Coverage alone took about three hours, so the follow-up exceeded the approximate time estimate rather than stopping another required run early."
   "2026-11-05T01:45:49.409Z",codex-toolchain-1104,"Final additional gates pass: docstrings document all 269 declarations in 28 files; duplication gate reports zero duplicated lines across 29 authored modules; regenerated changelog and changelog check are unchanged and pass after fetching tags. Runtime sources, manifest and dependency files are byte-identical to tested source head 8b11727; remaining changes are validation documentation and PM evidence only. Release claims without closing items; verify strict health, commit identity and privacy before the final non-force push."
-files[22]{path,scope}:
-  docs/atomic-finalization-sdk.md,project
-  docs/daily-sync-recovery.md,project
-  docs/toolchain-1104-validation.md,project
-  import-fidelity.ts,project
-  index.ts,project
-  package-lock.json,project
-  package.json,project
-  test/changelog-placement.test.ts,project
-  test/closeout-workflow.test.ts,project
-  test/daily-sync-idempotency.test.ts,project
-  test/discussion-model.test.ts,project
-  test/discussion-packed-acceptance.ts,project
-  test/discussions.test.ts,project
-  test/helpers/discussions.ts,project
-  test/import-fidelity.test.ts,project
-  test/label-import-model.test.ts,project
-  test/label-migration-real-data.ts,project
-  test/labels.test.ts,project
-  test/project-sync.test.ts,project
-  test/refresh.test.ts,project
-  test/scheduled-refusals.test.ts,project
-  test/typed-sentinel-normalization.test.ts,project
-tests[7]:
+  "2026-11-05T04:28:01.994Z",codex-toolchain-1104,"Reviewer follow-up authorized for PR 194 only. Clean worktree at 8907c14; existing gate predicates still quarantine exactly installed SDK 2026.11.4. Add fixture-version tests that execute each actual predicate and skip expression and fail under widened/inverted mutations, add an existing-owner update-then-close assignee restoration regression with reverted-restore proof, and document the known lifecycle-finalization limitation in README. Preserve all compensation assertions, existing quarantine scope, and disabled auto-merge. Run the requested complete nice npm test, then typecheck/lint; do not repeat completed coverage or dependency migration."
+  "2026-11-05T04:31:36.249Z",codex-toolchain-1104,"Reviewer condition 1: test/atomic-finalization-quarantine.test.ts evaluates the actual predicates AND skip options in both compensation test files against 12 fixture versions, without installing SDKs. Only exact 2026.11.4 is waived; every other fixture version re-enables assertions, and fresh refresh invocation never skips. All six deliberate always-skip, inverted-predicate and skip-bypass mutations fail assertions. This is an expiring waiver allowlist, not a claim that other versions implement the missing API."
+  "2026-11-05T04:31:37.787Z",codex-toolchain-1104,"Reviewer condition 2: added a separate existing-owner closed-source GH-1614 regression. It proves zero creates and one update, the same owner is closed, native history orders update then close (removing assignee) then import (restoring literal none), and title and sprint survive. Removing only the existing-owner sourceAssignee argument makes the regression fail (undefined versus none); the production fix is restored. Focused five-test run and test compilation pass."
+  "2026-11-05T04:31:38.710Z",codex-toolchain-1104,"Reviewer condition 3 / known limitation: README now states that on pm-cli >=2026.10.26 without transaction-owned finalization (pm-cli#1656), failure after lifecycle finalization can leave partially applied state; the ownership guard refuses unsafe rollback and the recovery journal resumes the same import. It names the exact lifecycle-compensation and recovered-refresh tests quarantined only on 2026.11.4, with automatic re-enable for any other version. No compensation assertion, runtime source, minimum SDK, dependency pin or auto-merge setting was changed."
+  "2026-11-05T06:15:37.816Z",codex-toolchain-1104,"Reviewer follow-up final validation on Node 26.13.0: NPM_CONFIG_USERCONFIG=/dev/null nice -n 10 npm test completed with 1649 tests: 1647 passed, 0 failed, 0 cancelled, 2 skipped, duration 6167670.956242 ms. The two fixture-version quarantine tests and existing-owner update-close-restore regression pass within the complete suite. All seven deliberate mutations were rejected, then restored before this run. Only the exact two unchanged pm-cli#1656 compensation cases skip on installed SDK 2026.11.4. Sequential nice npm run typecheck, npm run lint and npm run changelog:check all pass after fetching tags; changelog unchanged. No coverage rerun for this test/documentation-only follow-up; earlier coverage receipts remain scoped to their recorded source head. Runtime sources, pins, compensation assertions and auto-merge configuration unchanged. Remaining upstream requirement: transaction-owned finalization with durable recovery and compensation, pm-cli#1656 (confirmed open)."
+files[23]:
+  - path: docs/atomic-finalization-sdk.md
+    scope: project
+  - path: docs/daily-sync-recovery.md
+    scope: project
+  - path: docs/toolchain-1104-validation.md
+    scope: project
+  - path: import-fidelity.ts
+    scope: project
+  - path: index.ts
+    scope: project
+  - path: package-lock.json
+    scope: project
+  - path: package.json
+    scope: project
+  - path: test/atomic-finalization-quarantine.test.ts
+    scope: project
+    note: Fixture versions execute actual quarantine predicates and skip options
+  - path: test/changelog-placement.test.ts
+    scope: project
+  - path: test/closeout-workflow.test.ts
+    scope: project
+  - path: test/daily-sync-idempotency.test.ts
+    scope: project
+  - path: test/discussion-model.test.ts
+    scope: project
+  - path: test/discussion-packed-acceptance.ts
+    scope: project
+  - path: test/discussions.test.ts
+    scope: project
+  - path: test/helpers/discussions.ts
+    scope: project
+  - path: test/import-fidelity.test.ts
+    scope: project
+  - path: test/label-import-model.test.ts
+    scope: project
+  - path: test/label-migration-real-data.ts
+    scope: project
+  - path: test/labels.test.ts
+    scope: project
+  - path: test/project-sync.test.ts
+    scope: project
+  - path: test/refresh.test.ts
+    scope: project
+  - path: test/scheduled-refusals.test.ts
+    scope: project
+  - path: test/typed-sentinel-normalization.test.ts
+    scope: project
+    note: Existing owner update-close-restore regression
+tests[9]:
   - command: "node --test --test-name-pattern=\"real SDK atomic compensation restores\" test/import-fidelity.test.ts"
     scope: project
     provenance:
@@ -118,8 +149,29 @@ tests[7]:
       created_at: "2026-11-05T01:43:04.619Z"
       source_kind: local_mutation
       source_ref: dependabot/npm_and_yarn/pm-toolchain-838740a1aa
-docs[3]{path,scope}:
-  docs/atomic-finalization-sdk.md,project
-  docs/daily-sync-recovery.md,project
-  docs/toolchain-1104-validation.md,project
+  - command: nice -n 10 node --test test/atomic-finalization-quarantine.test.ts test/typed-sentinel-normalization.test.ts
+    scope: project
+    provenance:
+      author: codex-toolchain-1104
+      created_at: "2026-11-05T04:31:42.158Z"
+      source_kind: local_mutation
+      source_ref: dependabot/npm_and_yarn/pm-toolchain-838740a1aa
+  - command: NPM_CONFIG_USERCONFIG=/dev/null nice -n 10 npm test
+    scope: project
+    timeout_seconds: 10800
+    provenance:
+      author: codex-toolchain-1104
+      created_at: "2026-11-05T06:15:41.117Z"
+      source_kind: local_mutation
+      source_ref: dependabot/npm_and_yarn/pm-toolchain-838740a1aa
+docs[4]:
+  - path: docs/atomic-finalization-sdk.md
+    scope: project
+  - path: docs/daily-sync-recovery.md
+    scope: project
+  - path: docs/toolchain-1104-validation.md
+    scope: project
+  - path: README.md
+    scope: project
+    note: Known lifecycle finalization limitation and exact quarantines
 body: ""
