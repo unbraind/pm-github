@@ -646,11 +646,37 @@ test("audit listing errors and malformed pagination fail with sanitized messages
   assert.throws(() => auditDependabotMerges("acme/widgets", () => { throw new Error("private remote error"); }), /Cannot read complete PR audit listing/);
 });
 
-test("audit continues other PRs after denied revocation and reports operational failure", () => {
-  const a = auditFixture(); a.pulls.push({ number: 8, user: { login: bot }, auto_merge: {} });
-  a.f.commit.author.login = "outside"; a.f.failRevoke = true;
-  assert.throws(a.execute, /Cannot complete 2 auto-merge revocations/);
-  assert.equal(a.f.calls.filter(args => args.includes("--disable-auto")).length, 2);
+for (const count of [1, 2, 20, 23]) {
+  test(`audit reports failed PR numbers with a bounded list and continues all ${count} revocations`, () => {
+    const a = auditFixture();
+    const numbers = Array.from({ length: count }, (_, index) => index + 7);
+    a.pulls.splice(0, a.pulls.length, ...numbers.map(number => ({ number, user: { login: bot }, auto_merge: {} })));
+    a.f.commit.author.login = "outside"; a.f.failRevoke = true;
+    const listed = numbers.slice(0, 20).map(number => `#${number}`).join(", ");
+    assert.throws(a.execute, {
+      message: `Cannot complete ${count} auto-merge revocations (${listed}${count > 20 ? `, plus ${count - 20} more` : ""}); requests may still be armed. Retry immediately.`,
+    });
+    assert.deepEqual(a.f.calls.filter(args => args.includes("--disable-auto")).map(args => Number(args[2])), numbers);
+  });
+}
+
+test("audit failure report excludes successful revocations and preserved requests", () => {
+  const requests = new Map([7, 8, 9, 10].map(number => [number, fixture()]));
+  for (const [number, f] of requests) {
+    if (number !== 9) f.commit.author.login = "outside";
+    f.failRevoke = number === 7 || number === 10;
+  }
+  const gh = (args: readonly string[]): string => {
+    if (args[1]?.includes("/pulls?")) return [...requests.keys()].map(number => JSON.stringify({ number, user: { login: bot }, auto_merge: {} })).join("\n");
+    const number = Number(args[0] === "api" ? args[1]!.split("/pulls/")[1]!.split("/")[0] : args[2]);
+    return requests.get(number)!.gh(args);
+  };
+  assert.throws(() => auditDependabotMerges("acme/widgets", gh), {
+    message: "Cannot complete 2 auto-merge revocations (#7, #10); requests may still be armed. Retry immediately.",
+  });
+  assert.equal(requests.get(8)!.state.auto_merge, null);
+  assert.notEqual(requests.get(9)!.state.auto_merge, null);
+  for (const f of requests.values()) assert.ok(!f.calls.some(args => args.includes("--auto")));
 });
 
 test("activation tracker reflects active workflow and keeps fleet acceptance separate", () => {

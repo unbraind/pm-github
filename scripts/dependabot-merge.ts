@@ -153,14 +153,18 @@ export function auditDependabotMerges(repository: string, gh: (args: readonly st
     throw new Error("Incomplete PR audit listing; retry immediately.");
   }
   const results: string[] = [];
-  let failures = 0;
+  const failed: number[] = [];
   for (const pr of pulls.filter(pr => pr.user.login === bot && pr.auto_merge !== null)) {
     try {
       const result = runDependabotMerge({ repository, number: String(pr.number), phase: "audit", event: "schedule",
         actor: "", triggeringActor: "", author: bot, head: "", metadataOutcome: "", group: "", updateType: "", extraGroups: "" }, gh);
       results.push(`#${pr.number}: ${result.message}`);
-    } catch { failures++; }
+    } catch { failed.push(pr.number); }
   }
-  if (failures > 0) throw new Error(`Cannot complete ${failures} auto-merge revocations; requests may still be armed. Retry immediately.`);
+  if (failed.length > 0) {
+    const numbers = failed.slice(0, 20).map(number => `#${number}`).join(", ");
+    const remaining = failed.length > 20 ? `, plus ${failed.length - 20} more` : "";
+    throw new Error(`Cannot complete ${failed.length} auto-merge revocations (${numbers}${remaining}); requests may still be armed. Retry immediately.`);
+  }
   return { armed: false, message: results.join("\n") || "No armed Dependabot requests to audit." };
 }
