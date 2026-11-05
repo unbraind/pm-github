@@ -39,9 +39,15 @@ export interface MergeResult {
   message: string;
 }
 
-/** Use the current environment without a shell; failed reads cannot become empty success. */
-export function githubCli(args: readonly string[], executable = "gh"): string {
-  return execFileSync(executable, args, { encoding: "utf8", env: { ...process.env }, maxBuffer: 32 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+/** Bound each CLI attempt, discard failed output, and retry at most three times without a shell. */
+export function githubCli(args: readonly string[], executable = "gh", timeout = 60_000): string {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return execFileSync(executable, args, { encoding: "utf8", env: { ...process.env }, maxBuffer: 32 * 1024 * 1024,
+        stdio: ["ignore", "pipe", "pipe"], timeout, killSignal: "SIGKILL" });
+    } catch { /* A timeout or failed attempt must never expose partial output. */ }
+  }
+  throw new Error("GitHub CLI failed or timed out after 3 bounded attempts (60 seconds each in production).");
 }
 
 const bot = "dependabot[bot]";
@@ -73,7 +79,7 @@ export function runDependabotMerge(input: MergeInput, gh: (args: readonly string
     } catch { /* Unreadable state still owes revocation. */ }
     if (armed) {
       try { gh(["pr", "merge", ...target, "--disable-auto"]); }
-      catch { throw new Error("Auto-merge revocation denied or unavailable; check token write permissions immediately."); }
+      catch { throw new Error("Auto-merge revocation denied or unavailable after bounded retries; request may still be armed. Check token write permissions and retry immediately."); }
     }
   };
   revoke();

@@ -42,6 +42,7 @@ function fixture() {
         state.auto_merge = null;
       } else {
         assert.ok(args.includes("--squash"));
+        assert.ok(args.includes("--auto"), "the arm request must enable auto-merge");
         assert.equal(args.at(-1), head);
         if (f.failArm) throw new Error("expected head changed");
         state.auto_merge = {};
@@ -201,11 +202,15 @@ function loader(): string {
 
 test("workflow policy: pinned actions, minimal grants, no PR checkout or interpolated shell", () => {
   const source = readFileSync(join(root, ".github/workflows/pm-github-dependabot-merge.yml"), "utf8");
-  const workflow = parse(source) as { on: Record<string, unknown>; permissions: object; jobs: Record<string, { permissions: object; steps: { uses?: string; run?: string }[] }> };
+  const workflow = parse(source) as { on: Record<string, unknown>; permissions: object; jobs: Record<string, { permissions: object; "timeout-minutes": number; steps: { uses?: string; run?: string; "timeout-minutes"?: number }[] }> };
   assert.deepEqual(Object.keys(workflow.on), ["workflow_call"]); assert.deepEqual(workflow.permissions, {});
   assert.deepEqual(workflow.jobs["dependabot-merge"]!.permissions, { contents: "write", "pull-requests": "write" });
+  assert.equal(workflow.jobs["dependabot-merge"]!["timeout-minutes"], 60);
   for (const step of workflow.jobs["dependabot-merge"]!.steps) {
-    if (step.uses) assert.match(step.uses, /@[a-f0-9]{40}$/);
+    if (step.uses) {
+      assert.match(step.uses, /@[a-f0-9]{40}$/);
+      assert.equal(step["timeout-minutes"], 5);
+    }
     if (step.run) assert.doesNotMatch(step.run, /\$\{\{/);
   }
   assert.doesNotMatch(source, /actions\/checkout|skip-commit-verification|--admin/);
@@ -232,38 +237,61 @@ test("custom-token arm event preserves the request; a foreign synchronize event 
   assert.equal(f.state.auto_merge, null, "foreign synchronize must still revoke the request");
 });
 
-for (const mode of ["external", "local", "load-failed", "invalid-sha", "local-ref-failed"]) {
+/** Exercise the production timeout arguments with a shorter real clock in shell fixtures. */
+function installFixtureTimeout(dir: string): void {
+  writeFileSync(join(dir, "timeout"), `#!/bin/bash
+[[ "$1" == --signal=KILL && "$2" == 60s ]] || exit 97
+shift 2
+duration=60s
+case "$MODE" in *hang*) duration=0.3s ;; esac
+exec /usr/bin/timeout --signal=KILL "$duration" "$@"
+`, { mode: 0o755 });
+}
+
+for (const mode of ["external", "local", "remote-self", "load-failed", "invalid-sha", "local-ref-failed", "load-hang", "fallback-read-hang", "fallback-disable-hang", "load-retry"]) {
   test(`real workflow loader/launcher: ${mode}`, () => {
     const dir = mkdtempSync(join(tmpdir(), "dependabot-policy-"));
     const env = { ...process.env, PATH: dir + ":" + process.env.PATH, RUNNER_TEMP: dir,
-      POLICY_SOURCE: join(root, "scripts/dependabot-merge.ts"), WORKFLOW_SHA: mode === "invalid-sha" ? "bad" : head,
-      REPOSITORY: mode.startsWith("local") ? "unbraind/pm-github" : "acme/widgets", PR_NUMBER: "7", MODE: mode,
+      RETRY_MARKER: join(dir, "retried"), POLICY_SOURCE: join(root, "scripts/dependabot-merge.ts"), WORKFLOW_SHA: mode === "invalid-sha" ? "bad" : head,
+      WORKFLOW_REF: `unbraind/pm-github/.github/workflows/pm-github-dependabot-merge.yml@${mode.startsWith("local") ? "refs/pull/7/merge" : head}`,
+      CALLER_REF: "refs/pull/7/merge",
+      REPOSITORY: mode.startsWith("local") || mode === "remote-self" ? "unbraind/pm-github" : "acme/widgets", PR_NUMBER: "7", MODE: mode,
       GITHUB_STEP_SUMMARY: join(dir, "summary"), EVENT_NAME: "pull_request", EVENT_ACTOR: "outside", TRIGGERING_ACTOR: "outside",
       GITHUB_OUTPUT: join(dir, "output"),
       PR_AUTHOR: bot, EVENT_HEAD: head, EXTRA_GROUPS: "", PHASE: "evaluate", RECEIPTS: join(dir, "receipts") };
     try {
+      installFixtureTimeout(dir);
       writeFileSync(join(dir, "gh"), `#!/bin/bash
 printf '%s\\n' "$*" >> "$RECEIPTS"
 case "$*" in
   *git/ref/heads/main*) [[ "$MODE" != local-ref-failed ]] || exit 1; printf '%s' '${trusted}' ;;
-  *contents/scripts*) [[ "$MODE" != load-failed ]] || exit 1; cat "$POLICY_SOURCE" ;;
+  *contents/scripts*)
+    [[ "$MODE" != load-hang ]] || { trap '' TERM; sleep 2; exit 0; }
+    [[ "$MODE" != load-retry || -f "$RETRY_MARKER" ]] || { touch "$RETRY_MARKER"; printf partial; exit 1; }
+    [[ "$MODE" != load-failed && "$MODE" != fallback-* ]] || exit 1; cat "$POLICY_SOURCE" ;;
   *'/commits?'*) printf '%s' '{"sha":"${head}","author":{"login":"outside"},"committer":{"login":"outside"}}' ;;
-  'api '*) printf '%s' '{"state":"open","user":{"login":"${bot}"},"head":{"sha":"${head}"},"commits":1,"auto_merge":null}' ;;
-  'pr merge '*) ;;
+  'api '*) [[ "$MODE" != fallback-read-hang ]] || { trap '' TERM; sleep 2; exit 0; }; printf '%s' '{"state":"open","user":{"login":"${bot}"},"head":{"sha":"${head}"},"commits":1,"auto_merge":null}' ;;
+  'pr merge '*) [[ "$MODE" != fallback-disable-hang ]] || { trap '' TERM; sleep 2; exit 0; } ;;
   *) exit 2 ;;
 esac
 `, { mode: 0o755 });
-      const loaded = spawnSync("bash", ["-c", loader()], { cwd: dir, env, encoding: "utf8" });
-      const failed = ["load-failed", "invalid-sha", "local-ref-failed"].includes(mode);
-      assert.equal(loaded.status, 0, loaded.stderr);
+      const loaded = spawnSync("bash", ["-c", loader()], { cwd: dir, env, encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL" });
+      const failed = ["load-failed", "invalid-sha", "local-ref-failed", "load-hang", "fallback-read-hang"].includes(mode);
+      assert.equal(loaded.status, mode === "fallback-disable-hang" ? 1 : 0, loaded.stderr);
       const receipts = readFileSync(env.RECEIPTS, "utf8");
-      if (failed) {
+      if (mode === "fallback-disable-hang") {
+        assert.match(loaded.stdout, /Cannot revoke auto-merge after policy load failure and 3 bounded attempts/);
+        assert.equal(receipts.split("\n").filter(line => line.startsWith("pr merge ")).length, 3);
+      } else if (failed) {
+        if (mode === "load-hang") assert.equal(receipts.split("\n").filter(line => line.includes("contents/scripts")).length, 3);
+        if (mode === "fallback-read-hang") assert.equal(receipts.split("\n").filter(line => line.includes("pulls/7")).length, 3);
         assert.match(receipts, /--disable-auto/);
         assert.match(loaded.stdout, /::notice::Cannot load trusted merge policy/);
         assert.match(readFileSync(env.GITHUB_OUTPUT, "utf8"), /loaded=false/);
       }
       else {
         assert.match(receipts, new RegExp(`ref=${mode === "local" ? trusted : head}`));
+        if (mode === "remote-self") assert.doesNotMatch(receipts, /git\/ref\/heads\/main/);
         const run = spawnSync(process.execPath, [join(dir, "run-dependabot-merge.mts")], { cwd: dir, env, encoding: "utf8" });
         assert.equal(run.status, 0, run.stderr);
         assert.match(run.stdout, /::notice::Foreign or unverified commits: aaaaaaaaaaaa outside/);
@@ -295,7 +323,7 @@ test("CLI adapter resolves a unique fixture command against the current PATH", (
   } finally { process.env.PATH = old; rmSync(dir, { recursive: true, force: true }); }
 });
 
-for (const mode of ["armed", "clear", "closed", "malformed-api", "api-error", "denied"]) {
+for (const mode of ["armed", "clear", "closed", "malformed-api", "api-error", "denied", "hang-read", "hang-disable", "retry-disable"]) {
   test(`pre-tooling revocation shell: ${mode}`, () => {
     const dir = mkdtempSync(join(tmpdir(), "dependabot-revoke-"));
     try {
@@ -305,6 +333,7 @@ for (const mode of ["armed", "clear", "closed", "malformed-api", "api-error", "d
       writeFileSync(join(dir, "gh"), `#!/bin/bash
 printf '%s\\n' "$*" >> "$RECEIPTS"
 if [[ "$1" == api ]]; then
+  [[ "$MODE" != hang-read ]] || { trap '' TERM; sleep 2; exit 0; }
   [[ "$MODE" != api-error ]] || exit 1
   case "$MODE" in
     clear) payload='{"state":"open","auto_merge":null}' ;;
@@ -313,17 +342,51 @@ if [[ "$1" == api ]]; then
     *) payload='{"state":"open","auto_merge":{}}' ;;
   esac
   printf '%s' "$payload" | jq -r "$4"
-else [[ "$MODE" != denied ]]; fi
+else
+  [[ "$MODE" != hang-disable ]] || { trap '' TERM; sleep 2; exit 0; }
+  [[ "$MODE" != retry-disable || -f "$RETRY_MARKER" ]] || { touch "$RETRY_MARKER"; exit 1; }
+  [[ "$MODE" != denied ]]
+fi
 `, { mode: 0o755 });
-      const env = { ...process.env, PATH: dir + ":" + process.env.PATH, REPOSITORY: "acme/widgets", PR_NUMBER: "7",
+      installFixtureTimeout(dir);
+      const env = { ...process.env, PATH: dir + ":" + process.env.PATH, RETRY_MARKER: join(dir, "retried"), REPOSITORY: "acme/widgets", PR_NUMBER: "7",
         MODE: mode, RECEIPTS: join(dir, "receipts"), GITHUB_STEP_SUMMARY: join(dir, "summary") };
-      const result = spawnSync("bash", ["-c", shell], { cwd: dir, env, encoding: "utf8" });
-      assert.equal(result.status, mode === "denied" ? 1 : 0, result.stderr);
-      if (mode === "denied") assert.match(result.stdout, /Cannot revoke auto-merge/);
+      const result = spawnSync("bash", ["-c", shell], { cwd: dir, env, encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL" });
+      assert.equal(result.status, mode === "denied" || mode === "hang-disable" ? 1 : 0, result.stderr);
+      if (mode === "denied" || mode === "hang-disable") assert.match(result.stdout, /Cannot revoke auto-merge/);
       else assert.match(readFileSync(env.GITHUB_STEP_SUMMARY, "utf8"), /cleared before tooling/);
       const receipts = readFileSync(env.RECEIPTS, "utf8");
+      if (mode === "hang-read") assert.equal(receipts.split("\n").filter(line => line.startsWith("api ")).length, 3);
+      if (mode === "hang-disable" || mode === "denied") assert.equal(receipts.split("\n").filter(line => line.startsWith("pr merge ")).length, 3);
+      if (mode === "retry-disable") assert.equal(receipts.split("\n").filter(line => line.startsWith("pr merge ")).length, 2);
       if (mode === "clear" || mode === "closed") assert.doesNotMatch(receipts, /--disable-auto/);
       else assert.match(receipts, /--disable-auto/);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+}
+
+
+test("README describes the actual author guard without an owner restriction", () => {
+  const readme = readFileSync(join(root, "README.md"), "utf8");
+  assert.match(readme, /workflow checks the Dependabot author, then the\s+metadata group/);
+  assert.doesNotMatch(readme, /Dependabot author and repository\s+owner/);
+});
+
+for (const mode of ["retry", "exhausted", "timeout"]) {
+  test(`real CLI bounded attempts discard partial output: ${mode}`, () => {
+    const dir = mkdtempSync(join(tmpdir(), "dependabot-bounded-"));
+    try {
+      const counter = join(dir, "count");
+      const script = `const fs = require('node:fs'); const p = process.argv[1];
+        const n = fs.existsSync(p) ? Number(fs.readFileSync(p, 'utf8')) + 1 : 1;
+        fs.writeFileSync(p, String(n));
+        if (process.argv[2] === 'timeout') { process.stdout.write('partial'); process.on('SIGTERM', () => {}); setTimeout(() => { process.stdout.write('late'); process.exit(0); }, 2000); }
+        else if (process.argv[2] === 'retry' && n === 3) process.stdout.write('complete');
+        else { process.stdout.write('partial'); process.exit(1); }`;
+      const run = () => githubCli(["-e", script, counter, mode], process.execPath, mode === "timeout" ? 500 : 5000);
+      if (mode === "retry") assert.equal(run(), "complete");
+      else assert.throws(run, /failed or timed out after 3 bounded attempts/);
+      assert.equal(readFileSync(counter, "utf8"), "3");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 }

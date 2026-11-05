@@ -890,8 +890,11 @@ and review rules on the protected base branch.
 Foreign commits revoke auto-merge and produce a successful job, a summary and
 `::notice` listing **short SHA and author login only**. Disallowed metadata,
 unsupported events (including `pull_request_target`), API failures and incomplete
-pagination also leave auto-merge unarmed with a clear notice. An inability to
-revoke is an operational failure, rather than a false successful safety claim.
+pagination also leave auto-merge unarmed with a clear notice. Every CLI call is
+limited to three attempts of 60 seconds each; failed attempts discard partial
+output. A timed-out state read still attempts revocation. An
+inability to revoke is an operational failure that warns the request may remain
+armed, rather than a false successful safety claim.
 No PR files, Git author names/emails, commit messages or raw API errors are
 printed. Actions are SHA-pinned and no PR code is checked out or executed.
 The standalone policy is fetched from `job.workflow_sha` in pm-github; this
@@ -982,8 +985,8 @@ The group pattern is the repository name, covering both reusable workflow paths.
 Use exactly `pm-toolchain`: the fleet's existing
 [dependabot-auto-merge.yml](.github/workflows/dependabot-auto-merge.yml) enables
 `gh pr merge --auto --squash` for Dependabot PRs in that group, including calendar
-version major changes. The workflow checks the Dependabot author and repository
-owner, then the metadata group or minor/patch update type. Commit prefix and
+version major changes. The workflow checks the Dependabot author, then the
+metadata group or minor/patch update type. Commit prefix and
 labels do not control merge eligibility; the explicit values above keep PRs
 consistent. Ensure the two labels exist (GitHub ignores unknown custom labels).
 Repository auto-merge must be enabled and required branch-protection checks must

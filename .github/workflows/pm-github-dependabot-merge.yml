@@ -22,6 +22,8 @@ concurrency:
 jobs:
   dependabot-merge:
     runs-on: ubuntu-latest
+    # Covers the worst-case bounded policy/revocation budget plus tooling and metadata.
+    timeout-minutes: 60
     permissions:
       contents: write
       pull-requests: write
@@ -42,16 +44,29 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Keep retries bounded and discard partial output from failed attempts.
+          bounded_gh() {
+            local attempt output
+            for attempt in 1 2 3; do
+              if output="$(timeout --signal=KILL 60s gh "$@" 2>/dev/null)"; then
+                printf '%s' "${output}"
+                return 0
+              fi
+              echo "::warning::GitHub CLI failed or timed out (attempt ${attempt}/3)." >&2
+            done
+            return 1
+          }
           [[ "${REPOSITORY}" =~ ^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$ && "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]
-          armed="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq 'if .state == "closed" then false elif .state == "open" and has("auto_merge") then .auto_merge != null else error("Unverifiable PR state") end' 2>/dev/null)" || armed=true
+          armed="$(bounded_gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq 'if .state == "closed" then false elif .state == "open" and has("auto_merge") then .auto_merge != null else error("Unverifiable PR state") end')" || armed=true
           if [[ "${armed}" != false ]]; then
-            if ! gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --disable-auto 2>/dev/null; then
-              echo '::error::Cannot revoke auto-merge; check token write permissions immediately.'
+            if ! bounded_gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --disable-auto; then
+              echo '::error::Cannot revoke auto-merge after 3 bounded attempts; request may still be armed. Check token write permissions immediately.'
               exit 1
             fi
           fi
           echo 'Previous auto-merge requests cleared before tooling.' >> "${GITHUB_STEP_SUMMARY}"
       - name: Setup policy runtime
+        timeout-minutes: 5
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
@@ -60,20 +75,36 @@ jobs:
         id: policy
         env:
           WORKFLOW_SHA: ${{ job.workflow_sha }}
+          WORKFLOW_REF: ${{ job.workflow_ref }}
+          CALLER_REF: ${{ github.ref }}
         shell: bash
         run: |
           set -euo pipefail
+          # Keep retries bounded and discard partial output from failed attempts.
+          bounded_gh() {
+            local attempt output
+            for attempt in 1 2 3; do
+              if output="$(timeout --signal=KILL 60s gh "$@" 2>/dev/null)"; then
+                printf '%s' "${output}"
+                return 0
+              fi
+              echo "::warning::GitHub CLI failed or timed out (attempt ${attempt}/3)." >&2
+            done
+            return 1
+          }
           policy_sha="${WORKFLOW_SHA}"
           # A local-path pull_request call resolves workflow_sha from the PR.
           # Its executable policy must instead come from the trusted default branch.
-          if [[ "${REPOSITORY}" == unbraind/pm-github ]]; then
-            policy_sha="$(gh api repos/unbraind/pm-github/git/ref/heads/main --jq '.object.sha')" || policy_sha=""
+          if [[ "${REPOSITORY}" == unbraind/pm-github && "${EVENT_NAME}" == pull_request &&
+                "${WORKFLOW_REF}" == "unbraind/pm-github/.github/workflows/pm-github-dependabot-merge.yml@${CALLER_REF}" &&
+                "${CALLER_REF}" == "refs/pull/${PR_NUMBER}/merge" ]]; then
+            policy_sha="$(bounded_gh api repos/unbraind/pm-github/git/ref/heads/main --jq '.object.sha')" || policy_sha=""
           fi
-          if [[ ! "${policy_sha}" =~ ^[a-f0-9]{40}$ ]] || ! gh api "repos/unbraind/pm-github/contents/scripts/dependabot-merge.ts?ref=${policy_sha}" \
+          if [[ ! "${policy_sha}" =~ ^[a-f0-9]{40}$ ]] || ! bounded_gh api "repos/unbraind/pm-github/contents/scripts/dependabot-merge.ts?ref=${policy_sha}" \
             -H 'Accept: application/vnd.github.raw+json' > "${RUNNER_TEMP}/dependabot-merge.ts"; then
-            armed="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq 'if .state == "closed" then false elif .state == "open" and has("auto_merge") then .auto_merge != null else error("Unverifiable PR state") end' 2>/dev/null)" || armed=true
-            if [[ "${armed}" != false ]] && ! gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --disable-auto 2>/dev/null; then
-              echo '::error::Cannot revoke auto-merge after policy load failure; check token write permissions immediately.'
+            armed="$(bounded_gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq 'if .state == "closed" then false elif .state == "open" and has("auto_merge") then .auto_merge != null else error("Unverifiable PR state") end')" || armed=true
+            if [[ "${armed}" != false ]] && ! bounded_gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --disable-auto; then
+              echo '::error::Cannot revoke auto-merge after policy load failure and 3 bounded attempts; request may still be armed. Check token write permissions immediately.'
               exit 1
             fi
             echo '::notice::Cannot load trusted merge policy; auto-merge not armed.'
@@ -103,6 +134,7 @@ jobs:
         run: node "${RUNNER_TEMP}/run-dependabot-merge.mts"
 
       - name: Fetch Dependabot metadata
+        timeout-minutes: 5
         id: metadata
         if: steps.policy.outputs.loaded == 'true' && github.event_name == 'pull_request' && github.actor == 'dependabot[bot]' && github.triggering_actor == 'dependabot[bot]' && github.event.pull_request.user.login == 'dependabot[bot]'
         continue-on-error: true
