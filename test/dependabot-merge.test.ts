@@ -417,12 +417,86 @@ test("independent audit preserves verified requests and never arms them", () => 
   assert.ok(!a.f.calls.some(args => args[0] === "pr"));
 });
 
+/** Expand a numeric cron field so frequency checks cover lists, ranges and steps. */
+function cronField(field: string, maximum: number): number[] {
+  const values = new Set<number>();
+  for (const part of field.split(",")) {
+    const match = /^(\*|\d+(?:-\d+)?)(?:\/(\d+))?$/.exec(part);
+    assert.ok(match, `Unsupported cron field: ${field}`);
+    const step = Number(match[2] ?? 1);
+    const range = match[1]!.split("-").map(Number);
+    const start = match[1] === "*" ? 0 : range[0]!;
+    const end = match[1] === "*" || (range.length === 1 && match[2]) ? maximum : range.at(-1)!;
+    assert.ok(step >= 1 && step <= maximum + 1 && start >= 0 && start <= end && end <= maximum, `Invalid cron field: ${field}`);
+    for (let value = start; value <= end; value += step) values.add(value);
+  }
+  return [...values];
+}
+
+/** Refuse caller schedules whose minute/hour fields permit runs less than an hour apart. */
+function assertHourlyAuditCeiling(schedules: readonly { cron: string }[]): void {
+  const times: number[] = [];
+  for (const { cron } of schedules) {
+    const fields = cron.trim().split(/\s+/);
+    assert.equal(fields.length, 5, "Expected five cron fields");
+    const minutes = cronField(fields[0]!, 59);
+    const hours = cronField(fields[1]!, 23);
+    for (const hour of hours) for (const minute of minutes) times.push(hour * 60 + minute);
+  }
+  times.sort((a, b) => a - b);
+  assert.ok(times.length > 0, "Expected an audit schedule");
+  for (let i = 0; i < times.length; i++) {
+    const next = times[i + 1] ?? times[0]! + 24 * 60;
+    assert.ok(next - times[i]! >= 60, "Fleet audit schedules must not run more often than hourly");
+  }
+}
+
+for (const [name, cron, allowed] of [
+  ["five-minute", "3-58/5 * * * *", false],
+  ["fifteen-minute", "*/15 * * * *", false],
+  ["hourly", "23 * * * *", true],
+  ["daily", "23 4 * * *", true],
+  ["minute-list", "0,30 * * * *", false],
+  ["cross-midnight", "0,59 0,23 * * *", false],
+  ["two-hour-range", "23 0-22/2 * * *", true],
+  ["stepped-start", "5/15 * * * *", false],
+] as const) {
+  test(`caller schedule policy: ${name}`, () => {
+    const check = () => assertHourlyAuditCeiling([{ cron }]);
+    if (allowed) check();
+    else assert.throws(check, /must not run more often than hourly/);
+  });
+}
+
+test("caller schedule policy combines all entries and rejects malformed fields", () => {
+  assert.throws(() => assertHourlyAuditCeiling([{ cron: "0 * * * *" }, { cron: "30 * * * *" }]), /more often than hourly/);
+  for (const cron of ["@daily", "60 * * * *", "0 24 * * *", "*/0 * * * *", "4-2 * * * *", "bad * * * *"]) {
+    assert.throws(() => assertHourlyAuditCeiling([{ cron }]));
+  }
+  assert.throws(() => assertHourlyAuditCeiling([]), /Expected an audit schedule/);
+});
+
+test("caller and README template keep audits daily and never more often than hourly", () => {
+  const readme = readFileSync(join(root, "README.md"), "utf8");
+  const section = readme.split("## Verified Dependabot auto-merge\n")[1]!.split("## ")[0]!;
+  const template = section.split("```yaml\n")[1]!.split("```")[0]!;
+  for (const source of [readFileSync(join(root, ".github/workflows/dependabot-auto-merge.yml"), "utf8"), template]) {
+    const caller = parse(source) as { on: { schedule: { cron: string }[]; workflow_dispatch: unknown } };
+    assertHourlyAuditCeiling(caller.on.schedule);
+    assert.deepEqual(caller.on.schedule, [{ cron: "23 4 * * *" }]);
+    assert.ok(Object.hasOwn(caller.on, "workflow_dispatch"));
+  }
+  assert.match(section, /Fleet callers must not schedule the audit more often than hourly/);
+  assert.match(section, /prefer daily\s+plus `workflow_dispatch`/);
+  assert.doesNotMatch(section, /five-minute schedule/);
+});
+
 test("scheduled audit revokes a foreign push when its synchronize run never executes", () => {
   const caller = parse(readFileSync(join(root, ".github/workflows/dependabot-auto-merge.yml"), "utf8")) as {
     on: { schedule: { cron: string }[]; workflow_dispatch: unknown; pull_request_target: { types: string[] } };
     jobs: Record<string, { if: string; with?: { "audit-only": boolean } }>;
   };
-  assert.equal(caller.on.schedule[0]!.cron, "3-58/5 * * * *");
+  assertHourlyAuditCeiling(caller.on.schedule);
   assert.ok(Object.hasOwn(caller.on, "workflow_dispatch"));
   assert.equal(caller.jobs["audit-armed-requests"]!.if, "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'");
   assert.equal(caller.jobs["audit-armed-requests"]!.with!["audit-only"], true);

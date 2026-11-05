@@ -6,8 +6,9 @@ on:
     types: [opened, reopened, synchronize, ready_for_review, edited]
 
   # Independent of GITHUB_TOKEN-generated synchronize runs awaiting approval.
+  # Daily plus manual dispatch; fleet callers must not schedule more than hourly.
   schedule:
-    - cron: "3-58/5 * * * *"
+    - cron: "23 4 * * *"
   workflow_dispatch:
 
 permissions: {}

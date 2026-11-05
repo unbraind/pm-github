@@ -859,7 +859,7 @@ on:
   pull_request_target:
     types: [opened, reopened, synchronize, ready_for_review, edited]
   schedule:
-    - cron: "3-58/5 * * * *"
+    - cron: "23 4 * * *"
   workflow_dispatch:
 permissions: {}
 jobs:
@@ -935,9 +935,12 @@ trigger it for every open PR. This repository uses the supported local path.
 Keep the scheduled audit job when adopting the caller. GitHub can suppress
 workflow-generated events or park their `pull_request` runs awaiting approval;
 changing only the PR trigger does not establish an independent revocation path.
-The five-minute schedule and manual dispatch audit every armed Dependabot PR,
+The daily schedule and manual dispatch audit every armed Dependabot PR,
 including every page of its commits, with the same provenance validator used to
 arm. Unsafe or unverifiable snapshots are revoked; valid requests are preserved.
+Fleet callers must not schedule the audit more often than hourly; prefer daily
+plus `workflow_dispatch` to preserve shared runner capacity. Stagger daily run
+times across repositories. Use manual dispatch when an immediate sweep is needed.
 Audits never arm requests or depend on PR actor/metadata. Listing, policy-load
 or revocation failures fail visibly. Scheduled runs can be delayed or disabled
 by GitHub, so this is eventual revocation and requires operational monitoring,
