@@ -65,7 +65,11 @@ export function runDependabotMerge(input: MergeInput, gh: (args: readonly string
   const endpoint = `repos/${input.repository}/pulls/${input.number}`;
   const revoke = () => {
     let armed = true;
-    try { armed = (JSON.parse(gh(["api", endpoint])) as { auto_merge: unknown }).auto_merge !== null; } catch { /* Unreadable state still owes revocation. */ }
+    try {
+      const current = JSON.parse(gh(["api", endpoint])) as { state?: string; auto_merge: unknown };
+      // Merged PRs retain historical auto_merge metadata; it is no longer armed.
+      armed = current.state !== "closed" && current.auto_merge !== null;
+    } catch { /* Unreadable state still owes revocation. */ }
     if (armed) {
       try { gh(["pr", "merge", ...target, "--disable-auto"]); }
       catch { throw new Error("Auto-merge revocation denied or unavailable; check token write permissions immediately."); }

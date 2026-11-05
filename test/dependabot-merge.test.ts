@@ -163,6 +163,12 @@ test("no existing auto-merge requires no disable mutation", () => {
   f.execute(); assert.equal(f.calls.length, 1);
 });
 
+test("closed PR historical auto_merge metadata is not an active request", () => {
+  const f = fixture(); f.state.state = "closed";
+  assert.equal(f.execute().armed, false);
+  assert.ok(!f.calls.some(args => args[0] === "pr"));
+});
+
 test("revocation denial surfaces an operational error instead of false success", () => {
   const f = fixture(); f.failRevoke = true; assert.throws(f.execute, /revocation denied or unavailable/);
 });
