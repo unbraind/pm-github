@@ -13,6 +13,8 @@ import { captureStderr, jsonResponse, withEnv, withMockGithub } from "./helpers/
 const root = join(import.meta.dirname, "..");
 const fixtures = join(import.meta.dirname, "fixtures/import-fidelity");
 const cli = join(root, "node_modules/.bin/pm");
+// Re-enable automatically for the next SDK release; do not carry a silent permanent waiver.
+const needsOwnedFinalization = JSON.parse(readFileSync(join(root, "node_modules/@unbrained/pm-cli/package.json"), "utf8")).version === "2026.11.4";
 /** Read projected public API fixtures, retaining source lifecycle values verbatim. */
 function recorded(name: string): GhIssue { return JSON.parse(readFileSync(join(fixtures, `${name}.json`), "utf8")) as GhIssue; }
 /** Run a bounded command without inheriting the developer's Git identity. */
@@ -463,7 +465,9 @@ function atomicEntry(issue: GhIssue): PreparedGithubImport {
     comments: [], syncAnnotations: false, closedAt: issue.closed_at ?? undefined, fidelity: buildImportFidelity(issue, [], []) };
 }
 
-test("real SDK atomic compensation restores an imported source lifecycle and removes new items after finalization", async () => tracker(async (_directory, pmRoot) => {
+test("real SDK atomic compensation restores an imported source lifecycle and removes new items after finalization", {
+  skip: needsOwnedFinalization && "pm-cli#1656: SDK 2026.11.4 cannot own and compensate the lifecycle finalizer",
+}, async () => tracker(async (_directory, pmRoot) => {
   const source = recorded("pm-beads-85");
   const initial = atomicEntry(source);
   const result = await importGithubAtomic(pmRoot, "unbraind/pm-beads", [initial]);

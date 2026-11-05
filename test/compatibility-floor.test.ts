@@ -113,12 +113,12 @@ test("the extension manifest declares the same floor the CLI actually enforces",
     "the pending pm item must disclose the current SDK compatibility break");
 });
 
-test("the development minimum range has an exact compatible lock resolution", () => {
+test("the exact development SDK pin has a compatible lock resolution", () => {
   const dev = packageJson.devDependencies?.[CLI];
   const declared = extensionManifest.pm_min_version;
   assert.strictEqual(typeof declared, "string");
   assert.match(declared as string, EXACT_VERSION);
-  assert.equal(dev, `>=${String(declared)}`, "development and peer ranges share the enforced minimum");
+  assert.match(dev!, EXACT_VERSION, "the development SDK must be an exact reproducible pin");
   const lock = JSON.parse(readFileSync(resolve(repoRoot, "package-lock.json"), "utf8")) as {
     packages: Record<string, { version?: string; devDependencies?: Record<string, string>; peerDependencies?: Record<string, string>; integrity?: string }>;
   };
@@ -126,6 +126,7 @@ test("the development minimum range has an exact compatible lock resolution", ()
   assert.equal(lock.packages[""]!.peerDependencies?.[CLI], packageJson.peerDependencies?.[CLI]);
   const resolved = lock.packages["node_modules/@unbrained/pm-cli"]!;
   assert.match(resolved.version!, EXACT_VERSION, "npm ci must retain an exact SDK resolution");
+  assert.equal(resolved.version, dev, "the lock must resolve the exact development pin");
   assert.match(resolved.integrity!, /^sha512-/, "the exact development SDK bytes remain integrity locked");
   assert.ok(atOrAbove(resolved.version!, declared as string), "the exact locked SDK must satisfy the declared minimum");
   assert.ok(atOrAbove(resolved.version!, SDK_CONTRACT_FLOOR));

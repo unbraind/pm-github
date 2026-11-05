@@ -389,7 +389,7 @@ test("project writers preserve 500 native comma atoms through import and sync wi
   const pmRoot = path.join(root, "tracker");
   await sdkInit("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { pmRoot, cwd: root, noExtensions: true });
   const settings = await readSettings(pmRoot);
-  const scope = { parent: "none", clearDeps: true, unset: ["sprint", "release", "goal", "objective"] };
+  const scope = { clearDeps: true, unset: ["parent", "sprint", "release", "goal", "objective"] };
   const imported = (await sdkCreate({ title: "Existing issue", type: "Task", ...scope }, { pmRoot })).item;
   const pushed = (await sdkCreate({ title: "Native draft", type: "Task", ...scope }, { pmRoot })).item;
   let seed = 0x3c0ffee;

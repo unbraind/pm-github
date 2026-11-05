@@ -465,8 +465,8 @@ export function normalizeImportValue(field: string, value: unknown, types = defa
   // are formatting, while leading indentation remains meaningful content.
   if (field === "body" && typeof value === "string") return value.replace(/^\n+/, "").trimEnd();
   if (field === "assignee" || field === "sprint") {
-    const text = toNonEmptyImportString(value) ?? "";
-    return text === "none" ? "" : text;
+    // GH-1614: typed identities stay literal; an absent value represents a clear.
+    return toNonEmptyImportString(value) ?? "";
   }
   if (/^(?:github_)?(?:created|updated|closed|completed)_at$/.test(field) && typeof value === "string" && Number.isFinite(Date.parse(value))) return Date.parse(value);
   return value;
@@ -477,8 +477,9 @@ export function normalizeImportValue(field: string, value: unknown, types = defa
  * High-level create/update reserve native timestamps. This import adapter appends a real
  * before/after event instead of editing past history; retrying identical metadata is a no-op.
  * Cross-provider owners retain their creation/completion dates, content and release.
+ * Plain imports restore a source assignee that a native close command clears.
  */
-export async function persistImportFidelity(pmPath: string, id: string, fidelity: ImportFidelity, linkOnly: boolean, normalizeFields = false): Promise<void> {
+export async function persistImportFidelity(pmPath: string, id: string, fidelity: ImportFidelity, linkOnly: boolean, normalizeFields = false, sourceAssignee?: string): Promise<void> {
   const workspace = await readGithubWorkspace(pmPath);
   const pmRoot = workspace.pmRoot;
   const { settings } = workspace;
@@ -488,6 +489,7 @@ export async function persistImportFidelity(pmPath: string, id: string, fidelity
     mutate: document => {
       const before = canonicalDocument(document);
       const fields = { ...importFidelityFields(fidelity, linkOnly),
+        ...(!linkOnly && sourceAssignee ? { assignee: sourceAssignee } : {}),
         ...(!linkOnly ? { status: normalizeStatusInput(mapState(fidelity.github_state, fidelity.github_state_reason), workspace.statuses) } : {}) };
       for (const [field, value] of Object.entries(fields)) {
         const current = ownValue(document.metadata, field);

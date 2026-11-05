@@ -359,8 +359,8 @@ See [SDK adoption evidence](docs/sdk-adoption-1025.md).
 decoding first appeared in 2026.10.9, while the transaction `match` guard used
 by identity repair first appeared in 2026.10.17. The declared minimum must
 support both. Older hosts refuse installation or activation through matching
-peer/development minimum ranges and the top-level manifest floor. Development
-keeps an exact, integrity-locked SDK resolution. CI separately installs the exact
+peer dependency minimum and the top-level manifest floor. Development uses
+an independent exact, integrity-locked SDK pin. CI separately installs the exact
 minimum from npm, type-checks all production and operational SDK imports, then
 loads and exercises the packed artifact in a non-git tracker. See the
 [published SDK evidence](docs/sdk-minimum.md).
@@ -1196,7 +1196,23 @@ Release attribution uses the actual dates of locally available calendar tags, in
 
 Before creating an item, import checks the complete tracker for its provenance tag, GitHub URLs in provenance or link metadata, and Linear/Jira/ADO links referenced by the GitHub issue body. A unique existing external owner receives the GitHub tag and source metadata; its title, body, provider identity, creation/completion dates and release remain intact. A persisted `github_link_only` marker preserves that ownership on subsequent syncs. Free-text descriptions and bodies do not declare GitHub ownership. Ambiguous matches refuse the import before writes with `--gate` or `--atomic`. A plain multi-issue import may write earlier issues before rejecting a later ambiguous match.
 
-With `--gate` and a nonempty filtered issue list, both preview and apply results include a `plan` with source dates, closure reason, release, target identity, link/create/update action and state-conflict decision. An empty filtered issue list returns without a `plan`, including with `--gate --dry-run`. GitHub wins lifecycle conflicts for GitHub-owned imports. A canceled item that GitHub later reports as completed uses the SDK's explicit repeat-closure transition with the source reason. A linked external owner keeps its local status, and the plan records `preserve-provider-owner`; `github_state` still records the source state. Atomic transaction identity includes the latest external edit or different lifecycle generation in history. Local state edits and repeated state cycles force reconciliation, while staging and compensation keep crash retries on the same journal. Finalization runs before the SDK commits and is compensated with the batch on failure. It is idempotent and runs again after a recovered atomic journal, so an interrupted finalization can be repaired by retrying the same import before the gate permits a push.
+With `--gate` and a nonempty filtered issue list, both preview and apply results include a `plan` with source dates, closure reason, release, target identity, link/create/update action and state-conflict decision. An empty filtered issue list returns without a `plan`, including with `--gate --dry-run`. GitHub wins lifecycle conflicts for GitHub-owned imports. A canceled item that GitHub later reports as completed uses the SDK's explicit repeat-closure transition with the source reason. A linked external owner keeps its local status, and the plan records `preserve-provider-owner`; `github_state` still records the source state. Atomic transaction identity includes the latest external edit or different lifecycle generation in history. Local state edits and repeated state cycles force reconciliation, while staging and compensation keep crash retries on the same journal. Finalization runs before the SDK commits; its compensation has the known SDK limitation below. It is idempotent and runs again after a recovered atomic journal, so an interrupted finalization can be repaired by retrying the same import before the gate permits a push.
+
+**Known limitation — atomic lifecycle finalization:** On pm-cli ≥ 2026.10.26
+without transaction-owned finalization ([pm-cli#1656](https://github.com/unbraind/pm-cli/issues/1656)),
+a failure after lifecycle finalization can leave partially applied state. The
+SDK ownership guard refuses unsafe compensation; the recovery journal resumes
+when the same import is retried. Complete rollback after this boundary is not
+currently guaranteed. See [the SDK finalization analysis](docs/atomic-finalization-sdk.md).
+
+Exactly two tests are quarantined on the verified affected SDK pin, 2026.11.4:
+`real SDK atomic compensation restores an imported source lifecycle and removes new items after finalization`
+in `test/import-fidelity.test.ts`, and
+`terminal failures remove replay plans after real SDK compensation (true)` in
+`test/refresh.test.ts`. Their compensation assertions remain intact and
+re-enable automatically on any other installed SDK version. The fresh-invocation
+refresh case still runs. Repository fixture-version tests verify both actual
+quarantine predicates and skip options without installing SDK versions.
 
 An atomic apply whose complete normalized source projection already matches every item
 reports `unchanged: true`, zero imports/updates, and no transaction ID. It leaves

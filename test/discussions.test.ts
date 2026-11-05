@@ -216,7 +216,7 @@ test("peer success and foreign target interleavings are reported truthfully; mal
     const secondOptions = { readComment: async () => second };
     const secondPlan = await captureGithubDiscussion(root, selected, sdk, secondOptions);
     const skip = await captureGithubDiscussion(root, selected, sdk, { ...secondOptions, approval: secondPlan.approval, onBoundary: async point => {
-      if (point === "before_write") await sdk.client.create({ id: secondPlan.rows[0]!.id, type: "Task", title: "Foreign record", parent: "none", clearDeps: true, unset: ["sprint", "release", "goal", "objective"] });
+      if (point === "before_write") await sdk.client.create({ id: secondPlan.rows[0]!.id, type: "Task", title: "Foreign record", clearDeps: true, unset: ["parent", "sprint", "release", "goal", "objective"] });
     } });
     assert.equal(skip.skipped, 1);
     appendFileSync(getHistoryPath(root, skip.rows[0]!.id), "foreign malformed record\n");
@@ -313,7 +313,7 @@ test("1000 seeded extreme mutations fuzz input and output numeric domains before
 
 test("previous SDK native identifiers remain selectable through SDK whitespace normalization", async () => {
   await discussionTracker(async (root, sdk) => {
-    const context = (await sdk.client.create({ id: "legacy-native-id", title: "Previously supported native identifier", type: "Task", parent: "none", clearDeps: true, unset: ["sprint", "release", "goal", "objective"] })).item.id;
+    const context = (await sdk.client.create({ id: "legacy-native-id", title: "Previously supported native identifier", type: "Task", clearDeps: true, unset: ["parent", "sprint", "release", "goal", "objective"] })).item.id;
     const input = discussionRequest(` ${context} `);
     const options = { readComment: async () => discussionSource() };
     const plan = await captureGithubDiscussion(root, input, sdk, options);

@@ -149,7 +149,7 @@ async function fixture(fn: (f: WorkflowFixture) => Promise<void>, cell?: Decisio
   symlinkSync(cli, join(project, "node_modules/.bin/pm"));
   const generator = join(repoRoot, "node_modules/pm-changelog/dist/cli.js");
   writeFileSync(join(project, "package.json"), JSON.stringify({ name: "fixture", version: "2026.10.15", scripts: {
-    "changelog:full": `node ${JSON.stringify(generator)} --pm-root ../../.agents/pm --mode replace --output ../../CHANGELOG.md --status closed --date-from-version --release-version-from-package`,
+    "changelog:full": `node ${JSON.stringify(generator)} --pm-root ../../.agents/pm --mode replace --output ../../CHANGELOG.md --status closed --all-release-tags --date-from-version --release-version-from-package`,
   } }));
   appendFileSync(join(root, ".gitignore"), "node_modules/\n.agents/pm/extensions/\n.agents/pm/locks/\n.agents/pm/checkpoints/\n");
   writeFileSync(join(root, "CHANGELOG.md"), "Caller changelog before closeout\n");

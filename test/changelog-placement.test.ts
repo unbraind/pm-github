@@ -67,7 +67,7 @@ for (const kind of ["closeout", "sync"]) {
         assert.equal(spawnSync(cli, ["--pm-path", pmRoot, "init", "--defaults", "--agent-guidance", "skip"], { cwd: root }).status, 0);
         mkdirSync(join(root, "node_modules/.bin"), { recursive: true });
         writeFileSync(join(root, "package.json"), JSON.stringify({ version: "2026.9.2", scripts: {
-          "changelog:full": `node ${JSON.stringify(generator)} --stdin --pm-root .agents/pm --mode replace --output CHANGELOG.md --all-release-tags --release-version-from-package --date-from-version`,
+          "changelog:full": `node ${JSON.stringify(generator)} --stdin --pm-root .agents/pm --mode replace --output CHANGELOG.md --all-release-tags --include-empty --release-version-from-package --date-from-version`,
           custom: 'node -e "require(\'node:fs\').writeFileSync(\'custom.txt\', JSON.stringify(process.argv.slice(1)))"',
         } }));
         // The CLI's stdin mode avoids spawning an unrelated pm installation.
@@ -95,7 +95,12 @@ for (const kind of ["closeout", "sync"]) {
         assert.equal(result.status, 0, result.stderr);
         const changelog = readFileSync(join(root, "CHANGELOG.md"), "utf8");
         assert.match(changelog.split(/^## /m).find(section => section.startsWith("Unreleased")) ?? "", /October delivery/);
-        for (const section of changelog.split(/^## /m).filter(section => section.startsWith("2026.9.2"))) assert.doesNotMatch(section, /October delivery/);
+        const released = changelog.split(/^## /m).filter(section => section.startsWith("2026.9.2"));
+        for (const section of released) assert.doesNotMatch(section, /October delivery/);
+        if (tagged) {
+          assert.equal(released.length, 1, "the intentionally empty historical release must remain visible");
+          assert.match(released[0]!, /No changes\./);
+        }
         assert.equal((await get(item.item.id, {}, { pmRoot, noExtensions: true })).item.status, kind === "closeout" ? "closed" : "open");
         assert.equal(postScript(kind, root, "custom").status, 0);
         assert.equal(readFileSync(join(root, "custom.txt"), "utf8"), "[]");
