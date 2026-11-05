@@ -63,6 +63,7 @@ export function runDependabotMerge(input: MergeInput, gh: (args: readonly string
   }
   const target = [input.number, "--repo", input.repository];
   const endpoint = `repos/${input.repository}/pulls/${input.number}`;
+  /** Clear active requests, attempting revocation even when state cannot be read. */
   const revoke = () => {
     let armed = true;
     try {
@@ -79,6 +80,7 @@ export function runDependabotMerge(input: MergeInput, gh: (args: readonly string
   if (input.phase === "revoke") return { armed: false, message: "Previous auto-merge request revoked before metadata." };
   let message: string;
   try {
+    /** Obtain independent snapshots around pagination and the arm request. */
     const read = () => JSON.parse(gh(["api", endpoint])) as PullRequest;
     const before = read();
     // One JSON object per line works with both older and current gh releases.

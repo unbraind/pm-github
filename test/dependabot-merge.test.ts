@@ -51,7 +51,14 @@ function fixture() {
   return f;
 }
 
-test("Dependabot opens a verified PR: revoke first, then arm squash at the checked head", () => {
+test("Dependabot opens a verified PR with no existing request: arm squash", () => {
+  const f = fixture(); f.state.auto_merge = null;
+  assert.equal(f.execute().armed, true);
+  assert.ok(!f.calls.some(args => args.includes("--disable-auto")));
+  assert.ok(f.calls.find(args => args.includes("--match-head-commit")));
+});
+
+test("existing request is revoked before arming the verified Dependabot head", () => {
   const f = fixture();
   assert.equal(f.execute().armed, true);
   assert.ok(f.calls[1]!.includes("--disable-auto"));
