@@ -1,17 +1,15 @@
 id: pm-github-quay
 title: Adopt SDK 2026.11.4 contracts while retaining atomic import rollback guarantees
-description: "PR 194 now targets exact pm-cli 2026.11.4, pm-ops 2026.11.4 and pm-changelog 2026.10.31. GH-1614 literal identity normalization is fixed with real-SDK revert proof. The current compensation matrix is 1 passed and 2 failed: fresh refresh cleanup passes; source-lifecycle rollback after finalization and recovered refresh-plan cleanup remain blocked by GH-1591 transaction ownership. pm-cli#1656 must supply a supported journaled lifecycle finalizer. Preserve all rollback, peer-write safety and replay-plan assertions; never bypass ownership guards. Minimum consumer isolation is tracked by pm-github-gevp and issue 199."
+description: "PR 194 pins pm-cli 2026.11.4, pm-ops 2026.11.4 and pm-changelog 2026.10.31. GH-1614 plain assignments now use literal JSON input; source finalization restores the assignee after native close. Reverted-fix proof fails on undefined versus none. Full npm test: 1646 tests, 1644 pass, zero failures/cancellations, two exact SDK 2026.11.4-only pm-cli#1656 skips with all compensation assertions retained and automatic re-enable on another SDK. Typecheck/lint and strict all-source coverage pass: 14180 lines/statements, 445 functions, 5277 branches, all exactly covered across 29 authored modules. The 71-entry classification is in docs/toolchain-1104-validation.md. Atomic source-lifecycle rollback and recovered finalization still require a supported transaction-owned finalizer from pm-cli#1656. Never bypass ownership guards or claim these two skipped guarantees are certified."
 type: Issue
 pm_format_version: 2
 status: in_progress
 priority: 2
 tags[8]: ci,dependencies,"gh:unbraind/pm-cli#1656","gh:unbraind/pm-github#194","gh:unbraind/pm-github#197",migration,sdk,sdk-adoption
 created_at: "2026-11-02T09:17:15.200Z"
-updated_at: "2026-11-04T21:10:17.509Z"
-assignee: codex-toolchain-1104
-claim_principal: codex-toolchain-1104
+updated_at: "2026-11-05T01:45:56.220Z"
 author: pi-glm
-comments[24]{created_at,author,text}:
+comments[29]{created_at,author,text}:
   "2026-11-03T09:27:51.980Z",codex-toolchain-1103,"Reproduced the real-SDK compensation failure on the actual lockfile SDK 2026.10.28 (manifest remains >=2026.10.17). Root cause is the pm-cli 2026.10.26 GH-1591 ownership-proof hardening in src/sdk/item-transaction.ts. Before .26, compensateByRestore forced a timestamp restore. Since .26, hasOwnedCompensationEffects requires exclusive step ownership or a sibling compensation restoring the exact forward-state hash. commitGithubImportTransaction calls persistImportFidelity from its committing observer; that appends a separate import event (Preserve GitHub source lifecycle), so an ordinary subsequent observer failure correctly refuses rollback with transaction_partial_mutation rather than overwriting an unowned event. Classification: production integration depends on the former broad compensation behavior. Do not loosen the assertion or disable the SDK safety guard. Investigating a supported journaled finalizer; callback reordering or moving fidelity after commit would stop testing rollback after finalization and weaken the import guarantee."
   "2026-11-03T09:30:06.714Z",codex-toolchain-1103,"Supported API review: BulkItemMutation accepts create/update/close/release, and onTransition is an observer, not a journaled custom mutation. Exact lifecycle timestamps currently require persistImportFidelity/mutateItem. No safe small production fix was found on the existing supported SDK range: post-commit finalization weakens rollback, callback reordering bypasses the failing boundary, and spoofed internal markers or force restoration bypass ownership safety. Added docs/atomic-finalization-sdk.md with versions, GH-1591 source comparison, minimal public SDK call shape, actual refusal and required journaled-finalizer support. Keep the existing regression red and report this as a production integration blocker with an upstream API requirement, not an asserted SDK regression. No upstream issue was filed."
   "2026-11-03T09:45:26.334Z",codex-toolchain-1103,"Minimal public SDK reproducer verified on installed 2026.10.28: one bulk UPDATE, then client.update in committing, then an ordinary thrown error. Result is AggregateError compensation failed with transaction_partial_mutation; the item retains title Changed and description Source finalization, journal status compensating. This confirms the ownership-proof boundary independently of GitHub HTTP fixtures and source lifecycle timestamp handling. The synthetic tracker was removed after read-back. Typecheck and lint pass; npm test and the focused linked regression are running with the documented expected failure. Coverage/release gates were not run."
@@ -36,9 +34,15 @@ comments[24]{created_at,author,text}:
   "2026-11-04T21:06:08.384Z",codex-toolchain-1104,"Fresh SDK 2026.11.4 finalization recheck remains exactly 1 pass and 2 failures. Existing repo test options already support reason-bearing Node skip (privacy/gate POSIX and root-permission fixtures). Under the new authorization, skip only the source-lifecycle compensation case and recovered=true terminal refresh case, each citing pm-cli#1656. Every assertion remains in place; fresh refresh compensation still executes. Skips are conditional on installed SDK version 2026.11.4 so a new SDK release automatically re-enables both cases for re-evaluation. No production ownership or rollback guard is bypassed."
   "2026-11-04T21:08:36.140Z",codex-toolchain-1104,"Ready for full rerun: corrected literal and daily-idempotency files 5/5; reverted-fix control 0/1; linked new plain regression 1/1. Minimum packed consumer 1/1 with actual floor CLI JSON input; exact finalization matrix now 1 pass/2 explicit pm-cli#1656 skips, zero failures. Prior report inventory is exactly 71 entries: 2 empty-release assertions, 18 historical-only workflow assertions, 1 plain-import assertion, and 50 budget cancellations. Complete npm test will rerun every previously failed/cancelled file and supply the per-entry classification; budget cancellations are not host-load timeouts."
   "2026-11-04T21:10:17.488Z",codex-toolchain-1104,"First full command stopped in build:test before executing tests: the new regression treated generic list metadata tags as a typed array (TS2339). Narrow tags with Array.isArray before finding the exact provenance tag; runtime assertions are unchanged. Test compilation now passes. Restart the full command; do not count the compile-only attempt as a completed test suite."
-files[21]{path,scope}:
+  "2026-11-04T21:37:12.015Z",codex-toolchain-1104,"Full rerun progress: all twenty original changelog-related assertions have now emitted passing results (2 placement and 18 workflow). The real workflow safety, no-op behavioral-revert and peer-writer lease assertions remain intact. The discussion model worker has finished and the second worker has advanced; its outcome remains buffered behind the workflow file and is not yet certified. Keep the full run uninterrupted; no host-load timeout classification has been inferred from the old deliberate SIGINT cancellations."
+  "2026-11-04T22:18:43.445Z",codex-toolchain-1104,"Full rerun milestone: all 186 closeout decision-matrix rows pass. Exact title matching against the prior failure inventory confirms all 21 original failed assertions now emit passes: 2 empty requested releases, 18 historical-only workflow fixtures, and the plain repeat-import property. More than 1000 checks have emitted successful results; the full command is still processing the remaining files, so do not certify completion or coverage yet. The source-lifecycle case has emitted its explicit pm-cli#1656 skip reason; the recovered refresh case is still later in the queue."
+  "2026-11-04T22:40:34.751Z",codex-toolchain-1104,"Completed full Node 26 npm test on source head 8b11727: 1646 tests, 1644 pass, 0 fail, 0 cancelled, exactly 2 skips, 0 todo, duration 5277066 ms. Both skips are the previously reproduced pm-cli#1656 cases; the fresh-refresh compensation case executes and passes. Every one of the 21 original assertion failures now emits a passing result, and all 50 previously cancelled file entries were included in the completed 72-file run. No host-load timeout occurred, so none is classified that way. All 186 workflow decision rows and the 500-sequence models remain intact. Typecheck and lint follow the full run; coverage is authorized only after these succeed."
+  "2026-11-05T01:42:49.038Z",codex-toolchain-1104,"Coverage gate completed with exit 0: all 29 authored modules, exact 14180/14180 lines and statements, 445/445 functions, 5277/5277 branches, zero skipped source entries and unchanged four 100-percent thresholds. Instrumented test phase: 1646 tests, 1644 pass, zero failures/cancellations, the same two pm-cli#1656 skips, 7936886 ms. Native merge kept all 3883 receipts; no pre-filter, ignore or assertion weakening. Full 71-entry classification is documented. Coverage alone took about three hours, so the follow-up exceeded the approximate time estimate rather than stopping another required run early."
+  "2026-11-05T01:45:49.409Z",codex-toolchain-1104,"Final additional gates pass: docstrings document all 269 declarations in 28 files; duplication gate reports zero duplicated lines across 29 authored modules; regenerated changelog and changelog check are unchanged and pass after fetching tags. Runtime sources, manifest and dependency files are byte-identical to tested source head 8b11727; remaining changes are validation documentation and PM evidence only. Release claims without closing items; verify strict health, commit identity and privacy before the final non-force push."
+files[22]{path,scope}:
   docs/atomic-finalization-sdk.md,project
   docs/daily-sync-recovery.md,project
+  docs/toolchain-1104-validation.md,project
   import-fidelity.ts,project
   index.ts,project
   package-lock.json,project
@@ -58,7 +62,7 @@ files[21]{path,scope}:
   test/refresh.test.ts,project
   test/scheduled-refusals.test.ts,project
   test/typed-sentinel-normalization.test.ts,project
-tests[5]:
+tests[7]:
   - command: "node --test --test-name-pattern=\"real SDK atomic compensation restores\" test/import-fidelity.test.ts"
     scope: project
     provenance:
@@ -98,7 +102,24 @@ tests[5]:
       created_at: "2026-11-04T21:06:12.075Z"
       source_kind: local_mutation
       source_ref: dependabot/npm_and_yarn/pm-toolchain-838740a1aa
-docs[2]{path,scope}:
+  - command: nice -n 10 env NPM_CONFIG_USERCONFIG=/dev/null GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 npm test
+    scope: project
+    timeout_seconds: 10800
+    provenance:
+      author: codex-toolchain-1104
+      created_at: "2026-11-05T01:43:00.849Z"
+      source_kind: local_mutation
+      source_ref: dependabot/npm_and_yarn/pm-toolchain-838740a1aa
+  - command: nice -n 10 env NPM_CONFIG_USERCONFIG=/dev/null GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 npm run coverage
+    scope: project
+    timeout_seconds: 18000
+    provenance:
+      author: codex-toolchain-1104
+      created_at: "2026-11-05T01:43:04.619Z"
+      source_kind: local_mutation
+      source_ref: dependabot/npm_and_yarn/pm-toolchain-838740a1aa
+docs[3]{path,scope}:
   docs/atomic-finalization-sdk.md,project
   docs/daily-sync-recovery.md,project
+  docs/toolchain-1104-validation.md,project
 body: ""
