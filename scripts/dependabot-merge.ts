@@ -39,9 +39,9 @@ export interface MergeResult {
   message: string;
 }
 
-/** Execute gh without a shell; failed API reads cannot become empty success. */
+/** Use the current environment without a shell; failed reads cannot become empty success. */
 export function githubCli(args: readonly string[], executable = "gh"): string {
-  return execFileSync(executable, args, { encoding: "utf8", maxBuffer: 32 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
+  return execFileSync(executable, args, { encoding: "utf8", env: { ...process.env }, maxBuffer: 32 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
 }
 
 const bot = "dependabot[bot]";

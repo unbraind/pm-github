@@ -266,11 +266,13 @@ esac
         assert.equal(run.status, 0, run.stderr);
         assert.match(run.stdout, /::notice::Foreign or unverified commits: aaaaaaaaaaaa outside/);
         assert.match(readFileSync(env.GITHUB_STEP_SUMMARY, "utf8"), /aaaaaaaaaaaa outside/);
-        const old = process.env.PATH;
-        try {
-          process.env.PATH = env.PATH;
-          assert.equal(runDependabotMerge({ ...fixture().input, phase: "revoke" }).armed, false);
-        } finally { process.env.PATH = old; }
+        // Load the original module for coverage, with the fake gh available at
+        // child startup even if a runtime caches its initial command lookup.
+        const probe = join(dir, "adapter-probe.mts");
+        writeFileSync(probe, readFileSync(join(dir, "run-dependabot-merge.mts"), "utf8")
+          .replace("from './dependabot-merge.ts'", "from " + JSON.stringify(new URL("../scripts/dependabot-merge.ts", import.meta.url).href)));
+        const defaultRun = spawnSync(process.execPath, [probe], { env: { ...env, PHASE: "revoke" }, encoding: "utf8" });
+        assert.equal(defaultRun.status, 0, defaultRun.stderr);
       }
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
@@ -279,6 +281,16 @@ esac
 test("real CLI adapter passes argv without shell expansion and propagates failure", () => {
   assert.equal(githubCli(["-p", "'literal $safe'"], process.execPath).trim(), "literal $safe");
   assert.throws(() => githubCli(["-e", "process.exit(3)"], process.execPath));
+});
+
+test("CLI adapter resolves a unique fixture command against the current PATH", () => {
+  const dir = mkdtempSync(join(tmpdir(), "dependabot-command-"));
+  const old = process.env.PATH;
+  try {
+    writeFileSync(join(dir, "policy-command-probe"), "#!/bin/bash\nprintf fixture-resolved\n", { mode: 0o755 });
+    process.env.PATH = dir + ":" + old;
+    assert.equal(githubCli([], "policy-command-probe"), "fixture-resolved");
+  } finally { process.env.PATH = old; rmSync(dir, { recursive: true, force: true }); }
 });
 
 for (const mode of ["armed", "clear", "api-error", "denied"]) {
