@@ -213,6 +213,21 @@ test("workflow policy: pinned actions, minimal grants, no PR checkout or interpo
   const caller = readFileSync(join(root, ".github/workflows/dependabot-auto-merge.yml"), "utf8");
   assert.match(caller, /uses: \.\/\.github\/workflows\/pm-github-dependabot-merge.yml/);
   assert.match(caller, /synchronize/); assert.doesNotMatch(caller, /if:|pull_request_target/);
+  assert.doesNotMatch(caller, /auto_merge_enabled/, "custom-token arm events must not revoke their own request");
+});
+
+test("custom-token arm event preserves the request; a foreign synchronize event revokes it", () => {
+  const caller = parse(readFileSync(join(root, ".github/workflows/dependabot-auto-merge.yml"), "utf8")) as { on: { pull_request: { types: string[] } } };
+  const subscribed = caller.on.pull_request.types;
+  const f = fixture(); f.state.auto_merge = null;
+  assert.equal(f.execute().armed, true);
+  // PAT/App-generated events belong to the credential owner, not Dependabot.
+  f.input.actor = "automation"; f.input.triggeringActor = "automation";
+  if (subscribed.includes("auto_merge_enabled")) f.execute();
+  assert.notEqual(f.state.auto_merge, null, "the token's own arm event must not disarm the request");
+  f.input.actor = "outside"; f.input.triggeringActor = "outside"; f.commit.author.login = "outside";
+  if (subscribed.includes("synchronize")) f.execute();
+  assert.equal(f.state.auto_merge, null, "foreign synchronize must still revoke the request");
 });
 
 for (const mode of ["external", "local", "load-failed", "invalid-sha", "local-ref-failed"]) {

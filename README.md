@@ -857,7 +857,7 @@ updates outside those groups wait for review. The arm request includes
 name: dependabot-auto-merge
 on:
   pull_request:
-    types: [opened, reopened, synchronize, ready_for_review, edited, auto_merge_enabled]
+    types: [opened, reopened, synchronize, ready_for_review, edited]
 permissions: {}
 jobs:
   verified-auto-merge:
@@ -901,6 +901,9 @@ that self-call fails closed because the trusted policy file is absent.
 Migration: replace the **entire** copied `dependabot-auto-merge.yml` with the
 caller above. Retain `synchronize` and omit author/actor job guards: the job
 must run when a foreign actor pushes so it can revoke an earlier request.
+Keep `auto_merge_enabled` out of the caller's event types: a custom token's arm
+event belongs to its automation account and would immediately revoke its own
+request under the strict Dependabot actor policy.
 Remove any other workflow that arms Dependabot auto-merge, and clear existing
 requests when adopting the caller; installing a workflow does not retroactively
 trigger it for every open PR. This repository uses the supported local path.
