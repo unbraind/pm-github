@@ -1,5 +1,5 @@
 /** Standalone policy loaded from the reusable workflow SHA, never from a PR. */
-import { execFileSync } from "node:child_process";
+import { execFileSync, type ExecFileSyncOptionsWithStringEncoding } from "node:child_process";
 
 /** Minimal GitHub PR fields needed to prove a stable, complete snapshot. */
 interface PullRequest {
@@ -39,15 +39,27 @@ export interface MergeResult {
   message: string;
 }
 
+/** Execute one bounded child; injectable so tests can observe actual kill receipts. */
+export type GithubCommandRunner = (executable: string, args: readonly string[], options: ExecFileSyncOptionsWithStringEncoding) => string;
+
+/** Read the trusted runtime deadline; invalid overrides fail before starting a child. */
+export function githubCallTimeout(seconds = process.env.DEPENDABOT_GH_TIMEOUT_SECONDS ?? "60"): number {
+  if (!/^[1-9][0-9]*$/.test(seconds) || Number(seconds) > 60) {
+    throw new Error("GitHub CLI timeout must be an integer from 1 to 60 seconds.");
+  }
+  return Number(seconds) * 1000;
+}
+
 /** Bound each CLI attempt, discard failed output, and retry at most three times without a shell. */
-export function githubCli(args: readonly string[], executable = "gh", timeout = 60_000): string {
+export function githubCli(args: readonly string[], executable = "gh", timeout = githubCallTimeout(), execute: GithubCommandRunner = execFileSync): string {
+  if (!Number.isInteger(timeout) || timeout < 1 || timeout > 60_000) throw new Error("Invalid GitHub CLI timeout.");
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      return execFileSync(executable, args, { encoding: "utf8", env: { ...process.env }, maxBuffer: 32 * 1024 * 1024,
+      return execute(executable, args, { encoding: "utf8", env: { ...process.env }, maxBuffer: 32 * 1024 * 1024,
         stdio: ["ignore", "pipe", "pipe"], timeout, killSignal: "SIGKILL" });
     } catch { /* A timeout or failed attempt must never expose partial output. */ }
   }
-  throw new Error("GitHub CLI failed or timed out after 3 bounded attempts (60 seconds each in production).");
+  throw new Error("GitHub CLI failed or timed out after 3 bounded attempts.");
 }
 
 const bot = "dependabot[bot]";

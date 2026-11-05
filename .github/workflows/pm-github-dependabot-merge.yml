@@ -51,11 +51,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # A trusted runtime override may shorten the deadline, never remove its bound.
+          gh_timeout="${DEPENDABOT_GH_TIMEOUT_SECONDS-60}"
+          if [[ ! "${gh_timeout}" =~ ^[1-9][0-9]?$ ]] || (( gh_timeout > 60 )); then
+            echo '::error::GitHub CLI timeout must be an integer from 1 to 60 seconds.'
+            exit 1
+          fi
           # Keep retries bounded and discard partial output from failed attempts.
           bounded_gh() {
             local attempt output
             for attempt in 1 2 3; do
-              if output="$(timeout --signal=KILL 60s gh "$@" 2>/dev/null)"; then
+              if output="$(timeout --signal=KILL "${gh_timeout}s" gh "$@" 2>/dev/null)"; then
                 printf '%s' "${output}"
                 return 0
               fi
@@ -85,11 +91,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # A trusted runtime override may shorten the deadline, never remove its bound.
+          gh_timeout="${DEPENDABOT_GH_TIMEOUT_SECONDS-60}"
+          if [[ ! "${gh_timeout}" =~ ^[1-9][0-9]?$ ]] || (( gh_timeout > 60 )); then
+            echo '::error::GitHub CLI timeout must be an integer from 1 to 60 seconds.'
+            exit 1
+          fi
           # Keep retries bounded and discard partial output from failed attempts.
           bounded_gh() {
             local attempt output
             for attempt in 1 2 3; do
-              if output="$(timeout --signal=KILL 60s gh "$@" 2>/dev/null)"; then
+              if output="$(timeout --signal=KILL "${gh_timeout}s" gh "$@" 2>/dev/null)"; then
                 printf '%s' "${output}"
                 return 0
               fi

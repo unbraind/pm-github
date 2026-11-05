@@ -1,12 +1,12 @@
 /** Execute the production merge policy against API receipts and its real workflow launcher. */
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { parse } from "yaml";
-import { auditDependabotMerges, githubCli, runDependabotMerge, type MergeInput } from "../scripts/dependabot-merge.ts";
+import { auditDependabotMerges, githubCallTimeout, githubCli, runDependabotMerge, type GithubCommandRunner, type MergeInput } from "../scripts/dependabot-merge.ts";
 
 const root = resolve(import.meta.dirname, "..");
 const bot = "dependabot[bot]";
@@ -237,21 +237,51 @@ test("custom-token arm event preserves the request; a foreign synchronize event 
   assert.equal(f.state.auto_merge, null, "foreign synchronize must still revoke the request");
 });
 
-/** Exercise the production timeout arguments with a shorter real clock in shell fixtures. */
+/** Kill only after the blocking child signals readiness; host startup time is irrelevant. */
 function installFixtureTimeout(dir: string): void {
   writeFileSync(join(dir, "timeout"), `#!/bin/bash
-[[ "$1" == --signal=KILL && "$2" == 60s ]] || exit 97
-shift 2
-duration=60s
-case "$MODE" in *hang*) duration=0.3s ;; esac
-exec /usr/bin/timeout --signal=KILL "$duration" "$@"
+[[ "$1" == --signal=KILL && "$2" == "\${DEPENDABOT_GH_TIMEOUT_SECONDS-60}s" ]] || exit 97
+case "$MODE" in
+  *hang*) shift 2; exec "${process.execPath}" "$TIMEOUT_SUPERVISOR" "$@" ;;
+  *) exec /usr/bin/timeout "$@" ;;
+esac
 `, { mode: 0o755 });
+  writeFileSync(join(dir, "timeout-supervisor.cjs"), `
+const assert = require('node:assert/strict');
+const { spawn } = require('node:child_process');
+const { appendFileSync } = require('node:fs');
+const child = spawn(process.argv[2], process.argv.slice(3), { stdio: ['ignore', 'inherit', 'inherit', 'pipe', 'pipe'] });
+let ready = false;
+child.stdio[3].once('data', () => {
+  ready = true;
+  assert.equal(child.kill('SIGKILL'), true);
+});
+child.on('close', (code, signal) => {
+  if (ready) {
+    assert.equal(signal, 'SIGKILL');
+    appendFileSync(process.env.KILL_RECEIPTS, 'SIGKILL\\n');
+    process.exit(137);
+  }
+  assert.equal(signal, null);
+  process.exit(code);
+});
+`);
+}
+
+/** Runtime bindings for the readiness-controlled deadline fixture. */
+function timeoutEnvironment(dir: string, mode: string): Record<string, string> {
+  return { DEPENDABOT_GH_TIMEOUT_SECONDS: mode === "default-timeout" ? "60" : "7", TIMEOUT_SUPERVISOR: join(dir, "timeout-supervisor.cjs"), KILL_RECEIPTS: join(dir, "kills") };
+}
+
+/** Require actual child termination, not merely an invocation or elapsed time. */
+function assertHangKills(dir: string, mode: string): void {
+  if (mode.includes("hang")) assert.deepEqual(readFileSync(join(dir, "kills"), "utf8").trim().split("\n"), ["SIGKILL", "SIGKILL", "SIGKILL"]);
 }
 
 for (const mode of ["external", "local", "remote-self", "audit", "audit-load-failed", "load-failed", "invalid-sha", "load-hang", "fallback-read-hang", "fallback-disable-hang", "load-retry"]) {
   test(`real workflow loader/launcher: ${mode}`, () => {
     const dir = mkdtempSync(join(tmpdir(), "dependabot-policy-"));
-    const env = { ...process.env, PATH: dir + ":" + process.env.PATH, RUNNER_TEMP: dir,
+    const env = { ...process.env, ...timeoutEnvironment(dir, mode), PATH: dir + ":" + process.env.PATH, RUNNER_TEMP: dir,
       RETRY_MARKER: join(dir, "retried"), POLICY_SOURCE: join(root, "scripts/dependabot-merge.ts"), WORKFLOW_SHA: mode === "invalid-sha" ? "bad" : mode === "local" ? trusted : head,
       WORKFLOW_REF: `unbraind/pm-github/.github/workflows/pm-github-dependabot-merge.yml@${mode.startsWith("local") ? "refs/pull/7/merge" : head}`,
       CALLER_REF: "refs/pull/7/merge",
@@ -266,19 +296,20 @@ printf '%s\\n' "$*" >> "$RECEIPTS"
 case "$*" in
   *git/ref/heads/main*) [[ "$MODE" != local-ref-failed ]] || exit 1; printf '%s' '${trusted}' ;;
   *contents/scripts*)
-    [[ "$MODE" != load-hang ]] || { trap '' TERM; sleep 2; exit 0; }
+    [[ "$MODE" != load-hang ]] || { printf ready >&3; read -r -u 4; exit 98; }
     [[ "$MODE" != load-retry || -f "$RETRY_MARKER" ]] || { touch "$RETRY_MARKER"; printf partial; exit 1; }
     [[ "$MODE" != load-failed && "$MODE" != audit-load-failed && "$MODE" != fallback-* ]] || exit 1; cat "$POLICY_SOURCE" ;;
   *'/pulls?'*) printf '%s' '{"number":7,"user":{"login":"${bot}"},"auto_merge":{}}' ;;
   *'/commits?'*) printf '%s' '{"sha":"${head}","author":{"login":"outside"},"committer":{"login":"outside"}}' ;;
-  'api '*) [[ "$MODE" != fallback-read-hang ]] || { trap '' TERM; sleep 2; exit 0; }; printf '%s' '{"state":"open","user":{"login":"${bot}"},"head":{"sha":"${head}"},"commits":1,"auto_merge":null}' ;;
-  'pr merge '*) [[ "$MODE" != fallback-disable-hang ]] || { trap '' TERM; sleep 2; exit 0; } ;;
+  'api '*) [[ "$MODE" != fallback-read-hang ]] || { printf ready >&3; read -r -u 4; exit 98; }; printf '%s' '{"state":"open","user":{"login":"${bot}"},"head":{"sha":"${head}"},"commits":1,"auto_merge":null}' ;;
+  'pr merge '*) [[ "$MODE" != fallback-disable-hang ]] || { printf ready >&3; read -r -u 4; exit 98; } ;;
   *) exit 2 ;;
 esac
 `, { mode: 0o755 });
-      const loaded = spawnSync("bash", ["-c", loader()], { cwd: dir, env, encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL" });
+      const loaded = spawnSync("bash", ["-c", loader()], { cwd: dir, env, encoding: "utf8", timeout: 120_000, killSignal: "SIGKILL" });
       const failed = ["load-failed", "invalid-sha", "load-hang", "fallback-read-hang"].includes(mode);
       assert.equal(loaded.status, mode === "fallback-disable-hang" || mode === "audit-load-failed" ? 1 : 0, loaded.stderr);
+      assertHangKills(dir, mode);
       const receipts = readFileSync(env.RECEIPTS, "utf8");
       if (mode === "audit-load-failed") {
         assert.match(loaded.stdout, /Cannot load trusted audit policy/);
@@ -327,7 +358,7 @@ test("CLI adapter resolves a unique fixture command against the current PATH", (
   } finally { process.env.PATH = old; rmSync(dir, { recursive: true, force: true }); }
 });
 
-for (const mode of ["armed", "clear", "closed", "malformed-api", "api-error", "denied", "hang-read", "hang-disable", "retry-disable"]) {
+for (const mode of ["default-timeout", "armed", "clear", "closed", "malformed-api", "api-error", "denied", "hang-read", "hang-disable", "retry-disable"]) {
   test(`pre-tooling revocation shell: ${mode}`, () => {
     const dir = mkdtempSync(join(tmpdir(), "dependabot-revoke-"));
     try {
@@ -337,7 +368,7 @@ for (const mode of ["armed", "clear", "closed", "malformed-api", "api-error", "d
       writeFileSync(join(dir, "gh"), `#!/bin/bash
 printf '%s\\n' "$*" >> "$RECEIPTS"
 if [[ "$1" == api ]]; then
-  [[ "$MODE" != hang-read ]] || { trap '' TERM; sleep 2; exit 0; }
+  [[ "$MODE" != hang-read ]] || { printf ready >&3; read -r -u 4; exit 98; }
   [[ "$MODE" != api-error ]] || exit 1
   case "$MODE" in
     clear) payload='{"state":"open","auto_merge":null}' ;;
@@ -347,18 +378,20 @@ if [[ "$1" == api ]]; then
   esac
   printf '%s' "$payload" | jq -r "$4"
 else
-  [[ "$MODE" != hang-disable ]] || { trap '' TERM; sleep 2; exit 0; }
+  [[ "$MODE" != hang-disable ]] || { printf ready >&3; read -r -u 4; exit 98; }
   [[ "$MODE" != retry-disable || -f "$RETRY_MARKER" ]] || { touch "$RETRY_MARKER"; exit 1; }
   [[ "$MODE" != denied ]]
 fi
 `, { mode: 0o755 });
       installFixtureTimeout(dir);
-      const env = { ...process.env, PATH: dir + ":" + process.env.PATH, RETRY_MARKER: join(dir, "retried"), REPOSITORY: "acme/widgets", PR_NUMBER: "7",
+      const env = { ...process.env, ...timeoutEnvironment(dir, mode), PATH: dir + ":" + process.env.PATH, RETRY_MARKER: join(dir, "retried"), REPOSITORY: "acme/widgets", PR_NUMBER: "7",
         MODE: mode, RECEIPTS: join(dir, "receipts"), GITHUB_STEP_SUMMARY: join(dir, "summary") };
-      const result = spawnSync("bash", ["-c", shell], { cwd: dir, env, encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL" });
+      if (mode === "default-timeout") delete (env as NodeJS.ProcessEnv).DEPENDABOT_GH_TIMEOUT_SECONDS;
+      const result = spawnSync("bash", ["-c", shell], { cwd: dir, env, encoding: "utf8", timeout: 120_000, killSignal: "SIGKILL" });
       assert.equal(result.status, mode === "denied" || mode === "hang-disable" ? 1 : 0, result.stderr);
       if (mode === "denied" || mode === "hang-disable") assert.match(result.stdout, /Cannot revoke auto-merge/);
       else assert.match(readFileSync(env.GITHUB_STEP_SUMMARY, "utf8"), /cleared before tooling/);
+      assertHangKills(dir, mode);
       const receipts = readFileSync(env.RECEIPTS, "utf8");
       if (mode === "hang-read") assert.equal(receipts.split("\n").filter(line => line.startsWith("api ")).length, 3);
       if (mode === "hang-disable" || mode === "denied") assert.equal(receipts.split("\n").filter(line => line.startsWith("pr merge ")).length, 3);
@@ -370,13 +403,35 @@ fi
 }
 
 
+
+test("both workflow shells reject invalid deadline overrides before any CLI call", () => {
+  const source = parse(readFileSync(join(root, ".github/workflows/pm-github-dependabot-merge.yml"), "utf8")) as {
+    jobs: Record<string, { steps: { name: string; run?: string }[] }>;
+  };
+  const dir = mkdtempSync(join(tmpdir(), "dependabot-invalid-deadline-"));
+  try {
+    const receipt = join(dir, "called");
+    writeFileSync(join(dir, "gh"), `#!/bin/bash\nprintf called > "$CLI_RECEIPT"\n`, { mode: 0o755 });
+    for (const step of source.jobs["dependabot-merge"]!.steps.filter(step => step.name === "Revoke previous auto-merge before tooling" || step.name === "Load trusted merge policy")) {
+      for (const invalid of ["", "0", "-1", "1.5", "61", "Infinity", "1e2", " 7", "07", "7\n"]) {
+        const result = spawnSync("bash", ["-c", step.run!], { encoding: "utf8", env: {
+          ...process.env, PATH: dir + ":" + process.env.PATH, DEPENDABOT_GH_TIMEOUT_SECONDS: invalid, CLI_RECEIPT: receipt,
+        } });
+        assert.equal(result.status, 1, result.stderr);
+        assert.match(result.stdout, /timeout must be an integer from 1 to 60 seconds/);
+        assert.equal(existsSync(receipt), false);
+      }
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("README describes the actual author guard without an owner restriction", () => {
   const readme = readFileSync(join(root, "README.md"), "utf8");
   assert.match(readme, /workflow checks the Dependabot author, then the\s+metadata group/);
   assert.doesNotMatch(readme, /Dependabot author and repository\s+owner/);
 });
 
-for (const mode of ["retry", "exhausted", "timeout"]) {
+for (const mode of ["retry", "exhausted"]) {
   test(`real CLI bounded attempts discard partial output: ${mode}`, () => {
     const dir = mkdtempSync(join(tmpdir(), "dependabot-bounded-"));
     try {
@@ -384,16 +439,63 @@ for (const mode of ["retry", "exhausted", "timeout"]) {
       const script = `const fs = require('node:fs'); const p = process.argv[1];
         const n = fs.existsSync(p) ? Number(fs.readFileSync(p, 'utf8')) + 1 : 1;
         fs.writeFileSync(p, String(n));
-        if (process.argv[2] === 'timeout') { process.stdout.write('partial'); process.on('SIGTERM', () => {}); setTimeout(() => { process.stdout.write('late'); process.exit(0); }, 2000); }
-        else if (process.argv[2] === 'retry' && n === 3) process.stdout.write('complete');
+        if (process.argv[2] === 'retry' && n === 3) process.stdout.write('complete');
         else { process.stdout.write('partial'); process.exit(1); }`;
-      const run = () => githubCli(["-e", script, counter, mode], process.execPath, mode === "timeout" ? 500 : 5000);
+      const run = () => githubCli(["-e", script, counter, mode], process.execPath);
       if (mode === "retry") assert.equal(run(), "complete");
       else assert.throws(run, /failed or timed out after 3 bounded attempts/);
       assert.equal(readFileSync(counter, "utf8"), "3");
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 }
+
+
+test("CLI deadline defaults to 60 seconds, reads runtime overrides and rejects unbounded values", () => {
+  const previous = process.env.DEPENDABOT_GH_TIMEOUT_SECONDS;
+  const timeouts: number[] = [];
+  const execute: GithubCommandRunner = (_executable, _args, options) => {
+    timeouts.push(options.timeout!);
+    assert.equal(options.killSignal, "SIGKILL");
+    return "complete";
+  };
+  try {
+    delete process.env.DEPENDABOT_GH_TIMEOUT_SECONDS;
+    assert.equal(githubCli([], "fixture-command", undefined, execute), "complete");
+    process.env.DEPENDABOT_GH_TIMEOUT_SECONDS = "7";
+    assert.equal(githubCli([], "fixture-command", undefined, execute), "complete");
+    assert.deepEqual(timeouts, [60_000, 7000]);
+    for (const invalid of ["", "0", "-1", "1.5", "61", "Infinity", "1e2", " 7", "07", "7\n"]) {
+      assert.throws(() => githubCallTimeout(invalid), /integer from 1 to 60/);
+    }
+    for (const invalid of [0, -1, NaN, Infinity, 0.5, 60_001]) {
+      assert.throws(() => githubCli([], "fixture-command", invalid, execute), /Invalid GitHub CLI timeout/);
+    }
+    assert.equal(timeouts.length, 2, "invalid deadlines must not start a child");
+  } finally {
+    if (previous === undefined) delete process.env.DEPENDABOT_GH_TIMEOUT_SECONDS;
+    else process.env.DEPENDABOT_GH_TIMEOUT_SECONDS = previous;
+  }
+});
+
+test("real CLI timeout kills every blocking child and fails closed without startup counters", () => {
+  let attempts = 0;
+  let killed = 0;
+  const execute: GithubCommandRunner = (executable, args, options) => {
+    attempts++; // Parent-side receipt exists before the child can start or time out.
+    try { return execFileSync(executable, args, options); }
+    catch (error) {
+      const receipt = error as Error & { code?: string; signal?: string };
+      assert.equal(receipt.code, "ETIMEDOUT");
+      assert.equal(receipt.signal, "SIGKILL");
+      killed++;
+      throw error;
+    }
+  };
+  const block = "process.stdout.write('partial'); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);";
+  assert.throws(() => githubCli(["-e", block], process.execPath, 1, execute), /^Error: GitHub CLI failed or timed out after 3 bounded attempts\.$/);
+  assert.equal(attempts, 3);
+  assert.equal(killed, 3);
+});
 
 
 /** Supply paginated PR-list receipts while exercising the shared production provenance checks. */
