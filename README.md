@@ -861,6 +861,7 @@ on:
 permissions: {}
 jobs:
   verified-auto-merge:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
     permissions:
       contents: write
       pull-requests: write
@@ -899,8 +900,10 @@ a PR cannot supply the executable script. Before this change reaches `main`,
 that self-call fails closed because the trusted policy file is absent.
 
 Migration: replace the **entire** copied `dependabot-auto-merge.yml` with the
-caller above. Retain `synchronize` and omit author/actor job guards: the job
-must run when a foreign actor pushes so it can revoke an earlier request.
+caller above. Retain `synchronize` and the PR-author-only caller guard. Other
+PR automation keeps its own merge requests; a foreign push to a Dependabot PR
+still runs because the PR author remains Dependabot. An actor guard on the
+calling job would skip that foreign push and prevent revocation.
 Keep `auto_merge_enabled` out of the caller's event types: a custom token's arm
 event belongs to its automation account and would immediately revoke its own
 request under the strict Dependabot actor policy.

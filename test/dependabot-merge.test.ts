@@ -212,7 +212,9 @@ test("workflow policy: pinned actions, minimal grants, no PR checkout or interpo
   assert.match(source, /continue-on-error: true/); assert.match(source, /job\.workflow_sha/);
   const caller = readFileSync(join(root, ".github/workflows/dependabot-auto-merge.yml"), "utf8");
   assert.match(caller, /uses: \.\/\.github\/workflows\/pm-github-dependabot-merge.yml/);
-  assert.match(caller, /synchronize/); assert.doesNotMatch(caller, /if:|pull_request_target/);
+  assert.match(caller, /synchronize/);
+  assert.match(caller, /if: github\.event\.pull_request\.user\.login == 'dependabot\[bot\]'/);
+  assert.doesNotMatch(caller, /github\.(?:actor|triggering_actor)|pull_request_target/);
   assert.doesNotMatch(caller, /auto_merge_enabled/, "custom-token arm events must not revoke their own request");
 });
 
