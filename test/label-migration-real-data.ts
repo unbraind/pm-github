@@ -154,7 +154,7 @@ const runtime = process.versions.bun ? "bun" : "node";
 const nativeRoot = ${JSON.stringify(join(local, "native-proof-"))} + runtime;
 mkdirSync(nativeRoot);
 await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { pmRoot: nativeRoot, cwd: nativeRoot, noExtensions: true });
-const scope = { parent: "none", clearDeps: true, unset: ["sprint", "release", "goal", "objective"] };
+const scope = { clearDeps: true, unset: ["parent", "sprint", "release", "goal", "objective"] };
 const target = (await create({ title: "Literal native comma", type: "Task", ...scope }, { pmRoot: nativeRoot })).item;
 const settings = await readSettings(nativeRoot);
 /** Seed native array state through the SDK without routing it through command CSV options. */

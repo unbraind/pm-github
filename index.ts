@@ -2755,9 +2755,9 @@ export function parseImportOptions(options: Record<string, unknown>): ImportOpti
 // Spawn the `pm` CLI with the given argv and return a normalized ok/stdout/stderr
 // result (ok = exit code 0). Centralizes every pm mutation so callers share one
 // error-handling shape.
-function pmRun(args: string[]): { ok: boolean; stderr: string; stdout: string } {
+function pmRun(args: string[], input?: string): { ok: boolean; stderr: string; stdout: string } {
   const maxBuffer = pmJsonMaxBuffer();
-  const result = spawnSync("pm", args, { encoding: "utf-8", maxBuffer, env: { ...process.env } });
+  const result = spawnSync("pm", args, { encoding: "utf-8", maxBuffer, input, env: { ...process.env } });
   return { ok: result.status === 0, stderr: result.stderr || "", stdout: result.stdout || "" };
 }
 
@@ -3806,9 +3806,11 @@ export async function runImport(
         ...nativeTags,
         "--message", `Re-imported from GitHub #${issue.number}`,
       ];
-      if (assignee) updArgs.push("--assignee", assignee);
-      if (milestone) updArgs.push("--sprint", milestone);
-      const upd = pmRun(updArgs);
+      // GH-1614: JSON document fields preserve literal source identities;
+      // legacy --assignee/--sprint flags interpret none/null as clear tokens.
+      const upd = pmRun([...updArgs, "--stdin-json"], JSON.stringify({
+        ...(assignee ? { assignee } : {}), ...(milestone ? { sprint: milestone } : {}),
+      }));
       if (!upd.ok) {
         console.error(`#${issue.number}: update failed — ${upd.stderr}`);
         skipped++;
@@ -3839,7 +3841,7 @@ export async function runImport(
       if (syncAnnotations) {
         commentWriteFailures += (await syncGithubCommentsToAnnotations(match.id, comments, pmRoot, issue.number)).failed;
       }
-      await persistImportFidelity(pmRoot, match.id, prepared.fidelity!, false);
+      await persistImportFidelity(pmRoot, match.id, prepared.fidelity!, false, false, assignee);
       if (prepared.identity?.via === "citation") adopted++;
       else updated++;
       continue;
@@ -3862,12 +3864,12 @@ export async function runImport(
       "--message", `Imported from GitHub #${issue.number}`,
     ];
     if (canonicalGithubStatus(status, workspace.statuses) === canonicalGithubStatus("canceled", workspace.statuses)) createArgs.push("--close-reason", prepared.fidelity!.github_close_reason);
-    if (assignee) createArgs.push("--assignee", assignee);
-    if (milestone) createArgs.push("--sprint", milestone);
     // --json lets a following close (or annotations sync) address the freshly
     // created item by id without re-scanning the workspace.
     createArgs.push("--json");
-    const created = pmRun(createArgs);
+    const created = pmRun([...createArgs, "--stdin-json"], JSON.stringify({
+      ...(assignee ? { assignee } : {}), ...(milestone ? { sprint: milestone } : {}),
+    }));
     if (!created.ok) {
       console.error(`#${issue.number}: create failed — ${created.stderr}`);
       skipped++;
@@ -3904,7 +3906,7 @@ export async function runImport(
       }
     }
     if (!createdId) throw new CommandError(`Could not finalize GitHub issue #${issue.number}: created id missing.`);
-    await persistImportFidelity(pmRoot, createdId, prepared.fidelity!, false);
+    await persistImportFidelity(pmRoot, createdId, prepared.fidelity!, false, false, assignee);
     imported++;
   }
 

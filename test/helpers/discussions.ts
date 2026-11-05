@@ -14,7 +14,7 @@ export async function discussionTracker(run: (root: string, sdk: ExtensionComman
     await withEnv({ PM_AUTHOR: "fixture", PM_PATH: root, GIT_CEILING_DIRECTORIES: dirname(directory), PATH: directory }, async () => {
       await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { cwd: directory, pmRoot: root, noExtensions: true });
       const client = new PmClient({ pmRoot: root, noExtensions: true, author: "fixture" });
-      const item = (await client.create({ type: "Task", title: "Issue context", parent: "none", clearDeps: true, unset: ["sprint", "release", "goal", "objective"] })).item.id;
+      const item = (await client.create({ type: "Task", title: "Issue context", clearDeps: true, unset: ["parent", "sprint", "release", "goal", "objective"] })).item.id;
       await run(root, createExtensionCommandSdk(root, client), item, directory);
     });
   } finally { rmSync(directory, { recursive: true, force: true }); }

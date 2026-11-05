@@ -2,8 +2,8 @@
 
 pm-github requires PM CLI **2026.10.17 or newer**. The top-level
 `manifest.json` `pm_min_version` is the floor enforced by the host. npm peer
-and development ranges declare the same minimum. The development lockfile keeps
-an exact, integrity-checked SDK resolution; it currently resolves 2026.10.23.
+dependencies declare that minimum. The development dependency is an independent
+exact pin in `package.json`, with an identical integrity-checked lock resolution.
 
 The minimum covers the entire package contract, rather than one imported name:
 
@@ -32,7 +32,11 @@ cannot hide a missing SDK type. It type-checks a public typed consumer, imports
 the actual installed artifact, and exercises label preview,
 approval, SDK table restoration and literal native comma tags in a plain tracker
 with no git executable. No SDK mocks or development-node_modules symlinks are
-used. Public npm child processes use the null user configuration and exclude
+used. Runtime dependencies, TypeScript and Node types are installed in the
+minimum consumer. Operational pm-ops types come from a separate fixture tooling
+project, whose newer SDK peer cannot replace the consumer SDK. A synthetic tool
+requires the exact development SDK to verify that isolation on every run.
+Public npm child processes use the null user configuration and exclude
 credential variables; dependency lifecycle scripts are disabled.
 
 The test is part of the normal test inventory, so the unchanged npm/Bun release

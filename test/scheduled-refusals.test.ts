@@ -131,9 +131,10 @@ test("unchanged import comparison includes content, type and optional assignment
   assert.equal(importEntryUnchanged({ ...entry, match: { ...entry.match, body: undefined } }), false);
   assert.equal(importEntryUnchanged({ ...entry, assignee: "fixture", milestone: "Milestone" }), false);
   assert.equal(importEntryUnchanged({ ...entry, assignee: "fixture", milestone: "Milestone", match: { ...entry.match, assignee: "fixture", sprint: "Milestone" } }), true);
-  assert.equal(importEntryUnchanged({ ...entry, body: "\n\nBody \n", assignee: " fixture ", milestone: " none ", match: { ...entry.match, assignee: "fixture" } }), true);
+  assert.equal(importEntryUnchanged({ ...entry, body: "\n\nBody \n", assignee: " fixture ", milestone: " none ", match: { ...entry.match, assignee: "fixture", sprint: "none" } }), true);
   assert.equal(importEntryUnchanged({ ...entry, body: " Body" }), false, "Leading content indentation must remain significant.");
-  assert.equal(importEntryUnchanged({ ...entry, assignee: "none", milestone: "Milestone", match: { ...entry.match, sprint: " Milestone " } }), true);
+  assert.equal(importEntryUnchanged({ ...entry, assignee: "none", milestone: "Milestone", match: { ...entry.match, sprint: " Milestone " } }), false, "Literal none is a real identity change.");
+  assert.equal(importEntryUnchanged({ ...entry, assignee: "none", milestone: "Milestone", match: { ...entry.match, assignee: "none", sprint: " Milestone " } }), true);
   assert.deepEqual(normalizeImportValue("tags", [" X ", "x", ""]), ["x"]);
   assert.deepEqual(normalizeImportValue("tags", undefined), []);
   assert.equal(normalizeImportValue("status", "in-progress"), "in_progress");

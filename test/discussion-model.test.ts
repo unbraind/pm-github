@@ -13,7 +13,7 @@ test("500 seeded operation sequences preserve all touched native fields, relatio
     const referenceRoot = join(directory, "reference");
     await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { cwd: directory, pmRoot: referenceRoot, noExtensions: true });
     const reference = new PmClient({ pmRoot: referenceRoot, author: "fixture", noExtensions: true });
-    const scope = { parent: "none", clearDeps: true, unset: ["sprint", "release", "goal", "objective"] };
+    const scope = { clearDeps: true, unset: ["parent", "sprint", "release", "goal", "objective"] };
     await reference.create({ id: parent, title: "Issue context", type: "Task", ...scope });
     const ambient = (await sdk.client.create({ title: "Ambient context", type: "Task", ...scope })).item.id;
     const other = (await sdk.client.create({ title: "Related native task", type: "Task", ...scope })).item.id;
@@ -38,7 +38,7 @@ test("500 seeded operation sequences preserve all touched native fields, relatio
       await sdk.client.focus(random(2) ? ambient : other);
       const parentOptions = { body: `Native body ${random(9)}\r\n preserved  `, description: `Native description ${random(12)}`,
         tags: random(2) ? "KEEP, native" : "native", status: statuses[random(statuses.length)]!,
-        parent: "none", dep: [`id=${other},kind=related`], unset: ["sprint", "release", "goal", "objective"] };
+        dep: [`id=${other},kind=related`], unset: ["parent", "sprint", "release", "goal", "objective"] };
       await sdk.client.update(parent, parentOptions);
       const nativeBefore = (await sdk.client.get(parent, projection)).item;
       // Bound the state population while retaining 500 independent random operation sequences.
