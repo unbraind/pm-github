@@ -432,7 +432,7 @@ test("workflow refusal reporter emits one precise annotation and withholds priva
   for (const [payload, patch, expected] of [
     [{ plan: [{ item: f.id, pr: 42, missing_evidence: [{ code: "close_failed", reason: "SDK close refused: workflow_policy_refused. Supply required fields: reviewer." }] }] }, "", /item .*PR #42:.*reviewer/],
     [{ findings: [{ item_id: "github-issue-1", field: "body", rule: "absolute-host-path" }] }, "", /item github-issue-1, field body, rule absolute-host-path/],
-    [{ reason: secret }, "", /diagnostic blocked by the privacy gate/],
+    [{ reason: secret }, "", /\[redacted\]/],
     [{}, `diff --git a/.agents/pm/tasks/${f.id}.toon b/.agents/pm/tasks/${f.id}.toon\n-updated_at: before\n+updated_at: after`, /field updated_at/],
   ] as const) {
     writeFileSync(report, JSON.stringify(payload)); writeFileSync(error, ""); writeFileSync(diff, patch);

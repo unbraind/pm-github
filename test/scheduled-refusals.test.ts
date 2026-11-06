@@ -10,7 +10,7 @@ import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension, { fetchJSON, githubApiBase, parseNextLink, parseImportOptions, runImport, importEntryUnchanged, type PreparedGithubImport } from "../index.ts";
 import { buildImportFidelity, importFidelityFields, normalizeImportValue } from "../import-fidelity.ts";
 import { runCloseout, closeoutFailureReason, checkCloseoutHead } from "../closeout.ts";
-import { decodeWorkflowDiagnostic, readWorkflowFailure, workflowFailure } from "../workflow-diagnostic.ts";
+import { decodeWorkflowDiagnostic, readWorkflowFailure, redactWorkflowFailure, workflowFailure } from "../workflow-diagnostic.ts";
 import { withMockGithub, jsonResponse, nextLinkHeader } from "./helpers/mock-github-server.ts";
 
 const cli = join(import.meta.dirname, "../node_modules/.bin/pm");
@@ -151,6 +151,48 @@ test("workflow diagnostics decode progress, host errors and bounded nested recei
   assert.deepEqual(decodeWorkflowDiagnostic(' {"plan":[]}'), { plan: [] });
   assert.deepEqual(decodeWorkflowDiagnostic(' {"detail":3}'), { detail: 3 });
 });
+
+test("workflow diagnostics retain plain stderr failures and redact private values before logging", () => {
+  const secret = "ghp_" + "A".repeat(36);
+  const hostPath = "/" + ["home", "fixture", "tracker"].join("/");
+  const errors = [
+    `Error: Unverifiable GitHub pagination.`,
+    `progress\nError: Unexpected {remote} response.`,
+    `Error: Command failed\n\nWhat happened:\n  Missing required options --reviewer for type Issue\n\nWhy:\n  private help`,
+    `error: GitHub GET /repos/fixture/project/pulls failed: HTTP 403`,
+  ];
+  for (const [index, text] of errors.entries()) {
+    const reason = decodeWorkflowDiagnostic(text).reason;
+    assert.equal(typeof reason, "string");
+    assert.match(String(reason), [/Unverifiable GitHub pagination/, /Unexpected \{remote\}/, /Missing required options --reviewer/, /GET .*HTTP 403/][index]!);
+    assert.ok(!String(reason).includes("private help"));
+  }
+  const reason = `GitHub GET failed: HTTP 403; Bearer ${secret}; tracker ${hostPath}; Supply required fields: reviewer.`;
+  const redacted = redactWorkflowFailure(reason);
+  assert.match(redacted, /HTTP 403.*\[redacted\].*Supply required fields: reviewer/);
+  assert.ok(!redacted.includes(secret));
+  assert.ok(!redacted.includes(hostPath));
+  assert.equal(redactWorkflowFailure("Supply required fields: reviewer."), "Supply required fields: reviewer.");
+  // Encoded source offsets need not have the same length as decoded matches.
+  const encoded = secret.replace("_", "\\u005f");
+  assert.match(redactWorkflowFailure(encoded), /encoded private content \(github-token-classic\)/);
+  assert.ok(!redactWorkflowFailure(encoded).includes(encoded));
+});
+
+test("private plain stderr becomes a redacted diagnostic in a real non-git tracker", async () => tracker(async root => {
+  const file = join(root, "command.err");
+  const secret = "ghp_" + "A".repeat(36);
+  writeFileSync(file, `Error: Command failed\nWhat happened:\n  GET failed HTTP 403 with ${secret}; missing reviewer\nWhy:\n  private help`);
+  const before = snapshot(root);
+  const diagnostic = readWorkflowFailure(undefined, file, undefined);
+  assert.match(diagnostic.reason, /GET failed HTTP 403 with \[redacted\]; missing reviewer/);
+  assert.ok(!diagnostic.reason.includes(secret));
+  const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "importers", "schema", "hooks", "preflight", "search"] });
+  const result = await harness.runCommand({ command: "github workflow-diagnostic", pmRoot: root, options: { errorFile: file } });
+  assert.match(JSON.stringify(result), /HTTP 403 with \[redacted\]/);
+  assert.ok(!JSON.stringify(result).includes(secret));
+  assert.equal(snapshot(root), before);
+}));
 
 test("one workflow diagnostic identifies privacy, close validation, API denial and repeat drift", () => {
   assert.match(workflowFailure({ findings: [{ item_id: "fixture-1", field: "body", rule: "absolute-host-path" }] }), /item fixture-1, field body, rule absolute-host-path/);

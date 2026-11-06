@@ -1,5 +1,6 @@
 /** Produce one workflow refusal while keeping raw command output private. */
 import { readFileSync } from "node:fs";
+import { scanLineForRuleHits } from "./gate.ts";
 import { ownValue } from "./own-record.ts";
 
 /** Decode a CLI report or the JSON diagnostic following stderr progress messages. */
@@ -13,7 +14,34 @@ export function decodeWorkflowDiagnostic(text: string, depth = 0): Record<string
       return Object.keys(nested).length ? nested : { reason: report.detail };
     }
     return report;
-  } catch { return {}; }
+  } catch {
+    // Older hosts and subprocess failures can emit human-readable stderr even
+    // when --json was requested. Select the actual failure, not help/recovery.
+    const reason = /(?:^|\n)What happened:\s*\n\s*([^\r\n]+)/.exec(text)?.[1]
+      ?? /(?:^|\n)(?:Error|error):\s*([^\r\n]+)/.exec(text)?.[1];
+    return reason ? { reason } : {};
+  }
+}
+
+/** Mask gate findings before logging; encoded matches with uncertain spans stay wholly private. */
+export function redactWorkflowFailure(reason: string): string {
+  const hits = scanLineForRuleHits(reason);
+  if (hits.some(hit => !reason.startsWith(hit.matched, hit.index))) {
+    return `Diagnostic contained encoded private content (${[...new Set(hits.map(hit => hit.rule))].sort().join(", ")}); inspect the private command receipt. No branch was published.`;
+  }
+  const spans: { start: number; end: number }[] = [];
+  for (const hit of hits.sort((left, right) => left.index - right.index)) {
+    const previous = spans.at(-1);
+    const end = hit.index + hit.matched.length;
+    if (previous && hit.index <= previous.end) previous.end = Math.max(previous.end, end);
+    else spans.push({ start: hit.index, end });
+  }
+  let result = "", offset = 0;
+  for (const span of spans) {
+    result += reason.slice(offset, span.start) + "[redacted]";
+    offset = span.end;
+  }
+  return result + reason.slice(offset);
 }
 
 /** Read an optional receipt; missing or malformed files never expose their paths. */
@@ -52,5 +80,5 @@ export function readWorkflowFailure(reportFile: string | undefined, errorFile: s
   const output = decodeWorkflowDiagnostic(receipt(reportFile));
   const error = decodeWorkflowDiagnostic(receipt(errorFile));
   const fullFailure = output.command === "github closeout" && typeof output.failed === "number" && output.failed > 0;
-  return { reason: workflowFailure(fullFailure ? output : Object.keys(error).length ? error : output, receipt(diffFile)) };
+  return { reason: redactWorkflowFailure(workflowFailure(fullFailure ? output : Object.keys(error).length ? error : output, receipt(diffFile))) };
 }

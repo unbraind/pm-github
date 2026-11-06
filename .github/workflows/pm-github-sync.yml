@@ -389,7 +389,20 @@ jobs:
           source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
           trap 'result=$?; if (( result != 0 )); then restore_workflow_setup_artifacts; restore_sync_setup; fi; exit "${result}"' EXIT
           pm package install "npm:pm-github@${PM_GITHUB_VERSION}" --project
-          node -e 'if (require("./" + process.argv[2] + "/extensions/pm-github/package.json").version !== process.argv[1]) process.exit(1)' "${PM_GITHUB_VERSION}" "${PM_SYNC_TRACKER}"
+          node -e '
+            let installed;
+            try {
+              installed = require("./" + process.argv[2] + "/extensions/pm-github/package.json").version;
+            } catch {
+              console.error("::error::Cannot read installed pm-github version; verify package installation completed for the resolved tracker.");
+              process.exit(1);
+            }
+            if (installed !== process.argv[1]) {
+              const safe = value => typeof value === "string" && /^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$/.test(value) ? value : "<invalid>";
+              console.error("::error::Installed pm-github version " + safe(installed) + " differs from resolved workflow version " + safe(process.argv[1]) + ". Check release-tag normalization and package installation; adopt a newer workflow release pin.");
+              process.exit(1);
+            }
+          ' "${PM_GITHUB_VERSION}" "${PM_SYNC_TRACKER}"
 
       - name: Configure PM merge drivers
         run: pm merge install

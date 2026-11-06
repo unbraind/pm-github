@@ -2,17 +2,21 @@ id: pm-github-samq
 title: Coordinate caller adoption and source-content remediation for scheduled workflows
 description: "After pm-github-3it2 is released, update affected reusable workflow SHA pins through caller-owned review. All 21 named caller repositories are listed in docs/scheduled-workflow-refusals.md. Align newline required-checks declarations where GITHUB_TOKEN cannot read administration-only protection. pm-changelog sync job 121514139043 also requires source-content remediation or a reviewed narrow allowlist for absolute-host-path body findings; package diagnostics must preserve that refusal. No caller mutation belongs to the package fix."
 type: Issue
-status: open
+status: in_progress
 priority: 2
-tags[4]: caller-adoption,closeout,follow-up,sync
+tags[5]: caller-adoption,closeout,follow-up,"gh:unbraind/pm-github#175",sync
 created_at: "2026-10-27T03:39:19.756Z"
-updated_at: "2026-10-29T19:41:48.010Z"
+updated_at: "2026-11-06T23:06:22.895Z"
 author: codex-agent
 acceptance_criteria: "Caller owners adopt a release containing the pagination/diagnostic fix, review required-check declarations against branch policy, and resolve source privacy findings. Validate each scheduled workflow under its real GITHUB_TOKEN without weakening evidence or privacy gates."
-comments[2]{created_at,author,text}:
+comments[5]{created_at,author,text}:
   "2026-10-27T15:36:40.264Z",codex-agent,"Caller-adoption update: the newly published 2026.10.27 release at tag commit f90f86faa9c976392f1d1262fd0b3204de2007e4 retains byte-identical closeout.ts, index.ts, import-fidelity.ts and both reusable workflows from original main 2b71f73. Bumping to that release does not fix this incident. All 21 callers listed in docs/scheduled-workflow-refusals.md need a release SHA containing PR #190. Explicit required-check declarations and the documented pm-changelog source-content privacy remediation remain caller-owned. Source and re-review class fixes now pass both complete local release gates, 1548/1548 each with exact all-source four-dimensional coverage; PR #190 remains open for verification and is not merged."
   "2026-10-29T19:41:40.800Z",codex-agent,"2026-10-29 daily-sync follow-up from pm-github-3it2 / companion pm-cli-website-c0jw: after the package release, adopt pins through Dependabot; caller-owned issues:write grant is also needed for failure-issue creation/update/recovery closure (a reusable workflow cannot raise issues:read). Source-content triage is in docs/daily-sync-recovery.md: seven policy-refusal issue bodies across six repositories, including synthetic examples, remain for orchestrator remediation. pm-csv issue #197 separately has multiple existing owners and needs provenance repair. No fleet callers or source-content records were edited by this package work."
-docs[2]{path,scope}:
+  "2026-11-06T22:43:42.194Z",codex-agent,"Investigating the November 6 scheduled-workflow watch via REST job summaries and bounded log samples. Separating caller pin adoption, duplicate provenance, tracker validation, repeat-import drift and closeout failures. Replays use disposable public caller clones with their pinned SDK and both their workflow release and 2026.11.4. No caller workflow edits or remote apply operations are authorized."
+  "2026-11-06T22:59:10.678Z",codex-agent,"The watch contains 21 sync and 15 closeout failures across 22 callers. Shared release normalization and no-op fixes are already in published 2026.11.4. pm-slack replay confirms its issue #159 changes the pm-slack-77v5 item/history on the second import with 2026.10.28, while 2026.11.4 repeats with zero durable changes on the same pinned SDK. Duplicate provenance in pm-beads and required-create fields in pm-changelog still refuse on both releases. pm-ops still refuses its configured completeness policies (old close missing repro_steps, expected_result, resolution; latest update missing repro_steps). Caller data/policy remediation must retain these refusals."
+  "2026-11-06T23:06:17.306Z",codex-agent,"Caller follow-up matrix is complete in docs/scheduled-workflow-watch-1106.md. All 22 callers need newer workflow pins for the shared changes; duplicate-owner remediation remains for pm-beads, pm-brief, pm-memory and pm-rl; required-create policy remains for pm-changelog; completeness data/policy remains for pm-ops; one source-body host-path refusal remains for pm-jev. The deprecated version input is warning-only (present in every watched caller except pm-glossary), and all 21 sync callers grant only issues:read, so failure-issue alerts additionally require caller-owned issues:write. No caller PRs were opened."
+docs[3]{path,scope}:
   docs/daily-sync-recovery.md,project
   docs/scheduled-workflow-refusals.md,project
+  docs/scheduled-workflow-watch-1106.md,project
 body: ""

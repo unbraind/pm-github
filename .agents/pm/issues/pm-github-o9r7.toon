@@ -1,0 +1,28 @@
+id: pm-github-o9r7
+title: Explain scheduled install mismatches and preserve redacted command failure diagnostics
+description: "The November 6 fleet watch still samples old workflow releases with silent exact-version verification failures and hidden closeout stderr. Existing normalization, pagination and no-op fixes require caller pin adoption. Strengthen the current workflow install verifier with actionable safe messages, preserve actionable non-JSON or host-wrapped error details through the diagnostic path, and record the per-caller adoption and validation inventory without changing caller repositories."
+type: Issue
+status: in_progress
+priority: 1
+tags[5]: changelog-unreleased,closeout,diagnostics,sync,workflows
+created_at: "2026-11-06T22:47:15.345Z"
+updated_at: "2026-11-06T23:06:27.150Z"
+author: codex-agent
+acceptance_criteria: Real workflow regressions fail under function-only behavioral reversions; version mismatches identify safe expected and actual versions; command errors remain actionable after privacy redaction; existing gates still refuse publication; public caller replays distinguish package fixes from caller-owned policy and provenance.
+comments[4]{created_at,author,text}:
+  "2026-11-06T22:48:41.447Z",codex-agent,"REST evidence distinguishes old release adoption from current defects: padded tag verification silently exits after a healthy install; old repeated imports stamp updated_at; old closeout hides its actual failure. Existing main already normalizes tags and avoids repeated writes. This item adds safe install mismatch diagnostics and hardens failure receipt decoding, with executable workflow tests and the caller follow-up matrix on pm-github-samq."
+  "2026-11-06T22:56:57.243Z",codex-agent,"The exact pm-slack run-head replay reproduces the old failure using its pinned SDK 2026.11.4 and pm-github 2026.10.28: the second identical import updates one item and changes its item/history files. Published pm-github 2026.11.4 with that same SDK returns updated=0, unchanged=true and zero changed durable files. All issue/comment/timeline inputs came from REST-only public snapshots; optional GraphQL closure enrichment was not queried. The old closeout dry-run exits 1 with Unverifiable GitHub pagination. A latest-version full CLI preview reached the scratch deadline; it is not counted as passing."
+  "2026-11-06T23:00:43.810Z",codex-agent,"Behavioral revert proofs ran in a disposable repository copy. Reverting only the installed-version verifier in both reusable workflows fails 2/2 metadata-diagnostic regressions. Restoring only the prior stderr decoder fails 2/2 plain-stderr regressions. Replacing only diagnostic redaction with the previous identity behavior fails 2/2 privacy regressions. Restoring all fixes passes 5/5 selected tests, with zero skips or cancellations. Production and test typechecks and ESLint also pass. A workflow integration probe initially packed without a build and correctly refused the missing entry; the rebuilt probe is being rerun."
+  "2026-11-06T23:05:39.176Z",codex-agent,"Final focused validation: 81/81 complete self-versioned-workflow and scheduled-refusal tests pass; the rebuilt packed CLI workflow reporter integration passes 1/1; the linked pm test selection passes 5/5. Typecheck, test typecheck, lint, docstrings, existing Git-object identity/privacy gate and publish-attestation checks pass. A recorded REST pagination-only replay fails with installed 2026.10.28 and completes with installed 2026.11.4; full latest live closeout is not certified because of the read deadline/budget. All eleven generic-closeout callers currently expose numeric next-page REST links. The secondary preview-validation limitation is tracked separately on pm-github-xgk0. Full npm/Bun release and coverage gates remain for PR CI as authorized."
+files[6]{path,scope}:
+  .github/workflows/pm-github-closeout.yml,project
+  .github/workflows/pm-github-sync.yml,project
+  test/closeout-workflow.test.ts,project
+  test/scheduled-refusals.test.ts,project
+  test/self-versioned-workflows.test.ts,project
+  workflow-diagnostic.ts,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  "node --test --test-concurrency=2 --test-name-pattern=\"workflow diagnostics|private plain stderr|install verification explains\" test/scheduled-refusals.test.ts test/self-versioned-workflows.test.ts",project,codex-agent,"2026-11-06T23:04:02.805Z",local_mutation,scheduled-sync-closeout-failures
+docs[1]{path,scope}:
+  docs/scheduled-workflow-watch-1106.md,project
+body: ""

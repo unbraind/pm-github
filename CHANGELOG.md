@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Explain scheduled install mismatches and preserve redacted command failure diagnostics ([pm-github-o9r7](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-o9r7.toon))
 - Packed projection fixture cleanup can mask its own test outcome ([pm-github-mes8](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-mes8.toon))
 
 ### Security
