@@ -1,0 +1,24 @@
+id: pm-github-dependabot-activation
+title: Verify live Dependabot merge safety and coordinate fleet activation
+description: "Read-only Actions API inspection now reports dependabot-auto-merge.yml active, superseding the earlier disabled snapshot. PR #221 delivers the reusable provenance policy, trusted default-branch caller and independent scheduled audit source. Workflow state alone does not prove safe runtime activation. Keep repository token, event-policy, protected-branch and live-acceptance verification and fleet caller adoption separate from this implementation. Coordinate with companion pm-cli-website-wis6."
+type: Chore
+status: blocked
+priority: 2
+tags[4]: ci,dependabot,follow-up,security
+created_at: "2026-11-05T00:52:51.053Z"
+updated_at: "2026-11-05T11:10:09.277Z"
+author: codex-agent
+acceptance_criteria: "After reviewed delivery and release, verify each selected caller pins a release containing the policy or uses the reviewed trusted local path.; Verify the active caller has a repository-scoped merge token as Actions and Dependabot secrets when needed, required Actions event policy permits its trusted trigger, and server-enforced protected-branch checks and review requirements prevent unreviewed merges.; With owner authorization record live bot-only arm, foreign-commit revocation and independent scheduled audit acceptance without permitting an unintended merge, and coordinate remaining fleet adoption separately."
+blocked_by: pm-github-dependabot-merge
+dependencies[1]{id,kind,created_at,author,source_kind,author_source}:
+  pm-github-dependabot-merge,blocked_by,"2026-11-05T00:52:51.053Z",codex-agent,"cli:create:blocked_by",detected
+comments[2]{created_at,author,text}:
+  "2026-11-05T10:29:37.084Z",codex-agent,"PRRT_kwDOTbN4pM6z_gYw verified: Actions API currently reports the existing workflow active. Updated title, description and acceptance criteria to remove the obsolete enable request. Item remains blocked on reviewed implementation and runtime token/protection/live acceptance; active workflow state is not proof of fleet activation. No live workflow or secret settings changed."
+  "2026-11-05T11:10:03.277Z",codex-agent,"Round 2 source delivered and tested without changing live settings: activation snapshot corrected, trusted default-branch caller plus scheduled/manual provenance audit implemented. Focused regression covers this item and passes through the pinned pm runner; restoring the obsolete item fails it. Runtime token, event-policy, branch-protection, live arm/revoke/audit and fleet adoption checks remain blocked pending orchestrator verification. Releasing only my claim; this item remains open."
+files[1]{path,scope}:
+  .github/workflows/dependabot-auto-merge.yml,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test --test-concurrency=2 --test-name-pattern=activation test/dependabot-merge.test.ts,project,codex-agent,"2026-11-05T10:33:59.799Z",local_mutation,feat/reusable-dependabot-merge
+docs[1]{path,scope}:
+  README.md,project
+body: ""
