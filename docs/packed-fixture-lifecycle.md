@@ -89,8 +89,9 @@ The original packed baseline separately timed out during package installation
 on the shared development host. That receipt proves neither import assertion
 success nor a cleanup error, and no deadline is increased to accommodate it.
 
-The fixed lifecycle regression passes 5/5 under Node and native Bun with zero
+The fixed lifecycle regression passes 3/3 under Node and native Bun with zero
 skips. Lint and both source/test typechecks pass. A linked pm rerun passes
-13/13 coverage tests and 5/5 lifecycle tests. Two repaired packed-fixture
+13/13 coverage tests and 3/3 lifecycle tests. Positive cleanup controls share
+the primary-error regression so each new test fails its behavioral revert. Two repaired packed-fixture
 attempts still time out during installation, including one using the existing
 public npm cache; follow-up `pm-github-r14n` owns that local limitation.

@@ -69,37 +69,37 @@ test("real CLI flush completes before packed-fixture cleanup starts", { timeout:
   } finally { rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
 });
 
-for (const failBody of [false, true]) test(`real cleanup failure preserves the primary result (body fails: ${failBody})`, async () => {
-  const base = mkdtempSync(join(tmpdir(), "pm-fixture-cleanup-"));
-  const root = join(base, "tracker");
-  const primary = new Error("Mixed-import byte assertion failed");
-  let originalMode = 0;
-  try {
-    await runInit("fixture", { path: root, noExtensions: true }, { agentGuidance: "skip" });
-    await create({ title: "Preserve cleanup evidence", type: "Task" }, { pmRoot: root, noExtensions: true });
-    originalMode = statSync(root).mode & 0o777;
-    await assert.rejects(withFixtureCleanup(base, async () => {
-      const result = await boundedCli(nodeToolingExecutable(process.versions), ["-e", "require('node:fs').chmodSync(process.argv[1], 0o500)", root], base, packedFixtureEnvironment(base, root));
-      assert.equal(result.code, 0, result.stderr);
-      if (failBody) throw primary;
-      return "assertions passed";
-    }), (error: unknown) => {
-      if (failBody) {
-        assert.ok(error instanceof AggregateError, "Report both failures instead of masking the import failure.");
-        assert.equal(error.cause, primary);
-        assert.equal(error.errors[0], primary);
-        assert.equal(error.errors.length, 2);
-        assert.equal((error.errors[1] as NodeJS.ErrnoException).code, "EACCES");
-      } else assert.equal((error as NodeJS.ErrnoException).code, "EACCES", "Cleanup failure must never turn into success.");
-      return true;
-    });
-  } finally {
-    if (originalMode && existsSync(root)) chmodSync(root, originalMode);
-    rmSync(base, { recursive: true, force: true });
+test("fixture cleanup preserves primary errors and refuses teardown-only failures", async () => {
+  for (const failBody of [false, true]) {
+    const base = mkdtempSync(join(tmpdir(), "pm-fixture-cleanup-"));
+    const root = join(base, "tracker");
+    const primary = new Error("Mixed-import byte assertion failed");
+    let originalMode = 0;
+    try {
+      await runInit("fixture", { path: root, noExtensions: true }, { agentGuidance: "skip" });
+      await create({ title: "Preserve cleanup evidence", type: "Task" }, { pmRoot: root, noExtensions: true });
+      originalMode = statSync(root).mode & 0o777;
+      await assert.rejects(withFixtureCleanup(base, async () => {
+        const result = await boundedCli(nodeToolingExecutable(process.versions), ["-e", "require('node:fs').chmodSync(process.argv[1], 0o500)", root], base, packedFixtureEnvironment(base, root));
+        assert.equal(result.code, 0, result.stderr);
+        if (failBody) throw primary;
+        return "assertions passed";
+      }), (error: unknown) => {
+        if (failBody) {
+          assert.ok(error instanceof AggregateError, "Report both failures instead of masking the import failure.");
+          assert.equal(error.cause, primary);
+          assert.equal(error.errors[0], primary);
+          assert.equal(error.errors.length, 2);
+          assert.equal((error.errors[1] as NodeJS.ErrnoException).code, "EACCES");
+        } else assert.equal((error as NodeJS.ErrnoException).code, "EACCES", "Cleanup failure must never turn into success.");
+        return true;
+      });
+    } finally {
+      if (originalMode && existsSync(root)) chmodSync(root, originalMode);
+      rmSync(base, { recursive: true, force: true });
+    }
   }
-});
-
-test("successful cleanup returns the value and preserves a lone primary failure verbatim", async () => {
+  // Positive controls belong to the same regression: reverting this helper must fail the test.
   for (const failBody of [false, true]) {
     const base = mkdtempSync(join(tmpdir(), "pm-fixture-result-"));
     const primary = new Error("Original assertion");
