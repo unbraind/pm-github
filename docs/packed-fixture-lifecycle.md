@@ -23,7 +23,9 @@ and retains credential stripping and the clean npm user configuration. No host
 settings or telemetry preferences are changed.
 
 The regression initializes an actual SDK tracker, creates a native item, and
-updates it with the installed CLI. A fixture-local telemetry endpoint holds its
+updates it with the installed CLI under the active test runtime. A real preload
+records the producer runtime; the Bun test must execute Bun itself. A
+fixture-local telemetry endpoint holds its
 response for one second. The CLI must finish delivery and record the durable
 successful flush before the fixture body returns. Reverting only the inline
 flag fails that assertion: the direct CLI exits before delivery completes.
@@ -42,11 +44,12 @@ bounded retries for transient filesystem errors. It handles all four outcomes:
 | Pass | Fail | Cleanup error |
 | Fail | Fail | AggregateError containing both errors, original failure as cause |
 
-Tests initialize real SDK trackers and use a real OS child to remove write
-permission from a populated directory. The resulting filesystem `EACCES`
-proves cleanup cannot erase the primary assertion or silently pass. Original
-permissions are restored in test teardown. No SDK or filesystem mock supplies
-these failures.
+Tests initialize real SDK trackers and await a real OS child before teardown.
+An injectable remover supplies a controlled `ENOTEMPTY` error to exercise
+error preservation independently of filesystem permissions or elevated
+privileges. The success and primary-only controls still execute real removal.
+The delayed telemetry producer test above exercises the actual OS-process
+lifecycle; no SDK mock substitutes for tracker operations.
 
 ## Already-fixed coverage issue
 
@@ -84,14 +87,19 @@ npm run build:test
 Behavioral reverts run only in disposable copies. Removing the inline flush
 flag fails the real producer test; removing global-root isolation fails the
 inherited-override regression; restoring bare `finally` removal fails primary
-error preservation. Restoring the fixed implementation must pass again.
+error preservation. Forcing the producer back to Node fails the runtime
+receipt assertion under Bun. Restoring the fixed implementation must pass again.
 The original packed baseline separately timed out during package installation
 on the shared development host. That receipt proves neither import assertion
 success nor a cleanup error, and no deadline is increased to accommodate it.
+A later complete linked rerun passes all six projection tests, including the
+packed consumer, at the original deadlines.
 
 The fixed lifecycle regression passes 3/3 under Node and native Bun with zero
-skips. Lint and both source/test typechecks pass. A linked pm rerun passes
-13/13 coverage tests and 3/3 lifecycle tests. Positive cleanup controls share
-the primary-error regression so each new test fails its behavioral revert. Two repaired packed-fixture
-attempts still time out during installation, including one using the existing
-public npm cache; follow-up `pm-github-r14n` owns that local limitation.
+skips. Lint and both source/test typechecks pass. Linked pm reruns pass
+13/13 coverage tests, 3/3 lifecycle tests and 6/6 projection tests. Positive
+cleanup controls share the primary-error regression so each new test fails its
+behavioral revert. Two earlier repaired-fixture attempts timed out during
+installation, including one using the existing public npm cache. Follow-up
+`pm-github-r14n` retains those intermittent failures and the later successful
+rerun without asserting an unproven resource or registry root cause.

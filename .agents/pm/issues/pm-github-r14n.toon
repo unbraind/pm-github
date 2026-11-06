@@ -6,9 +6,11 @@ status: open
 priority: 2
 tags[3]: ci,fixtures,follow-up
 created_at: "2026-11-06T12:54:44.193Z"
-updated_at: "2026-11-06T12:56:23.922Z"
+updated_at: "2026-11-06T13:59:53.519Z"
 author: codex-astra
 acceptance_criteria: Reproduce and isolate package-install cost with synthetic packed consumers; retain the existing deadlines and assertions; document comparison with the hosted matrix.
+comments[1]{created_at,author,text}:
+  "2026-11-06T13:59:53.518Z",codex-astra,"A later full focused rerun completed successfully through pm test: import-projection 6/6, including the packed npm/native Bun consumer, with unchanged 45-second child and 600-second test deadlines. No installation or timeout implementation was changed to obtain this pass. Earlier baseline and repaired timeouts remain valid evidence of an intermittent shared-host validation limit; no definitive resource/registry root cause is claimed."
 files[1]{path,scope}:
   test/import-projection.test.ts,project
 body: ""

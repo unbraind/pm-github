@@ -14,12 +14,12 @@ export function packedFixtureEnvironment(base: string, root: string, inherited: 
   return env;
 }
 
-/** Remove a consumer after its producers exit, retaining both failures if teardown also fails. */
-export async function withFixtureCleanup<T>(base: string, body: () => Promise<T>): Promise<T> {
+/** Remove a consumer after its producers exit; an injectable remover makes failure controls independent of OS privileges. */
+export async function withFixtureCleanup<T>(base: string, body: () => Promise<T>, remove: typeof rmSync = rmSync): Promise<T> {
   let outcome: { ok: true; value: T } | { ok: false; error: unknown };
   try { outcome = { ok: true, value: await body() }; }
   catch (error) { outcome = { ok: false, error }; }
-  try { rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
+  try { remove(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
   catch (cleanup) {
     if (!outcome.ok) throw new AggregateError([outcome.error, cleanup], "Packed consumer failed and fixture cleanup also failed", { cause: outcome.error });
     throw cleanup;
