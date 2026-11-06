@@ -2,14 +2,15 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { devNull, tmpdir } from "node:os";
-import { delimiter, join, relative } from "node:path";
+import { tmpdir } from "node:os";
+import { join, relative } from "node:path";
 import test from "node:test";
 import { decode } from "@toon-format/toon";
 import { certifyCompleteListResult, commitImportedItem, create, get, getItemPath, listAllComplete, parseTags, toImportTags, decodePmTableRows, type PmTableCellEncoding, type PmEncodedTableRows, readSettings, schemaAddStatus, schemaAddType } from "@unbrained/pm-cli/sdk";
 import { decodeCompletePmItems, parseImportOptions, runImport, githubLabelsToTags, planGithubLabelMigration, type GhIssue } from "../index.ts";
 import { normalizeImportValue, readImportTypeNames, serializeImportTags } from "../import-fidelity.ts";
 import { boundedCli } from "./helpers/bounded-cli.ts";
+import { withPackedFixture } from "./helpers/packed-fixture.ts";
 import { jsonResponse, withMockGithub } from "./helpers/mock-github-server.ts";
 
 const packageRoot = join(import.meta.dirname, "..");
@@ -153,23 +154,15 @@ for (const atomic of [false, true]) test(`additive provider links preserve liter
 
 test("packed npm and native Bun consumers preserve mixed-import bytes in JSON and TOON", { timeout: 600_000 }, async () => {
   const base = mkdtempSync(join(tmpdir(), "pm-packed-projection-"));
-  const root = join(base, "consumer");
-  const pmRoot = join(root, ".agents/pm");
-  mkdirSync(root);
-  mkdirSync(join(base, "home"));
-  const env: NodeJS.ProcessEnv = { ...process.env, HOME: join(base, "home"), NPM_CONFIG_USERCONFIG: devNull, PM_AUTHOR: "fixture", PM_PATH: pmRoot,
-    PATH: join(root, "node_modules/.bin") + delimiter + process.env.PATH, GITHUB_TOKEN: "fixture" };
-  for (const key of Object.keys(env)) if (/token|secret|password|credential|api.?key|access.?key|private.?key|npm_media_server|ssh_auth_sock|^npm_auth$/i.test(key)) delete env[key];
-  env.GITHUB_TOKEN = "fixture";
-  delete env.NODE_TEST_CONTEXT;
-  /** Keep the HTTP fixture responsive while a real package manager or CLI child runs. */
-  const run = async (bin: string, args: string[], cwd = root, extra = env): Promise<string> => {
-    const result = await boundedCli(bin, args, cwd, extra);
-    assert.equal(result.timedOut, false, result.stderr);
-    assert.equal(result.code, 0, result.stderr + result.stdout);
-    return result.stdout;
-  };
-  try {
+  await withPackedFixture(base, async ({ root, env }) => {
+    const pmRoot = join(root, ".agents/pm");
+    /** Keep the HTTP fixture responsive while a real package manager or CLI child runs. */
+    const run = async (bin: string, args: string[], cwd = root, extra = env): Promise<string> => {
+      const result = await boundedCli(bin, args, cwd, extra);
+      assert.equal(result.timedOut, false, result.stderr);
+      assert.equal(result.code, 0, result.stderr + result.stdout);
+      return result.stdout;
+    };
     initialize(pmRoot, env);
     writeFileSync(join(root, "package.json"), "{}\n");
     mkdirSync(join(root, "node_modules/.bin"), { recursive: true });
@@ -255,5 +248,5 @@ test("packed npm and native Bun consumers preserve mixed-import bytes in JSON an
         assert.ok(durable(pmRoot) === providerBefore, "Workspace provider previews must preserve native items/history.");
       }
     });
-  } finally { rmSync(base, { recursive: true, force: true }); }
+  });
 });

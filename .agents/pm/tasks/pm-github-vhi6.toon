@@ -2,18 +2,14 @@ id: pm-github-vhi6
 title: Bound coverage aggregation memory and compare default-heap CI behavior
 description: "During the PR #122 privacy-scope regression work, an identity-isolated npm release:check completed 587/587 tests with zero failures, skips or cancellations, then c8 report aggregation exhausted Node's default 4 GiB heap. Native coverage receipts occupied approximately 2.9 GiB. The security fix is being validated with NODE_OPTIONS=--max-old-space-size=12288 and unchanged source inventory and four 100-percent thresholds. Compare default-heap CI behavior, investigate bounded report aggregation or documented resource requirements, and retain complete authored-source and real CLI coverage. Earlier local heap-exhaustion observations also appear in pm-github-fmrf; this task tracks current default-heap acceptance separately from the scope fix in pm-github-wrmt."
 type: Task
-status: closed
+status: in_progress
 priority: 2
-tags[4]: changelog-unreleased,coverage,follow-up,gates
+tags[5]: changelog-unreleased,coverage,follow-up,gates,"gh:unbraind/pm-github#177"
 created_at: "2026-10-14T14:32:34.672Z"
-updated_at: "2026-11-04T06:31:07.310Z"
-closed_at: "2026-11-04T06:31:07.302Z"
-completed_at: "2026-11-04T06:31:07.302Z"
+updated_at: "2026-11-06T12:58:09.775Z"
 author: codex-agent
-resolution: Implemented and merged in #215 (ceaecfe).
-expected_result: The change described by this item is on main.
-actual_result: "Merged in #215 as ceaecfe; checks successful at head 7e29ca0: CodeQL, bun-release (22), bun-release (26), codeql, semgrep-cloud-platform/scan, test (22), test (26)."
-comments[28]{created_at,author,text}:
+release: 2026.11.4
+comments[31]{created_at,author,text}:
   "2026-10-14T15:04:27.090Z",codex-agent,"Confirmed resource workaround: complete identity-isolated npm and Bun release:check each passed 587/587 tests and all 11 checks with NODE_OPTIONS=--max-old-space-size=12288. Coverage remains exact 100/100/100/100 across 12 authored modules, without source exemptions or threshold changes. The earlier default-heap npm run passed all 587 tests before c8 aggregation exhausted the heap. Default-heap CI comparison and bounded aggregation remain follow-up work; the security change does not alter coverage implementation or CI memory settings."
   "2026-10-24T14:34:24.911Z",codex-agent,"Additional measured receipt from pm-github-closeout-attribution / PR 174: CI https://github.com/unbraind/pm-github/actions/runs/40101464708 at 30b94f1 failed all four npm/Bun release jobs on Node 22/26 with JavaScript heap exhaustion during c8 aggregation at the existing 8192 MiB limit. The Node 26 test phases each passed 1337/1337, zero failures/cancellations/skips before aggregation failed. No release-gate pass is claimed. This round reduces repeated setup in the new 36-case workflow matrix (shared immutable Git/tracker baselines and only the actual closeout/publication steps); the broader bounded aggregation task remains open, with thresholds, source inventory and heap configuration unchanged."
   "2026-10-24T15:10:00.744Z",codex-agent,"Second receipt: https://github.com/unbraind/pm-github/actions/runs/40103921945 at ad2e7cb passed 1337/1337 tests in every npm/Bun Node 22/26 job, then all four c8 aggregations exhausted the unchanged 8192 MiB heap. Sharing tracker callers alone was insufficient while package setup still repeated per cell. The next harness prepares package/scope setup once per immutable baseline; every one of the 36 cases still restores input, runs actual branch preparation, real CLI closeout, publication privacy/refusal gates and leased push, with fresh receipts and provenance/history assertions. No coverage resource or threshold change is used. The broader bounded aggregation task remains open."
@@ -42,6 +38,9 @@ comments[28]{created_at,author,text}:
   "2026-11-03T15:03:30.210Z",claude-orchestrator,"CodeRabbit round 5 on 98e6da6 (Major): stripping inherited heap limits from the c8 environment also stripped them from the nested node --test command and its workers, because c8 hands its environment down. splitHeapOverrides now returns the remaining NODE_OPTIONS and the removed limits as --flag=value arguments; the gate keeps the merge under the 3072 MiB ceiling alone and puts the inherited limits back on the nested command right before --test. Node's test runner forwards them to every worker (measured: 19406 MiB under a 60% percentage, 1426 MiB under 1234). Tests: spy pins env plus nested arguments (removing the re-injection fails 0/1); a real node --test worker keeps an inherited 1234 MiB limit. Minor: docs now say the shared-store follow-up closed with the privacy gate passing."
   "2026-11-03T19:59:24.433Z",codex-agent,"Round 6 (CodeRabbit on 479c029): the real-c8 test now has a branch-only fixture, in which every line of choose(value) runs but the false branch never does. The gate must fail it, and the receipt must show full lines with partial branches; with branches removed from the gate's dimensions the test fails. The docs recipe slice now ends at the nested node (args.indexOf(node)), because inherited heap limits sit between node and --test; a spy showed the old slice kept node. The da3f62e receipts are labelled historical, and a current receipt follows: full npm run coverage RC=0, 1,629/1,629 tests, 13,252/13,252 lines and statements, 426/426 functions, 5,103/5,103 branches, peak RSS 1,672,188 KiB."
   "2026-11-03T21:03:47.930Z",codex-agent,"CI on 6458f22: test (22) failed only in the Bun run of test/coverage-gate.test.ts. The worker-heap probe spawned process.execPath, which under Bun is Bun itself, so no Node test runner started and the worker heap read NaN. Both heap probes now spawn nodeToolingExecutable(process.versions), the Node executable the gate nests under c8. coverage-gate.test.ts passes 13/13 under Bun and 13/13 under Node; restoring the old code fails the probe under Bun locally, as in CI. Test-only change."
+  "2026-11-06T12:42:36.437Z",codex-astra,"Reopened only to revalidate still-open #177 against main 03c3059. Main contains merged #215 (ceaecfe), native incremental c8 aggregation and the 3072 MiB cap. Reuse this owner for current-head regression/resource and CI evidence; no coverage implementation change if reproduction passes."
+  "2026-11-06T12:46:27.435Z",codex-astra,"Unchanged main verification: node --test --test-concurrency=2 test/coverage-gate.test.ts passes 13/13, zero skips. The real c8 regression merges 512 receipts (158244352 serialized bytes) under a 128 MiB heap; timed peak RSS for the focused command is 116064 KiB. Verified #215 merged as ceaecfe and all four npm/Bun Node22/26 CI jobs passed at 7e29ca0 in run 41718350180. Those are historical full-gate receipts; the new PR will supply final-head CI. No coverage code change is needed for #177."
+  "2026-11-06T12:56:09.782Z",codex-astra,"Current verification is complete without coverage code changes: the pm-linked coverage command passes 13/13 with zero skipped cases. Removing only --merge-async in a disposable copy fails the 512-receipt expected-success assertion through heap exhaustion; the untouched implementation passes again. Main already fixes #177 via #215. Full npm/Bun Node22/26 CI on the combined fixture PR remains an independent final-head gate."
 files[4]{path,scope}:
   scripts/coverage-gate.ts,project
   test/closeout-workflow.test.ts,project
@@ -52,5 +51,4 @@ tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
 docs[2]{path,scope}:
   docs/bounded-coverage-merge.md,project
   docs/explicit-closeout-attribution.md,project
-close_reason: "Delivered by #215 \"Bound the c8 coverage merge with its incremental mode and a 3 GiB heap\" (merged as ceaecfe). Checks successful at the PR head 7e29ca0: CodeQL, bun-release (22), bun-release (26), codeql, semgrep-cloud-platform/scan, test (22), test (26)."
 body: ""
