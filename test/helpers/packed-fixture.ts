@@ -1,7 +1,27 @@
 /** Shared lifecycle for disposable packed consumers. */
-import { rmSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { devNull } from "node:os";
 import { delimiter, join } from "node:path";
+
+/** Paths and isolated environment owned by a disposable packed consumer. */
+export interface PackedFixture {
+  root: string;
+  global: string;
+  env: NodeJS.ProcessEnv;
+}
+
+/** Own setup, body and teardown so even partial setup retains failure evidence. */
+export async function withPackedFixture<T>(base: string, body: (fixture: PackedFixture) => Promise<T>, remove: typeof rmSync = rmSync): Promise<T> {
+  return withFixtureCleanup(base, async () => {
+    const root = join(base, "consumer");
+    const global = join(base, "global");
+    mkdirSync(root);
+    mkdirSync(global);
+    mkdirSync(join(base, "home"));
+    const env = packedFixtureEnvironment(base, root);
+    return body({ root, global, env });
+  }, remove);
+}
 
 /** Build the packed consumer environment without inherited credentials. */
 export function packedFixtureEnvironment(base: string, root: string, inherited: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {

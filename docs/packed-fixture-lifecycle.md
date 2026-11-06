@@ -34,6 +34,12 @@ reconstruct the precise process timing of the historical hosted failure.
 
 ## Outcome preservation
 
+`withPackedFixture` starts cleanup ownership immediately after allocation of the
+base directory. Directory creation, environment construction, SDK initialization,
+the consumer body and HTTP-server teardown all run inside that scope. Both the
+packed projection and producer regression use this owner. There is no independent
+outer removal that could replace its reported failure.
+
 `withFixtureCleanup` awaits the body, then removes the disposable tree with
 bounded retries for transient filesystem errors. It handles all four outcomes:
 
@@ -50,6 +56,12 @@ error preservation independently of filesystem permissions or elevated
 privileges. The success and primary-only controls still execute real removal.
 The delayed telemetry producer test above exercises the actual OS-process
 lifecycle; no SDK mock substitutes for tracker operations.
+
+A setup regression creates a real non-git SDK tracker and uses an OS child to
+place a file where the consumer directory must be created. Setup must report
+`EEXIST`, never start the body, and remove the partial fixture and tracker. This
+failure does not depend on permissions or elevated privileges. The cleanup-error
+controls run through the same owner used by both consumers.
 
 ## Already-fixed coverage issue
 
@@ -89,15 +101,19 @@ flag fails the real producer test; removing global-root isolation fails the
 inherited-override regression; restoring bare `finally` removal fails primary
 error preservation. Forcing the producer back to Node fails the runtime
 receipt assertion under Bun. Restoring the fixed implementation must pass again.
+Moving setup outside cleanup ownership fails the setup-removal regression.
+Replacing the owner's delegated cleanup with a bare `finally` fails its
+primary-plus-cleanup regression. Each mutation keeps the callable interface and
+fault boundary intact and runs in a disposable copy with a passing baseline.
 The original packed baseline separately timed out during package installation
 on the shared development host. That receipt proves neither import assertion
 success nor a cleanup error, and no deadline is increased to accommodate it.
 A later complete linked rerun passes all six projection tests, including the
 packed consumer, at the original deadlines.
 
-The fixed lifecycle regression passes 3/3 under Node and native Bun with zero
+The fixed lifecycle regression passes 4/4 under Node and native Bun with zero
 skips. Lint and both source/test typechecks pass. Linked pm reruns pass
-13/13 coverage tests, 3/3 lifecycle tests and 6/6 projection tests. Positive
+13/13 coverage tests, 4/4 lifecycle tests and 6/6 projection tests. Positive
 cleanup controls share the primary-error regression so each new test fails its
 behavioral revert. Two earlier repaired-fixture attempts timed out during
 installation, including one using the existing public npm cache. Follow-up

@@ -10,7 +10,7 @@ import { certifyCompleteListResult, commitImportedItem, create, get, getItemPath
 import { decodeCompletePmItems, parseImportOptions, runImport, githubLabelsToTags, planGithubLabelMigration, type GhIssue } from "../index.ts";
 import { normalizeImportValue, readImportTypeNames, serializeImportTags } from "../import-fidelity.ts";
 import { boundedCli } from "./helpers/bounded-cli.ts";
-import { packedFixtureEnvironment, withFixtureCleanup } from "./helpers/packed-fixture.ts";
+import { withPackedFixture } from "./helpers/packed-fixture.ts";
 import { jsonResponse, withMockGithub } from "./helpers/mock-github-server.ts";
 
 const packageRoot = join(import.meta.dirname, "..");
@@ -154,19 +154,15 @@ for (const atomic of [false, true]) test(`additive provider links preserve liter
 
 test("packed npm and native Bun consumers preserve mixed-import bytes in JSON and TOON", { timeout: 600_000 }, async () => {
   const base = mkdtempSync(join(tmpdir(), "pm-packed-projection-"));
-  const root = join(base, "consumer");
-  const pmRoot = join(root, ".agents/pm");
-  mkdirSync(root);
-  mkdirSync(join(base, "home"));
-  const env = packedFixtureEnvironment(base, root);
-  /** Keep the HTTP fixture responsive while a real package manager or CLI child runs. */
-  const run = async (bin: string, args: string[], cwd = root, extra = env): Promise<string> => {
-    const result = await boundedCli(bin, args, cwd, extra);
-    assert.equal(result.timedOut, false, result.stderr);
-    assert.equal(result.code, 0, result.stderr + result.stdout);
-    return result.stdout;
-  };
-  await withFixtureCleanup(base, async () => {
+  await withPackedFixture(base, async ({ root, env }) => {
+    const pmRoot = join(root, ".agents/pm");
+    /** Keep the HTTP fixture responsive while a real package manager or CLI child runs. */
+    const run = async (bin: string, args: string[], cwd = root, extra = env): Promise<string> => {
+      const result = await boundedCli(bin, args, cwd, extra);
+      assert.equal(result.timedOut, false, result.stderr);
+      assert.equal(result.code, 0, result.stderr + result.stdout);
+      return result.stdout;
+    };
     initialize(pmRoot, env);
     writeFileSync(join(root, "package.json"), "{}\n");
     mkdirSync(join(root, "node_modules/.bin"), { recursive: true });
