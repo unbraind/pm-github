@@ -101,3 +101,12 @@ original plan; changing global hook registries is not a finalization contract.
 No observer reordering, post-commit finalization, forged SDK markers, forced
 rollback or compensation assertion changes are used. The remaining production
 integration blocker is explicit; this PR does not certify atomic finalization.
+
+## Recheck after PR #223 (2026-11-06)
+
+Issue #197 remains blocked on a supported SDK finalization step. Main
+`300e115` includes PR #223, which repairs packed-fixture cleanup, but retains
+the lifecycle finalizer and both exact-2026.11.4 quarantines unchanged.
+The [new reproduction receipts](atomic-finalization-197-recheck.md) cover
+the declared minimum, the ownership-guard boundary and current published SDKs,
+including plain directories and a separate process writing the same item.
