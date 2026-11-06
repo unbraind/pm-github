@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Packed projection fixture cleanup can mask its own test outcome ([pm-github-mes8](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-mes8.toon))
+
 ### Security
 
 - Reusable Dependabot merge workflow with complete commit provenance ([pm-github-dependabot-merge](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-dependabot-merge.toon))

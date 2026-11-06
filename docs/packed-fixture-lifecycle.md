@@ -1,0 +1,96 @@
+# Packed consumer lifecycle and cleanup
+
+Issues: [#202](https://github.com/unbraind/pm-github/issues/202) and
+[#177](https://github.com/unbraind/pm-github/issues/177).
+
+The packed projection fixture uses real npm and native Bun consumers against a
+synthetic HTTP provider and a disposable non-git tracker. Every existing
+mixed-import byte/history, JSON/TOON, alias, and preview assertion remains in
+place, with the original command deadlines and 600-second test timeout.
+
+## Producer ownership
+
+The pinned CLI's telemetry runtime schedules an unreferenced, detached
+`telemetry-flush.js` child by default outside test mode. Its direct parent's
+exit therefore does not prove that the queue and state writer has exited.
+The fixture removes `NODE_TEST_CONTEXT` when starting consumer commands, so it
+must explicitly select the supported `PM_TELEMETRY_INLINE_FLUSH=1` lifecycle.
+The same control already appears in the closeout and import-gate fixtures.
+
+`packedFixtureEnvironment` selects this lifecycle and a disposable
+`PM_GLOBAL_PATH`, overriding inherited values. It keeps child coverage enabled
+and retains credential stripping and the clean npm user configuration. No host
+settings or telemetry preferences are changed.
+
+The regression initializes an actual SDK tracker, creates a native item, and
+updates it with the installed CLI. A fixture-local telemetry endpoint holds its
+response for one second. The CLI must finish delivery and record the durable
+successful flush before the fixture body returns. Reverting only the inline
+flag fails that assertion: the direct CLI exits before delivery completes.
+This identifies a real producer and lifecycle boundary; it does not claim to
+reconstruct the precise process timing of the historical hosted failure.
+
+## Outcome preservation
+
+`withFixtureCleanup` awaits the body, then removes the disposable tree with
+bounded retries for transient filesystem errors. It handles all four outcomes:
+
+| Body | Cleanup | Result |
+| --- | --- | --- |
+| Pass | Pass | Original return value |
+| Fail | Pass | Original thrown value |
+| Pass | Fail | Cleanup error |
+| Fail | Fail | AggregateError containing both errors, original failure as cause |
+
+Tests initialize real SDK trackers and use a real OS child to remove write
+permission from a populated directory. The resulting filesystem `EACCES`
+proves cleanup cannot erase the primary assertion or silently pass. Original
+permissions are restored in test teardown. No SDK or filesystem mock supplies
+these failures.
+
+## Already-fixed coverage issue
+
+Main contains [#215](https://github.com/unbraind/pm-github/pull/215), merged as
+`ceaecfe2226e5b41fa39a5c546824d7f1081f79f`. Its native c8 incremental merge and
+3072 MiB heap ceiling fix the allocation class in #177 without filtering child
+receipts or lowering the exact four-dimensional coverage thresholds. This
+change does not alter the coverage implementation or its inventory.
+
+Rechecking main `03c3059` passed all 13 coverage-gate tests. The expanded
+512-receipt case handles 158,244,352 serialized bytes under a 128 MiB merge
+heap. The focused command peaked at 116,064 KiB RSS. Removing only
+`--merge-async` in a disposable copy fails that case with heap exhaustion.
+The existing missing/stale/incomplete, uncovered-line, branch-only, and
+unloaded-source controls also pass. Prior full-suite measurements are in
+[bounded-coverage-merge.md](bounded-coverage-merge.md).
+
+Historical full npm/Bun Node 22/26 acceptance is verified at #215 head
+`7e29ca02e8a3df023d3ac4cea079662a08601991` in
+[CI run 41718350180](https://github.com/unbraind/pm-github/actions/runs/41718350180).
+Current PR CI must independently certify the revised head.
+
+## Reproduction
+
+```sh
+npm run build
+node --test --test-concurrency=1 test/packed-fixture.test.ts
+node --test --test-concurrency=1 test/import-projection.test.ts
+node --test --test-concurrency=2 test/coverage-gate.test.ts
+npm run lint
+npm run typecheck
+npm run build:test
+```
+
+Behavioral reverts run only in disposable copies. Removing the inline flush
+flag fails the real producer test; removing global-root isolation fails the
+inherited-override regression; restoring bare `finally` removal fails primary
+error preservation. Restoring the fixed implementation must pass again.
+The original packed baseline separately timed out during package installation
+on the shared development host. That receipt proves neither import assertion
+success nor a cleanup error, and no deadline is increased to accommodate it.
+
+The fixed lifecycle regression passes 5/5 under Node and native Bun with zero
+skips. Lint and both source/test typechecks pass. A linked pm rerun passes
+13/13 coverage tests and 5/5 lifecycle tests. Two repaired packed-fixture
+attempts still time out during installation, including one using the existing
+public npm cache; follow-up `pm-github-r14n` owns that local limitation.
