@@ -739,6 +739,8 @@ interface RuleHit {
   readonly matched: string;
   /** Character offset of the match within its line, for jsonl field attribution. */
   readonly index: number;
+  /** Exclusive source end offset, including every encoded character in the match. */
+  readonly end: number;
 }
 
 /** Sticky `\uXXXX` matcher: reads at one offset without copying the line suffix. */
@@ -895,7 +897,7 @@ export function scanLineForRuleHits(line: string, trackerLine = false): RuleHit[
       if (!rule.confirm || rule.confirm(match[0])) {
         const matched = rule.rule === "home-username" ? match[0].slice(match[0].indexOf("~")) : match[0];
         const start = match.index + match[0].length - matched.length;
-        hits.push({ rule: rule.rule, matched, index: offsets[start]! });
+        hits.push({ rule: rule.rule, matched, index: offsets[start]!, end: offsets[start + matched.length] ?? line.length });
       }
     }
   }
@@ -903,7 +905,7 @@ export function scanLineForRuleHits(line: string, trackerLine = false): RuleHit[
   for (let match = HIGH_ENTROPY_ASSIGNMENT.exec(decoded); match; match = HIGH_ENTROPY_ASSIGNMENT.exec(decoded)) {
     const [identifier, value] = [match[1]!, match[2]!];
     if (isHighEntropySecretAssignment(identifier, value)) {
-      hits.push({ rule: "high-entropy-assignment", matched: value, index: offsets[match.indices![2]![0]]! });
+      hits.push({ rule: "high-entropy-assignment", matched: value, index: offsets[match.indices![2]![0]]!, end: offsets[match.indices![2]![1]] ?? line.length });
     }
   }
   return hits;

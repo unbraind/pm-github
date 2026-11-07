@@ -56,9 +56,12 @@ cannot certify scheduled token permissions or all historical head checks.
 
 ## Caller follow-up matrix
 
-All listed workflows need a newer reusable workflow release pin through
-Dependabot for the shared fixes/diagnostics. **2026.11.4 already carries the
-normalization, repeat-import and pagination fixes.** A subsequent release will
+Dependabot owns reusable workflow pin adoption. **2026.11.4 already carries
+the normalization, repeat-import and pagination fixes.** Callers exhibiting
+those failures need a newer pin. For the sync-only policy/data refusals in
+pm-beads, pm-memory, pm-ops and pm-jev, the demonstrated requirement is the
+caller repair below; a newer pin is recommended for current diagnostics but
+is not an established remedy for that refusal. A subsequent release will
 carry this PR's diagnostic hardening. An absent workflow below means absent
 from this watch, rather than absent from the repository.
 
@@ -73,7 +76,7 @@ the actual required contexts; do not guess or weaken protection.
 | Caller | Sync pin / watched run | Closeout pin / watched run | Required follow-up |
 | --- | --- | --- | --- |
 | pm-ado | [2026.10.25](https://github.com/unbraind/pm-ado/actions/runs/42184199180) | [2026.11.01](https://github.com/unbraind/pm-ado/actions/runs/42210474404) | Pin adoption; no additional cause-specific config proven. |
-| pm-beads | [2026.10.29](https://github.com/unbraind/pm-beads/actions/runs/42195026438) | — | Pin adoption plus repair duplicate provenance ownership. |
+| pm-beads | [2026.10.29](https://github.com/unbraind/pm-beads/actions/runs/42195026438) | — | Repair duplicate provenance ownership; newer pin recommended for diagnostics. |
 | pm-brief | [2026.10.28](https://github.com/unbraind/pm-brief/actions/runs/42207372623) | [2026.10.28](https://github.com/unbraind/pm-brief/actions/runs/42210529287) | Pin adoption plus repair duplicate provenance ownership. |
 | pm-changelog | [2026.10.28](https://github.com/unbraind/pm-changelog/actions/runs/42027324581) | [2026.10.28](https://github.com/unbraind/pm-changelog/actions/runs/42210877837) | Pin adoption plus resolve required-create field/type policy. |
 | pm-context | [2026.10.28](https://github.com/unbraind/pm-context/actions/runs/42184398828) | [2026.10.28](https://github.com/unbraind/pm-context/actions/runs/42210348997) | Pin adoption; no additional cause-specific config proven. |
@@ -82,11 +85,11 @@ the actual required contexts; do not guess or weaken protection.
 | pm-gantt-chart | [2026.10.28](https://github.com/unbraind/pm-gantt-chart/actions/runs/42184337810) | [2026.10.28](https://github.com/unbraind/pm-gantt-chart/actions/runs/42210851846) | Pin adoption; no additional cause-specific config proven. |
 | pm-glossary | [2026.11.02](https://github.com/unbraind/pm-glossary/actions/runs/42205634086) | — | Pin adoption; no additional cause-specific config proven. |
 | pm-http | [2026.11.02](https://github.com/unbraind/pm-http/actions/runs/42206584592) | — | Pin adoption; no additional cause-specific config proven. |
-| pm-jev | [2026.10.30](https://github.com/unbraind/pm-jev/actions/runs/42207291810) | — | Pin adoption plus remediate body privacy finding or review a narrow allowlist. |
+| pm-jev | [2026.10.30](https://github.com/unbraind/pm-jev/actions/runs/42207291810) | — | Remediate body privacy finding or review a narrow allowlist; newer pin recommended for diagnostics. |
 | pm-jira | — | [2026.10.28](https://github.com/unbraind/pm-jira/actions/runs/42210400598) | Pin adoption; no additional cause-specific config proven. |
 | pm-linear | [2026.10.28](https://github.com/unbraind/pm-linear/actions/runs/42205870054) | [2026.10.28](https://github.com/unbraind/pm-linear/actions/runs/42210479407) | Pin adoption; no additional cause-specific config proven. |
-| pm-memory | [2026.10.30](https://github.com/unbraind/pm-memory/actions/runs/42206711464) | — | Pin adoption plus repair duplicate provenance ownership. |
-| pm-ops | [2026.10.29](https://github.com/unbraind/pm-ops/actions/runs/42184434094) | — | Pin adoption plus resolve configured completeness policy/data. |
+| pm-memory | [2026.10.30](https://github.com/unbraind/pm-memory/actions/runs/42206711464) | — | Repair duplicate provenance ownership; newer pin recommended for diagnostics. |
+| pm-ops | [2026.10.29](https://github.com/unbraind/pm-ops/actions/runs/42184434094) | — | Resolve configured completeness policy/data; newer pin recommended for diagnostics. |
 | pm-presets | [2026.10.26](https://github.com/unbraind/pm-presets/actions/runs/42025638809) | [2026.11.02](https://github.com/unbraind/pm-presets/actions/runs/42210547090) | Pin adoption; no additional cause-specific config proven. |
 | pm-rl | [2026.10.28](https://github.com/unbraind/pm-rl/actions/runs/42184101173) | [2026.10.28](https://github.com/unbraind/pm-rl/actions/runs/42210344121) | Pin adoption plus repair duplicate provenance ownership. |
 | pm-rust | [2026.11.02](https://github.com/unbraind/pm-rust/actions/runs/42184269190) | [2026.11.02](https://github.com/unbraind/pm-rust/actions/runs/42210715831) | Pin adoption; no additional cause-specific config proven. |
@@ -106,19 +109,19 @@ The workflow diagnostic command now recognizes plain `Error:` stderr and the
 host's `What happened:` section as well as JSON receipts. It selects the actual
 failure line rather than help or recovery text. The shared privacy scanner
 redacts known matched values while preserving useful status and required-field
-text. Overlapping matches are merged; encoded matches with uncertain source
-spans are withheld entirely. The workflows still privacy-scan the final
+text. Overlapping matches are merged using the scanner's original-source start
+and exclusive end offsets, including complete encoded characters. The workflows still privacy-scan the final
 candidate and escape Actions annotation control characters before logging it.
 Raw stderr and tracker diffs remain private.
 
-Validation completed before publication:
+Initial PR validation at `5a31da1` (before this review round):
 
 - `node --test --test-concurrency=2 test/self-versioned-workflows.test.ts test/scheduled-refusals.test.ts`: **81/81 pass**, zero failures, skips or cancellations.
 - `npm run build && node --test --test-concurrency=2 --test-name-pattern='workflow refusal reporter emits' test/closeout-workflow.test.ts`: **1/1 pass**, using the rebuilt packed extension and real CLI.
 - `node --test --test-concurrency=2 --test-name-pattern='workflow diagnostics|private plain stderr|install verification explains' test/scheduled-refusals.test.ts test/self-versioned-workflows.test.ts`: **5/5 pass**, also verified through the pinned `pm test` link and `pm test --run --progress`.
 - `npm run typecheck`, `npm run build:test`, `npm run lint`, `npm run docstring`, `npm run privacy`, `npm run verify:release-publish-attestation`: pass. The privacy gate audited 9,068 pre-change Git objects and approved every identity; it is rerun after committing the new objects.
 - Focused c8 instrumentation of `workflow-diagnostic.ts` with the five diagnostic tests reports **100% lines, statements, functions and branches**. This measures that module only.
-- Full npm/Bun release and coverage gates are delegated to PR CI under the task's targeted-gate instruction. Their results are not inferred from focused tests.
+- At that initial head, full npm/Bun release and coverage gates were delegated to PR CI under the original targeted-gate instruction. The review round below supersedes this with both complete local gates.
 
 Behavioral reversions execute only in a disposable repository copy, leaving
 source tracker history intact:
@@ -149,7 +152,81 @@ between an import preview's completeness/privacy checks and apply's native
 mutation/finalization validation. The SDK already exposes
 `previewItemMutations`; this is not recorded as a missing SDK capability.
 No new pm CLI/SDK defect was established and no upstream issue was filed.
+Main already tracks the separate lifecycle-compensation defect as
+[pm-cli#1656](https://github.com/unbraind/pm-cli/issues/1656); its two quarantined
+tests remain skipped in the full suites. See
+[the existing compensation investigation](atomic-finalization-197-recheck.md).
+These skips do not certify rollback of finalized imported lifecycle data.
 
 No merge, release, tag, caller PR, bot trigger, thread reply or hosted-data
 operation is part of this work. Real scheduled-token acceptance and the full
 CI certification remain separate from the local replays above.
+
+
+## Review class closure
+
+PR #225 review findings were checked against every package call site. Live
+operator entry points (README and the caller-adoption issue description) now
+reference this complete 22-caller watch matrix alongside historical evidence.
+Closed historical tracker records retain their original incident context.
+
+Both reusable workflow verifier tests assert the actual and expected version,
+including punctuation, for every accepted release-resolution scenario. Rejected
+metadata tests exclude every raw fixture value and its JSON-escaped form from
+output, in addition to the credential and tracker-path checks.
+
+Generic stderr wrappers cannot override a specific later cause, the host's
+`What happened:` section, or an actionable structured stdout receipt. Both sync
+and closeout call the same diagnostic command, and the public SDK command and
+packed npm/native Bun CLI paths share that selection and redaction function.
+
+Scanner hits now carry an exclusive source end offset for both ordinary rules
+and high-entropy assignments. Redaction merges those source spans rather than
+combining a source start with a decoded length. Generated encodings verify that
+each span decodes to exactly the matched value; the prefix-overlap Windows case
+retains safe surrounding context while removing the entire encoded match.
+Gate JSON/TOON receipts keep their existing rule, hash and start-offset contract;
+no persisted record or allowlist hash is rewritten.
+
+The first investigation also mistakenly tagged the caller-adoption item as a
+second owner of issue #175. The duplicate tag was removed through pinned pm;
+all history and the canonical owner remain intact. A data-revert regression
+prevents that rollout follow-up from taking the canonical owner's provenance.
+
+The class tests cover plain non-git trackers, JSON and TOON, generic and specific
+stderr, structured stdout reports, every scanner hit-construction path, and
+one packed artifact consumed through npm and native Bun. Revert proofs and
+full-gate results for this round are recorded on pm-github-o9r7.
+
+Nine independent review-round behavioral controls ran in disposable copies:
+
+| Reverted behavior or data | Regression failures |
+| --- | --- |
+| README current-watch link | 1/1 |
+| Adoption description current-watch link | 1/1 |
+| Expected version omitted from both real workflow verifiers | 2/2 |
+| Malformed metadata appended by both real verifier catch blocks | 2/2 |
+| Specific text-cause decoder | 1/1 |
+| Specific stdout/stderr receipt precedence | 1/1 |
+| Source-span redactor | 1/1 |
+| Scanner source-span construction | 1/1 |
+| Duplicate canonical provenance tag on adoption item | 1/1 |
+
+The fixed implementation restores the seven-test selection; the corrected
+provenance separately passes 1/1. The final linked regression selection passes
+8/8 with no failures, skips or cancellations. Existing tests and privacy,
+coverage, identity and publication thresholds remain unchanged.
+
+Review-round full validation used serial isolated environments and at most two
+test workers. Both commands completed on the final runtime source:
+
+| Command | Result | Tests | Exact coverage over 30 authored modules |
+| --- | --- | --- | --- |
+| `npm run release:check` | Exit 0 | 1,780 pass; 0 fail/cancelled; 2 existing skips | 14,415/14,415 lines and statements; 456/456 functions; 5,440/5,440 branches |
+| `bun run release:check` | Exit 0 | 1,780 pass; 0 fail/cancelled; 2 existing skips | 14,415/14,415 lines and statements; 456/456 functions; 5,440/5,440 branches |
+
+Both complete gates also pass typecheck, build, docstrings, lint, duplication,
+identity/privacy, production audit (zero vulnerabilities), pack dry-run,
+changelog and publication attestation. The two skips are the existing
+pm-cli#1656 lifecycle-compensation quarantines described above. No skip,
+threshold, source exemption or telemetry policy was added or changed.

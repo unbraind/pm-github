@@ -30,7 +30,7 @@ test("the proof refuses unreadable source and invalid baseline corpus behavior",
   assert.equal(missing.exitCode, 1);
   assert.equal(missing.stdout, "");
   assert.match(missing.stderr, /could not read/);
-  const allowFailure = await runPublicFormMutationProof({ baselineScanner: () => [{ rule: "absolute-host-path", matched: "synthetic", index: 0 }] });
+  const allowFailure = await runPublicFormMutationProof({ baselineScanner: () => [{ rule: "absolute-host-path", matched: "synthetic", index: 0, end: 9 }] });
   assert.equal(allowFailure.exitCode, 1);
   assert.match(allowFailure.stderr, /baseline allow row/);
   const refuseFailure = await runPublicFormMutationProof({ baselineScanner: () => [] });
@@ -52,7 +52,7 @@ test("mutation drift, import failures and unexpected flips fail without leaking 
   assert.equal(failure.exitCode, 1);
   assert.match(failure.stdout, /mutated module failed/);
   assert.ok(!failure.stdout.includes("private diagnostic sentinel"));
-  const allowDrift = await run(noOp, async () => ({ ...gate, scanLineForRuleHits: () => [{ rule: "absolute-host-path", matched: "synthetic", index: 0 }] }));
+  const allowDrift = await run(noOp, async () => ({ ...gate, scanLineForRuleHits: () => [{ rule: "absolute-host-path", matched: "synthetic", index: 0, end: 9 }] }));
   assert.equal(allowDrift.exitCode, 1);
   assert.match(allowDrift.stdout, /flipped allow rows drifted/);
   const refuseDrift = await run(noOp, async () => ({ ...gate, scanLineForRuleHits: () => [] }));

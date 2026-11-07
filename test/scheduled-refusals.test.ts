@@ -175,7 +175,7 @@ test("workflow diagnostics retain plain stderr failures and redact private value
   assert.equal(redactWorkflowFailure("Supply required fields: reviewer."), "Supply required fields: reviewer.");
   // Encoded source offsets need not have the same length as decoded matches.
   const encoded = secret.replace("_", "\\u005f");
-  assert.match(redactWorkflowFailure(encoded), /encoded private content \(github-token-classic\)/);
+  assert.equal(redactWorkflowFailure(encoded), "[redacted]");
   assert.ok(!redactWorkflowFailure(encoded).includes(encoded));
 });
 
