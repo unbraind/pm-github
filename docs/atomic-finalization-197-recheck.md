@@ -97,10 +97,10 @@ npm run typecheck
 npm run build:test
 ```
 
-All three static checks passed. Full npm/Bun release gates and native Bun tests
-remain CI responsibilities for this documentation change; a green run with
-the retained skips cannot certify #197. There is no production change to
-revert and no new test or assertion for which a repair/revert claim is made.
+All three static checks passed. The completed npm/Bun CI receipts are recorded
+below; a green run with the retained skips cannot certify #197. There is no
+production change to revert and no new test or assertion for which a
+repair/revert claim is made.
 
 The existing Git-object privacy gate passed for 9,049 objects, and the four
 changed files separately passed its content rules. Strict tracker health
@@ -108,6 +108,52 @@ passed with an isolated home. The regular home reported the local
 2026.11.4/2026.11.5 extension-host version mismatch; no shared configuration
 was changed to hide it. Tracker history remains a byte-prefix extension of
 main's history.
+
+## Current CI lane receipts (2026-11-07)
+
+The unresolved review thread `PRRT_kwDOTbN4pM60s7BX` correctly identified that
+the original recheck omitted current lane results. [CI run 42297415013](https://github.com/unbraind/pm-github/actions/runs/42297415013)
+completed successfully for exact PR head
+`fff3e51a4b2f54df2b44f656e92ca0478880e9e2`. The job steps and logs were read,
+including the release gates, final coverage summaries and native Bun totals.
+
+| Node | npm release gate | Bun release gate | Native Bun behavior |
+| --- | --- | --- | --- |
+| 22 | [Passed](https://github.com/unbraind/pm-github/actions/runs/42297415013/job/128166149846) | [Passed](https://github.com/unbraind/pm-github/actions/runs/42297415013/job/128166149519) | Passed in the npm job |
+| 26 | [Passed](https://github.com/unbraind/pm-github/actions/runs/42297415013/job/128166150030) | [Passed](https://github.com/unbraind/pm-github/actions/runs/42297415013/job/128166149956) | Passed in the npm job |
+
+Each release gate reports 1,773 tests: 1,771 passed, zero failed and two skipped,
+with final line, statement, function and branch coverage all at 100%. Each
+native Bun job also totals 1,771 passed, zero failed and two skipped. Both npm
+jobs passed strict tracker health and the Bun install check. These are the
+current lanes defined by `.github/workflows/ci.yml`; the Bun release job runs
+`bun run release:check`, while native behavior runs `npm run test:bun`.
+
+These receipts apply to the exact head above, before this documentation
+correction. Subsequent commits need their own CI run. Local full release gates
+are deferred to CI because pm-github takes several hours on the shared host.
+The two existing exact-2026.11.4 skips still exclude ordinary-failure lifecycle
+restoration/new-item removal and recovered-refresh compensation. This lane
+evidence completes the omitted report; it does not close #197 or establish the
+missing transaction-owned finalizer. Upstream pm-cli#1656 remains open at this
+review round, and the pinned public mutation union is unchanged.
+
+The review-round focused command above was repeated locally through the pinned
+pm runner: Node 24.19.0 reports four passed, zero failed and two skipped. The
+same selection on CI's Bun 1.3.14 reports four passed, zero failed and two
+skipped. The pinned runtime was selected without changing repository pins:
+
+```sh
+NPM_CONFIG_USERCONFIG=/dev/null npm exec --yes --ignore-scripts --package=bun@1.3.14 -- \
+  bun test --timeout 600000 \
+  --test-name-pattern='real SDK atomic compensation restores|terminal failures remove replay plans|quarantine re-enables|GH-1614 plain' \
+  test/import-fidelity.test.ts test/refresh.test.ts \
+  test/atomic-finalization-quarantine.test.ts test/typed-sentinel-normalization.test.ts
+```
+
+The older installed Bun 1.3.5 instead executes both skipped cases, reporting
+four passed and two failed with the documented incomplete-compensation errors.
+This is an older-runtime diagnostic, not a timeout or a passing CI receipt.
 
 ## Public API inspection
 
