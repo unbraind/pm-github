@@ -112,9 +112,29 @@ for (const file of files) {
         assert.equal(readFileSync(join(cwd, "receipt"), "utf8").trim(), `npm:pm-github@${scenario.expected}`);
         const wrong = bash(cwd, install, { ...env, INSTALLED_VERSION: "1999.1.1" });
         assert.notEqual(wrong.status, 0, "installed-version verification remains fail closed");
+        assert.ok((wrong.stdout + wrong.stderr).includes(`::error::Installed pm-github version 1999.1.1 differs from resolved workflow version ${scenario.expected}.`));
       }
     }));
   }
+  test(`${kind} install verification explains invalid metadata without disclosing its contents`, () => fixture(cwd => {
+    const env = { ...setup(cwd), RUNNER_TEMP: cwd, PM_GITHUB_VERSION: version };
+    const scope = shell(source, "Resolve sync commit scope").split("<<'SCOPE'\n")[1]!.split("\nSCOPE")[0]!;
+    writeFileSync(join(cwd, "pm-github-sync-scope.sh"), scope);
+    const secret = "ghp_" + "A".repeat(36);
+    for (const installed of [secret, 'invalid"metadata', 'broken"source\\suffix']) {
+      const result = bash(cwd, shell(source, "Install pinned pm-github extension"), { ...env, INSTALLED_VERSION: installed });
+      assert.notEqual(result.status, 0);
+      const output = result.stdout + result.stderr;
+      assert.ok(output.includes(installed === secret
+        ? `::error::Installed pm-github version <invalid> differs from resolved workflow version ${version}.`
+        : "::error::Cannot read installed pm-github version"));
+      assert.ok(!output.includes(secret));
+      for (const representation of [installed, JSON.stringify(installed).slice(1, -1)]) {
+        assert.ok(!output.includes(representation), "every rejected metadata value and its serialized form must remain private");
+      }
+      assert.ok(!(result.stdout + result.stderr).includes(cwd), "module/parser diagnostics must not expose the tracker path");
+    }
+  }));
   test(`${kind} binds documented job identity and omits deprecated template input`, () => {
     assert.match(source, /WORKFLOW_SHA: \$\{\{ job.workflow_sha \}\}/);
     assert.match(source, /REQUESTED_PM_GITHUB_VERSION: \$\{\{ inputs.pm-github-version \}\}/);

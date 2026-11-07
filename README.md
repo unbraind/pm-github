@@ -1033,7 +1033,7 @@ for schedules, groups, commit messages and labels.
 
 ## Automated closeout workflow
 
-For scheduled failures, see the [run evidence and refusal guide](docs/scheduled-workflow-refusals.md).
+For scheduled failures, start with the [November 6 watch matrix and caller actions](docs/scheduled-workflow-watch-1106.md). The [historical run evidence and refusal guide](docs/scheduled-workflow-refusals.md) retains earlier incident context.
 Both maintenance workflows select one actionable reason from private command
 receipts and privacy-scan it before emitting an error annotation. Closeout
 accepts GitHub's numeric pagination aliases only after verifying repository

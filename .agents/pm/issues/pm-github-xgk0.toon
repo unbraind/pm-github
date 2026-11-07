@@ -1,0 +1,16 @@
+id: pm-github-xgk0
+title: Validate atomic import previews against configured mutation policies
+description: "Public caller replays show pm-changelog and pm-ops gated atomic dry runs returning a plan while the identical local apply refuses configured create or completeness rules. The importer checks completeness, identity and privacy in preview but does not run the ordered mutation coordinator or lifecycle finalization. Reuse the actual mutation builder and SDK semantic preview for supported stages, expose remaining finalization/guard limits explicitly, and preserve source item/history bytes. The installed SDK publicly exports previewItemMutations; this is a package integration follow-up, not an SDK-gap claim. Do not weaken caller policies or manufacture required values."
+type: Issue
+status: open
+priority: 2
+tags[4]: follow-up,preview,sync,validation
+created_at: "2026-11-06T23:03:10.169Z"
+updated_at: "2026-11-06T23:05:14.893Z"
+author: codex-agent
+acceptance_criteria: "Real non-git trackers with must-allow and must-refuse create/update/close policies produce matching preview and apply verdicts for generated source plans, with no source writes during preview; finalization and active-hook limits are explicitly reported."
+comments[1]{created_at,author,text}:
+  "2026-11-06T23:05:14.892Z",codex-agent,"Public representative evidence is linked in docs/scheduled-workflow-watch-1106.md. With the same pinned SDK and unchanged rendered source plan, pm-changelog and pm-ops dry runs return a plan but apply refuses configured required options or completeness rules. This is a secondary preview integration limitation; caller policy remains authoritative and must not be bypassed. Installed SDK declaration item-transaction.d.ts exports previewItemMutations over pmRoot, transactionId, author and mutations; finalization and extension guard limits also need explicit treatment."
+docs[1]{path,scope}:
+  docs/scheduled-workflow-watch-1106.md,project
+body: ""
