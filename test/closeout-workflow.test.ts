@@ -179,7 +179,10 @@ exec "$REAL_PM" "$@"
 set -euo pipefail
 printf '%s\\n' "$*" >> "$RECEIPTS"
 case "$1 $2" in
-  "api repos/acme/widgets") [[ "\${API_DENIED:-false}" != true ]] || exit 1; printf '%s' "\${API_BRANCH:-trunk}" ;;
+  "api repos/acme/widgets")
+    [[ "\${API_DENIED:-false}" != true ]] || exit 1
+    if [[ "$*" == *'.allow_auto_merge'* ]]; then printf true; else printf '%s' "\${API_BRANCH:-trunk}"; fi ;;
+  "api repos/acme/widgets/branches/"*) printf true ;;
   "auth setup-git") ;;
   "pr list")
     if [[ -f "$PR_STATE" ]]; then

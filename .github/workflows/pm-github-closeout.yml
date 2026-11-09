@@ -68,6 +68,10 @@ jobs:
       checks: read
       actions: write
     runs-on: ubuntu-latest
+    # Every step is bounded work with no in-job wait for other runs; landing is
+    # owned by GitHub's native auto-merge and the next scheduled closeout, so a
+    # hung job must stop here instead of holding a shared fleet runner.
+    timeout-minutes: 60
     env:
       REPOSITORY: ${{ inputs.repository }}
       SYNC_BRANCH: pm-github/closeout
@@ -643,16 +647,16 @@ jobs:
           printf 'SYNC_PUBLISHED=true\n' >> "${GITHUB_ENV}"
 
       - name: Dispatch caller CI and report parked runs
+        # Only dispatch, arm and report; no caller CI can extend this bound.
+        timeout-minutes: 5
         if: env.SYNC_PUBLISHED == 'true'
         env:
           GH_TOKEN: ${{ steps.automation_token.outputs.token || github.token }}
-          MAINTENANCE_ATTEMPTS: ${{ steps.automation_token.outputs.token != '' && '40' || '120' }}
-          MAINTENANCE_SECONDS: ${{ steps.automation_token.outputs.token != '' && '2400' || '7200' }}
           APP_DEADLINE: ${{ steps.publication_auth.outputs.deadline }}
         shell: bash
         run: |
           set -Eeuo pipefail
-          trap 'echo "::error::Caller check dispatch or PR maintenance failed; token requires actions:write, contents:write and pull-requests:write, and selected workflows must support workflow_dispatch. Inspect the bot PR state; no protection was bypassed."' ERR
+          trap 'echo "::error::Caller check dispatch or auto-merge preparation failed; token requires actions:write, contents:write and pull-requests:write, and selected workflows must support workflow_dispatch. Inspect the bot PR state; no protection was bypassed."' ERR
           [[ "${SYNC_PUBLISHED:-false}" == true ]] || exit 0
           # Default inventory covers the fleet's CI and CodeQL names. An explicit
           # list replaces it; empty disables dispatch AND automatic landing.
@@ -702,15 +706,33 @@ jobs:
             done
           }
           # --auto respects required checks and conversation resolution. The SHA
-          # guard refuses a changed head; a disabled repository setting is soft.
+          # guard refuses a changed head; a disabled repository setting or missing
+          # branch protection is a reported fallback, never a bypass.
           enable_auto_merge() {
             if [[ -z "${APP_DEADLINE:-}" ]]; then
-              echo "::notice::Auto-merge not armed with GITHUB_TOKEN: its merge does not start push workflows on the default branch. Configure the optional automation App for unattended landing."
+              echo "::notice::Auto-merge not armed with GITHUB_TOKEN: its merge does not start push workflows on the default branch. Configure the optional automation App for unattended landing; a maintainer can land the PR after checks, or the next scheduled run retries."
               return 0
             fi
-            if ! gh pr merge "${SYNC_PR_NUMBER}" -R "${REPOSITORY}" --auto --squash --match-head-commit "${head_sha}"; then
-              echo "::notice::Squash auto-merge unavailable for the bot PR; repository settings or branch rules require attention. No protection was bypassed."
+            # gh --auto can merge immediately when no rule blocks the PR. Check
+            # the repository setting and protected base once, never poll checks.
+            local auto_allowed base_ref protected merge_error merge_reason
+            if ! auto_allowed="$(gh api "repos/${REPOSITORY}" --jq '.allow_auto_merge')" || [[ "${auto_allowed}" != true ]]; then
+              echo "::notice::Squash auto-merge unavailable: repository auto-merge is disabled or its setting could not be verified; the next scheduled run retries."
+              return 0
             fi
+            base_ref="$(jq -nr --arg ref "${DEFAULT_BRANCH}" '$ref | @uri')"
+            if ! protected="$(gh api "repos/${REPOSITORY}/branches/${base_ref}" --jq '.protected')" || [[ "${protected}" != true ]]; then
+              echo "::notice::Squash auto-merge unavailable: base branch protection is absent or could not be verified; the next scheduled run retries."
+              return 0
+            fi
+            merge_error="$(mktemp)"
+            if gh pr merge "${SYNC_PR_NUMBER}" -R "${REPOSITORY}" --auto --squash --match-head-commit "${head_sha}" 2> "${merge_error}"; then
+              rm -f -- "${merge_error}"
+              return 0
+            fi
+            merge_reason="$(head -n 1 -- "${merge_error}" 2>/dev/null | tr -d '\r' | tr -cd '[:print:]' | sed 's/%/%25/g' || true)"
+            rm -f -- "${merge_error}"
+            echo "::notice::Squash auto-merge unavailable for the bot PR${merge_reason:+ (${merge_reason})}. Repository settings or branch rules require attention; a maintainer can land the PR after checks, or the next scheduled run retries. No protection was bypassed."
           }
           head_sha="$(git rev-parse HEAD)"
           dispatch_checks
@@ -727,57 +749,14 @@ jobs:
             [[ -n "${run_url}" ]] || continue
             echo "::notice::A pull-request workflow requires maintainer approval: ${run_url}. Dispatched head checks do not satisfy PR branch rules; the optional automation App starts eligible native PR runs."
           done <<< "${parked_runs}"
-          # A daily release can advance the base AFTER publication. Keep this
-          # same daily run alive rather than adding push triggers. App tokens
-          # expire after one hour, so their monitor stops within forty minutes.
-          # Concurrency serializes runs of this kind; it is not a daily quota.
-          last_dispatched="${head_sha}"
-          update_requested=""
-          maintenance_deadline=$((SECONDS + ${MAINTENANCE_SECONDS:-7200}))
-          if [[ -n "${APP_DEADLINE:-}" ]]; then
-            remaining_auth_seconds=$((APP_DEADLINE - $(date +%s)))
-            (( remaining_auth_seconds > 0 )) || remaining_auth_seconds=0
-            maintenance_deadline=$((SECONDS + remaining_auth_seconds))
-          fi
-          base_ref="$(jq -nr --arg ref "${DEFAULT_BRANCH}" '$ref | @uri')"
-          max_attempts="${MAINTENANCE_ATTEMPTS:-120}"
-          for ((attempt=0; attempt<max_attempts; attempt++)); do
-            (( SECONDS < maintenance_deadline )) || break
-            if ! pr="$(gh pr view "${SYNC_PR_NUMBER}" -R "${REPOSITORY}" --json number,state,headRefOid)"; then
-              echo "::notice::Bot PR state unavailable; retrying."
-              sleep 60
-              continue
-            fi
-            [[ "$(jq -r '.state' <<< "${pr}")" == OPEN ]] || exit 0
-            head_sha="$(jq -er '.headRefOid | select(test("^[a-f0-9]{40}$"))' <<< "${pr}")"
-            if [[ "${head_sha}" != "${last_dispatched}" ]]; then
-              dispatch_checks
-              enable_auto_merge
-              last_dispatched="${head_sha}"
-              update_requested=""
-            fi
-            # Merge-state labels can be BLOCKED or UNKNOWN while the base has
-            # advanced. Contents-read ancestry is independent of that policy label.
-            if ! behind_by="$(gh api "repos/${REPOSITORY}/compare/${base_ref}...${head_sha}" --jq '.behind_by')"; then
-              echo "::notice::Bot branch ancestry unavailable; retrying."
-              sleep 60
-              continue
-            fi
-            [[ "${behind_by}" =~ ^[0-9]+$ ]] || { echo "::error::Cannot verify bot branch ancestry."; exit 1; }
-            if (( behind_by > 0 )) && [[ "${update_requested}" != "${head_sha}" ]]; then
-              number="$(jq -er '.number | select(type == "number")' <<< "${pr}")"
-              # GitHub merges the current protected base into this same-repo bot
-              # branch. expected_head_sha prevents racing another branch writer.
-              if gh api --method PUT "repos/${REPOSITORY}/pulls/${number}/update-branch" -f "expected_head_sha=${head_sha}" >/dev/null; then
-                update_requested="${head_sha}"
-                echo "::notice::Updating the behind bot branch; checks will be dispatched again when the new head appears."
-              else
-                echo "::notice::Bot branch update refused; retrying without bypassing protections."
-              fi
-            fi
-            sleep 60
-          done
-          echo "::notice::Bot PR maintenance reached its configured bound; auto-merge remains enabled when allowed. The next scheduled run rebuilds from the current default branch. Unresolved conversations still require resolution."
+          # Never wait in-job for caller CI: it takes runners from the same account
+          # pool, so polling here can only lengthen the queue it waits on. Required
+          # checks decide the armed auto-merge; a base advance after publication or
+          # an unavailable auto-merge waits for the next scheduled run, which
+          # rebuilds this branch from the current default branch and retries.
+          # No in-job wait remains because no contract needs one: the parked-run
+          # report reads runs GitHub already registered for the published head.
+          echo "::notice::Landing stays outside this runner: required checks decide the armed auto-merge, and the next scheduled run retries when auto-merge cannot be armed or the base advanced. Unresolved conversations still require resolution."
 
       # Also revoke on dispatch/maintenance failure, cancellation, disabled CI,
       # no publication, or a hold. This runs even when an earlier step failed.

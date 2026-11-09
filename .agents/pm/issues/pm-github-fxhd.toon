@@ -1,0 +1,34 @@
+id: pm-github-fxhd
+title: The gated sync holds a runner for up to two hours while it waits for caller CI it competes with for the same pool
+description: ""
+type: Issue
+status: in_progress
+priority: 2
+tags[5]: changelog-unreleased,ci,fleet,"gh:unbraind/pm-github#228",sync
+created_at: "2026-11-09T19:25:14.594Z"
+updated_at: "2026-11-09T20:16:22.402Z"
+author: codex-agent
+comments[6]{created_at,author,text}:
+  "2026-11-09T20:06:55.015Z",codex-agent,"Continuation: retained the existing uncommitted sync and closeout edits. No remote task branch or PR exists. Auditing all workflow_call jobs and the dispatch/landing contracts before focused verification."
+  "2026-11-09T20:09:30.888Z",codex-agent,"Class audit: both reusable sync and closeout dispatch steps contained the long PR/ancestry monitor; removed both. Dependabot has bounded API retries with no run polling and already has a job timeout. Added 60-minute sync/closeout job limits and five-minute dispatch caps; sync alerts retain 10 minutes. Before gh --auto, one-time repository setting and protected-base reads prevent immediate unprotected landing. Unknown metadata exits with a reason. Retained App-only unattended merging, scoped tokens, owned PR checks, closeout attribution holds/revocation, publication gates and parked-run reporting. A later schedule rebuilds/retries; persistent configuration problems need a maintainer."
+  "2026-11-09T20:11:34.716Z",codex-agent,"Revert proof in a disposable copy: replaced only the sync/closeout Dispatch caller CI and report parked runs blocks with HEAD baseline blocks, leaving current tests and job timeouts. node --test --test-concurrency=2 --test-name-pattern=\"armed auto-merge is requested exactly once|unavailable auto-merge reports|the dispatch step shell never sleeps|fallback without merging or polling\" test/bot-pr-workflow.test.ts exited 1: all 18 selected regressions failed (0 passed). Separately removed only the two new job timeout-minutes declarations with fixed dispatch: the every job in the reusable workflows contract exited 1 (1 failed). The package worktree stayed fixed throughout; the fixed focused contract suite passed 117/117 after these source changes. Build, build:test, typecheck and lint passed. No full release gate was run locally; CI owns it."
+  "2026-11-09T20:13:34.077Z",codex-agent,"Linked tests were executed through the pinned pm test command with --run --progress against a scratch copy of the tracker, using schema context and the source workspace. Result: 117/117 passed, no failures or skips. Scratch storage kept test-run artifacts out of the package tracker. A first invocation with none/source context was refused by the documented context constraint before execution; retrying with schema/source passed."
+  "2026-11-09T20:14:09.943Z",codex-agent,"The source-workspace privacy gate also passed: 9140 Git objects audited with approved identities and no secret or host-path findings. The focused contracts cover App-only landing, disabled repository auto-merge, absent/unknown base protection, parked-run URLs and the five-minute dispatch limit. Caller templates keep release SHA pins and existing configuration; adopting the fix requires their normal pin update."
+  "2026-11-09T20:16:21.432Z",codex-agent,"Final local verification: focused contract command passed 117/117; NPM_CONFIG_USERCONFIG=/dev/null node --test --test-concurrency=2 --test-name-pattern=\"earlier armed auto-merge|previous auto-merge is revoked|ambiguous deliveries open\" test/closeout-workflow.test.ts passed all 11 selected tests with no skips. npm run build, npm run build:test, npm run typecheck, npm run lint and npm run changelog:check passed. Strict tracker health with --no-extensions passed (only pre-existing stale-item advisories). Extension-enabled local health is blocked by extension_host_pm_cli_version_skew:2026.11.4:2026.11.8:pm-github; no dependency pin changed. CI must certify the full gate on the pushed head. Revert proof is recorded above; no new upstream PM CLI or SDK defect was found."
+files[4]{path,scope}:
+  .github/workflows/pm-github-closeout.yml,project
+  .github/workflows/pm-github-sync.yml,project
+  test/bot-pr-workflow.test.ts,project
+  test/closeout-workflow.test.ts,project
+tests[5]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  node --test --test-concurrency=2 test/bot-pr-workflow.test.ts test/self-versioned-workflows.test.ts test/workflow-rule-names.test.ts,project,180,codex-agent,"2026-11-09T20:11:31.238Z",local_mutation,fix/sync-does-not-hold-runners
+  npm run typecheck,project,180,codex,"2026-11-09T20:13:35.475Z",local_mutation,fix/sync-does-not-hold-runners
+  npm run lint,project,180,codex,"2026-11-09T20:13:36.734Z",local_mutation,fix/sync-does-not-hold-runners
+  "npm run changelog:check",project,180,codex,"2026-11-09T20:13:39.004Z",local_mutation,fix/sync-does-not-hold-runners
+  "NPM_CONFIG_USERCONFIG=/dev/null node --test --test-concurrency=2 --test-name-pattern=\"earlier armed auto-merge|previous auto-merge is revoked|ambiguous deliveries open\" test/closeout-workflow.test.ts",project,600,codex-agent,"2026-11-09T20:16:20.486Z",local_mutation,fix/sync-does-not-hold-runners
+docs[4]{path,scope}:
+  docs/bot-pr-automation.md,project
+  docs/closeout-workflow-caller.yml,project
+  docs/sync-workflow-caller.yml,project
+  README.md,project
+body: "Issue: https://github.com/unbraind/pm-github/issues/228. The dispatch step polls until it can land the PR (7200 s with github.token, 2400 s with an app token, over 120/40 attempts). The caller CI it waits for needs runners from the same free-tier account pool: between 10:00Z and 12:00Z on 2026-11-09, 77 fleet runs queued while 8 ran; a scheduled sync sat in that step from 10:27Z, holding a runner while waiting for CI that could not start. An automation job must never wait in-job for work that competes for the same runner pool.\n\nPlan: dispatch caller CI, arm GitHub native auto-merge on the owned PR, report parked runs and exit. When auto-merge cannot be armed (GITHUB_TOKEN mode, no branch protection, disabled setting), print a notice with the reason; the next scheduled sync rebuilds and retries the PR. Persistent configuration problems require maintainer attention. Remove the whole polling class from both reusable workflows (sync and closeout), add timeout-minutes to every reusable job, add a contract test that fails on revert."

@@ -64,11 +64,13 @@ The official create-github-app-token action is pinned by immutable commit in
 both workflows, and Dependabot maintains that pin. Its token is restricted to the current
 caller and the listed permissions, and is automatically revoked at job end.
 The private key is supplied only to that action after local gates and caller
-scripts finish. App-enabled monitoring has forty polls and a forty-minute
-absolute deadline recorded immediately after token creation, so publication
-time also counts toward the budget. This stays inside the one-hour token lifetime. Legacy
-GITHUB_TOKEN monitoring retains the two-hour bound and does not arm auto-merge;
-a maintainer must approve eligible runs and merge the protected PR. Required checks and conversations stay enforced by GitHub.
+scripts finish. After dispatch, the workflow arms `gh pr merge --auto --squash`
+on the expected head SHA and exits: it performs no in-job wait for caller CI,
+which takes runners from the same account pool, so polling could only lengthen
+the queue it waits on. Legacy GITHUB_TOKEN mode does not arm auto-merge;
+a maintainer must approve eligible runs and merge the protected PR. A base
+advance after publication, or an unavailable auto-merge, waits for the next
+scheduled run. Required checks and conversations stay enforced by GitHub.
 
 Sources: [GitHub token event behavior](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow),
 [required-check eligibility](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks),
@@ -151,16 +153,25 @@ code cannot safely infer unknown required context names from workflow filenames.
 
 ## Freshness and protected merging
 
-The proposal is rebuilt on the default branch each daily run. After publication,
-a bounded monitor retries failed PR-state and ancestry reads, and handles a base advance (including the daily release) by
-checking compare-API ancestry even when the merge label is BLOCKED or UNKNOWN,
-requesting update-branch with expected_head_sha, then redispatching every
-selected workflow for the new head. In App mode it requests squash auto-merge with a matching
-head SHA; GitHub still enforces required checks and conversation resolution.
-Disallowed auto-merge is a notice, failed check dispatch is an error. No bypass
-or thread resolution is attempted. Successful ancestry responses must still contain a nonnegative integer; invalid
-values fail closed. App mode stops within forty minutes and legacy mode within two hours. A base
-change outside that window is handled by the next daily run, so permanent freshness is not claimed.
+The proposal is rebuilt on the default branch each daily run. After publication the
+dispatch step arms squash auto-merge (in App mode) with a matching head SHA and
+exits; GitHub still enforces required checks and conversation resolution. No
+runner is held while caller CI queues: it takes runners from the same account
+pool, so an in-job wait could only lengthen the queue it waits on. Disallowed
+auto-merge is a notice naming the reason; failed check dispatch is an error.
+The repository auto-merge setting and protected base are checked once before
+calling `gh`, which can otherwise merge immediately on an unprotected branch.
+Unreadable or malformed settings/protection metadata also use the scheduled
+fallback. A later run retries; a persistent configuration problem still needs
+maintainer attention. No
+bypass or thread resolution is attempted. A base advance after publication,
+or an unavailable auto-merge, is handled by the next scheduled run, which
+force-rebuilds the proposal branch from the current default branch, so permanent
+freshness is not claimed. Sync and closeout jobs have 60-minute timeouts;
+their dispatch steps have five-minute timeouts and no polling. Sync alerts use
+10 minutes. The Dependabot reusable job already had a 60-minute timeout;
+its bounded API retries do not wait for caller runs. The non-reusable release
+workflow is outside this caller-workflow change.
 
 The existing daily schedules and per-kind concurrency groups are retained. No
 push trigger is added: concurrency permits one active run per kind, not one
@@ -173,12 +184,14 @@ and enabled auto-merge do not resolve that conversation.
 
 ## Regression evidence
 
-`test/bot-pr-workflow.test.ts` executes each workflow's actual maintenance shell
-against a real local Git remote. It advances the base with a release commit,
-performs a real branch merge, and verifies that both workflows are dispatched
-again on the changed head. Receipt-only GitHub commands keep caller repositories
-untouched. Cases also cover explicit overrides, no dispatchable workflow,
-CodeQL without a dispatch trigger, dispatch-denial diagnostics, App credential
-pairing, token scope/bindings, token-lifetime bounds, disallowed auto-merge and a blocked PR reaching
-the monitor bound. Existing end-to-end import and closeout suites retain the
-privacy, scope, ownership, lease and no-op boundaries.
+`test/bot-pr-workflow.test.ts` executes each workflow's actual dispatch shell
+against a real local Git remote with receipt-only GitHub commands. It advances
+the base with a release commit and verifies one dispatch round, one head-guarded
+auto-merge request and a parked-run report, with no PR/ancestry polling or branch
+update. Cases cover disabled auto-merge, absent protection, failed/malformed
+metadata, explicit overrides, no dispatchable workflow, CodeQL without a dispatch
+trigger, dispatch denial, App credential pairing and scoped token bindings.
+The timeout contract discovers every reusable workflow and checks every job;
+the dispatch-step contract checks the five-minute cap. Existing end-to-end import
+and closeout suites retain privacy, scope, ownership, lease, no-op and attribution
+revocation boundaries.

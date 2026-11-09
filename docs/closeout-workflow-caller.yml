@@ -4,6 +4,9 @@
 # Callers need no guard of their own: API default-branch resolution supports schedule
 # payloads without repository metadata; manual dispatch from another branch fails closed.
 # Unattended landing needs the optional App client ID/key mapping below.
+# After dispatch the reusable step arms App auto-merge, reports parked runs and
+# exits without waiting for CI. Unavailable auto-merge is reported; later schedules
+# rebuild and retry. Required checks and maintainer decisions still govern landing.
 # Configure required CI workflows to support workflow_dispatch and emit their usual checks.
 # Missing CI filenames are skipped with a notice, matching the reusable sync workflow.
 # Settings -> Actions -> General must allow Actions to create pull requests.

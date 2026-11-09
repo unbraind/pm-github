@@ -1,10 +1,11 @@
-/** Exercise the exact reusable maintenance shell with real Git and receipt-only GitHub commands. */
+/** Exercise the exact reusable dispatch shell with real Git and receipt-only GitHub commands. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { parse } from "yaml";
 
 const root = resolve(import.meta.dirname, "..");
 
@@ -44,8 +45,18 @@ set -euo pipefail
 printf '%s HEAD=%s\\n' "$*" "$(git rev-parse HEAD)" >> "$RECEIPTS"
 case "$1 $2" in
   'workflow run') exit "\${DISPATCH_DENIED:-0}" ;;
-  'pr merge') exit "\${AUTO_DENIED:-0}" ;;
-  'run list') ;;
+  'pr merge')
+    if [[ "\${AUTO_DENIED:-0}" != 0 ]]; then
+      printf 'pull request auto-merge is disabled\\n' >&2
+      exit "\${AUTO_DENIED}"
+    fi ;;
+  'run list') printf '%s\\n' "\${PARKED_URL:-}" ;;
+  'api repos/acme/widgets')
+    [[ "\${SETTING_READ_DENIED:-0}" == 0 ]] || exit 1
+    printf '%s\\n' "\${AUTO_ALLOWED:-true}" ;;
+  'api repos/acme/widgets/branches/'*)
+    [[ "\${PROTECTION_READ_DENIED:-0}" == 0 ]] || exit 1
+    printf '%s\\n' "\${PROTECTED:-true}" ;;
   'pr view')
     if [[ "\${PR_READ_FAILURE:-none}" != none ]]; then
       if [[ "\${PR_READ_FAILURE}" == always || ! -f "$STATE.pr-read" ]]; then
@@ -77,7 +88,7 @@ case "$1 $2" in
 esac
 `, { mode: 0o755 });
     writeFileSync(join(bin, "date"), '#!/usr/bin/env bash\nprintf "%s\\n" "${FAKE_NOW:-1700000000}"\n', { mode: 0o755 });
-    writeFileSync(join(bin, "sleep"), "#!/usr/bin/env bash\nexit 0\n", { mode: 0o755 });
+    writeFileSync(join(bin, "sleep"), '#!/usr/bin/env bash\nprintf "sleep %s\\n" "$*" >> "$RECEIPTS"\nexit 0\n', { mode: 0o755 });
     run({ dir, env, receipts: () => { try { return readFileSync(env.RECEIPTS, "utf8"); } catch { return ""; } },
       execute: kind => {
         if (env.BEHIND === "true" && !releaseCreated) {
@@ -85,16 +96,17 @@ esac
           git("add", "release.txt"); git("commit", "-qm", "Release"); git("push", "-q", "origin", "trunk"); git("switch", "-q", "automation/proposal");
           releaseCreated = true;
         }
-        return spawnSync("bash", ["-c", maintenance(kind)], { cwd: dir, env, encoding: "utf8" });
+        return spawnSync("bash", ["-c", maintenance(kind)], { cwd: dir, env, encoding: "utf8", timeout: 10_000 });
       } });
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
 test("README distinguishes App auto-merge from no-App maintainer landing", () => {
   const readme = readFileSync(join(root, "README.md"), "utf8").replace(/\s+/g, " ");
-  assert.match(readme, /In App mode, after dispatch the workflow requests `gh pr merge --auto --squash` with the expected head SHA/);
+  assert.match(readme, /In App mode, after dispatch the workflow requests `gh pr merge --auto --squash` with the expected head SHA and exits; required checks decide the merge, and no runner is held while they run/);
   assert.match(readme, /Without an App, maintainers approve native PR runs, wait for required checks and conversations, and merge with an authorized credential; the workflow does not arm auto-merge/);
-  assert.match(readme, /dispatches all selected workflows and, in App mode, requests auto-merge again when the new head appears/);
+  assert.doesNotMatch(readme, /dispatches all selected workflows and, in App mode, requests auto-merge again when the new head appears/);
+  assert.match(readme, /Never wait in-job for caller CI: it takes runners from the same account pool/);
 });
 
 for (const kind of ["sync", "closeout"]) {
@@ -144,51 +156,15 @@ for (const kind of ["sync", "closeout"]) {
     assert.match(String(r.stdout), /codeql.yml. Add workflow_dispatch: under on:/);
     assert.match(f.receipts(), /workflow run ci.yml/); assert.doesNotMatch(f.receipts(), /workflow run codeql.yml/);
   }));
-  test(`${kind}: a daily release makes the proposal BEHIND, updates with a SHA lease and redispatches both workflows`, () => fixture(f => {
+  test(`${kind}: a base advance after publication never polls; landing stays with auto-merge and the next scheduled run`, () => fixture(f => {
     f.env.BEHIND = "true";
-    const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr));
+    const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
     const dispatches = f.receipts().split("\n").filter(line => line.startsWith("workflow run"));
-    assert.equal(dispatches.length, 4); assert.match(dispatches[0]!, /ci.yml/); assert.match(dispatches[1]!, /codeql.yml/);
-    const heads = dispatches.map(line => line.split("HEAD=")[1]);
-    assert.equal(heads[0], heads[1]); assert.equal(heads[2], heads[3]); assert.notEqual(heads[0], heads[2]);
-    assert.match(f.receipts(), /api --method PUT repos\/acme\/widgets\/pulls\/7\/update-branch -f expected_head_sha=/);
-    assert.equal(readFileSync(join(f.dir, "release.txt"), "utf8"), "Release advances base\n");
-  }));
-  test(`${kind}: a blocked merge label cannot hide a base advance`, () => fixture(f => {
-    Object.assign(f.env, { BEHIND: "true", MERGE_STATE: "BLOCKED", MAINTENANCE_ATTEMPTS: "2" });
-    const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr));
-    assert.match(f.receipts(), /api repos\/acme\/widgets\/compare\/trunk\.\.\./);
-    assert.match(f.receipts(), /update-branch/);
-    assert.equal(f.receipts().split("\n").filter(line => line.startsWith("workflow run")).length, 4);
-    assert.equal(readFileSync(join(f.dir, "release.txt"), "utf8"), "Release advances base\n");
-  }));
-  for (const boundary of ["PR", "COMPARE"]) {
-    test(`${kind}: transient ${boundary} poll failure retries and still updates and redispatches`, () => fixture(f => {
-      Object.assign(f.env, { BEHIND: "true", MAINTENANCE_ATTEMPTS: "4", [`${boundary}_READ_FAILURE`]: "once" });
-      const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
-      assert.match(String(r.stdout), /unavailable; retrying/);
-      assert.doesNotMatch(String(r.stdout), /Cannot verify|token requires/);
-      assert.match(f.receipts(), /update-branch/);
-      const dispatches = f.receipts().split("\n").filter(line => line.startsWith("workflow run"));
-      assert.equal(dispatches.length, 4);
-      assert.notEqual(dispatches[0]!.split("HEAD=")[1], dispatches[2]!.split("HEAD=")[1]);
-      assert.equal(readFileSync(join(f.dir, "release.txt"), "utf8"), "Release advances base\n");
-    }));
-    test(`${kind}: persistent ${boundary} poll errors stop at the configured bound`, () => fixture(f => {
-      Object.assign(f.env, { BLOCKED: "true", MAINTENANCE_ATTEMPTS: "3", [`${boundary}_READ_FAILURE`]: "always" });
-      const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
-      assert.match(String(r.stdout), /configured bound/);
-      assert.equal(f.receipts().split("\n").filter(line => line.startsWith("pr view")).length, 3);
-      assert.doesNotMatch(f.receipts(), /update-branch/);
-    }));
-  }
-  test(`${kind}: successful ancestry reads with invalid data still fail closed`, () => fixture(f => {
-    Object.assign(f.env, { BLOCKED: "true", INVALID_ANCESTRY: "true", MAINTENANCE_ATTEMPTS: "3" });
-    const r = f.execute(kind); assert.equal(r.status, 1, String(r.stderr));
-    assert.match(String(r.stdout), /Cannot verify bot branch ancestry/);
-    assert.doesNotMatch(String(r.stdout), /unavailable; retrying/);
-    assert.doesNotMatch(f.receipts(), /update-branch/);
-    assert.equal(f.receipts().split("\n").filter(line => line.startsWith("pr view")).length, 1);
+    assert.equal(dispatches.length, 2, "exactly one dispatch round, no redispatch on a moved base");
+    assert.match(f.receipts(), /pr merge 7 .*--auto --squash --match-head-commit [a-f0-9]{40}/);
+    assert.doesNotMatch(f.receipts(), /pr view|compare\/trunk|update-branch|sleep/);
+    assert.match(String(r.stdout), /Landing stays outside this runner/);
+    assert.equal(existsSync(join(f.dir, "release.txt")), false, "a base advance is repaired by the next scheduled run, not in-job");
   }));
   test(`${kind}: dispatch denial reports the token diagnostic before auto-merge`, () => fixture(f => {
     f.env.DISPATCH_DENIED = "1";
@@ -196,12 +172,49 @@ for (const kind of ["sync", "closeout"]) {
     assert.match(String(r.stdout), /token requires actions:write/);
     assert.doesNotMatch(f.receipts(), /pr merge|pr view/);
   }));
-  test(`${kind}: disabled auto-merge is a notice, unresolved conversations stay blocked at the time bound`, () => fixture(f => {
-    f.env.AUTO_DENIED = "1"; f.env.BLOCKED = "true";
-    const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr));
-    assert.match(String(r.stdout), /Squash auto-merge unavailable/); assert.match(String(r.stdout), /configured bound/);
-    assert.equal(f.receipts().split("\n").filter(line => line.startsWith("pr view")).length, 120);
-    assert.doesNotMatch(f.receipts(), /update-branch|--admin|resolve/);
+  test(`${kind}: unavailable auto-merge reports the reason and exits without polling; the next scheduled run retries`, () => fixture(f => {
+    f.env.AUTO_DENIED = "1";
+    const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
+    assert.match(String(r.stdout), /Squash auto-merge unavailable for the bot PR \(pull request auto-merge is disabled\)/);
+    assert.match(String(r.stdout), /the next scheduled run retries/);
+    assert.match(f.receipts(), /workflow run ci\.yml/);
+    assert.doesNotMatch(f.receipts(), /pr view|update-branch|sleep|--admin|resolve/);
+  }));
+  for (const [variable, value, reason] of [
+    ["AUTO_ALLOWED", "false", "repository auto-merge is disabled"],
+    ["AUTO_ALLOWED", "null", "repository auto-merge is disabled"],
+    ["SETTING_READ_DENIED", "1", "repository auto-merge is disabled"],
+    ["PROTECTED", "false", "base branch protection is absent"],
+    ["PROTECTED", "invalid", "base branch protection is absent"],
+    ["PROTECTION_READ_DENIED", "1", "base branch protection is absent"],
+  ]) {
+    test(`${kind}: ${variable}=${value} uses the scheduled fallback without merging or polling`, () => fixture(f => {
+      f.env[variable!] = value;
+      f.env.PARKED_URL = "https://github.com/acme/widgets/actions/runs/123";
+      const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
+      assert.ok(String(r.stdout).includes(reason!));
+      assert.match(String(r.stdout), /the next scheduled run retries/);
+      assert.match(String(r.stdout), /maintainer approval: https:\/\/github.com\/acme\/widgets\/actions\/runs\/123/);
+      assert.equal(f.receipts().split("\n").filter(line => line.startsWith("workflow run")).length, 2);
+      assert.doesNotMatch(f.receipts(), /pr merge|pr view|update-branch|sleep/);
+      assert.ok(f.receipts().split("\n").filter(line => line.startsWith("api ")).length <= 2);
+    }));
+  }
+  test(`${kind}: armed auto-merge is requested exactly once and the step exits after the parked-run report`, () => fixture(f => {
+    f.env.PARKED_URL = "https://github.com/acme/widgets/actions/runs/123";
+    const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
+    const arms = f.receipts().split("\n").filter(line => line.startsWith("pr merge 7"));
+    assert.equal(arms.length, 1);
+    const calls = f.receipts();
+    assert.ok(calls.lastIndexOf("workflow run") < calls.indexOf("pr merge 7"));
+    assert.ok(calls.indexOf("pr merge 7") < calls.indexOf("run list"));
+    assert.match(String(r.stdout), /maintainer approval: https:\/\/github.com\/acme\/widgets\/actions\/runs\/123/);
+    assert.match(arms[0]!, /--auto --squash --match-head-commit [a-f0-9]{40}/);
+    assert.doesNotMatch(arms[0]!, /--admin|--force/);
+    assert.equal(f.receipts().split("\n").filter(line => line.startsWith("workflow run")).length, 2);
+    assert.match(f.receipts(), /run list .*--status action_required/);
+    assert.doesNotMatch(f.receipts(), /pr view|compare\/trunk|update-branch|sleep/);
+    assert.match(String(r.stdout), /Landing stays outside this runner/);
   }));
 }
 
@@ -235,11 +248,9 @@ for (const kind of ["sync", "closeout"]) {
     assert.ok(source.indexOf("name: Verify strict pm health") < source.indexOf("name: Create automation app token"));
     assert.ok(source.indexOf("name: Validate publication credentials") < source.indexOf("name: Commit gated"));
     assert.equal(source.split("GH_TOKEN: ${{ steps.automation_token.outputs.token || github.token }}").length - 1, kind === "closeout" ? 3 : 2);
-    assert.match(source, /MAINTENANCE_ATTEMPTS: \$\{\{ steps.automation_token.outputs.token != '' && '40' \|\| '120' \}\}/);
     assert.equal((source.match(/secrets\.automation_app_private_key/g) ?? []).length, 2);
     assert.match(source, /APP_DEADLINE: \$\{\{ steps.publication_auth.outputs.deadline \}\}/);
-    assert.match(source, /MAINTENANCE_SECONDS: \$\{\{ steps.automation_token.outputs.token != '' && '2400' \|\| '7200' \}\}/);
-    assert.doesNotMatch(source, /--admin|gh pr review|resolveReviewThread|\/check-runs.*--method POST/);
+    assert.doesNotMatch(source, /MAINTENANCE_|--admin|gh pr review|resolveReviewThread|\/check-runs.*--method POST/);
   });
   test(`${kind}: partial App credentials fail closed and legacy mode reports check ineligibility`, () => fixture(f => {
     for (const [clientId, key, token, status] of [["", "false", "false", 0], ["", "true", "false", 1],
@@ -255,16 +266,26 @@ for (const kind of ["sync", "closeout"]) {
       }
     }
   }));
-  test(`${kind}: App maintenance ends at its configured poll bound`, () => fixture(f => {
-    Object.assign(f.env, { MAINTENANCE_ATTEMPTS: "1", MAINTENANCE_SECONDS: "2400", BLOCKED: "true" });
-    const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr));
-    assert.equal(f.receipts().split("\n").filter(line => line.startsWith("pr view")).length, 1);
-    assert.match(String(r.stdout), /configured bound/);
-  }));
-  test(`${kind}: the elapsed-time deadline also ends maintenance before token expiry`, () => fixture(f => {
-    Object.assign(f.env, { MAINTENANCE_ATTEMPTS: "40", MAINTENANCE_SECONDS: "2400", APP_DEADLINE: "1700002400", FAKE_NOW: "1700002500", BLOCKED: "true" });
-    const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr));
-    assert.doesNotMatch(f.receipts(), /pr view/);
-    assert.match(String(r.stdout), /configured bound/);
-  }));
+  test(`${kind}: the dispatch step shell never sleeps or polls other runs`, () => {
+    const source = parse(readFileSync(join(root, `.github/workflows/pm-github-${kind}.yml`), "utf8")) as { jobs: Record<string, { steps: Record<string, unknown>[] }> };
+    const step = source.jobs[`gated-${kind}`]!.steps.find(step => step.name === "Dispatch caller CI and report parked runs")!;
+    assert.equal(step["timeout-minutes"], 5, "dispatch is capped even if a CLI call hangs");
+    const shell = maintenance(kind);
+    assert.doesNotMatch(shell, /\bsleep\b/, "no in-job wait may remain");
+    assert.doesNotMatch(shell, /for \(\(attempt/, "no poll loop may remain");
+    assert.doesNotMatch(shell, /gh pr view|compare\/|update-branch/, "no PR-state polling may remain");
+    assert.match(shell, /Landing stays outside this runner/);
+  });
 }
+
+test("every job in the reusable workflows declares an explicit timeout", () => {
+  for (const file of readdirSync(join(root, ".github/workflows")).filter(file => /\.ya?ml$/.test(file))) {
+    const parsed = parse(readFileSync(join(root, `.github/workflows/${file}`), "utf8")) as { on?: { workflow_call?: unknown }; jobs: Record<string, Record<string, unknown>> };
+    if (!parsed.on || !Object.hasOwn(parsed.on, "workflow_call")) continue;
+    for (const [id, job] of Object.entries(parsed.jobs)) {
+      const timeout = job["timeout-minutes"];
+      assert.ok(typeof timeout === "number" && Number.isInteger(timeout) && timeout > 0 && timeout <= 60,
+        `${file} job ${id} needs an explicit, bounded timeout-minutes`);
+    }
+  }
+});
