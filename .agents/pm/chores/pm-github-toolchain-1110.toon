@@ -1,0 +1,22 @@
+id: pm-github-toolchain-1110
+title: Bound lifecycle compensation quarantine to verified SDK pins
+description: "Adapt https://github.com/unbraind/pm-github/pull/227 using existing pm-github-quay evidence for unresolved upstream GH-1656."
+type: Chore
+status: in_progress
+priority: 2
+tags[1]: "gh:unbraind/pm-github#227"
+created_at: "2026-11-10T12:43:45.298Z"
+updated_at: "2026-11-10T12:45:37.105Z"
+assignee: codex-toolchain-1110
+claim_principal: codex-toolchain-1110
+author: codex-toolchain-1110
+comments[2]{created_at,author,text}:
+  "2026-11-10T12:43:48.205Z",codex-toolchain-1110,"Upstream pm-cli GH-1656 remains OPEN. Installed CHANGELOG 2026.11.5/2026.11.6 contains GH-1655, GH-1660, revision follow-ups and GH-1670, but no owned-finalization step or GH-1656 fix. Existing pm-github-quay and docs/atomic-finalization-197-recheck.md already prove 2026.11.4/.5/.6 all fail both lifecycle compensation guarantees. Reproduced on this 2026.11.6 worktree before changing the predicate: the real mixed import and recovered refresh still report incomplete compensation; the fresh no-op-finalizer control passes. Extend only the explicit verified-pin allowlist to .5/.6, preserve every assertion and keep future .7/unverified SDKs executing the checks. This is a quarantine maintenance change, not a rollback repair. Full coverage intentionally excluded per task instructions."
+  "2026-11-10T12:45:37.105Z",codex-toolchain-1110,"Exact local counts: exposed SDK 2026.11.6 reproduction 3 tests: 1 passed, 2 failed, 0 skipped. After bounded quarantine maintenance: 5 tests: 3 passed, 0 failed, 2 skipped; these skips retain the unresolved guarantees rather than certify rollback. Linked predicate regression also runs through pm test. Auto-merge disabled before any push."
+files[3]{path,scope}:
+  test/atomic-finalization-quarantine.test.ts,project
+  test/import-fidelity.test.ts,project
+  test/refresh.test.ts,project
+tests[1]{command,scope,provenance{author,created_at,source_kind}}:
+  node --test --test-concurrency=2 test/atomic-finalization-quarantine.test.ts,project,codex-toolchain-1110,"2026-11-10T12:44:34.800Z",local_mutation
+body: ""
