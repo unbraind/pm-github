@@ -182,7 +182,8 @@ case "$1 $2" in
   "api repos/acme/widgets")
     [[ "\${API_DENIED:-false}" != true ]] || exit 1
     if [[ "$*" == *'.allow_auto_merge'* ]]; then printf true; else printf '%s' "\${API_BRANCH:-trunk}"; fi ;;
-  "api repos/acme/widgets/branches/"*) printf true ;;
+  "api repos/acme/widgets/branches/"*) printf '{"protected":true,"protection":{"required_status_checks":{"contexts":["CI"],"checks":[]}}}' ;;
+  "api repos/acme/widgets/rules/branches/"*) printf '[[]]' ;;
   "auth setup-git") ;;
   "pr list")
     if [[ -f "$PR_STATE" ]]; then

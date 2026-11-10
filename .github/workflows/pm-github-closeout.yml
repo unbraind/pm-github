@@ -716,15 +716,31 @@ jobs:
               return 1
             fi
             # gh --auto can merge immediately when no rule blocks the PR. Check
-            # the repository setting and protected base once, never poll checks.
-            local auto_allowed base_ref protected merge_error merge_reason
+            # repository settings, classic protection and applicable rules once, never poll checks.
+            local auto_allowed base_ref branch_json rules_json merge_error merge_reason
             if ! auto_allowed="$(gh api "repos/${REPOSITORY}" --jq '.allow_auto_merge')" || [[ "${auto_allowed}" != true ]]; then
               echo "::notice::Squash auto-merge unavailable: repository auto-merge is disabled or its setting could not be verified; the next scheduled run retries."
               return 1
             fi
             base_ref="$(jq -nr --arg ref "${DEFAULT_BRANCH}" '$ref | @uri')"
-            if ! protected="$(gh api "repos/${REPOSITORY}/branches/${base_ref}" --jq '.protected')" || [[ "${protected}" != true ]]; then
+            if ! branch_json="$(gh api "repos/${REPOSITORY}/branches/${base_ref}")" || ! jq -e '.protected == true' <<< "${branch_json}" >/dev/null; then
               echo "::notice::Squash auto-merge unavailable: base branch protection is absent or could not be verified; the next scheduled run retries."
+              return 1
+            fi
+            # Protection alone can mean only reviews/conversations. Dispatched
+            # checks cannot block a CLEAN PR unless at least one check is required.
+            # Read both sources even when classic protection already names checks;
+            # an unreadable rules API is an unverifiable prerequisite, not absence.
+            if ! rules_json="$(gh api "repos/${REPOSITORY}/rules/branches/${base_ref}" --paginate --slurp)"; then
+              echo "::notice::Squash auto-merge unavailable: required PR CI status checks could not be verified because the base branch rules API could not be read; the next scheduled run retries."
+              return 1
+            fi
+            if ! jq -en --argjson branch "${branch_json}" --argjson rules "${rules_json}" '
+              [ $branch.protection.required_status_checks | select(.enforcement_level != "off") | (.contexts[]?, .checks[]?.context) ]
+              + [ $rules[][] | select(.type == "required_status_checks") | .parameters.required_status_checks[]?.context ]
+              | any(.[]; type == "string" and length > 0)
+            ' >/dev/null; then
+              echo "::notice::Squash auto-merge unavailable: base branch must require at least one PR CI status check through classic protection or an applicable ruleset; no required check could be verified; the next scheduled run retries."
               return 1
             fi
             merge_error="$(mktemp)"

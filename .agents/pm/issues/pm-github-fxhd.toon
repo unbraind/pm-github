@@ -6,9 +6,9 @@ status: in_progress
 priority: 2
 tags[5]: changelog-unreleased,ci,fleet,"gh:unbraind/pm-github#228",sync
 created_at: "2026-11-09T19:25:14.594Z"
-updated_at: "2026-11-10T13:54:56.531Z"
+updated_at: "2026-11-10T18:31:53.993Z"
 author: codex-agent
-comments[19]{created_at,author,text}:
+comments[23]{created_at,author,text}:
   "2026-11-09T20:06:55.015Z",codex-agent,"Continuation: retained the existing uncommitted sync and closeout edits. No remote task branch or PR exists. Auditing all workflow_call jobs and the dispatch/landing contracts before focused verification."
   "2026-11-09T20:09:30.888Z",codex-agent,"Class audit: both reusable sync and closeout dispatch steps contained the long PR/ancestry monitor; removed both. Dependabot has bounded API retries with no run polling and already has a job timeout. Added 60-minute sync/closeout job limits and five-minute dispatch caps; sync alerts retain 10 minutes. Before gh --auto, one-time repository setting and protected-base reads prevent immediate unprotected landing. Unknown metadata exits with a reason. Retained App-only unattended merging, scoped tokens, owned PR checks, closeout attribution holds/revocation, publication gates and parked-run reporting. A later schedule rebuilds/retries; persistent configuration problems need a maintainer."
   "2026-11-09T20:11:34.716Z",codex-agent,"Revert proof in a disposable copy: replaced only the sync/closeout Dispatch caller CI and report parked runs blocks with HEAD baseline blocks, leaving current tests and job timeouts. node --test --test-concurrency=2 --test-name-pattern=\"armed auto-merge is requested exactly once|unavailable auto-merge reports|the dispatch step shell never sleeps|fallback without merging or polling\" test/bot-pr-workflow.test.ts exited 1: all 18 selected regressions failed (0 passed). Separately removed only the two new job timeout-minutes declarations with fixed dispatch: the every job in the reusable workflows contract exited 1 (1 failed). The package worktree stayed fixed throughout; the fixed focused contract suite passed 117/117 after these source changes. Build, build:test, typecheck and lint passed. No full release gate was run locally; CI owns it."
@@ -28,13 +28,17 @@ comments[19]{created_at,author,text}:
   "2026-11-10T05:16:00.116Z",pi-github228-1109,"Round 2 outside-diff fix: the closeout armed flag now records only an observed successful arm. enable_auto_merge returns 0 only after the arm call itself succeeds and 1 on every fallback (no App deadline, disabled or unverifiable repository setting, absent or unverifiable branch protection, failed gh pr merge). The shared shell captures that status before any later command, and the closeout-only block writes CLOSEOUT_AUTOMERGE_ALLOWED only when the status is true, so the always() cleanup revokes any request armed earlier in the same run instead of skipping it. The sync shell stays byte-identical apart from the closeout hold and flag block. Revert proof: replacing the flag condition with the old deadline check makes all 5 failed-arm cases in test/bot-pr-workflow.test.ts fail; restoring it makes all 6 armed-flag cases pass. The Dependabot merge script already returns armed only after a verified request, so the class has no second instance. The other outside-diff note (gh api preflight timeouts) is the reviewer's own design note marked no change required; both calls already sit inside the step's 5-minute timeout."
   "2026-11-10T05:16:57.829Z",pi-github228-1109,"Pushed 223e6c7 to the existing PR 229 and requested a fresh CodeRabbit review. Both outside-diff findings are answered in the PR: the armed-flag class is fixed with a revert-proven regression, and the gh api preflight note is the reviewer's own design note requiring no change. Focused gates: bot-pr-workflow 79/79, closeout auto-merge/parked-run/ambiguous subset 12/12, workflow contract suites 69/69, typecheck clean, changelog:check clean. The full release gate stays with CI on the pushed head."
   "2026-11-10T13:54:56.531Z",claude-orchestrator,"Orchestrator fix: CI failed in tsc (test/bot-pr-workflow.test.ts(103,38) TS2769: env.GITHUB_ENV is string | undefined). The agent's local release:check passed on stale node_modules; a clean npm ci (@types/node 26.6.6, typescript 7.0.2) reproduces it. The read is now guarded with if (env.GITHUB_ENV). tsc -p tsconfig.test.json clean, lint clean, test/bot-pr-workflow.test.ts 79/0. The full suite could not finish locally under load 13-17 on 4 cores (killed at 50 min), so CI certifies the full gate."
+  "2026-11-10T17:54:45.948Z",codex-agent,"Continuation for PR #229 from cd7bc5e; retained all prior commits. Addressing thread PRRT_kwDOTbN4pM61ur3t: read classic required status checks and applicable branch rules before auto-merge; refuse absent requirements or unreadable metadata, retain scheduled fallback and shared maintenance contract. Scoped gates only; CI owns the full gate."
+  "2026-11-10T17:58:16.132Z",codex-agent,"Revert proof for PRRT_kwDOTbN4pM61ur3t: in a disposable copy, replaced only enable_auto_merge bodies in both workflows with cd7bc5e; kept the new tests and fixture API responses. Command: timeout 1200s node --test --test-concurrency=2 --test-name-pattern=\"classic protection with required checks|ruleset-only required check|protected base without required checks|unreadable branch rules API\" test/bot-pr-workflow.test.ts. Reverted: 8 tests, 0 pass, 8 fail. Restored: 8 tests, 8 pass, 0 fail. Each named case fails for both sync and closeout: classic protection with required checks arms auto-merge after reading both sources; ruleset-only required check arms auto-merge after reading both sources; protected base without required checks refuses auto-merge and names the missing requirement; unreadable branch rules API refuses auto-merge even with classic required checks. Classic cases cover contexts and checks; ruleset-only covers a later inherited-rule page; unreadable covers HTTP 403/404/429 with partial valid output. Source worktree was never reverted. Focused bot-pr suite passes 87/87, typecheck, lint and build:test pass. Remaining workflow-reading gates are running with a disposable tracker for test-run records."
+  "2026-11-10T18:19:21.257Z",codex-agent,"Scoped-gate limit: the combined eight workflow-reading files were attempted through pinned pm test --run --progress with disposable tracker storage, two workers and a 1200-second cap. The command exceeded that cap (exit 124); the pm runner buffered test output, so this is incomplete evidence, not a passing suite. No workflow test child processes remained after timeout. Running the seven smaller workflow-reading files directly for visible results and a focused closeout maintenance/revocation selection next. CI must certify the full closeout suite and full release gate."
+  "2026-11-10T18:31:52.802Z",codex-agent,"Review round for PRRT_kwDOTbN4pM61ur3t complete: both reusable workflows now read classic branch required_status_checks contexts/checks and every page of active branch rules before arming head-guarded auto-merge. At least one named required status check is mandatory; unreadable rules APIs and protected bases without required checks emit prerequisite-specific notices and defer to the next scheduled run. The shared maintenance contract remains intact. Direct scoped gates: 234/234 pass across bot-pr-workflow, import-gate, daily-sync-alert, self-versioned-workflows, workflow-rule-names, attestation-workflow-operands and changelog-placement; includes the final malformed-protection fixture adjustment. Focused closeout arming/revocation: 3/3 pass (earlier armed auto-merge; informational parked-run failure; previous auto-merge revoked on maintenance exit). Typecheck, lint and build:test pass. Revert proof remains 8/8 fail with only enable_auto_merge reverted to cd7bc5e, 8/8 pass restored, covering all four new names in each workflow. The complete eight-file run hit its 20-minute cap before pm returned a summary; full closeout and full release-gate certification remain pending CI at https://github.com/unbraind/pm-github/pull/229/checks. No review replies or resolutions posted. Releasing claim for orchestrator verification; item remains in progress."
 files[5]{path,scope}:
   .github/workflows/pm-github-closeout.yml,project
   .github/workflows/pm-github-sync.yml,project
   docs/explicit-closeout-attribution.md,project
   test/bot-pr-workflow.test.ts,project
   test/closeout-workflow.test.ts,project
-tests[10]:
+tests[13]:
   - command: node --test --test-concurrency=2 test/bot-pr-workflow.test.ts test/self-versioned-workflows.test.ts test/workflow-rule-names.test.ts
     scope: project
     timeout_seconds: 180
@@ -112,6 +116,30 @@ tests[10]:
     provenance:
       author: pi-github228-1109
       created_at: "2026-11-10T05:15:59.007Z"
+      source_kind: local_mutation
+      source_ref: fix/sync-does-not-hold-runners
+  - command: timeout 1200s node --test --test-concurrency=2 test/bot-pr-workflow.test.ts test/closeout-workflow.test.ts test/import-gate.test.ts test/daily-sync-alert.test.ts test/self-versioned-workflows.test.ts test/workflow-rule-names.test.ts test/attestation-workflow-operands.test.ts test/changelog-placement.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-10T17:56:48.093Z"
+      source_kind: local_mutation
+      source_ref: fix/sync-does-not-hold-runners
+  - command: timeout 1200s node --test --test-concurrency=2 test/bot-pr-workflow.test.ts test/import-gate.test.ts test/daily-sync-alert.test.ts test/self-versioned-workflows.test.ts test/workflow-rule-names.test.ts test/attestation-workflow-operands.test.ts test/changelog-placement.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-10T18:19:20.066Z"
+      source_kind: local_mutation
+      source_ref: fix/sync-does-not-hold-runners
+  - command: "timeout 1200s node --test --test-concurrency=2 --test-name-pattern='earlier armed auto-merge|informational parked-run failure|previous auto-merge is revoked on workflow exit: maintenance' test/closeout-workflow.test.ts"
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-10T18:30:18.257Z"
       source_kind: local_mutation
       source_ref: fix/sync-does-not-hold-runners
 docs[4]{path,scope}:

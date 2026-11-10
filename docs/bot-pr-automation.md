@@ -160,11 +160,16 @@ runner is held while caller CI queues: it takes runners from the same account
 pool, so an in-job wait could only lengthen the queue it waits on. Disallowed
 auto-merge is a notice naming the reason; failed check dispatch is an error.
 The repository auto-merge setting and protected base are checked once before
-calling `gh`, which can otherwise merge immediately on an unprotected branch.
-Unreadable or malformed settings/protection metadata also use the scheduled
-fallback. A later run retries; a persistent configuration problem still needs
-maintainer attention. No
-bypass or thread resolution is attempted. A base advance after publication,
+calling `gh`, which can otherwise merge immediately even on a protected branch
+with no required status checks. The base must require at least one named PR CI
+status check, from classic protection (`required_status_checks.contexts` or
+`checks`) or an active applicable ruleset. Both the branch metadata and the
+paginated branch-rules API are read before arming; reviews or conversations alone
+are insufficient. Unreadable APIs (including permission errors, 404s and rate
+limits), malformed metadata or absent required checks produce a notice naming
+the missing prerequisite and use the scheduled fallback. A later run retries; a
+persistent configuration problem still needs maintainer attention. No bypass or
+thread resolution is attempted. A base advance after publication,
 or an unavailable auto-merge, is handled by the next scheduled run, which
 force-rebuilds the proposal branch from the current default branch, so permanent
 freshness is not claimed. Sync and closeout jobs have 60-minute timeouts;
@@ -188,9 +193,11 @@ and enabled auto-merge do not resolve that conversation.
 against a real local Git remote with receipt-only GitHub commands. It advances
 the base with a release commit and verifies one dispatch round, one head-guarded
 auto-merge request and a parked-run report, with no PR/ancestry polling or branch
-update. Cases cover disabled auto-merge, absent protection, failed/malformed
-metadata, explicit overrides, no dispatchable workflow, CodeQL without a dispatch
-trigger, dispatch denial, App credential pairing and scoped token bindings.
+update. Cases cover classic contexts/checks, ruleset-only requirements, protected
+bases without required checks, unreadable rules APIs, disabled auto-merge, absent
+protection, failed/malformed metadata, explicit overrides, no dispatchable
+workflow, CodeQL without a dispatch trigger, dispatch denial, App credential
+pairing and scoped token bindings.
 The timeout contract discovers every reusable workflow and checks every job;
 the dispatch-step contract checks the five-minute cap. Existing end-to-end import
 and closeout suites retain privacy, scope, ownership, lease, no-op and attribution

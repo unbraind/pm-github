@@ -64,7 +64,15 @@ case "$1 $2" in
     printf '%s\\n' "\${AUTO_ALLOWED:-true}" ;;
   'api repos/acme/widgets/branches/'*)
     [[ "\${PROTECTION_READ_DENIED:-0}" == 0 ]] || exit 1
-    printf '%s\\n' "\${PROTECTED:-true}" ;;
+    if [[ "$*" == *--jq* ]]; then printf '%s\\n' "\${PROTECTED:-true}";
+    else jq -n --arg protected "\${PROTECTED:-true}" --argjson checks "\${CLASSIC_CHECKS:-null}" \
+      '{protected: (if $protected == "true" then true elif $protected == "false" then false else $protected end), protection: {required_status_checks: ($checks // {contexts: ["CI"], checks: []})}}'; fi ;;
+  'api repos/acme/widgets/rules/branches/'*)
+    printf '%s\\n' "\${RULE_PAGES:-[[]]}"
+    if [[ "\${RULES_READ_DENIED:-0}" != 0 ]]; then
+      printf 'HTTP %s: branch rules unavailable\\n' "$RULES_READ_DENIED" >&2
+      exit 1
+    fi ;;
   'pr view')
     if [[ "\${PR_READ_FAILURE:-none}" != none ]]; then
       if [[ "\${PR_READ_FAILURE}" == always || ! -f "$STATE.pr-read" ]]; then
@@ -213,6 +221,53 @@ for (const kind of ["sync", "closeout"]) {
       assert.ok(f.receipts().split("\n").filter(line => line.startsWith("api ")).length <= 2);
     }));
   }
+  test(`${kind}: classic protection with required checks arms auto-merge after reading both sources`, () => fixture(f => {
+    for (const checks of [{ contexts: ["CI"], checks: [] }, { contexts: [], checks: [{ context: "CI", app_id: 7 }] }]) {
+      f.env.CLASSIC_CHECKS = JSON.stringify(checks);
+      const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
+      const calls = f.receipts();
+      assert.match(calls, /api repos\/acme\/widgets\/branches\/trunk HEAD=/);
+      assert.match(calls, /api repos\/acme\/widgets\/rules\/branches\/trunk --paginate --slurp HEAD=/);
+      assert.ok(calls.indexOf("rules/branches/trunk") < calls.indexOf("pr merge 7"), "both required-check sources must be read before arming");
+      assert.match(calls, /pr merge 7 .*--auto --squash --match-head-commit [a-f0-9]{40}/);
+      assert.doesNotMatch(String(r.stdout), /Squash auto-merge unavailable/);
+    }
+  }));
+  test(`${kind}: ruleset-only required check arms auto-merge after reading both sources`, () => fixture(f => {
+    f.env.CLASSIC_CHECKS = JSON.stringify({ contexts: [], checks: [] });
+    // An inherited requirement on a later API page must still be found.
+    f.env.RULE_PAGES = JSON.stringify([[{ type: "pull_request" }], [{ type: "required_status_checks", ruleset_source_type: "Organization",
+      parameters: { required_status_checks: [{ context: "CI", integration_id: 7 }] } }]]);
+    const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
+    const calls = f.receipts();
+    assert.match(calls, /api repos\/acme\/widgets\/branches\/trunk HEAD=/);
+    assert.match(calls, /api repos\/acme\/widgets\/rules\/branches\/trunk --paginate --slurp HEAD=/);
+    assert.ok(calls.indexOf("rules/branches/trunk") < calls.indexOf("pr merge 7"));
+    assert.match(calls, /pr merge 7 .*--auto --squash --match-head-commit [a-f0-9]{40}/);
+    assert.doesNotMatch(String(r.stdout), /Squash auto-merge unavailable/);
+  }));
+  test(`${kind}: protected base without required checks refuses auto-merge and names the missing requirement`, () => fixture(f => {
+    f.env.CLASSIC_CHECKS = JSON.stringify({ contexts: [], checks: [] });
+    f.env.RULE_PAGES = JSON.stringify([[{ type: "pull_request" }, { type: "required_status_checks", parameters: { required_status_checks: [] } }]]);
+    f.env.PARKED_URL = "https://github.com/acme/widgets/actions/runs/123";
+    const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
+    assert.doesNotMatch(f.receipts(), /pr merge|CLOSEOUT_AUTOMERGE_ALLOWED=true|sleep/);
+    assert.match(String(r.stdout), /::notice::Squash auto-merge unavailable: base branch must require at least one PR CI status check/);
+    assert.match(String(r.stdout), /the next scheduled run retries/);
+    assert.match(String(r.stdout), /maintainer approval: https:\/\/github.com\/acme\/widgets\/actions\/runs\/123/);
+  }));
+  test(`${kind}: unreadable branch rules API refuses auto-merge even with classic required checks`, () => fixture(f => {
+    // Partial valid output followed by an API failure is never sufficient evidence.
+    f.env.RULE_PAGES = JSON.stringify([[{ type: "required_status_checks", parameters: { required_status_checks: [{ context: "CI" }] } }]]);
+    for (const code of ["403", "404", "429"]) {
+      f.env.RULES_READ_DENIED = code;
+      const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
+      assert.match(String(r.stderr), new RegExp(`HTTP ${code}`));
+      assert.doesNotMatch(f.receipts(), /pr merge|CLOSEOUT_AUTOMERGE_ALLOWED=true|sleep/);
+      assert.match(String(r.stdout), /::notice::Squash auto-merge unavailable: required PR CI status checks could not be verified.*rules API could not be read/);
+      assert.match(String(r.stdout), /the next scheduled run retries/);
+    }
+  }));
   for (const appMode of [true, false]) {
     test(`${kind}: parked-run listing failure is informational in ${appMode ? "App" : "GITHUB_TOKEN"} mode`, () => fixture(f => {
       if (!appMode) delete f.env.APP_DEADLINE;
