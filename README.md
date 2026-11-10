@@ -1137,7 +1137,8 @@ for caller CI: it takes runners from the same account pool**, so polling here ca
 only lengthen the queue it waits on. The dispatch step performs no in-job wait —
 no contract requires one: the parked-run report reads runs GitHub already
 registered for the published head, and landing is owned by armed auto-merge or
-a later scheduled retry. A base advance after publication, or an unavailable
+a later scheduled retry. The closeout armed flag records only an observed
+successful arm, so a failed arm stays revocable by the always() cleanup. A base advance after publication, or an unavailable
 auto-merge, waits for the next scheduled rebuild, which force-rebuilds the bot
 branch from the current default branch and re-arms. The existing daily schedules
 and separate sync/closeout concurrency groups remain. Unresolved conversations

@@ -707,23 +707,25 @@ jobs:
           }
           # --auto respects required checks and conversation resolution. The SHA
           # guard refuses a changed head; a disabled repository setting or missing
-          # branch protection is a reported fallback, never a bypass.
+          # branch protection is a reported fallback, never a bypass. Every path
+          # returns a status: 0 only after the arm call itself succeeded, so an
+          # armed flag can record an observed result and never an intention.
           enable_auto_merge() {
             if [[ -z "${APP_DEADLINE:-}" ]]; then
               echo "::notice::Auto-merge not armed with GITHUB_TOKEN: its merge does not start push workflows on the default branch. Configure the optional automation App for unattended landing; a maintainer can land the PR after checks, or the next scheduled run retries."
-              return 0
+              return 1
             fi
             # gh --auto can merge immediately when no rule blocks the PR. Check
             # the repository setting and protected base once, never poll checks.
             local auto_allowed base_ref protected merge_error merge_reason
             if ! auto_allowed="$(gh api "repos/${REPOSITORY}" --jq '.allow_auto_merge')" || [[ "${auto_allowed}" != true ]]; then
               echo "::notice::Squash auto-merge unavailable: repository auto-merge is disabled or its setting could not be verified; the next scheduled run retries."
-              return 0
+              return 1
             fi
             base_ref="$(jq -nr --arg ref "${DEFAULT_BRANCH}" '$ref | @uri')"
             if ! protected="$(gh api "repos/${REPOSITORY}/branches/${base_ref}" --jq '.protected')" || [[ "${protected}" != true ]]; then
               echo "::notice::Squash auto-merge unavailable: base branch protection is absent or could not be verified; the next scheduled run retries."
-              return 0
+              return 1
             fi
             merge_error="$(mktemp)"
             if gh pr merge "${SYNC_PR_NUMBER}" -R "${REPOSITORY}" --auto --squash --match-head-commit "${head_sha}" 2> "${merge_error}"; then
@@ -733,6 +735,7 @@ jobs:
             merge_reason="$(head -n 1 -- "${merge_error}" 2>/dev/null | tr -d '\r' | tr -cd '[:print:]' | sed 's/%/%25/g' || true)"
             rm -f -- "${merge_error}"
             echo "::notice::Squash auto-merge unavailable for the bot PR${merge_reason:+ (${merge_reason})}. Repository settings or branch rules require attention; a maintainer can land the PR after checks, or the next scheduled run retries. No protection was bypassed."
+            return 1
           }
           head_sha="$(git rev-parse HEAD)"
           dispatch_checks
@@ -740,8 +743,13 @@ jobs:
             echo "::notice::Delivery attribution needs review; caller checks were dispatched and automatic landing is disabled."
             exit 0
           fi
-          enable_auto_merge
-          if [[ -n "${APP_DEADLINE:-}" ]]; then
+          # Capture the arm status before any later command: a reported fallback
+          # must not fail the step, and only an observed success may record it.
+          enable_auto_merge && auto_merge_armed=true || auto_merge_armed=false
+          # The flag records an observed successful arm, never the intention: a
+          # failed arm leaves any request armed earlier in this run revocable by
+          # the always() cleanup instead of surviving it.
+          if [[ "${auto_merge_armed}" == true ]]; then
             printf 'CLOSEOUT_AUTOMERGE_ALLOWED=true\n' >> "${GITHUB_ENV}"
           fi
           # Informational reporting must not fail dispatch or revoke armed auto-merge.

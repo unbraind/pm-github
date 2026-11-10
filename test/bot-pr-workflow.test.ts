@@ -97,7 +97,12 @@ esac
 `, { mode: 0o755 });
     writeFileSync(join(bin, "date"), '#!/usr/bin/env bash\nprintf "%s\\n" "${FAKE_NOW:-1700000000}"\n', { mode: 0o755 });
     writeFileSync(join(bin, "sleep"), '#!/usr/bin/env bash\nprintf "sleep %s\\n" "$*" >> "$RECEIPTS"\nexit 0\n', { mode: 0o755 });
-    run({ dir, env, receipts: () => { try { return readFileSync(env.RECEIPTS, "utf8"); } catch { return ""; } },
+    run({ dir, env, receipts: () => {
+      let recorded = "";
+      try { recorded += readFileSync(env.RECEIPTS, "utf8"); } catch { /* no remote calls yet */ }
+      try { recorded += readFileSync(env.GITHUB_ENV, "utf8"); } catch { /* the step wrote no job env */ }
+      return recorded;
+    },
       execute: kind => {
         if (env.BEHIND === "true" && !releaseCreated) {
           git("switch", "-q", "trunk"); writeFileSync(join(dir, "release.txt"), "Release advances base\n");
@@ -219,7 +224,7 @@ for (const kind of ["sync", "closeout"]) {
       assert.match(String(r.stdout), /::notice::Could not list approval-required runs/);
       assert.match(String(r.stdout), /Landing stays outside this runner/);
       assert.doesNotMatch(String(r.stdout), /::error::|maintainer approval: https:/);
-      const calls = f.receipts().trim().split("\n");
+      const calls = f.receipts().trim().split("\n").filter(line => line.includes("HEAD="));
       assert.equal(calls.filter(line => line.startsWith("workflow run")).length, 2);
       assert.equal(calls.filter(line => line.startsWith("pr merge")).length, Number(appMode));
       assert.equal(calls.filter(line => line.startsWith("run list")).length, 1, "reporting is never retried");
@@ -243,6 +248,24 @@ for (const kind of ["sync", "closeout"]) {
     assert.doesNotMatch(f.receipts(), /pr view|compare\/trunk|update-branch|sleep/);
     assert.match(String(r.stdout), /Landing stays outside this runner/);
   }));
+  if (kind === "closeout") {
+    for (const [variable, value] of [
+      ["AUTO_DENIED", "1"], ["AUTO_ALLOWED", "false"], ["SETTING_READ_DENIED", "1"],
+      ["PROTECTED", "false"], ["PROTECTION_READ_DENIED", "1"],
+    ] as const) {
+      test(`${kind}: a failed arm records no armed flag (${variable})`, () => fixture(f => {
+        f.env[variable] = value;
+        const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
+        assert.doesNotMatch(f.receipts(), /CLOSEOUT_AUTOMERGE_ALLOWED=true/,
+          "an armed flag must record an observed successful arm, never the intention");
+        assert.doesNotMatch(f.receipts(), /pr view|update-branch|sleep/);
+      }));
+    }
+    test(`${kind}: a successful arm is the only path that records the armed flag`, () => fixture(f => {
+      const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr));
+      assert.match(f.receipts(), /CLOSEOUT_AUTOMERGE_ALLOWED=true/);
+    }));
+  }
 }
 
 test("sync and closeout share PR maintenance apart from the closeout attribution hold", () => {
@@ -251,7 +274,10 @@ test("sync and closeout share PR maintenance apart from the closeout attribution
     + '  exit 0\nfi\n';
   const closeout = maintenance("closeout");
   assert.equal(closeout.split(hold).length, 2);
-  const landingReceipt = 'if [[ -n "${APP_DEADLINE:-}" ]]; then\n'
+  const landingReceipt = '# The flag records an observed successful arm, never the intention: a\n'
+    + '# failed arm leaves any request armed earlier in this run revocable by\n'
+    + '# the always() cleanup instead of surviving it.\n'
+    + 'if [[ "${auto_merge_armed}" == true ]]; then\n'
     + '  printf \'CLOSEOUT_AUTOMERGE_ALLOWED=true\\n\' >> "${GITHUB_ENV}"\nfi\n';
   assert.equal(closeout.split(landingReceipt).length, 2);
   assert.equal(maintenance("sync"), closeout.replace(hold, "").replace(landingReceipt, ""));
