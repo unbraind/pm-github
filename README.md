@@ -1233,8 +1233,8 @@ run from the repository root. A script that regenerates the changelog must write
 the repository-root `CHANGELOG.md` to stay within the publication allowlist.
 
 Bot-created PRs using GITHUB_TOKEN may have `pull_request` runs parked in
-`action_required`. The optional App token makes publication and branch refresh
-start native eligible PR workflows automatically. Configured manual workflows
+`action_required`. The optional App token makes publication start native
+eligible PR workflows automatically. Configured manual workflows
 are also dispatched on the bot head; these jobs are additional verification,
 because GitHub excludes manual job checks from PR branch-rule evaluation. Each
 manual workflow must support `workflow_dispatch` and produce its intended check
