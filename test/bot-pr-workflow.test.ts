@@ -100,7 +100,7 @@ esac
     run({ dir, env, receipts: () => {
       let recorded = "";
       try { recorded += readFileSync(env.RECEIPTS, "utf8"); } catch { /* no remote calls yet */ }
-      try { recorded += readFileSync(env.GITHUB_ENV, "utf8"); } catch { /* the step wrote no job env */ }
+      try { if (env.GITHUB_ENV) recorded += readFileSync(env.GITHUB_ENV, "utf8"); } catch { /* the step wrote no job env */ }
       return recorded;
     },
       execute: kind => {
