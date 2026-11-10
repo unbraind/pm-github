@@ -660,6 +660,20 @@ test("earlier armed auto-merge is disabled before a later hold updates the reuse
   assert.match(readFileSync(f.env.RECEIPTS!, "utf8"), /pr merge 7 -R acme\/widgets --disable-auto/);
 }));
 
+test("informational parked-run failure preserves armed auto-merge through always cleanup", async () => fixture(async f => {
+  f.env.APP_DEADLINE = String(Math.floor(Date.now() / 1000) + 600);
+  f.env.RUN_LIST_DENIED = "true";
+  const result = await f.run([...setup, ...finish]);
+  assert.equal(result.code, 0, result.out);
+  assert.match(result.out, /Could not list approval-required runs/);
+  assert.equal(existsSync(f.env.AUTO_STATE!), true, "informational failure must not revoke armed auto-merge");
+  assert.equal(existsSync(f.env.ARMED_EDIT!), false);
+  const calls = readFileSync(f.env.RECEIPTS!, "utf8");
+  assert.match(calls, /pr merge 7 .*--auto --squash/);
+  assert.equal(calls.split("\n").filter(line => line.startsWith("run list")).length, 1);
+  assert.doesNotMatch(calls, /--disable-auto/);
+}));
+
 for (const mode of ["guard", "setup", "evidence", "privacy", "no-op", "empty-ci", "dispatch", "maintenance", "disable-denied"]) {
   test(`previous auto-merge is revoked on workflow exit: ${mode}`, async () => fixture(async f => {
     f.env.APP_DEADLINE = String(Math.floor(Date.now() / 1000) + 600);
@@ -673,10 +687,13 @@ for (const mode of ["guard", "setup", "evidence", "privacy", "no-op", "empty-ci"
     if (mode === "no-op") f.env.NO_DELIVERY = "true";
     if (mode === "empty-ci") f.env.CI_WORKFLOWS = "";
     if (mode === "dispatch") f.env.DISPATCH_DENIED = "true";
-    if (mode === "maintenance") f.env.RUN_LIST_DENIED = "true";
     if (mode === "disable-denied") f.env.DISABLE_DENIED = "true";
     const priorBranch = f.git("ls-remote", "origin", `refs/heads/${branch}`);
-    const second = await f.run([...setup, ...finish]);
+    // A required head lookup failure remains fatal; parked-run reporting is informational.
+    const source = mode === "maintenance" ? workflow.replace('head_sha="$(git rev-parse HEAD)"',
+      'head_sha="$(git rev-parse --verify refs/heads/missing-fixture-head || exit 1)"') : workflow;
+    if (mode === "maintenance") assert.notEqual(source, workflow, "inject the failure at the production head lookup");
+    const second = await f.run([...setup, ...finish], source);
     assert.equal(second.code, ["no-op", "empty-ci"].includes(mode) ? 0 : 1, second.out);
     assert.equal(existsSync(f.env.AUTO_STATE!), mode === "disable-denied");
     assert.equal(existsSync(f.env.ARMED_EDIT!), false);

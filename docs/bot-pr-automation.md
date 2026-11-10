@@ -195,3 +195,9 @@ The timeout contract discovers every reusable workflow and checks every job;
 the dispatch-step contract checks the five-minute cap. Existing end-to-end import
 and closeout suites retain privacy, scope, ownership, lease, no-op and attribution
 revocation boundaries.
+
+The approval-required run listing is informational. Both dispatch steps query it
+once after auto-merge preparation; if the lookup fails, they print a notice to
+inspect the bot PR and exit successfully without retrying or revoking auto-merge.
+Successful lookups still report each parked run URL. Dispatch failures continue
+to fail the job before auto-merge can be armed.

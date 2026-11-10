@@ -763,7 +763,11 @@ jobs:
           head_sha="$(git rev-parse HEAD)"
           dispatch_checks
           enable_auto_merge
-          parked_runs="$(gh run list -R "${REPOSITORY}" --commit "${head_sha}" --status action_required --limit 100 --json url --jq '.[].url')"
+          # Informational reporting must not fail dispatch or revoke armed auto-merge.
+          if ! parked_runs="$(gh run list -R "${REPOSITORY}" --commit "${head_sha}" --status action_required --limit 100 --json url --jq '.[].url')"; then
+            parked_runs=""
+            echo "::notice::Could not list approval-required runs; inspect the bot PR for workflows awaiting maintainer approval. Dispatch and auto-merge preparation are unchanged."
+          fi
           while IFS= read -r run_url; do
             [[ -n "${run_url}" ]] || continue
             echo "::notice::A pull-request workflow requires maintainer approval: ${run_url}. Dispatched head checks do not satisfy PR branch rules; the optional automation App starts eligible native PR runs."

@@ -21,6 +21,14 @@ function stepShell(kind: string, name: string): string {
     .split("\n").filter(line => line.startsWith("          ")).map(line => line.slice(10)).join("\n");
 }
 
+/** Reject runner-waiting operations regardless of the surrounding loop spelling. */
+function assertNoRunnerWaits(shell: string): void {
+  assert.doesNotMatch(shell, /\bsleep\b/, "no in-job wait may remain");
+  assert.doesNotMatch(shell, /for \(\(attempt/, "no poll loop may remain");
+  assert.doesNotMatch(shell, /\bgh\s+(?:[^;\n]*?\s)?run\s+(?:watch|view)\b|check-runs|check-suites|\bgh\s+pr\s+checks\b[^\n]*--watch/, "no caller-run polling command may remain");
+  assert.doesNotMatch(shell, /gh pr view|compare\/|update-branch/, "no PR-state polling may remain");
+}
+
 /** Model only the remote GitHub API; branch update performs a real merge against a real remote. */
 function fixture(run: (f: { dir: string; env: NodeJS.ProcessEnv; receipts: () => string; execute: (kind: string) => ReturnType<typeof spawnSync> }) => void): void {
   const dir = mkdtempSync(join(tmpdir(), "bot-pr-"));
@@ -50,7 +58,7 @@ case "$1 $2" in
       printf 'pull request auto-merge is disabled\\n' >&2
       exit "\${AUTO_DENIED}"
     fi ;;
-  'run list') printf '%s\\n' "\${PARKED_URL:-}" ;;
+  'run list') printf '%s\\n' "\${PARKED_URL:-}"; exit "\${PARKED_READ_DENIED:-0}" ;;
   'api repos/acme/widgets')
     [[ "\${SETTING_READ_DENIED:-0}" == 0 ]] || exit 1
     printf '%s\\n' "\${AUTO_ALLOWED:-true}" ;;
@@ -200,6 +208,25 @@ for (const kind of ["sync", "closeout"]) {
       assert.ok(f.receipts().split("\n").filter(line => line.startsWith("api ")).length <= 2);
     }));
   }
+  for (const appMode of [true, false]) {
+    test(`${kind}: parked-run listing failure is informational in ${appMode ? "App" : "GITHUB_TOKEN"} mode`, () => fixture(f => {
+      if (!appMode) delete f.env.APP_DEADLINE;
+      f.env.PARKED_READ_DENIED = "47";
+      // A failed lookup may return partial output; do not present it as a complete report.
+      f.env.PARKED_URL = "https://github.com/acme/widgets/actions/runs/123";
+      const r = f.execute(kind);
+      assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
+      assert.match(String(r.stdout), /::notice::Could not list approval-required runs/);
+      assert.match(String(r.stdout), /Landing stays outside this runner/);
+      assert.doesNotMatch(String(r.stdout), /::error::|maintainer approval: https:/);
+      const calls = f.receipts().trim().split("\n");
+      assert.equal(calls.filter(line => line.startsWith("workflow run")).length, 2);
+      assert.equal(calls.filter(line => line.startsWith("pr merge")).length, Number(appMode));
+      assert.equal(calls.filter(line => line.startsWith("run list")).length, 1, "reporting is never retried");
+      assert.ok(calls.at(-1)!.startsWith("run list"), "no later remote action or polling");
+      if (kind === "closeout" && appMode) assert.match(readFileSync(f.env.GITHUB_ENV!, "utf8"), /CLOSEOUT_AUTOMERGE_ALLOWED=true/);
+    }));
+  }
   test(`${kind}: armed auto-merge is requested exactly once and the step exits after the parked-run report`, () => fixture(f => {
     f.env.PARKED_URL = "https://github.com/acme/widgets/actions/runs/123";
     const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
@@ -271,9 +298,7 @@ for (const kind of ["sync", "closeout"]) {
     const step = source.jobs[`gated-${kind}`]!.steps.find(step => step.name === "Dispatch caller CI and report parked runs")!;
     assert.equal(step["timeout-minutes"], 5, "dispatch is capped even if a CLI call hangs");
     const shell = maintenance(kind);
-    assert.doesNotMatch(shell, /\bsleep\b/, "no in-job wait may remain");
-    assert.doesNotMatch(shell, /for \(\(attempt/, "no poll loop may remain");
-    assert.doesNotMatch(shell, /gh pr view|compare\/|update-branch/, "no PR-state polling may remain");
+    assertNoRunnerWaits(shell);
     assert.match(shell, /Landing stays outside this runner/);
   });
 }
@@ -289,3 +314,21 @@ test("every job in the reusable workflows declares an explicit timeout", () => {
     }
   }
 });
+
+for (const kind of ["sync", "closeout"]) {
+  for (const command of [
+    "while :; do gh run watch 7; done",
+    "until gh run view 7; do :; done",
+    "for run in 7 8; do gh -R acme/widgets run view \"$run\"; done",
+    "gh\t run\twatch 7",
+    "while :; do gh api repos/acme/widgets/commits/HEAD/check-runs; done",
+    "until gh api repos/acme/widgets/commits/HEAD/check-suites; do :; done",
+    "gh pr checks 7 --watch",
+  ]) {
+    test(`${kind}: no-wait contract rejects adversarial polling ${command}`, () => {
+      const shell = maintenance(kind);
+      assertNoRunnerWaits(shell); // Legitimate gh run list and while read remain allowed.
+      assert.throws(() => assertNoRunnerWaits(`${shell}\n${command}`), /no caller-run polling command/);
+    });
+  }
+}
