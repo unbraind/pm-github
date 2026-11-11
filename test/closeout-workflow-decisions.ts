@@ -57,11 +57,65 @@ async function decisionFixture(cell: DecisionCase): Promise<WorkflowFixture> {
   return f;
 }
 
-test.after(async () => {
-  for (const pending of decisionFixtures.values()) {
-    const shared = await pending;
-    shared.release();
-    await shared.done;
+/** Release every initialized peer before aggregating setup and teardown failures. */
+async function releaseDecisionFixtures(fixtures: Iterable<Promise<Pick<SharedDecisionFixture, "release" | "done">>>): Promise<void> {
+  const setups = await Promise.allSettled(fixtures);
+  const failures: unknown[] = [];
+  const finished: Promise<void>[] = [];
+  for (const result of setups) {
+    if (result.status === "rejected") { failures.push(result.reason); continue; }
+    try { result.value.release(); } catch (error) { failures.push(error); }
+    finished.push(result.value.done);
+  }
+  for (const result of await Promise.allSettled(finished)) {
+    if (result.status === "rejected") failures.push(result.reason);
+  }
+  if (failures.length) throw new AggregateError(failures, "Decision fixture cleanup failed");
+}
+
+test.after(() => releaseDecisionFixtures(decisionFixtures.values()));
+
+test("decision cleanup releases initialized real fixtures despite setup and teardown failures", async () => {
+  const roots: string[] = [];
+  const forceRelease: (() => void)[] = [];
+  const setupFailure = new Error("injected setup failure");
+  const teardownFailure = new Error("injected teardown failure");
+  const pending: Promise<Pick<SharedDecisionFixture, "release" | "done">>[] = [];
+  /** Create real SDK trackers and HTTP evidence servers, then hold their lifetime. */
+  function initialize(mode: "setup failure" | "teardown failure" | "success") {
+    const ready = new Promise<Pick<SharedDecisionFixture, "release" | "done">>((resolveReady, reject) => {
+      let release = () => {};
+      const lifetime = new Promise<void>(resolveLifetime => { release = resolveLifetime; });
+      forceRelease.push(release);
+      const done = fixture(async f => {
+        roots.push(f.base);
+        if (mode === "setup failure") throw setupFailure;
+        resolveReady({ release, done });
+        await lifetime;
+        if (mode === "teardown failure") throw teardownFailure;
+      });
+      void done.catch(reject);
+    });
+    pending.push(ready);
+    return ready;
+  }
+  try {
+    await assert.rejects(initialize("setup failure"), error => error === setupFailure);
+    await initialize("teardown failure");
+    await initialize("success");
+    await assert.rejects(releaseDecisionFixtures(pending), (error: unknown) => {
+      assert.ok(roots.every(root => !existsSync(root)), "initialized peers were cleaned before setup failure was reported");
+      assert.ok(error instanceof AggregateError);
+      assert.deepEqual(error.errors, [setupFailure, teardownFailure]);
+      return true;
+    });
+    assert.equal(roots.length, 3);
+    assert.ok(roots.every(root => !existsSync(root)), "all real trackers and HTTP servers reached fixture cleanup");
+  } finally {
+    // Keep the regression itself leak-free when a behavioral revert fails early.
+    for (const release of forceRelease) release();
+    const initialized = await Promise.allSettled(pending);
+    await Promise.allSettled(initialized.flatMap(result => result.status === "fulfilled" ? [result.value.done] : []));
   }
 });
 

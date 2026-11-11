@@ -742,7 +742,7 @@ jobs:
             fi
             # gh --auto can merge immediately when no rule blocks the PR. Check
             # repository settings, classic protection and applicable rules once, never poll checks.
-            local auto_allowed base_ref branch_json rules_json merge_error merge_reason
+            local auto_allowed base_ref branch_json rules_json strict_allowed merge_error merge_reason
             if ! auto_allowed="$(gh api "repos/${REPOSITORY}" --jq '.allow_auto_merge')" || [[ "${auto_allowed}" != true ]]; then
               echo "::notice::Squash auto-merge unavailable: repository auto-merge is disabled or its setting could not be verified; the next scheduled run retries."
               return 1
@@ -767,6 +767,23 @@ jobs:
             ' >/dev/null; then
               echo "::notice title=required_checks_unconfigured::Squash auto-merge unavailable: base branch must require at least one PR CI status check through classic protection or an applicable ruleset; no required check could be verified; the next scheduled run retries."
               return 1
+            fi
+            # Required names alone can be loose: GitHub must also enforce freshness.
+            # Rulesets expose this directly; classic branch strictness is available
+            # on the matching GraphQL rule, not the REST branch summary.
+            if ! jq -e 'any(.[][]; .type == "merge_queue" or
+              (.type == "required_status_checks" and .parameters.strict_required_status_checks_policy == true
+                and any(.parameters.required_status_checks[]?.context; type == "string" and length > 0)))' <<< "${rules_json}" >/dev/null; then
+              if ! strict_allowed="$(gh api graphql -F owner="${REPOSITORY%%/*}" -F repo="${REPOSITORY#*/}" -F ref="refs/heads/${DEFAULT_BRANCH}" \
+                -f query='query($owner:String!,$repo:String!,$ref:String!){repository(owner:$owner,name:$repo){ref(qualifiedName:$ref){branchProtectionRule{requiresStatusChecks requiresStrictStatusChecks}}}}' \
+                --jq '.data.repository.ref.branchProtectionRule | .requiresStatusChecks == true and .requiresStrictStatusChecks == true')"; then
+                echo "::notice title=branch_freshness_unverified::Squash auto-merge unavailable: the up-to-date branch requirement could not be read; the next scheduled run retries."
+                return 1
+              fi
+              if [[ "${strict_allowed}" != true ]] || ! jq -e '.protection.required_status_checks.enforcement_level != "off"' <<< "${branch_json}" >/dev/null; then
+                echo "::notice title=required_checks_not_strict::Squash auto-merge unavailable: require branches to be up to date before merging or configure an applicable merge queue; the next scheduled run retries."
+                return 1
+              fi
             fi
             merge_error="$(mktemp)"
             if gh pr merge "${SYNC_PR_NUMBER}" -R "${REPOSITORY}" --auto --squash --match-head-commit "${head_sha}" 2> "${merge_error}"; then

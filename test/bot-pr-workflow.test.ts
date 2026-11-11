@@ -30,7 +30,7 @@ function assertNoRunnerWaits(shell: string): void {
 }
 
 /** Model GitHub policy and native check events; accepted landing updates a real Git remote. */
-function fixture(run: (f: { dir: string; env: NodeJS.ProcessEnv; receipts: () => string; execute: (kind: string) => ReturnType<typeof spawnSync>; nativeState: () => { baseSha: string; headSha: string; armed: boolean }; completeRequiredChecks: (conclusion: "failure" | "success") => void }) => void): void {
+function fixture(run: (f: { dir: string; env: NodeJS.ProcessEnv; receipts: () => string; execute: (kind: string) => ReturnType<typeof spawnSync>; nativeState: () => { baseSha: string; headSha: string; armed: boolean; baseHasRelease: boolean }; rebuildProposal: () => void; completeRequiredChecks: (conclusion: "failure" | "success") => void }) => void): void {
   const dir = mkdtempSync(join(tmpdir(), "bot-pr-"));
   const bin = join(dir, "bin");
   const env: NodeJS.ProcessEnv & { RECEIPTS: string } = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1",
@@ -46,7 +46,7 @@ function fixture(run: (f: { dir: string; env: NodeJS.ProcessEnv; receipts: () =>
     for (const name of ["ci", "codeql"]) writeFileSync(join(dir, `.github/workflows/${name}.yml`), "on:\n  pull_request:\n  workflow_dispatch:\n");
     git("init", "-q", "-b", "trunk"); git("add", ".github"); git("commit", "-qm", "Caller base");
     git("init", "--bare", "-q", join(dir, "remote.git")); git("remote", "add", "origin", join(dir, "remote.git")); git("push", "-q", "origin", "trunk");
-    git("switch", "-qc", "automation/proposal"); git("commit", "--allow-empty", "-qm", "Proposal");
+    git("switch", "-qc", "automation/proposal"); git("commit", "--allow-empty", "-qm", "Proposal"); git("push", "-q", "origin", "automation/proposal");
     let releaseCreated = false;
     writeFileSync(join(bin, "gh"), `#!/usr/bin/env bash
 set -euo pipefail
@@ -71,6 +71,9 @@ case "$1 $2" in
       fi
     fi ;;
   'run list') printf '%s\\n' "\${PARKED_URL:-}"; exit "\${PARKED_READ_DENIED:-0}" ;;
+  'api graphql')
+    [[ "\${STRICT_READ_DENIED:-0}" == 0 ]] || exit 1
+    printf '%s\\n' "\${CLASSIC_STRICT:-true}" ;;
   'api repos/acme/widgets')
     [[ "\${SETTING_READ_DENIED:-0}" == 0 ]] || exit 1
     printf '%s\\n' "\${AUTO_ALLOWED:-true}" ;;
@@ -125,11 +128,31 @@ esac
     writeFileSync(join(bin, "date"), '#!/usr/bin/env bash\nprintf "%s\\n" "${FAKE_NOW:-1700000000}"\n', { mode: 0o755 });
     writeFileSync(join(bin, "sleep"), '#!/usr/bin/env bash\nprintf "sleep %s\\n" "$*" >> "$RECEIPTS"\nexit 0\n', { mode: 0o755 });
     run({ dir, env,
-      nativeState: () => ({ baseSha: git("--git-dir", join(dir, "remote.git"), "rev-parse", "trunk"), headSha: git("rev-parse", "HEAD"), armed: existsSync(env.STATE + ".auto-merge") }),
+      nativeState: () => ({ baseSha: git("--git-dir", join(dir, "remote.git"), "rev-parse", "trunk"), headSha: git("--git-dir", join(dir, "remote.git"), "rev-parse", "automation/proposal"), armed: existsSync(env.STATE + ".auto-merge"), baseHasRelease: git("--git-dir", join(dir, "remote.git"), "ls-tree", "--name-only", "trunk").split("\n").includes("release.txt") }),
+      rebuildProposal: () => {
+        git("fetch", "-q", "origin", "trunk");
+        git("reset", "--hard", "origin/trunk");
+        git("commit", "--allow-empty", "-qm", "Scheduled rebuild");
+        git("push", "-q", "--force-with-lease", "origin", "automation/proposal");
+        rmSync(env.STATE + ".auto-merge", { force: true });
+        env.REMOTE_CHECK_CONCLUSION = "pending";
+      },
       completeRequiredChecks: conclusion => {
         env.REMOTE_CHECK_CONCLUSION = conclusion;
         // A GitHub-side check event completes an armed request after the runner exited.
-        if (conclusion === "success" && existsSync(env.STATE + ".auto-merge")) git("push", "-q", "origin", "HEAD:refs/heads/trunk");
+        if (conclusion === "success" && existsSync(env.STATE + ".auto-merge")) {
+          const base = git("--git-dir", join(dir, "remote.git"), "rev-parse", "trunk");
+          const upToDate = git("merge-base", base, "HEAD") === base;
+          if (!upToDate && env.REMOTE_STRICT !== "false") return;
+          if (upToDate) git("push", "-q", "origin", "HEAD:refs/heads/trunk");
+          else {
+            git("switch", "-qc", "fixture-native-merge", base);
+            git("merge", "--squash", "automation/proposal");
+            git("commit", "--allow-empty", "-qm", "Native squash merge");
+            git("push", "-q", "origin", "HEAD:refs/heads/trunk");
+            git("switch", "-q", "automation/proposal");
+          }
+        }
       },
       receipts: () => {
       let recorded = "";
@@ -160,6 +183,26 @@ test("README explains protected auto-merge and No-App native check approval", ()
   assert.match(readme, /Never wait in-job for caller CI: it takes runners from the same account pool/);
   assert.match(readme, /The base must require at least one named PR CI status check, through classic protection or an applicable ruleset/);
   assert.match(readme, /`required_checks_unconfigured`.*unreadable branch-rules API produces `required_checks_unverified`/);
+});
+
+test("caller templates distinguish immediate App runs from approval-dependent GITHUB_TOKEN runs", () => {
+  for (const name of ["sync", "closeout"]) {
+    const text = readFileSync(join(root, `docs/${name}-workflow-caller.yml`), "utf8").replace(/^# ?/gm, "").replace(/\s+/g, " ");
+    assert.match(text, /With the App client ID\/key mapping below, runs start at once and auto-merge lands the PR after required checks; with GITHUB_TOKEN, each new run waits for one approval \(a maintainer or an approval sweep\), and auto-merge then lands it/);
+    assert.doesNotMatch(text, /Landing is unattended in both token modes/);
+  }
+});
+
+test("automation guide states exact check discovery and its caller-CI limitation", () => {
+  const text = readFileSync(join(root, "docs/bot-pr-automation.md"), "utf8").replace(/\s+/g, " ");
+  assert.match(text, /classic `GET \/repos\/\{owner\}\/\{repo\}\/branches\/\{branch\}` metadata and every page of `GET \/repos\/\{owner\}\/\{repo\}\/rules\/branches\/\{branch\}`/);
+  assert.match(text, /`required_status_checks.contexts` or `checks\[\].context` \(unless enforcement is `off`\)/);
+  assert.match(text, /contains any nonempty string/);
+  assert.match(text, /Names are not trimmed or matched to caller workflow jobs/);
+  assert.match(text, /Maintainers must configure every intended CI check as required/);
+  assert.match(text, /Missing checks, unreadable APIs/);
+  assert.match(text, /requiresStrictStatusChecks/);
+  assert.match(text, /Loose or unverifiable policies never arm auto-merge/);
 });
 
 for (const kind of ["sync", "closeout"]) {
@@ -239,15 +282,69 @@ for (const kind of ["sync", "closeout"]) {
     assert.match(String(r.stdout), /codeql.yml. Add workflow_dispatch: under on:/);
     assert.match(f.receipts(), /workflow run ci.yml/); assert.doesNotMatch(f.receipts(), /workflow run codeql.yml/);
   }));
-  test(`${kind}: a base advance after publication never polls; landing stays with auto-merge and the next scheduled run`, () => fixture(f => {
+  test(`${kind}: strict required checks prevent remote landing after base advance until scheduled rebuild`, () => fixture(f => {
+    f.env.MODEL_NATIVE_LANDING = "1";
+    f.env.REMOTE_CHECK_CONCLUSION = "pending";
     f.env.BEHIND = "true";
+    const before = f.nativeState();
     const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
-    const dispatches = f.receipts().split("\n").filter(line => line.startsWith("workflow run"));
-    assert.equal(dispatches.length, 2, "exactly one dispatch round, no redispatch on a moved base");
-    assert.match(f.receipts(), /pr merge 7 .*--auto --squash --match-head-commit [a-f0-9]{40}/);
-    assert.doesNotMatch(f.receipts(), /pr view|compare\/trunk|update-branch|sleep/);
+    const advanced = f.nativeState();
+    assert.notEqual(advanced.baseSha, before.baseSha, "the real remote base advanced");
+    assert.equal(advanced.headSha, before.headSha, "this runner never updates the proposal");
+    assert.equal(advanced.baseHasRelease, true);
+    assert.equal(advanced.armed, true);
+    const calls = f.receipts();
+    assert.equal(calls.split("\n").filter(line => line.startsWith("workflow run")).length, 2);
+    assert.doesNotMatch(calls, /pr view|compare\/trunk|update-branch|sleep/);
     assert.match(String(r.stdout), /Landing stays outside this runner/);
-    assert.equal(existsSync(join(f.dir, "release.txt")), false, "a base advance is repaired by the next scheduled run, not in-job");
+    assert.equal(existsSync(join(f.dir, "release.txt")), false);
+    f.completeRequiredChecks("success");
+    assert.equal(f.nativeState().baseSha, advanced.baseSha, "passing checks cannot land a stale proposal under strict protection");
+    assert.equal(f.receipts(), calls, "the runner is gone while GitHub enforces freshness");
+    f.rebuildProposal();
+    const rebuilt = f.nativeState();
+    assert.notEqual(rebuilt.headSha, before.headSha);
+    assert.equal(rebuilt.baseSha, advanced.baseSha);
+    assert.equal(rebuilt.armed, false, "the new scheduled publication needs its own arm");
+    const retry = f.execute(kind); assert.equal(retry.status, 0, String(retry.stderr) + String(retry.stdout));
+    assert.equal(f.nativeState().baseSha, advanced.baseSha, "rebuilt checks must also pass before landing");
+    assert.equal(f.nativeState().armed, true);
+    f.completeRequiredChecks("success");
+    assert.equal(f.nativeState().baseSha, rebuilt.headSha, "GitHub lands the rebuilt proposal");
+    assert.equal(f.nativeState().baseHasRelease, true, "the advanced base content survives landing");
+  }));
+  test(`${kind}: loose required checks refuse auto-merge before stale native landing`, () => fixture(f => {
+    Object.assign(f.env, { MODEL_NATIVE_LANDING: "1", REMOTE_STRICT: "false", CLASSIC_STRICT: "false", REMOTE_CHECK_CONCLUSION: "pending", BEHIND: "true" });
+    const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
+    const advanced = f.nativeState();
+    f.completeRequiredChecks("success");
+    assert.equal(f.nativeState().baseSha, advanced.baseSha, "loose checks must never leave a stale proposal armed");
+    assert.equal(advanced.armed, false);
+    assert.match(String(r.stdout), /::notice title=required_checks_not_strict::/);
+    assert.doesNotMatch(f.receipts(), /pr merge|sleep|pr view|update-branch/);
+  }));
+  for (const policy of ["strict ruleset", "merge queue"]) {
+    test(`${kind}: ${policy} supplies native freshness without classic strictness`, () => fixture(f => {
+      f.env.CLASSIC_STRICT = "false";
+      f.env.STRICT_READ_DENIED = "1";
+      f.env.RULE_PAGES = JSON.stringify([[policy === "merge queue" ? { type: "merge_queue" } : { type: "required_status_checks", parameters: { strict_required_status_checks_policy: true, required_status_checks: [{ context: "CI" }] } }]]);
+      const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
+      assert.match(f.receipts(), /pr merge 7 .*--auto --squash/);
+      assert.doesNotMatch(f.receipts(), /api graphql/);
+    }));
+  }
+  test(`${kind}: unenforced classic strictness cannot supply freshness for loose ruleset checks`, () => fixture(f => {
+    f.env.CLASSIC_CHECKS = JSON.stringify({ enforcement_level: "off", contexts: ["CI"] });
+    f.env.RULE_PAGES = JSON.stringify([[{ type: "required_status_checks", parameters: { strict_required_status_checks_policy: false, required_status_checks: [{ context: "CI" }] } }]]);
+    const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
+    assert.match(String(r.stdout), /::notice title=required_checks_not_strict::/);
+    assert.doesNotMatch(f.receipts(), /pr merge/);
+  }));
+  test(`${kind}: unreadable classic freshness refuses auto-merge with a typed notice`, () => fixture(f => {
+    f.env.STRICT_READ_DENIED = "1";
+    const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
+    assert.match(String(r.stdout), /::notice title=branch_freshness_unverified::/);
+    assert.doesNotMatch(f.receipts(), /pr merge/);
   }));
   test(`${kind}: dispatch denial reports the token diagnostic before auto-merge`, () => fixture(f => {
     f.env.DISPATCH_DENIED = "1";

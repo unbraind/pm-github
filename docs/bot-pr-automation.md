@@ -161,22 +161,39 @@ exits; GitHub still enforces required checks and conversation resolution. No
 runner is held while caller CI queues: it takes runners from the same account
 pool, so an in-job wait could only lengthen the queue it waits on. Disallowed
 auto-merge is a notice naming the reason; failed check dispatch is an error.
-The repository auto-merge setting and protected base are checked once before
-calling `gh`, which can otherwise merge immediately even on a protected branch
-with no required status checks. The base must require at least one named PR CI
-status check, from classic protection (`required_status_checks.contexts` or
-`checks`) or an active applicable ruleset. Both the branch metadata and the
-paginated branch-rules API are read before arming; reviews or conversations alone
-are insufficient. Unreadable APIs (including permission errors, 404s and rate
-limits), malformed metadata or absent required checks produce a notice naming
-the missing prerequisite and use the scheduled fallback. The stable notice titles
-are `required_checks_unconfigured` for absent required checks and
-`required_checks_unverified` for an unreadable branch-rules API. A later run retries; a
-persistent configuration problem still needs maintainer attention. No bypass or
-thread resolution is attempted. A base advance after publication,
-or an unavailable auto-merge, is handled by the next scheduled run, which
-force-rebuilds the proposal branch from the current default branch, so permanent
-freshness is not claimed. Sync and closeout jobs have 60-minute timeouts;
+The guard checks the repository auto-merge setting and that the base is protected.
+It reads classic `GET /repos/{owner}/{repo}/branches/{branch}` metadata and every
+page of `GET /repos/{owner}/{repo}/rules/branches/{branch}` before arming.
+A required check is present when classic `required_status_checks.contexts` or
+`checks[].context` (unless enforcement is `off`), or an active applicable
+`required_status_checks` rule's `parameters.required_status_checks[].context`,
+contains any nonempty string. Names are not trimmed or matched to caller workflow
+jobs: the guard does not establish that a named check belongs to caller CI.
+Maintainers must configure every intended CI check as required; auto-merge does
+not wait for unrequired checks, including additional manual head validation.
+Reviews and conversations alone do not count. Missing checks, unreadable APIs
+(including permissions, 404s and rate limits), or metadata that cannot verify a
+required name refuse arming and report the scheduled-retry fallback.
+
+Freshness is also required: an active applicable `merge_queue` rule, or a
+required-status-check ruleset with `strict_required_status_checks_policy: true`
+and a nonempty required context, supplies native freshness. Otherwise the guard
+reads the matching branch's GraphQL `branchProtectionRule` and requires both
+`requiresStatusChecks` and `requiresStrictStatusChecks` to be true. This extra
+read is necessary because the REST branch summary omits classic strictness.
+Loose or unverifiable policies never arm auto-merge. The notice titles are
+`required_checks_unconfigured` for absent check names,
+`required_checks_unverified` for unreadable branch rules,
+`required_checks_not_strict` for absent strict protection or merge queue, and
+`branch_freshness_unverified` for unreadable classic freshness policy.
+A later run retries; persistent configuration problems need maintainer attention.
+No bypass or thread resolution is attempted. Under strict checks, a base advance
+blocks landing until the next scheduled run rebuilds the proposal from the current
+default branch and its new required checks pass. With a merge queue, GitHub tests
+the queued merge against the latest base; configure caller checks for merge-group
+validation when selecting that policy. An unavailable auto-merge also waits for
+the next scheduled retry. See GitHub's
+[strict checks and merge queue rules](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches). Sync and closeout jobs have 60-minute timeouts;
 their dispatch steps have five-minute timeouts and no polling. Sync alerts use
 10 minutes. The Dependabot reusable job already had a 60-minute timeout;
 its bounded API retries do not wait for caller runs. The non-reusable release

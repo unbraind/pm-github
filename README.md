@@ -1132,6 +1132,13 @@ protection or an applicable ruleset; reviews or conversations alone are
 insufficient. No required check produces `required_checks_unconfigured`, and an
 unreadable branch-rules API produces `required_checks_unverified`. Both notices
 use the scheduled-retry fallback.
+Require branches to be up to date before merging, or configure an applicable
+merge queue. The guard verifies ruleset strictness/merge queue or the matching
+classic GraphQL branch-protection rule before arming. Loose checks produce
+`required_checks_not_strict`; an unreadable classic freshness policy produces
+`branch_freshness_unverified`. Configure every intended CI check as required:
+the presence guard accepts a nonempty required context name and does not match
+that name to caller CI jobs.
 The next scheduled run rebuilds and retries; persistent settings or protection
 problems require maintainer attention before unattended landing can work.
 Without an App, maintainers must approve the native PR runs before required
