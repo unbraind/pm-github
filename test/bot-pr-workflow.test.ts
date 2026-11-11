@@ -150,10 +150,12 @@ esac
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
-test("README distinguishes App auto-merge from no-App maintainer landing", () => {
+test("README explains protected auto-merge and No-App native check approval", () => {
   const readme = readFileSync(join(root, "README.md"), "utf8").replace(/\s+/g, " ");
-  assert.match(readme, /In App mode, after dispatch the workflow requests `gh pr merge --auto --squash` with the expected head SHA and exits; required checks decide the merge, and no runner is held while they run/);
-  assert.match(readme, /Without an App, maintainers approve native PR runs, wait for required checks and conversations, and merge with an authorized credential; the workflow does not arm auto-merge/);
+  assert.match(readme, /In both token modes, after dispatch the workflow requests `gh pr merge --auto --squash` with the expected head SHA and exits; required checks decide the merge, and no runner is held while they run/);
+  assert.match(readme, /Without an App, maintainers must approve the native PR runs before required checks can pass; the already armed auto-merge then lands the protected PR/);
+  assert.match(readme, /`github_token_requires_approval`/);
+  assert.doesNotMatch(readme, /the workflow does not arm auto-merge/);
   assert.doesNotMatch(readme, /dispatches all selected workflows and, in App mode, requests auto-merge again when the new head appears/);
   assert.match(readme, /Never wait in-job for caller CI: it takes runners from the same account pool/);
   assert.match(readme, /The base must require at least one named PR CI status check, through classic protection or an applicable ruleset/);
@@ -189,13 +191,43 @@ for (const kind of ["sync", "closeout"]) {
     const r = f.execute(kind); assert.equal(r.status, 1);
     assert.doesNotMatch(f.receipts(), /workflow run|pr merge/);
   }));
-  test(`${kind}: GITHUB_TOKEN fallback dispatches validation without arming auto-merge`, () => fixture(f => {
+  test(`${kind}: GITHUB_TOKEN arms native auto-merge then exits before approved PR checks land`, () => fixture(f => {
     delete f.env.APP_DEADLINE;
-    const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr));
+    f.env.MODEL_NATIVE_LANDING = "1";
+    f.env.REMOTE_CHECK_CONCLUSION = "pending";
+    const before = f.nativeState().baseSha;
+    const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
     assert.match(f.receipts(), /workflow run ci.yml/);
-    assert.doesNotMatch(f.receipts(), /pr merge/);
-    assert.match(String(r.stdout), /Auto-merge not armed with GITHUB_TOKEN/);
+    assert.match(f.receipts(), /pr merge 7 .*--auto --squash --match-head-commit [a-f0-9]{40}/);
+    assert.match(String(r.stdout), /::notice title=github_token_requires_approval::GITHUB_TOKEN native PR checks require maintainer approval/);
+    assert.match(String(r.stdout), /Configure the optional automation App/);
+    assert.equal(f.nativeState().armed, true);
+    assert.equal(f.nativeState().baseSha, before, "parked native checks cannot land");
+    const calls = f.receipts();
+    assert.doesNotMatch(calls, /--admin|--force|sleep|pr view|update-branch/);
+    f.completeRequiredChecks("failure");
+    assert.equal(f.nativeState().baseSha, before, "approved but failing checks cannot land");
+    f.completeRequiredChecks("success");
+    assert.equal(f.nativeState().baseSha, f.nativeState().headSha, "approved passing native checks land through GitHub");
+    assert.equal(f.receipts(), calls, "the runner is already gone");
   }));
+  for (const unreadable of [false, true]) {
+    test(`${kind}: GITHUB_TOKEN refuses ${unreadable ? "unreadable rules" : "no required checks"} with the shared typed notice`, () => fixture(f => {
+      delete f.env.APP_DEADLINE;
+      f.env.MODEL_NATIVE_LANDING = "1";
+      if (unreadable) f.env.RULES_READ_DENIED = "403";
+      else {
+        f.env.REMOTE_REQUIRED_CHECKS = "false";
+        f.env.CLASSIC_CHECKS = JSON.stringify({ contexts: [], checks: [] });
+      }
+      const before = f.nativeState().baseSha;
+      const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
+      assert.equal(f.nativeState().baseSha, before);
+      assert.equal(f.nativeState().armed, false);
+      assert.match(String(r.stdout), new RegExp(`::notice title=required_checks_${unreadable ? "unverified" : "unconfigured"}::`));
+      assert.doesNotMatch(f.receipts(), /pr merge|sleep|pr view|update-branch/);
+    }));
+  }
   test(`${kind}: no dispatchable workflow refuses automatic landing`, () => fixture(f => {
     for (const name of ["ci", "codeql"]) writeFileSync(join(f.dir, `.github/workflows/${name}.yml`), "on:\n  pull_request:\nenv:\n  workflow_dispatch: ignored\njobs:\n  test:\n    workflow_dispatch: ignored\n");
     const r = f.execute(kind); assert.equal(r.status, 1); assert.match(String(r.stdout), /No dispatchable caller workflow/);
@@ -353,10 +385,10 @@ for (const kind of ["sync", "closeout"]) {
       assert.doesNotMatch(String(r.stdout), /::error::|maintainer approval: https:/);
       const calls = f.receipts().trim().split("\n").filter(line => line.includes("HEAD="));
       assert.equal(calls.filter(line => line.startsWith("workflow run")).length, 2);
-      assert.equal(calls.filter(line => line.startsWith("pr merge")).length, Number(appMode));
+      assert.equal(calls.filter(line => line.startsWith("pr merge")).length, 1);
       assert.equal(calls.filter(line => line.startsWith("run list")).length, 1, "reporting is never retried");
       assert.ok(calls.at(-1)!.startsWith("run list"), "no later remote action or polling");
-      if (kind === "closeout" && appMode) assert.match(readFileSync(f.env.GITHUB_ENV!, "utf8"), /CLOSEOUT_AUTOMERGE_ALLOWED=true/);
+      if (kind === "closeout") assert.match(readFileSync(f.env.GITHUB_ENV!, "utf8"), /CLOSEOUT_AUTOMERGE_ALLOWED=true/);
     }));
   }
   test(`${kind}: armed auto-merge is requested exactly once and the step exits after the parked-run report`, () => fixture(f => {

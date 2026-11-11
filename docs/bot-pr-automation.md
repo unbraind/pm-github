@@ -34,9 +34,9 @@ bot-PR action_required runs without an App. GitHub documents write access for
 the PR approval UI and Actions write permission for fine-grained tokens on the
 [approval endpoint](https://docs.github.com/en/rest/actions/workflow-runs#approve-a-workflow-run-for-a-fork-pull-request).
 Use the maintainer's authorized credential; this reusable workflow does not
-approve itself. Wait for the native PR checks to pass and required conversations
-to be resolved, then merge through the protected PR using the maintainer
-credential. The fallback does not arm auto-merge. A new bot head may require
+approve itself. The workflow arms native auto-merge, which waits for the approved PR checks
+to pass and required conversations to be resolved. A maintainer can also merge
+through the protected PR using an authorized credential. A new bot head may require
 approval again. Manually dispatched checks remain extra head validation.
 
 ### App path: unattended native PR runs
@@ -67,8 +67,10 @@ The private key is supplied only to that action after local gates and caller
 scripts finish. After dispatch, the workflow arms `gh pr merge --auto --squash`
 on the expected head SHA and exits: it performs no in-job wait for caller CI,
 which takes runners from the same account pool, so polling could only lengthen
-the queue it waits on. Legacy GITHUB_TOKEN mode does not arm auto-merge;
-a maintainer must approve eligible runs and merge the protected PR. A base
+the queue it waits on. GITHUB_TOKEN mode also arms auto-merge;
+a maintainer must approve eligible native PR runs first. Its typed
+`github_token_requires_approval` notice explains approval and App configuration.
+A GITHUB_TOKEN merge still does not trigger default-branch push workflows. A base
 advance after publication, or an unavailable auto-merge, waits for the next
 scheduled run. Required checks and conversations stay enforced by GitHub.
 
@@ -154,7 +156,7 @@ code cannot safely infer unknown required context names from workflow filenames.
 ## Freshness and protected merging
 
 The proposal is rebuilt on the default branch each daily run. After publication the
-dispatch step arms squash auto-merge (in App mode) with a matching head SHA and
+dispatch step arms squash auto-merge (in either token mode) with a matching head SHA and
 exits; GitHub still enforces required checks and conversation resolution. No
 runner is held while caller CI queues: it takes runners from the same account
 pool, so an in-job wait could only lengthen the queue it waits on. Disallowed

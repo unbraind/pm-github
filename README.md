@@ -1096,7 +1096,7 @@ The script must emit the root `CHANGELOG.md` and remain inside the publication s
 | Validation | Strict PM health; explicit item/history scope committed together |
 | Branch and PR | Explicit force-with-lease against the observed bot ref; push only bot branch; owned PR lookup excludes forks |
 | No-op | Zero closes or no tracker diff creates no remote branch or PR; caller-only drift unpublished; stale owned PR closed |
-| CI and landing | Dispatch caller checks after publication; request protected squash auto-merge in App mode; report parked approval-required runs; exit without waiting for caller CI |
+| CI and landing | Dispatch caller checks after publication; request protected squash auto-merge in both token modes; report parked approval-required runs; exit without waiting for caller CI |
 
 `ci-workflows` defaults to `ci.yml codeql.yml`, covering the fleet's CI and
 CodeQL workflows without querying branch protection. An explicit list replaces
@@ -1120,7 +1120,7 @@ verification. Empty credentials retain GITHUB_TOKEN and emit a setup notice;
 partial or failed App credentials stop publication. The private key is passed
 only to the token action, after caller scripts have completed.
 
-In App mode, after dispatch the workflow requests `gh pr merge --auto --squash`
+In both token modes, after dispatch the workflow requests `gh pr merge --auto --squash`
 with the expected head SHA and exits; required checks decide the merge, and no
 runner is held while they run. A repository that disallows auto-merge — no
 branch protection, or the repository setting disabled — emits a notice naming
@@ -1134,9 +1134,13 @@ unreadable branch-rules API produces `required_checks_unverified`. Both notices
 use the scheduled-retry fallback.
 The next scheduled run rebuilds and retries; persistent settings or protection
 problems require maintainer attention before unattended landing can work.
-Without an App, maintainers approve native PR runs, wait for required checks and
-conversations, and merge with an authorized credential; the workflow does not arm
-auto-merge.
+Without an App, maintainers must approve the native PR runs before required
+checks can pass; the already armed auto-merge then lands the protected PR.
+The `github_token_requires_approval` notice explains this approval step and the
+optional App configuration for unattended checks. A merge performed with
+GITHUB_TOKEN does not trigger default-branch `push` workflows; use the App when
+those follow-up workflows must run automatically. GitHub documents the
+[PR approval exception and suppressed push events](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
 GitHub enforces required checks and conversation resolution. **Never wait in-job
 for caller CI: it takes runners from the same account pool**, so polling here can
 only lengthen the queue it waits on. The dispatch step performs no in-job wait —

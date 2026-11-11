@@ -712,8 +712,7 @@ jobs:
           # armed flag can record an observed result and never an intention.
           enable_auto_merge() {
             if [[ -z "${APP_DEADLINE:-}" ]]; then
-              echo "::notice::Auto-merge not armed with GITHUB_TOKEN: its merge does not start push workflows on the default branch. Configure the optional automation App for unattended landing; a maintainer can land the PR after checks, or the next scheduled run retries."
-              return 1
+              echo "::notice title=github_token_requires_approval::GITHUB_TOKEN native PR checks require maintainer approval; auto-merge waits for those required checks. Configure the optional automation App for unattended checks. A GITHUB_TOKEN merge does not start default-branch push workflows."
             fi
             # gh --auto can merge immediately when no rule blocks the PR. Check
             # repository settings, classic protection and applicable rules once, never poll checks.
