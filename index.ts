@@ -4724,14 +4724,15 @@ export type BlockerReferenceForm =
   | "url"            // https://github.com/owner/repo/issues/N or /pull/N
   | "gh_dash"        // `GH-N`
   | "short_repo_hash" // `name#N` (bare repo short name, resolved against a hint)
-  | "bare_hash";      // `#N` (resolved against a hint)
+  | "bare_hash"       // `#N` (resolved against a hint)
+  | "unparsed_url";   // HTTP URL candidate without a supported GitHub identity
 
 /** One GitHub reference found in blocker text, before its repo hint is applied. */
 export interface ParsedBlockerReference {
   /** `owner/repo` (lowercase) when the reference carries it; `undefined` for hint-resolved forms. */
   repo?: string;
-  /** Issue or pull-request number. */
-  number: number;
+  /** Issue or PR number; absent for an unparsed URL. */
+  number?: number;
   /** The syntactic form the reference was recognized in. */
   form: BlockerReferenceForm;
   /** The literal matched text (for report provenance). */
@@ -4744,8 +4745,8 @@ export interface BlockerReference {
   key: string;
   /** `owner/repo` (lowercase); `undefined` when no hint could resolve the reference. */
   repo?: string;
-  /** Issue or pull-request number. */
-  number: number;
+  /** Issue or PR number; absent for an unparsed URL. */
+  number?: number;
   /** The syntactic form the reference was recognized in. */
   form: BlockerReferenceForm;
   /** The literal matched text (for report provenance). */
@@ -4756,14 +4757,14 @@ export interface BlockerReference {
 export interface BlockerReferenceState {
   /** `owner/repo` (lowercase); `undefined` when the reference never resolved to a repo. */
   repo?: string;
-  /** Issue or pull-request number. */
-  number: number;
+  /** Issue or PR number; absent for an unparsed URL. */
+  number?: number;
   /** The syntactic form the reference was recognized in. */
   form: BlockerReferenceForm;
   /** The literal matched text (for report provenance). */
   raw: string;
   /** Live state, or the reason it is unknown. */
-  state: "open" | "closed" | "merged" | "not_found" | "error" | "unresolved";
+  state: "open" | "closed" | "merged" | "not_found" | "error" | "unresolved" | "unparsed";
   /** GitHub close reason for issues (`COMPLETED`, `NOT_PLANNED`, `REOPENED`), when known. */
   state_reason?: string;
   /** ISO timestamp the issue closed, when known. */
@@ -4859,25 +4860,33 @@ function maskNonGithubLocators(text: string): string {
  * never yields the same (form, raw, number) twice.
  *
  * @param text - One blocker text source (blocked_reason, description, comment, …).
- * @returns Every recognized reference, in form order (URL, owner/repo, GH-N, short, bare).
+ * @returns Every URL (including unparsed candidates), then owner/repo, GH-N, short and bare forms.
  */
 export function parseBlockerReferences(text: string): ParsedBlockerReference[] {
   const masked = maskNonGithubLocators(text);
   const out: ParsedBlockerReference[] = [];
-  for (const token of githubUrlTokens(masked)) {
+  const tokens = githubUrlTokens(masked);
+  const pieces: string[] = [];
+  let previous = 0;
+  for (const token of tokens) {
     const target = parseGithubIssueUrl(token.raw);
-    if (target && !target.api && target.number <= 999999999) out.push({ repo: target.repo, number: target.number, form: "url", raw: token.raw });
+    if (target && !target.api && target.number <= 999999999 && BLOCKER_REPO_SHAPE.test(target.repo)) out.push({ repo: target.repo, number: target.number, form: "url", raw: token.raw });
+    else out.push({ form: "unparsed_url", raw: token.raw });
+    pieces.push(masked.slice(previous, token.index), " ".repeat(token.end - token.index));
+    previous = token.end;
   }
-  for (const m of masked.matchAll(BLOCKER_OWNER_REPO_RE)) {
+  // A malformed URL remains one reference; never guess from a hash/query inside it.
+  const shorthand = pieces.join("") + masked.slice(previous);
+  for (const m of shorthand.matchAll(BLOCKER_OWNER_REPO_RE)) {
     out.push({ repo: m[2]!.toLowerCase(), number: Number(m[3]), form: "repo_hash", raw: `${m[2]}#${m[3]}` });
   }
-  for (const m of masked.matchAll(BLOCKER_GH_DASH_RE)) {
+  for (const m of shorthand.matchAll(BLOCKER_GH_DASH_RE)) {
     out.push({ number: Number(m[1]), form: "gh_dash", raw: m[0]!.toUpperCase() });
   }
-  for (const m of masked.matchAll(BLOCKER_SHORT_REPO_RE)) {
+  for (const m of shorthand.matchAll(BLOCKER_SHORT_REPO_RE)) {
     out.push({ number: Number(m[3]), form: "short_repo_hash", raw: `${m[2]}#${m[3]}` });
   }
-  for (const m of masked.matchAll(BLOCKER_BARE_HASH_RE)) {
+  for (const m of shorthand.matchAll(BLOCKER_BARE_HASH_RE)) {
     out.push({ number: Number(m[2]), form: "bare_hash", raw: `#${m[2]}` });
   }
   return out;
@@ -4906,6 +4915,11 @@ export function resolveBlockerReferences(
   const out: BlockerReference[] = [];
   const seen = new Set<string>();
   for (const ref of parsed) {
+    if (ref.form === "unparsed_url" || ref.number === undefined) {
+      const key = `unparsed:${ref.raw}`;
+      if (!seen.has(key)) { seen.add(key); out.push({ key, form: "unparsed_url", raw: ref.raw }); }
+      continue;
+    }
     let repo = ref.repo;
     if (repo === undefined) {
       for (const hint of [itemRepo, fallbackRepo]) {
@@ -4932,8 +4946,8 @@ export function resolveBlockerReferences(
  * item-level `blocked_by` field, `blocked_reason`, `description`, and every
  * stored comment. A `blocked_reason` is a static string that nothing re-reads —
  * that is exactly the staleness this command exists to surface — so comments
- * (including the latest ones) are scanned too. References matching any of the
- * item's own GitHub provenance tags are excluded: an issue cannot block itself.
+ * (including the latest ones) are scanned too. Only authoritative import identity
+ * is excluded as self; shareable reference tags never hide a blocker.
  *
  * @param item - One complete item from {@link decodeBlockerPmItems}.
  * @param fallbackRepo - The `--repo` hint, when given.
@@ -4956,10 +4970,7 @@ export function collectBlockerReferences(item: BlockerPmItem, fallbackRepo: stri
     return undefined;
   })();
   const parsed = texts.flatMap((text) => parseBlockerReferences(text));
-  const ownKeys = new Set((item.tags ?? []).flatMap((tag) => {
-    const provenance = parseProvenanceTag(tag);
-    return provenance ? [`${provenance.repo}#${provenance.number}`] : [];
-  }));
+  const ownKeys = new Set(importIdentityKeys(item));
   return resolveBlockerReferences(parsed, itemRepo, fallbackRepo).filter((ref) => !ownKeys.has(ref.key));
 }
 
@@ -5425,6 +5436,7 @@ export function buildBlockerClearedComment(state: BlockerReferenceState): string
   const repo = state.repo ?? "";
   const { disposition, at } = blockerDispositionAndDate(state);
   const human = at === "" ? "an unknown date" : at.slice(0, 10);
+  if (state.number === undefined) throw new CommandError("An unparsed blocker reference cannot be announced as cleared.");
   const marker = blockerCommentMarker(repo, state.number, disposition, at === "" ? "unknown" : at);
   return `Blocker ${repo}#${state.number} ${disposition} on ${human}; revalidate.\n\n${marker}`;
 }
@@ -5497,6 +5509,7 @@ export async function appendBlockerComments(
       const markers = extractBlockerCommentMarkers(existing);
       const pending = entry.states.filter((state) => {
         const { disposition, at } = blockerDispositionAndDate(state);
+        if (state.number === undefined) throw new CommandError("An unparsed blocker reference cannot be announced as cleared.");
         return !markers.has(blockerCommentMarker(state.repo ?? "", state.number, disposition, at === "" ? "unknown" : at));
       });
       if (pending.length === 0) { skipped++; continue; }
@@ -5569,7 +5582,7 @@ async function runBlockers(ctx: CommandHandlerContext) {
   const unique = new Map<string, ResolvedBlockerReference>();
   for (const entry of perItem) {
     for (const ref of entry.references) {
-      if (ref.repo !== undefined && !unique.has(ref.key)) {
+      if (ref.repo !== undefined && ref.number !== undefined && ref.form !== "unparsed_url" && !unique.has(ref.key)) {
         unique.set(ref.key, { key: ref.key, repo: ref.repo, number: ref.number, form: ref.form, raw: ref.raw });
       }
     }
@@ -5582,7 +5595,7 @@ async function runBlockers(ctx: CommandHandlerContext) {
   const items: BlockerItemReport[] = perItem.map(({ item, references }) => {
     const refStates: BlockerReferenceState[] = references.map((ref) =>
       stateByKey.get(ref.key)
-      ?? { repo: ref.repo, number: ref.number, form: ref.form, raw: ref.raw, state: "unresolved" as const });
+      ?? { repo: ref.repo, number: ref.number, form: ref.form, raw: ref.raw, state: ref.form === "unparsed_url" ? "unparsed" as const : "unresolved" as const });
     return {
       id: item.id,
       status: item.status,

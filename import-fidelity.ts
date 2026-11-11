@@ -299,10 +299,13 @@ export class GithubIdentityConflictError extends Error {
   }
 }
 
-/** Canonicalize an explicit issue/PR URL through the same locator normalization as ownership matching. */
-function explicitGithubKey(value: unknown): string | undefined {
-  const target = parseGithubIssueUrl(value);
-  return target && !target.api ? target.key : undefined;
+/** Resolve every supported explicit URL alias once, retaining the shared parser's issue/PR kind. */
+export function explicitGithubIdentities(item: PmItem) {
+  return Object.entries(item).flatMap(([field, value]) => {
+    if (!/^github_?url$/i.test(field)) return [];
+    const target = parseGithubIssueUrl(value);
+    return target && !target.api ? [{ ...target, field }] : [];
+  });
 }
 
 /** Ambiguous number-only provenance is diagnostic evidence, never import authority. */
@@ -317,7 +320,7 @@ export interface LegacyGithubIdentityConflict {
 export function legacyGithubIdentityConflict(item: PmItem): LegacyGithubIdentityConflict | undefined {
   if (!Number.isSafeInteger(item.github_number) || Number(item.github_number) < 1 ||
     normalizeGithubRepository(item.github_repo) ||
-    Object.entries(item).some(([field, value]) => /^github_?url$/i.test(field) && explicitGithubKey(value))) return undefined;
+    explicitGithubIdentities(item).length > 0) return undefined;
   const references = (item.tags ?? []).flatMap(tag => { const ref = parseProvenanceTag(tag); return ref ? [ref] : []; });
   const repositories = [...new Set(references.map(ref => ref.repo))].sort();
   // Deterministic IDs and generated source descriptions independently establish ownership.
@@ -331,11 +334,7 @@ export function legacyGithubIdentityConflict(item: PmItem): LegacyGithubIdentity
 /** Resolve persisted identity with legacy compatibility; diagnostics may report conflicts that all write planners refuse. */
 export function importIdentityKeys(item: PmItem, options: { allowConflicts?: boolean } = {}): string[] {
   const keys = new Set<string>();
-  for (const [field, value] of Object.entries(item)) {
-    if (!/^github_?url$/i.test(field)) continue;
-    const key = explicitGithubKey(value);
-    if (key) keys.add(key);
-  }
+  for (const target of explicitGithubIdentities(item)) keys.add(target.key);
   const urlKey = [...keys][0];
   const repository = normalizeGithubRepository(item.github_repo) ?? urlKey?.split("#")[0];
   if (repository && Number.isSafeInteger(item.github_number) && Number(item.github_number) > 0) keys.add(`${repository}#${item.github_number}`);

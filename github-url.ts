@@ -51,11 +51,34 @@ export function parseGithubIssueUrl(value: unknown) {
   return { ...parts, number, key: `${parts.repo}#${number}`, canonical: `https://github.com/${parts.repo}/issues/${number}` };
 }
 
-/** Discover candidate URL tokens in prose; callers parse their structure with the shared helpers. */
-export function githubUrlTokens(text: string): Array<{ raw: string; index: number }> {
-  return [...text.matchAll(/https?:\/\/[^\s<>"'`\])}]+/gi)].map(match => {
-    let end = match[0]!.length;
-    while (end > 0 && ".,;".includes(match[0]![end - 1]!)) end--;
-    return { raw: match[0]!.slice(0, end), index: match.index };
-  });
+/** Extract prose URLs without Markdown wrappers; end retains the original span for masking. */
+export function githubUrlTokens(text: string): Array<{ raw: string; index: number; end: number }> {
+  const tokens: Array<{ raw: string; index: number; end: number }> = [];
+  const starts = /https?:\/\//gi;
+  for (let match = starts.exec(text); match; match = starts.exec(text)) {
+    const index = match.index;
+    let end = starts.lastIndex;
+    const brackets: string[] = [];
+    for (; end < text.length; end++) {
+      const character = text[end]!;
+      if (/[\s<>"'`]/.test(character)) break;
+      if ("([{".includes(character)) brackets.push(character);
+      else if (")]}".includes(character)) {
+        const opener = character === ")" ? "(" : character === "]" ? "[" : "{";
+        if (brackets.at(-1) !== opener) break;
+        brackets.pop();
+      }
+    }
+    starts.lastIndex = end;
+    let trimmed = end;
+    while (trimmed > index && ".,;:!?".includes(text[trimmed - 1]!)) trimmed--;
+    // Opening emphasis precedes the scheme; closing emphasis reverses its order.
+    const closing: string[] = [];
+    for (let prefix = index - 1; prefix >= 0 && "*_".includes(text[prefix]!); prefix--) closing.push(text[prefix]!);
+    const emphasis = closing.join("");
+    if (emphasis && text.slice(index, trimmed).endsWith(emphasis)) trimmed -= emphasis.length;
+    while (trimmed > index && ".,;:!?".includes(text[trimmed - 1]!)) trimmed--;
+    tokens.push({ raw: text.slice(index, trimmed), index, end });
+  }
+  return tokens;
 }

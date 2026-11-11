@@ -194,7 +194,7 @@ test("parseBlockerReferences masks foreign locators and unwraps the github: sche
 test("parseBlockerReferences rejects lookalikes", () => {
   assert.deepEqual(
     github.parseBlockerReferences("issue/854 #854abc ###12 https://example.com/x#4 GH-12345678901"),
-    [],
+    [{ form: "unparsed_url", raw: "https://example.com/x#4" }],
   );
   // A markdown heading with a number is not a reference, and a long digit run
   // cannot partially match.
@@ -226,7 +226,7 @@ test("resolveBlockerReferences leaves hint-dependent forms unresolved without a 
 
 // Candidate selection ----------------------------------------------------------
 
-test("collectBlockerReferences excludes every own provenance key from all text sources", () => {
+test("collectBlockerReferences excludes its owned identity while retaining reference tags", () => {
   const item: github.BlockerPmItem = {
     id: "fixture-imported", title: "Imported issue", status: "blocked",
     tags: ["ordinary", "gh:Unbraind/pm-cli#1", "gh:unbraind/pm-web#2"],
@@ -237,7 +237,7 @@ test("collectBlockerReferences excludes every own provenance key from all text s
     comments: [{ text: "Self: GH-1; actual blocker: #854; other: unbraind/pm-web#854" }],
   };
   assert.deepEqual(github.collectBlockerReferences(item, "other/repo").map(ref => ref.key),
-    ["unbraind/pm-cli#854", "unbraind/pm-web#854"]);
+    ["unbraind/pm-cli#854", "unbraind/pm-web#2", "unbraind/pm-web#854"]);
   assert.deepEqual(github.collectBlockerReferences({ ...item, tags: ["ordinary"] }, "unbraind/pm-cli")
     .map(ref => ref.key), ["unbraind/pm-cli#1", "unbraind/pm-cli#854", "unbraind/pm-web#2", "unbraind/pm-web#854"]);
 });

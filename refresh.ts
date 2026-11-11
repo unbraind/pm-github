@@ -13,7 +13,7 @@ import {
   resolveGitHubToken, resumeGithubImport, assertGithubImportReplayPreflight, validateGithubImportFidelity, validateGithubImportPlan,
   type GhIssue, type PmItem, type PreparedGithubImport,
 } from "./index.ts";
-import { fetchImportTimeline, legacyGithubIdentityConflict, importIdentityKeys, importFidelityFields, normalizeImportValue, readImportReleases } from "./import-fidelity.ts";
+import { explicitGithubIdentities, fetchImportTimeline, legacyGithubIdentityConflict, importIdentityKeys, importFidelityFields, normalizeImportValue, readImportReleases } from "./import-fidelity.ts";
 
 /** An existing item and its unique linked issue number. */
 export interface RefreshTarget { id: string; number: number; item: PmItem }
@@ -34,7 +34,7 @@ export function selectRefreshTargets(items: readonly PmItem[], repo: string): Re
     if (!item.id) continue;
     const identities = importIdentityKeys(item);
     // The refresh GraphQL path queries issue(), so PR owners are excluded.
-    if (parseGithubIssueUrl(item.github_url)?.kind === "pull") continue;
+    if (explicitGithubIdentities(item).some(target => target.kind === "pull")) continue;
     if (typeof item.github_repo === "string" && item.github_repo.toLowerCase() === repo && typeof item.github_number === "number" && (!Number.isSafeInteger(item.github_number) || item.github_number < 1)) throw new CommandError(`Refresh found an invalid issue number for ${item.id}.`);
     const numbers = new Set<number>();
     for (const key of identities) {

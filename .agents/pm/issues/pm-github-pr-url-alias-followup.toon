@@ -2,14 +2,21 @@ id: pm-github-pr-url-alias-followup
 title: Exclude PR owners in every supported explicit URL field during refresh
 description: "Review follow-up from PR #233 thread PRRT_kwDOTbN4pM62Q99D: identity resolution recognizes GitHubURL aliases, while refresh PR exclusion checks github_url only. Evaluate all supported explicit URL fields before the issue-only GraphQL query. Separate from round-4 durable-state publication; retain real tracker tests for aliases and issue owners."
 type: Issue
-status: open
+status: in_progress
 priority: 3
 tags[2]: "gh:unbraind/pm-github#233",review-followup
 created_at: "2026-11-11T18:20:19.928Z"
-updated_at: "2026-11-11T18:22:31.188Z"
+updated_at: "2026-11-11T21:06:59.068Z"
 author: codex-github230-1111
-files[1]{path,scope}:
+comments[2]{created_at,author,text}:
+  "2026-11-11T20:20:11.029Z",codex-github230-1111,"Round 5 centralizes recognized explicit URL aliases in explicitGithubIdentities and makes ownership matching and refresh consume the same parsed kind. Five real SDK alias scenarios verify PRs are excluded before querying, canonical PR controls stay excluded, issue aliases still refresh, and curated titles stay unchanged. The selector/model also checks all 1024 case/optional-underscore spellings. Focused Node/Bun files pass 30/30; full gates and reverts remain in progress."
+  "2026-11-11T21:06:56.712Z",codex-github230-1111,"Round 5 completed: explicitGithubIdentities shares every recognized URL alias and parsed kind between import ownership and refresh PR selection. Five real SDK tracker scenarios cover retained aliases, canonical PR controls, issue aliases and unchanged curated titles; the selector also checks all 1024 accepted case/optional-underscore spellings. Linked node --test --test-concurrency=1 --test-name-pattern \"^Refresh excludes PRs\" test/github-url.test.ts passes 5/5. Reverting only the selector makes all 5 fail; restored Node/Bun file passes 31/31. Evidence maps to PRRT_kwDOTbN4pM62Q99D. Releasing this author claim and leaving the item in progress."
+files[3]{path,scope}:
+  import-fidelity.ts,project
   refresh.ts,project
+  test/github-url.test.ts,project
+tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  "node --test --test-concurrency=1 --test-name-pattern \"^Refresh excludes PRs\" test/github-url.test.ts",project,1200,codex-github230-1111,"2026-11-11T20:20:08.486Z",local_mutation,fix/reference-tags-are-not-import-identity
 docs[1]{path,scope}:
   "https://github.com/unbraind/pm-github/pull/233#discussion_r4540585165",project
 body: ""
