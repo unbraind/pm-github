@@ -1,6 +1,7 @@
 import { normalizeGithubRepository, parseGithubUrl, parseGithubIssueUrl } from "./github-url.ts";
 import { readGithubWorkspace, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue, setOwnValue } from "./own-record.ts";
+import { assertGithubImportOwner, type GithubOwnedTarget } from "./import-ownership.ts";
 /** Source lifecycle, release-window and cross-provider identity rules for issue imports. */
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -323,9 +324,9 @@ export function legacyGithubIdentityConflict(item: PmItem): LegacyGithubIdentity
     explicitGithubIdentities(item).length > 0) return undefined;
   const references = (item.tags ?? []).flatMap(tag => { const ref = parseProvenanceTag(tag); return ref ? [ref] : []; });
   const repositories = [...new Set(references.map(ref => ref.repo))].sort();
-  // Deterministic IDs and generated source descriptions independently establish ownership.
+  // Generated source descriptions establish legacy ownership; an ID is only a destination.
   const generated = typeof item.description === "string" ? /^GH (?:issue|PR) #[1-9]\d*: (https?:\/\/\S+)(?: ·|$)/i.exec(item.description) : undefined;
-  if (repositories.length < 2 || references.some(ref => ref.number === item.github_number && importerCreatedItem(item, ref.repo, ref.number)) || generated && parseGithubIssueUrl(generated[1])?.number === item.github_number) return undefined;
+  if (repositories.length < 2 || generated && parseGithubIssueUrl(generated[1])?.number === item.github_number) return undefined;
   return { code: "ambiguous_legacy_github_identity", item: item.id,
     candidates: repositories.map(repo => `${repo}#${item.github_number}`),
     remedy: "Set github_repo or github_url explicitly on the intended owner; keep other gh: tags as references." };
@@ -355,7 +356,7 @@ export function importIdentityKeys(item: PmItem, options: { allowConflicts?: boo
     const legacyLink = !hasRepository && item.github_number === undefined && typeof item.github_link_only === "boolean" && references.length === 1;
     // Pre-fidelity releases wrote this exact generated description plus the reference tag.
     const legacyDescription = Number(generated?.[1]) === number && legacyLocators.includes(`https://github.com/${repo}/issues/${number}`);
-    if (!hasRepository && (legacyNumber || legacyLink || legacyDescription || importerCreatedItem(item, repo, number))) keys.add(`${repo}#${number}`);
+    if (!hasRepository && (legacyNumber || legacyLink || legacyDescription)) keys.add(`${repo}#${number}`);
   }
   return [...keys];
 }
@@ -386,7 +387,7 @@ export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, _ta
     const keys = importIdentityKeys(item);
     if (!item.id || legacyGithubIdentityConflict(item)) return false;
     if (keys.length) return keys.includes(issueKey);
-    return importerCreatedItem(item, repo, issue.number) || declaredOwner(item) ||
+    return declaredOwner(item) ||
       Object.entries(item).some(([key, value]) => OWNER_LINK_FIELD.test(key) && locators(value).includes(issueUrl)) ||
       locators(providerProvenance(item)).some(url => bodyUrls.has(url));
   });
@@ -601,7 +602,7 @@ export function normalizeImportValue(field: string, value: unknown, types = defa
  * Cross-provider owners retain their creation/completion dates, content and release.
  * Plain imports restore a source assignee that a native close command clears.
  */
-export async function persistImportFidelity(pmPath: string, id: string, fidelity: ImportFidelity, linkOnly: boolean, normalizeFields = false, sourceAssignee?: string, preserveContent = false): Promise<void> {
+export async function persistImportFidelity(pmPath: string, id: string, fidelity: ImportFidelity, linkOnly: boolean, normalizeFields = false, sourceAssignee?: string, preserveContent = false, ownership?: GithubOwnedTarget): Promise<void> {
   const workspace = await readGithubWorkspace(pmPath);
   const pmRoot = workspace.pmRoot;
   const { settings } = workspace;
@@ -609,6 +610,8 @@ export async function persistImportFidelity(pmPath: string, id: string, fidelity
   await mutateItem({ pmRoot, settings, id, author: "pm-github", op: "import", skipNoop: true,
     message: `Preserve GitHub source lifecycle for issue #${fidelity.github_number}`,
     mutate: document => {
+      const source = parseGithubIssueUrl(fidelity.github_url)!;
+      assertGithubImportOwner({ ...document.metadata, body: document.body }, { ...ownership, id, repo: source.repo, number: fidelity.github_number });
       const before = canonicalDocument(document);
       const fields = { ...importFidelityFields(fidelity, linkOnly, preserveContent ? document.metadata : undefined),
         ...(!linkOnly && !preserveContent && sourceAssignee ? { assignee: sourceAssignee } : {}),

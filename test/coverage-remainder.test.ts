@@ -141,7 +141,7 @@ test("atomic import falls back when settings are unreadable and reports interrup
       title: "Widget",
       itemType: "Task",
       status: "open",
-      description: "d",
+      description: "GH issue #7: https://github.com/acme/widgets/issues/7",
       body: "b",
       tags: ["gh:acme/widgets#7"],
       comments: [],
@@ -500,6 +500,9 @@ test("non-atomic import reports update, close, reopen, and unparsed-id failures"
   const listed = spawnSync(REAL_PM, ["--pm-path", root, "--json", "list", "--full"], { encoding: "utf8" });
   assert.equal(listed.status, 0, listed.stderr);
   try {
+    const existing7 = await seedGithubItem(root, 7);
+    const existing8 = await seedGithubItem(root, 8);
+    const existing9 = await seedGithubItem(root, 9);
     await withFakePm(`
       for arg in "$@"; do
         if [ "$arg" = "update" ]; then echo update-refused >&2; exit 1; fi
@@ -508,7 +511,7 @@ test("non-atomic import reports update, close, reopen, and unparsed-id failures"
     `, async () => {
       const { stderr } = await captureStderr(() => assert.rejects(runImport("acme/widgets", root, opts(), {
         resolveToken: () => "tok",
-        readItems: () => [{ id: mirrorId(7), title: "old", status: "open", tags: ["gh:acme/widgets#7"] }],
+        readItems: () => [{ ...existing7, status: "open" }],
         fetchIssues: async () => [issue({ assignee: { login: "octo" }, milestone: { title: "Now" } })],
       }), /Imported 0 issue/));
 
@@ -523,7 +526,7 @@ test("non-atomic import reports update, close, reopen, and unparsed-id failures"
     `, async () => {
       const closed = await captureStderr(() => assert.rejects(runImport("acme/widgets", root, opts(), {
         resolveToken: () => "tok",
-        readItems: () => [{ id: mirrorId(8), title: "old", status: "open", tags: ["gh:acme/widgets#8"] }],
+        readItems: () => [{ ...existing8, status: "open" }],
         fetchIssues: async () => [issue({ number: 8, state: "closed", state_reason: "completed", closed_at: "2026-02-01T00:00:00Z" })],
       }), /Imported 0 issue/));
       assert.match(closed.stderr.join("\n"), /close reconciliation failed|close after import failed/);
@@ -537,7 +540,7 @@ test("non-atomic import reports update, close, reopen, and unparsed-id failures"
     `, async () => {
       const reopened = await captureStderr(() => assert.rejects(runImport("acme/widgets", root, opts(), {
         resolveToken: () => "tok",
-        readItems: () => [{ id: mirrorId(9), title: "old", status: "closed", tags: ["gh:acme/widgets#9"] }],
+        readItems: () => [{ ...existing9, status: "closed" }],
         fetchIssues: async () => [issue({ number: 9, state: "open" })],
       }), /Imported 0 issue/));
       assert.match(reopened.stderr.join("\n"), /reopen reconciliation failed/);

@@ -63,7 +63,7 @@ function assertSourceClosures(pmRoot: string, id: string, skip = 0, dates: reado
 
 test("mixed new and linked closed issues plus an open issue repeat with identical item and history bytes", async () => tracker(async pmRoot => {
   const linked = (await create({ title: "Previously linked", type: "Chore", status: "closed", closeReason: "Original closure",
-    completedAt: "2025-02-01T00:00:00Z", tags: `gh:${repo}#1` }, { pmRoot })).item;
+    completedAt: "2025-02-01T00:00:00Z", tags: `gh:${repo}#1`, description: `GH issue #1: https://github.com/${repo}/issues/1` }, { pmRoot })).item;
   await persistImportFidelity(pmRoot, linked.id, buildImportFidelity(issue(1), [], []), false);
   const issues = [issue(1), issue(2), issue(3, true), { ...issue(4), state: "open" as const, state_reason: null, closed_at: null }];
   const first = await importing(pmRoot, issues);

@@ -6,8 +6,10 @@ status: open
 priority: 3
 tags[2]: "gh:unbraind/pm-github#233",review-followup
 created_at: "2026-11-11T18:20:18.830Z"
-updated_at: "2026-11-11T18:22:28.358Z"
+updated_at: "2026-11-11T22:07:08.273Z"
 author: codex-github230-1111
+comments[1]{created_at,author,text}:
+  "2026-11-11T22:07:08.272Z",codex-github230-1111,"Round 6 review reproduction retained for later work (PRRT_kwDOTbN4pM62Q98t): start with a curated linked item with no completed_at, import a GitHub closure so completed_at is assigned from github_closed_at, then reopen the source and re-sync. The item becomes open and closed_at is cleared, but the source-assigned completed_at remains. A pre-link local completion date must still be preserved. Do not clear every completed_at; track source assignment distinctly before implementing reopen cleanup. This round intentionally changes no completion-date behavior."
 files[1]{path,scope}:
   import-fidelity.ts,project
 docs[1]{path,scope}:

@@ -6,11 +6,12 @@ status: in_progress
 priority: 3
 tags[2]: "gh:unbraind/pm-github#233",review-followup
 created_at: "2026-11-11T18:20:20.837Z"
-updated_at: "2026-11-11T21:06:58.322Z"
+updated_at: "2026-11-11T22:21:14.447Z"
 author: codex-github230-1111
-comments[2]{created_at,author,text}:
+comments[3]{created_at,author,text}:
   "2026-11-11T20:20:09.731Z",codex-github230-1111,"Round 5 implements a shared linear prose URL extractor with balanced delimiters and matching emphasis, while complete structured URL identity checks stay strict. Unknown URL candidates remain visible as unparsed_url/unparsed references without guessed numbers; they prevent clearance and cleared annotations. Focused real SDK tracker cases cover ten wrapper forms, six punctuation marks, the exact false-clear reproduction and eight unknown URL cases. Node and native Bun focused files pass 30/30 including alias cases. Full dependent-file gates and behavioral reverts remain in progress."
   "2026-11-11T21:06:55.904Z",codex-github230-1111,"Round 5 completed: Markdown-aware URL extraction handles every requested wrapper and punctuation while retaining balanced URL data. Unsupported HTTP candidates remain unparsed_url/unparsed without invented numbers; masking prevents fragment fallback. Only actual ownership excludes self, so reference tags cannot hide open blockers. The linked node --test --test-concurrency=1 --test-name-pattern \"^(Markdown|Unparsed|Reference)\" test/github-url.test.ts run passes 26/26; full blockers file passes 35/35. Behavioral reverts fail all 17 Markdown cases, all 8 unparsed cases and the reference-tag self-exclusion case; restored full Node/Bun file passes 31/31. Evidence maps to PRRT_kwDOTbN4pM62SJvl. Releasing this author claim and leaving the item in progress."
+  "2026-11-11T22:21:14.447Z",codex-github230-1111,"Additional outside-diff review reproduction from the latest CodeRabbit body, retained outside round-6 ownership-write scope: an unowned blocked item tagged gh:a/r#7 says Blocked by #2, while the command supplies --repo b/r. Tag-based repository hinting queries a/r#2; if closed while b/r#2 is open it can falsely clear and annotate. Resolve repository hints from authoritative ownership or the explicit command hint; a reference tag must not choose the repository. No hint behavior changed in round 6."
 files[3]{path,scope}:
   github-url.ts,project
   index.ts,project

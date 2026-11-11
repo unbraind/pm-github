@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import test from "node:test";
 import { decode } from "@toon-format/toon";
-import { normalizeItemId, certifyCompleteListResult, commitImportedItem, create, get, getItemPath, listAllComplete, parseTags, toImportTags, decodePmTableRows, type PmTableCellEncoding, type PmEncodedTableRows, readSettings, schemaAddStatus, schemaAddType } from "@unbrained/pm-cli/sdk";
+import { normalizeItemId, certifyCompleteListResult, commitImportedItem, create, get, getItemPath, getHistoryPath, listAllComplete, mutateItem, parseTags, toImportTags, decodePmTableRows, readHistoryEntries, verifyHistoryEntries, type PmTableCellEncoding, type PmEncodedTableRows, readSettings, schemaAddStatus, schemaAddType } from "@unbrained/pm-cli/sdk";
 import { deriveAtomicItemId, decodeCompletePmItems, parseImportOptions, runImport, githubLabelsToTags, planGithubLabelMigration, type GhIssue } from "../index.ts";
 import { normalizeImportValue, readImportTypeNames, serializeImportTags } from "../import-fidelity.ts";
 import { boundedCli } from "./helpers/bounded-cli.ts";
@@ -173,8 +173,11 @@ test("packed npm and native Bun consumers preserve mixed-import bytes in JSON an
     const packed = JSON.parse(await run("npm", ["pack", "--ignore-scripts", "--foreground-scripts=false", "--json", "--pack-destination", base], packageRoot,
       { ...env, PM_PATH: join(packageRoot, ".agents/pm") })) as [{ filename: string }];
     await run(cli, ["--path", pmRoot, "package", "install", join(base, packed[0].filename), "--project"]);
-    await run(cli, ["--path", pmRoot, "create", "--title", "Native", "--id", deriveAtomicItemId("fixture/project", 2, "fixture-", normalizeItemId), "--type", "issue", "--tags", "gh:fixture/project#2"]);
+    await run(cli, ["--path", pmRoot, "create", "--title", "Native", "--id", deriveAtomicItemId("fixture/project", 2, "fixture-", normalizeItemId), "--type", "issue", "--tags", "gh:fixture/project#2",
+      "--description", "GH issue #2: https://github.com/fixture/project/issues/2"]);
     let payload = [issue(1, labelSets.flat()), issue(2, labelSets.flat())];
+    /** Switch source snapshots after the preceding real CLI calls have completed. */
+    const selectPayload = (next: GhIssue[]) => { payload = next; };
     await withMockGithub((request, response) => jsonResponse(response, 200, request.url === "/graphql"
       ? { data: { repository: { issue: { timelineItems: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } } }
       : request.url!.includes("/issues?") ? payload : request.url === "/repos/fixture/project/issues/7" ? { state: "open" } : []), async server => {
@@ -201,7 +204,8 @@ test("packed npm and native Bun consumers preserve mixed-import bytes in JSON an
           assert.equal(item.tags.filter(tag => tag.startsWith("gh:fixture/project#")).length, 1);
         }
       }
-      await run(cli, ["--path", pmRoot, "create", "--title", "Plain native", "--id", deriveAtomicItemId("fixture/project", 4, "fixture-", normalizeItemId), "--type", "issue", "--tags", "gh:fixture/project#4"], root, environment);
+      await run(cli, ["--path", pmRoot, "create", "--title", "Plain native", "--id", deriveAtomicItemId("fixture/project", 4, "fixture-", normalizeItemId), "--type", "issue", "--tags", "gh:fixture/project#4",
+        "--description", "GH issue #4: https://github.com/fixture/project/issues/4"], root, environment);
       payload = [issue(3, labelSets.flat()), issue(4, labelSets.flat())];
       const plainArgs = ["--path", pmRoot, "github", "import", "fixture/project", "--type", "issue"];
       const plain = JSON.parse(await run("npm", ["exec", "--offline", "--", "pm", ...plainArgs, "--json"], root, environment)) as { imported: number; updated: number };
@@ -221,7 +225,8 @@ test("packed npm and native Bun consumers preserve mixed-import bytes in JSON an
       await schemaAddType("Investigation", { folder: "investigations", alias: ["probe"] }, { pmRoot: root, noExtensions: true });
       await schemaAddStatus("working", { alias: ["busy-now"], role: ["active"] }, { pmRoot: root, noExtensions: true });
       await schemaAddStatus("verified", { alias: ["settled"], role: ["terminal", "terminal_done"] }, { pmRoot: root, noExtensions: true });
-      await run(cli, ["--path", root, "create", "--title", "Nested native", "--id", deriveAtomicItemId("fixture/project", 6, "fixture-", normalizeItemId), "--type", "probe", "--status", "busy-now", "--tags", "gh:fixture/project#6"], root, environment);
+      await run(cli, ["--path", root, "create", "--title", "Nested native", "--id", deriveAtomicItemId("fixture/project", 6, "fixture-", normalizeItemId), "--type", "probe", "--status", "busy-now", "--tags", "gh:fixture/project#6",
+        "--description", "GH issue #6: https://github.com/fixture/project/issues/6"], root, environment);
       payload = [issue(5, labelSets.flat()), issue(6, labelSets.flat())];
       const nestedArgs = ["--path", root, "github", "import", "fixture/project", "--atomic", "--type", "probe"];
       const nestedFirst = JSON.parse(await run("npm", ["exec", "--offline", "--", "pm", ...nestedArgs, "--json"], root, environment)) as { imported: number; updated: number };
@@ -248,6 +253,25 @@ test("packed npm and native Bun consumers preserve mixed-import bytes in JSON an
         else { assert.equal(receipt.plan.length, 1); assert.equal(receipt.plan[0]!.payload.state, "closed"); }
         assert.ok(durable(pmRoot) === providerBefore, "Workspace provider previews must preserve native items/history.");
       }
+      const id = deriveAtomicItemId("fixture/project", 2, "fixture-", normalizeItemId);
+      await mutateItem({ pmRoot, id, settings: await readSettings(pmRoot), author: "fixture", op: "update", message: "Relink packed consumer target",
+        mutate: document => {
+          document.metadata.github_url = "https://github.com/other/project/issues/8";
+          document.metadata.github_repo = "other/project"; document.metadata.github_number = 8;
+          return { changedFields: ["github_url", "github_repo", "github_number"] };
+        } });
+      const history = verifyHistoryEntries(await readHistoryEntries(getHistoryPath(pmRoot, id), id));
+      assert.equal(history.ok, true, history.errors.join("; "));
+      assert.equal(history.latest_after_hash, (await get(id, {}, { pmRoot })).item_hash);
+      selectPayload([{ ...issue(2, []), title: "Changed source after explicit relink" }]);
+      const relinked = durable(pmRoot);
+      const refused = await boundedCli(cli, [...args, "--gate", "--json"], root, environment);
+      assert.equal(refused.code, 2);
+      const errorJson = refused.stdout.trim() || refused.stderr.slice(refused.stderr.indexOf("{"));
+      const problem = JSON.parse(errorJson) as { code: string; detail: string };
+      assert.equal(problem.code, "github_import_owner_conflict");
+      assert.match(problem.detail, /fixture\/project#2.*other\/project#8/);
+      assert.equal(durable(pmRoot), relinked, "The actual packed CLI must preserve the relinked item and its history");
     });
   });
 });

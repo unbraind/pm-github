@@ -22,8 +22,14 @@ test("shared importer conversion covers legacy refresh deltas and every native m
       const repo = "fixture/repo";
       const raw = [" One,TWO ", "ONE", " GH:FIXTURE/REPO#1 "];
       const expected = (await create({ title: "SDK reference", type: "Task", tags: raw.join(","), ...scope }, { pmRoot: root })).item;
-      const match = (await create({ id: deriveAtomicItemId("fixture/repo", 1, "fixture-", normalizeItemId), title: "Legacy target", type: "Task", tags: "old", ...scope }, { pmRoot: root })).item;
+      const createdMatch = (await create({ id: deriveAtomicItemId("fixture/repo", 1, "fixture-", normalizeItemId), title: "Legacy target", type: "Task", tags: "old",
+        description: "GH issue #1: https://github.com/fixture/repo/issues/1", ...scope }, { pmRoot: root })).item;
       const settings = await readSettings(root);
+      await mutateItem({ pmRoot: root, settings, id: createdMatch.id, author: "fixture", op: "update", mutate: document => {
+        document.metadata.github_url = "https://github.com/fixture/repo/issues/1";
+        return { changedFields: ["github_url"] };
+      } });
+      const match = (await get(createdMatch.id, {}, { pmRoot: root })).item;
       const issue: GhIssue = { number: 1, title: "Legacy target", body: "", state: "open", labels: [{ name: " One,TWO " }, { name: "ONE" }],
         assignee: null, milestone: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-02-01T00:00:00Z",
         html_url: `https://github.com/${repo}/issues/1` };
@@ -169,7 +175,8 @@ test("500 native tag arrays keep literal identities and refresh decisions equal 
     await withEnv({ PM_PATH: root, PM_AUTHOR: "fixture", GIT_CEILING_DIRECTORIES: dirname(directory), PATH: directory }, async () => {
       await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { pmRoot: root, cwd: directory, noExtensions: true });
       const scope = { clearDeps: true, unset: ["parent", "sprint", "release", "goal", "objective"] };
-      const target = (await create({ id: deriveAtomicItemId("fixture/repo", 1, "fixture-", normalizeItemId), title: "Native witness", type: "Task", ...scope }, { pmRoot: root })).item;
+      const target = (await create({ id: deriveAtomicItemId("fixture/repo", 1, "fixture-", normalizeItemId), title: "Native witness", type: "Task",
+        description: "GH issue #1: https://github.com/fixture/repo/issues/1", ...scope }, { pmRoot: root })).item;
       const settings = await readSettings(root);
       const repo = "fixture/repo";
       const provenance = `gh:${repo}#1`;

@@ -2,13 +2,14 @@ id: pm-github-reference-identity
 title: Keep GitHub reference tags separate from import identity
 description: "Preserve curated local fields, allow shared reference tags, and retain migration-free matching of existing importer provenance."
 type: Issue
+pm_format_version: 2
 status: in_progress
 priority: 2
 tags[2]: "gh:unbraind/pm-github#230","gh:unbraind/pm-github#233"
 created_at: "2026-11-11T10:19:25.073Z"
-updated_at: "2026-11-11T21:06:57.443Z"
+updated_at: "2026-11-11T23:54:22.939Z"
 author: codex-github230-1111
-comments[32]{created_at,author,text}:
+comments[38]{created_at,author,text}:
   "2026-11-11T10:19:28.756Z",codex-github230-1111,"Read issue 230 and all comments. Branch starts from main; PR229 changes workflows and docs separately. Plan: distinguish explicit importer identity from references, preserve curated linked content, retain legacy persisted provenance, and prove behavior with real SDK trackers and behavioral reverts. Task-specific gate budget applies: focused importer/sync/dependent tests, lint and typecheck; full suite only within 45 minutes."
   "2026-11-11T10:24:30.654Z",codex-github230-1111,"Implemented separate durable import identity lookup; shared gh references no longer select owners or collide. Curated links merge provenance/lifecycle while deterministic importer records mirror content. New real SDK regressions pass 9/9, including no-git curated links and byte-identical legacy resync beside shared references. Reviewing existing tests that assumed tag-only ownership; updating mirror fixtures to explicit importer identities."
   "2026-11-11T10:33:45.352Z",codex-github230-1111,"Behavioral revert proof in a disposable package copy: rebuilt after restoring released matchImportedIssue, prepareGithubImport and verifyImportIdempotency plus tag-only identity lookup. node --test --test-concurrency=2 test/reference-import-identity.test.ts: 14 tests, 13 fail, 1 pass. All four required scenarios fail: single curated Chore, shared references, mirror title refresh beside a reference, and byte-identical legacy resync beside a reference. The passing legacy link-marker case is existing supported behavior. Package worktree was never reverted. Fixed regressions are being rerun through pm test; full npm test follows within the task budget."
@@ -41,7 +42,13 @@ comments[32]{created_at,author,text}:
   "2026-11-11T20:30:23.327Z",codex-github230-1111,"Round 5 false-clear path audit also found self-exclusion treated every gh: tag as ownership. collectBlockerReferences now uses the same authoritative importIdentityKeys resolver to exclude only actual self identity, retaining reference-tagged blockers. Added a real tracker reproduction with gh:o/r#2 plus the mixed closed/open Markdown links; it must retain open #2. Legacy generated owner markers still resolve through the existing compatibility rule. No other ownership or content merge behavior changed. The focused file now contains 31 cases; behavioral reverts will cover the collector independently."
   "2026-11-11T21:06:54.225Z",codex-github230-1111,"Round 5 final behavioral revert proof in a disposable package copy with real SDK trackers and real HTTP transport: node --test --test-concurrency=1 --test-name-pattern PATTERN test/github-url.test.ts. Restoring only the previous tokenizer body (retaining span metadata) makes all 17 ^Markdown cases fail; restoring parseBlockerReferences makes all 8 ^Unparsed cases fail; restoring collectBlockerReferences makes the ^Reference tags case fail; restoring selectRefreshTargets makes all 5 ^Refresh excludes PRs cases fail. Total 31 expected behavioral failures, zero cancellations. Each required wrapper and punctuation case fails on revert, including the supplied mixed closed/open URL reproduction. The restored implementation passes 31/31 and all seven code/docs/test files match the package implementation byte-for-byte. The package worktree was never reverted."
   "2026-11-11T21:06:55.106Z",codex-github230-1111,"Round 5 final gates: 54 selected test files / 57 bounded invocations, 56 completed invocations, 1231 passes, zero assertion failures, 2 existing pm-cli#1656 skips. All 73 import-gate cases pass across four disjoint name partitions. closeout-workflow reached its 20-minute cap after 69 passes and one cancellation; it remains incomplete CI evidence. Final blockers recheck passes 35/35. Linked pm runs of node --test --test-concurrency=1 test/github-url.test.ts and bun test --timeout 60000 test/github-url.test.ts each pass 31/31; follow-up pm runs pass 26 blocker cases and 5 alias cases. Project policy disables automatic test-result writes, so exact outcomes are recorded here. Lint, typecheck, build, test compilation, docstrings (31 files / 278 declarations), zero duplication and strict tracker health pass (two existing advisories). Full npm/Bun release and exact 100% coverage remain CI certification under the task budget. Read receipt: two supplied findings; 21 threads / 21 comments and 9 reviews enumerated without remaining pages, with the two targeted full texts/diffs read (PRRT_kwDOTbN4pM62SJvl and PRRT_kwDOTbN4pM62Q99D). The accepted rounds remain intact. Releasing all three scoped claims; items remain in progress. Curated reopen and Projects follow-ups remain unchanged."
-files[43]{path,scope}:
+  "2026-11-11T22:07:06.775Z",codex-github230-1111,"Round 6: accepted head rechecked clean. Audit every existing-item write target against exactly one authoritative GitHub owner, including deterministic upsert collisions, URL/alias matches, refresh, closeout and durable replay/finalization. Choose a typed collision refusal rather than silently reassigning an existing deterministic ID; preserve byte-identical item content on refusal and ordinary owner-matching idempotency. Real SDK tracker matrix and isolated behavioral reverts will cover each path. The completion-date reopen defect remains deferred. Current review receipt: one supplied blocking finding; 21 threads/comments and 10 reviews enumerated without further pages. The curated-reopen thread and latest CodeRabbit body were read in full."
+  "2026-11-11T22:21:13.228Z",codex-github230-1111,"Round 6 implementation: typed github_import_owner_conflict refuses occupied deterministic IDs rather than allocating suffixes. One shared positive owner assertion protects preflight and every SDK item-lock write, including replay, fidelity and annotations; bound delegates retain ambient mutation hooks. Plain CLI writes and dependency edges carry --expect-hash from the same live ownership read. URL-only, alias-only and number-only targets are checked independently. Closeout holds imported owners outside its delivery repository while retaining explicit native delivery for local items. Real SDK non-git matrix passes 21/21 under Node and Bun, including matching-owner idempotency and ambient hook controls. The bounded dependent sweep is now running with two workers."
+  "2026-11-11T23:34:38.727Z",codex-github230-1111,"Round 6 refinement: deterministic IDs, even alongside a matching reference tag, no longer confer ownership. Released source-number/link markers and generated source descriptions still resolve without migration; a real pre-fidelity marker control updates its original ID and then re-syncs byte-identically. Creation/content plans must retain the generated source marker before SDK updates, otherwise github_import_plan_ownership_invalid refuses before journal publication. Existing-item checks use live normalized ownership, locked SDK hooks, and CLI expected revisions. First-link provider/citation authorization is preserved without overriding explicit GitHub owners. Collision remedy restores intended provenance only for the intended item; otherwise select a different configured ID prefix or tracker and retain existing items/history. New relink fixtures use mutateItem and verify complete history chains plus the current item hash, rather than the birth-only import adapter. Both same-repository and cross-repository closeout transfers are held."
+  "2026-11-11T23:48:50.034Z",codex-github230-1111,"Round 6 final behavioral revert proof in disposable package copies only: disabling assertGithubImportOwner alone makes all 19 shared-guard cases fail; removing only ownedPmRun expected-hash arguments makes the real peer/CLI race fail with changed native body/history; disabling assertCloseoutGithubOwner makes both same-repository and cross-repository delivery cases fail. The source matrix has 22 refusal cases and four must-allow/ambient controls. The exact gated atomic upsert reproduction uses a valid URL-only transfer to other/project#8 and compares native item/history bytes before checking the refusal, so a late gate error cannot hide an overwrite. Curated collisions run without Git and include a matching reference tag, plus a second incoming issue to prove whole-batch refusal. Every relink verifies the full native history chain and its current item hash. Source revert commands are node --test --test-concurrency=1 --test-name-pattern PATTERN test/import-ownership.test.ts, with patterns ^Ownership (?!plain CLI|closeout|matching-owner|guard preserves), ^Ownership plain CLI, and ^Ownership closeout. Restored source passes 26/26. Rebuilding the artifact with only the owner assertion disabled makes the packed npm consumer regression fail; restoring and rebuilding makes that exact packed case pass 1/1. Its command is node --test --test-concurrency=1 --test-name-pattern \"^packed npm\" test/import-projection.test.ts. The packed case verifies the public CLI JSON github_import_owner_conflict code, both owner values and unchanged native bytes. All production code/docs and the relevant tests match their restored copies. No pm SDK mocks are used in the new matrix."
+  "2026-11-11T23:48:51.488Z",codex-github230-1111,"Round 6 final bounded gate receipt: 54 selected test files / 57 initial invocations, corrected with linked/full or targeted fixture rechecks; 53 completed files / 56 complete invocations contain 1220 tests: 1218 pass, zero remaining failures and two existing pm-cli#1656 skips. The importer gate passes all 73 cases in four disjoint partitions. closeout-workflow reached its 20-minute cap after 74 passes and one cancellation without an assertion failure; CI must certify that file and the full npm/Bun release/coverage gate. Both 500-case label models pass, as does their corrected shared-conversion case. Final linked pm runs of node --test --test-concurrency=1 test/import-ownership.test.ts and bun test --timeout 60000 test/import-ownership.test.ts each pass 26/26 with valid SDK mutation histories. Finalization, refresh, idempotency, SDK hooks, literal-field and packed consumer rechecks pass. Existing command-failure fixtures now seed real owners; deleted targets refuse at the SDK tombstone read before mutation and retain their history. Build, test compilation, lint, typecheck, docstrings (32 files / 287 declarations), zero duplication (33 authored modules) and strict tracker health pass with two existing advisories. No dependency or SDK pin changed; no new SDK gap or quarantine was introduced. Project policy disables automatic test-result records, so outcomes are recorded in comments. Current review receipt: one supplied blocking finding; 21 threads / 21 comments and 10 reviews enumerated without remaining pages. The curated-reopen thread PRRT_kwDOTbN4pM62Q98t and the latest CodeRabbit body were read in full. Its completion-date reproduction is recorded on the deferred item without changing behavior. The two outside-diff read-path findings are tracked separately. CI evidence remains at https://github.com/unbraind/pm-github/pull/233/checks. Releasing this author claim; the main item remains in progress and follow-ups stay open or in progress."
+  "2026-11-11T23:54:22.048Z",codex-github230-1111,"Final fixture tightening: the dependency-race regression now delegates listing to the real SDK and uses the real default ordering-cycle collector. The exact command node --test --test-concurrency=1 --test-name-pattern \"^Ownership dependency writes\" test/import-ownership.test.ts passes 1/1. In a disposable package copy, disabling only assertGithubImportOwner makes that same case fail 1/1; restoring it passes 1/1. Final test compilation and lint pass. This strengthens the existing 22-case behavioral revert proof without changing production code, test counts or the gate receipt. All tracker histories remain byte-prefix extensions of the accepted base and origin/main. Releasing only this author claim before commit; no item is closed."
+files[47]{path,scope}:
   .github/workflows/pm-github-sync.yml,project
   closeout.ts,project
   discussions.ts,project
@@ -49,6 +56,7 @@ files[43]{path,scope}:
   github-url.ts,project
   identity.ts,project
   import-fidelity.ts,project
+  import-ownership.ts,project
   import-tags.ts,project
   index.ts,project
   projects.ts,project
@@ -61,6 +69,7 @@ files[43]{path,scope}:
   test/dryrun-preview.test.ts,project
   test/durable-recovery.test.ts,project
   test/fixtures/atomic-plan-crash.ts,project
+  test/fixtures/ownership-peer.ts,project
   test/fixtures/refresh-crash.ts,project
   test/github-url.test.ts,project
   test/handler-failures.test.ts,project
@@ -71,6 +80,7 @@ files[43]{path,scope}:
   test/import-fidelity.test.ts,project
   test/import-gate.test.ts,project
   test/import-lock.test.ts,project
+  test/import-ownership.test.ts,project
   test/import-projection.test.ts,project
   test/label-import-model.test.ts,project
   test/link-deps.test.ts,project
@@ -80,75 +90,577 @@ files[43]{path,scope}:
   test/review-import-identity.test.ts,project
   test/review-round3-identity.test.ts,project
   test/scheduled-refusals.test.ts,project
+  test/sdk-adoption.test.ts,project
   test/smoke.test.ts,project
   test/typed-sentinel-normalization.test.ts,project
   test/webhooks.test.ts,project
   test/workspace-resolution.test.ts,project
   webhooks.ts,project
-tests[63]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
-  node --test --test-concurrency=2 test/reference-import-identity.test.ts test/import-conflict-report.test.ts,project,1200,codex-github230-1111,"2026-11-11T10:32:07.555Z",local_mutation,fix/reference-tags-are-not-import-identity
-  npm run lint,project,1200,codex-github230-1111,"2026-11-11T10:39:23.496Z",local_mutation,fix/reference-tags-are-not-import-identity
-  npm run typecheck,project,1200,codex-github230-1111,"2026-11-11T10:39:25.518Z",local_mutation,fix/reference-tags-are-not-import-identity
-  npm test,project,2700,codex-github230-1111,"2026-11-11T10:39:28.387Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/review-import-identity.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:32:52.519Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/atomic.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/blockers.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/changelog-placement.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/cited-issue-adoption.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/closeout-attribution.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/closeout-revision.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/closeout-selection.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/closeout-workflow.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/closeout.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/comments-sync.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/complete-corpus.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/coverage-boundaries.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/coverage-edges.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/coverage-remainder.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/daily-sync-alert.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/daily-sync-idempotency.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/daily-sync-privacy.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/discussion-model.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/discussions.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/dryrun-preview.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/gate.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/handler-failures.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/http-boundary.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/identity.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/import-conflict-report.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/import-errors.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/import-fidelity.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/import-lock.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/import-projection.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/import-regex-sampling.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/import-regex.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/import-selection.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/issue-forms.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/label-import-model.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/labels.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/link-deps.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/own-property.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/project-sync.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/reference-import-identity.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/refresh.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/repeat-import-noop.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/scheduled-refusals.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/sdk-adoption.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/smoke.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/typed-sentinel-normalization.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/webhooks.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/workspace-resolution.test.ts,project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  "node --test --test-concurrency=1 --test-name-pattern '^[a-fA-F]' test/import-gate.test.ts",project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  "node --test --test-concurrency=1 --test-name-pattern '^[g-mG-M]' test/import-gate.test.ts",project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  "node --test --test-concurrency=1 --test-name-pattern '^[n-sN-S]' test/import-gate.test.ts",project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  "node --test --test-concurrency=1 --test-name-pattern '^[t-zT-Z]' test/import-gate.test.ts",project,1200,codex-github230-1111,"2026-11-11T14:46:32.891Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/review-round3-identity.test.ts,project,1200,codex-github230-1111,"2026-11-11T16:30:52.324Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/projects.test.ts,project,1200,codex-github230-1111,"2026-11-11T16:38:38.609Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/atomic-finalization-quarantine.test.ts,project,1200,codex-github230-1111,"2026-11-11T17:07:56.203Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/durable-recovery.test.ts,project,1200,codex-github230-1111,"2026-11-11T18:15:04.959Z",local_mutation,fix/reference-tags-are-not-import-identity
-  bun test --timeout 60000 test/durable-recovery.test.ts,project,1200,codex-github230-1111,"2026-11-11T18:37:26.637Z",local_mutation,fix/reference-tags-are-not-import-identity
-  node --test --test-concurrency=1 test/github-url.test.ts,project,1200,codex-github230-1111,"2026-11-11T20:17:14.785Z",local_mutation,fix/reference-tags-are-not-import-identity
-  bun test --timeout 60000 test/github-url.test.ts,project,1200,codex-github230-1111,"2026-11-11T20:17:14.785Z",local_mutation,fix/reference-tags-are-not-import-identity
+tests[70]:
+  - command: node --test --test-concurrency=2 test/reference-import-identity.test.ts test/import-conflict-report.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T10:32:07.555Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: npm run lint
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T10:39:23.496Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: npm run typecheck
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T10:39:25.518Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: npm test
+    scope: project
+    timeout_seconds: 2700
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T10:39:28.387Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/review-import-identity.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:32:52.519Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/atomic.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/blockers.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/changelog-placement.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/cited-issue-adoption.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/closeout-attribution.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/closeout-revision.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/closeout-selection.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/closeout-workflow.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/closeout.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/comments-sync.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/complete-corpus.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/coverage-boundaries.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/coverage-edges.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/coverage-remainder.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/daily-sync-alert.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/daily-sync-idempotency.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/daily-sync-privacy.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/discussion-model.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/discussions.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/dryrun-preview.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/gate.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/handler-failures.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/http-boundary.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/identity.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/import-conflict-report.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/import-errors.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/import-fidelity.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/import-lock.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/import-projection.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/import-regex-sampling.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/import-regex.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/import-selection.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/issue-forms.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/label-import-model.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/labels.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/link-deps.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/own-property.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/project-sync.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/reference-import-identity.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/refresh.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/repeat-import-noop.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/scheduled-refusals.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/sdk-adoption.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/smoke.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/typed-sentinel-normalization.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/webhooks.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/workspace-resolution.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: "node --test --test-concurrency=1 --test-name-pattern '^[a-fA-F]' test/import-gate.test.ts"
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: "node --test --test-concurrency=1 --test-name-pattern '^[g-mG-M]' test/import-gate.test.ts"
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: "node --test --test-concurrency=1 --test-name-pattern '^[n-sN-S]' test/import-gate.test.ts"
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: "node --test --test-concurrency=1 --test-name-pattern '^[t-zT-Z]' test/import-gate.test.ts"
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T14:46:32.891Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/review-round3-identity.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T16:30:52.324Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/projects.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T16:38:38.609Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/atomic-finalization-quarantine.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T17:07:56.203Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/durable-recovery.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T18:15:04.959Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: bun test --timeout 60000 test/durable-recovery.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T18:37:26.637Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/github-url.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T20:17:14.785Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: bun test --timeout 60000 test/github-url.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T20:17:14.785Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: node --test --test-concurrency=1 test/import-ownership.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T22:21:10.719Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+    updated_by: codex-github230-1111
+    updated_at: "2026-11-11T22:30:40.987Z"
+  - command: bun test --timeout 60000 test/import-ownership.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T22:21:12.037Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+    updated_by: codex-github230-1111
+    updated_at: "2026-11-11T22:30:42.144Z"
+  - command: "node --test --test-concurrency=1 --test-name-pattern \"^(atomic import falls back|non-atomic import reports)\" test/coverage-remainder.test.ts"
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T23:34:33.357Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: "node --test --test-concurrency=1 --test-name-pattern \"^runImport (closes a linked|reopens a linked)\" test/handler-failures.test.ts"
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T23:34:34.355Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: "node --test --test-concurrency=1 --test-name-pattern \"^import (refuses before mutation|reconciles a canceled)\" test/import-errors.test.ts"
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T23:34:35.286Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: "node --test --test-concurrency=1 --test-name-pattern \"^shared importer conversion\" test/label-import-model.test.ts"
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T23:34:36.332Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: "node --test --test-concurrency=1 --test-name-pattern \"^packed npm\" test/import-projection.test.ts"
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-11T23:34:37.462Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
 docs[4]{path,scope}:
   docs/cited-issue-adoption-validation.md,project
   docs/identity-collisions.md,project

@@ -436,7 +436,7 @@ test("closure and identity edge cases retain exact evidence rather than inventin
 });
 
 test("finalization appends history, is a true no-op on retry, restores files on append failure and releases locks", async () => tracker(async (_directory, pmRoot) => {
-  const item = (await create({ title: "Finalize fixture", type: "Task" }, { pmRoot })).item;
+  const item = (await createImportMirror({ title: "Finalize fixture", type: "Task", tags: "gh:unbraind/pm-beads#85" }, { pmRoot })).item;
   const fidelity = buildImportFidelity({ ...recorded("pm-beads-85"), state: "open", closed_at: null }, [], []);
   const shortId = item.id.slice((await readSettings(pmRoot)).id_prefix.length);
   await persistImportFidelity(pmRoot, shortId, fidelity, false);
@@ -463,7 +463,7 @@ test("finalization appends history, is a true no-op on retry, restores files on 
 /** Build a direct import plan from the same recorded lifecycle used by HTTP replays. */
 function atomicEntry(issue: GhIssue): PreparedGithubImport {
   return { issueNumber: issue.number, title: issue.title, itemType: "Issue", status: "closed",
-    description: `Recorded ${issue.html_url}`, body: issue.body ?? "", tags: [`gh:unbraind/pm-beads#${issue.number}`],
+    description: `GH issue #${issue.number}: ${issue.html_url}`, body: issue.body ?? "", tags: [`gh:unbraind/pm-beads#${issue.number}`],
     comments: [], syncAnnotations: false, closedAt: issue.closed_at ?? undefined, fidelity: buildImportFidelity(issue, [], []) };
 }
 
@@ -563,7 +563,7 @@ test("tag-date ordering ignores non-release and undated blob tags and is stable 
 }));
 
 test("legacy records without a source closure date retain honest evidence without inventing a closure date", async () => tracker(async (_directory, pmRoot) => {
-  const item = (await create({ title: "Legacy fixture", type: "Task", status: "closed", closeReason: "Fixture closure" }, { pmRoot })).item;
+  const item = (await createImportMirror({ title: "Legacy fixture", type: "Task", status: "closed", closeReason: "Fixture closure", tags: "gh:unbraind/pm-beads#85" }, { pmRoot })).item;
   const fidelity = buildImportFidelity({ ...recorded("pm-beads-85"), closed_at: null }, [], []);
   await persistImportFidelity(pmRoot, item.id, fidelity, false);
   const actual = (await get(item.id, {}, { pmRoot })).item;
@@ -574,7 +574,7 @@ test("legacy records without a source closure date retain honest evidence withou
 
 
 test("a legacy unknown closure cannot put native closure before source creation", async () => tracker(async (_directory, pmRoot) => {
-  const item = (await create({ title: "Legacy chronology fixture", type: "Task", status: "closed", closeReason: "Fixture closure" }, { pmRoot })).item;
+  const item = (await createImportMirror({ title: "Legacy chronology fixture", type: "Task", status: "closed", closeReason: "Fixture closure", tags: "gh:unbraind/pm-beads#85" }, { pmRoot })).item;
   const future = new Date(Date.now() + 86400000).toISOString();
   const fidelity = buildImportFidelity({ ...recorded("pm-beads-85"), created_at: future, updated_at: future, closed_at: null }, [], []);
   await assert.rejects(persistImportFidelity(pmRoot, item.id, fidelity, false), /needs a source closure date/);

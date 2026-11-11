@@ -10,5 +10,8 @@ export async function createImportMirror(options: NonNullable<Parameters<typeof 
   })[0];
   if (!reference) throw new Error("Mirror fixture requires a source reference");
   const settings = await readSettings(context!.pmRoot!);
-  return create({ ...options, id: options.id ?? deriveAtomicItemId(reference.repo, reference.number, settings.id_prefix, normalizeItemId) }, context);
+  const source = `GH issue #${reference.number}: https://github.com/${reference.repo}/issues/${reference.number}`;
+  const description = options.description?.startsWith(source) ? options.description
+    : source + (options.description ? ` · ${options.description}` : "");
+  return create({ ...options, description, id: options.id ?? deriveAtomicItemId(reference.repo, reference.number, settings.id_prefix, normalizeItemId) }, context);
 }

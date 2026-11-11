@@ -98,7 +98,8 @@ function freshTracker(): string {
  */
 function createLinkedItem(root: string, title: string, tag: string, status: string, importerOwned = false): string {
   const reference = parseProvenanceTag(tag)!;
-  const ownedId = importerOwned ? ["--id", deriveAtomicItemId(reference.repo, reference.number, "test-", normalizeItemId)] : [];
+  const ownedId = importerOwned ? ["--id", deriveAtomicItemId(reference.repo, reference.number, "test-", normalizeItemId),
+    "--description", `GH issue #${reference.number}: https://github.com/${reference.repo}/issues/${reference.number}`] : [];
   const createStatus = status === "closed" ? "open" : status;
   const r = spawnSync(
     PM_BIN,

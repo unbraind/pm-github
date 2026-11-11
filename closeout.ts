@@ -1,7 +1,8 @@
 import { parseGithubUrl, parseGithubIssueUrl, githubUrlTokens } from "./github-url.ts";
 import { readGithubWorkspace, githubStatusIsTerminal } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
-import { normalizeImportValue } from "./import-fidelity.ts";
+import { importerCreatedItem, importIdentityKeys, normalizeImportValue } from "./import-fidelity.ts";
+import { assertGithubImportOwner, GithubImportOwnershipError } from "./import-ownership.ts";
 /** Close delivered tracker items using merged pull requests and head-check evidence. */
 import { close, hashDocument, locateItem, readLocatedItem, runWithActiveExtensions, setActiveExtensionHooks, listAllComplete, certifyCompleteListResult, getHistoryPath, readHistoryEntries, verifyHistoryEntries, PmCliError, EXIT_CODE, type ItemDocument } from "@unbrained/pm-cli/sdk";
 
@@ -25,8 +26,21 @@ export interface CloseoutRow {
 
 /** Stable decisions used by automation and compact skip counts. */
 export type CloseoutCode = "already_terminal" | "other_repository" | "duplicate_selection" | "explicit_skip"
+  | "github_import_owner_conflict"
   | "needs_review" | "unknown_item" | "epic" | "active_children" | "not_delivery" | "close_failed"
   | "head_checks_passed" | "head_checks_failed" | "head_evidence_unavailable" | "required_checks_unverified" | "not_merged" | "incomplete_merge";
+
+/** Explicit delivery may close local items, but never an issue owned by a different repository. */
+export function assertCloseoutGithubOwner(item: ItemDocument["metadata"], repo: string): void {
+  const reservedNumber = /-github-[a-f0-9]{12}-([1-9]\d*)$/.exec(item.id)?.[1];
+  if (reservedNumber && importerCreatedItem(item, repo, Number(reservedNumber))) {
+    assertGithubImportOwner(item, { id: item.id, repo, number: Number(reservedNumber) });
+  }
+  const owners = importIdentityKeys(item);
+  if (owners.length && (owners.length !== 1 || !owners[0]!.startsWith(`${repo.toLowerCase()}#`))) {
+    throw new GithubImportOwnershipError(item.id, `${repo.toLowerCase()} (delivery repository)`, owners);
+  }
+}
 
 /** Which head-check policy was evaluated for one selected pull request. */
 interface CheckGate {
@@ -612,11 +626,15 @@ async function closeoutAttempt(pmPath: string, repo: string | undefined, options
     }
     for (const ref of refs) {
       const role = deliveryRole(ref.declared, items.get(ref.item)?.tags.includes(`delivery-pr:${pr.html_url}`) === true, commitsReadable);
+      let ownershipConflict: GithubImportOwnershipError | undefined;
+      if (items.has(ref.item)) try { assertCloseoutGithubOwner(items.get(ref.item)!, repo); }
+      catch (error: unknown) { if (!(error instanceof GithubImportOwnershipError)) throw error; ownershipConflict = error; }
       let reason: string;
       let code: CloseoutCode;
       if (ref.repo.toLowerCase() !== repo.toLowerCase()) { code = "other_repository"; reason = "Link points to another repository."; }
       else if (!items.has(ref.item)) { code = "unknown_item"; reason = "Item does not exist in the tracker."; }
       else if (skip.has(ref.item)) { code = "explicit_skip"; reason = "Explicitly excluded by --skip."; }
+      else if (ownershipConflict) { code = "github_import_owner_conflict"; reason = ownershipConflict.message; }
       else if (githubStatusIsTerminal(items.get(ref.item)!.status, workspace.statuses)) { code = "already_terminal"; reason = "Item is already closed or canceled."; }
       else if (pr.merged === false) { code = "not_merged"; reason = "Pull request is confirmed unmerged and cannot deliver this item."; }
       else if (isEpic(items.get(ref.item)!.type)) { code = "epic"; reason = "Epics close when their children are done, not by a pull request."; }
@@ -646,7 +664,7 @@ async function closeoutAttempt(pmPath: string, repo: string | undefined, options
       const row: CloseoutRow = { item: ref.item, pr: number, action: "skip", code, reason };
       plan.push(row);
       if (role !== "context" && pr.merged !== false && items.has(ref.item) && ref.repo.toLowerCase() === repo.toLowerCase()
-        && !skip.has(ref.item) && !githubStatusIsTerminal(items.get(ref.item)!.status, workspace.statuses)
+        && !skip.has(ref.item) && !ownershipConflict && !githubStatusIsTerminal(items.get(ref.item)!.status, workspace.statuses)
         && !isEpic(items.get(ref.item)!.type) && !activeChildren.has(ref.item)) {
         const group = candidates.get(ref.item) ?? [];
         group.push({ row, pr, declared: ref.declared, commitsReadable });
@@ -727,6 +745,7 @@ async function closeoutAttempt(pmPath: string, repo: string | undefined, options
               await observer?.("locked");
               // SDK close may also auto-unblock dependents. Every resulting write needs its own snapshot.
               const before = context.before!;
+              assertCloseoutGithubOwner(before.metadata, repo);
               const id = before.metadata.id;
               if (hashDocument(before) !== snapshots.get(id)) {
                 if (id !== entry.row.item) dependentConflicts.set(id, entry.row.pr);
