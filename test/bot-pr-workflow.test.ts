@@ -29,8 +29,8 @@ function assertNoRunnerWaits(shell: string): void {
   assert.doesNotMatch(shell, /gh pr view|compare\/|update-branch/, "no PR-state polling may remain");
 }
 
-/** Model only the remote GitHub API; branch update performs a real merge against a real remote. */
-function fixture(run: (f: { dir: string; env: NodeJS.ProcessEnv; receipts: () => string; execute: (kind: string) => ReturnType<typeof spawnSync> }) => void): void {
+/** Model GitHub policy and native check events; accepted landing updates a real Git remote. */
+function fixture(run: (f: { dir: string; env: NodeJS.ProcessEnv; receipts: () => string; execute: (kind: string) => ReturnType<typeof spawnSync>; nativeState: () => { baseSha: string; headSha: string; armed: boolean }; completeRequiredChecks: (conclusion: "failure" | "success") => void }) => void): void {
   const dir = mkdtempSync(join(tmpdir(), "bot-pr-"));
   const bin = join(dir, "bin");
   const env: NodeJS.ProcessEnv & { RECEIPTS: string } = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1",
@@ -57,6 +57,18 @@ case "$1 $2" in
     if [[ "\${AUTO_DENIED:-0}" != 0 ]]; then
       printf 'pull request auto-merge is disabled\\n' >&2
       exit "\${AUTO_DENIED}"
+    fi
+    if [[ "\${MODEL_NATIVE_LANDING:-0}" == 1 ]]; then
+      # GitHub permits --auto to land immediately when no required check blocks
+      # the PR; otherwise it stores the request and enforces its own checks.
+      if [[ "$*" == *--auto* && "\${REMOTE_REQUIRED_CHECKS:-true}" == true && "\${REMOTE_CHECK_CONCLUSION:-pending}" != success && "$*" != *--admin* ]]; then
+        touch "$STATE.auto-merge"
+      elif [[ "\${REMOTE_REQUIRED_CHECKS:-true}" == true && "\${REMOTE_CHECK_CONCLUSION:-pending}" != success && "$*" != *--admin* ]]; then
+        printf 'required status checks have not passed\\n' >&2
+        exit 1
+      else
+        git push -q origin HEAD:refs/heads/trunk
+      fi
     fi ;;
   'run list') printf '%s\\n' "\${PARKED_URL:-}"; exit "\${PARKED_READ_DENIED:-0}" ;;
   'api repos/acme/widgets')
@@ -74,6 +86,13 @@ case "$1 $2" in
       exit 1
     fi ;;
   'pr view')
+    if [[ "\${MODEL_NATIVE_LANDING:-0}" == 1 ]]; then
+      head_sha="$(git rev-parse HEAD)"
+      base_sha="$(git --git-dir=remote.git rev-parse trunk)"
+      state=OPEN; [[ "$base_sha" != "$head_sha" ]] || state=MERGED
+      printf '{"number":7,"state":"%s","headRefOid":"%s","mergeStateStatus":"BLOCKED"}' "$state" "$head_sha"
+      exit 0
+    fi
     if [[ "\${PR_READ_FAILURE:-none}" != none ]]; then
       if [[ "\${PR_READ_FAILURE}" == always || ! -f "$STATE.pr-read" ]]; then
         touch "$STATE.pr-read"; exit 1
@@ -105,7 +124,14 @@ esac
 `, { mode: 0o755 });
     writeFileSync(join(bin, "date"), '#!/usr/bin/env bash\nprintf "%s\\n" "${FAKE_NOW:-1700000000}"\n', { mode: 0o755 });
     writeFileSync(join(bin, "sleep"), '#!/usr/bin/env bash\nprintf "sleep %s\\n" "$*" >> "$RECEIPTS"\nexit 0\n', { mode: 0o755 });
-    run({ dir, env, receipts: () => {
+    run({ dir, env,
+      nativeState: () => ({ baseSha: git("--git-dir", join(dir, "remote.git"), "rev-parse", "trunk"), headSha: git("rev-parse", "HEAD"), armed: existsSync(env.STATE + ".auto-merge") }),
+      completeRequiredChecks: conclusion => {
+        env.REMOTE_CHECK_CONCLUSION = conclusion;
+        // A GitHub-side check event completes an armed request after the runner exited.
+        if (conclusion === "success" && existsSync(env.STATE + ".auto-merge")) git("push", "-q", "origin", "HEAD:refs/heads/trunk");
+      },
+      receipts: () => {
       let recorded = "";
       try { recorded += readFileSync(env.RECEIPTS, "utf8"); } catch { /* no remote calls yet */ }
       try { if (env.GITHUB_ENV) recorded += readFileSync(env.GITHUB_ENV, "utf8"); } catch { /* the step wrote no job env */ }
@@ -117,6 +143,8 @@ esac
           git("add", "release.txt"); git("commit", "-qm", "Release"); git("push", "-q", "origin", "trunk"); git("switch", "-q", "automation/proposal");
           releaseCreated = true;
         }
+        // Bound old polling implementations during behavioral revert proofs.
+        if (env.MODEL_NATIVE_LANDING === "1") env.MAINTENANCE_ATTEMPTS = "1";
         return spawnSync("bash", ["-c", maintenance(kind)], { cwd: dir, env, encoding: "utf8", timeout: 10_000 });
       } });
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -128,6 +156,8 @@ test("README distinguishes App auto-merge from no-App maintainer landing", () =>
   assert.match(readme, /Without an App, maintainers approve native PR runs, wait for required checks and conversations, and merge with an authorized credential; the workflow does not arm auto-merge/);
   assert.doesNotMatch(readme, /dispatches all selected workflows and, in App mode, requests auto-merge again when the new head appears/);
   assert.match(readme, /Never wait in-job for caller CI: it takes runners from the same account pool/);
+  assert.match(readme, /The base must require at least one named PR CI status check, through classic protection or an applicable ruleset/);
+  assert.match(readme, /`required_checks_unconfigured`.*unreadable branch-rules API produces `required_checks_unverified`/);
 });
 
 for (const kind of ["sync", "closeout"]) {
@@ -221,6 +251,48 @@ for (const kind of ["sync", "closeout"]) {
       assert.ok(f.receipts().split("\n").filter(line => line.startsWith("api ")).length <= 2);
     }));
   }
+  test(`${kind}: native landing refuses failing required checks without an admin bypass`, () => fixture(f => {
+    f.env.MODEL_NATIVE_LANDING = "1";
+    f.env.REMOTE_CHECK_CONCLUSION = "failure";
+    const before = f.nativeState().baseSha;
+    const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
+    assert.equal(f.nativeState().baseSha, before, "failing required checks cannot land the proposal");
+    assert.equal(f.nativeState().armed, true, "GitHub owns the request while required checks fail");
+    const calls = f.receipts();
+    assert.match(calls, /pr merge 7 .*--auto --squash --match-head-commit [a-f0-9]{40}/);
+    assert.doesNotMatch(calls, /--admin|--force|sleep|pr view|update-branch/);
+    f.completeRequiredChecks("failure");
+    assert.equal(f.nativeState().baseSha, before, "a failing native check event still refuses landing");
+    assert.equal(f.receipts(), calls, "the exited runner does no more work");
+  }));
+  test(`${kind}: native landing refuses no required checks with a typed notice`, () => fixture(f => {
+    f.env.MODEL_NATIVE_LANDING = "1";
+    f.env.REMOTE_REQUIRED_CHECKS = "false";
+    f.env.REMOTE_CHECK_CONCLUSION = "success";
+    f.env.CLASSIC_CHECKS = JSON.stringify({ contexts: [], checks: [] });
+    const before = f.nativeState().baseSha;
+    const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
+    assert.equal(f.nativeState().baseSha, before, "a CLEAN PR with no required checks must not land");
+    assert.equal(f.nativeState().armed, false);
+    assert.match(String(r.stdout), /::notice title=required_checks_unconfigured::/);
+    assert.match(String(r.stdout), /the next scheduled run retries/);
+    assert.doesNotMatch(f.receipts(), /pr merge|sleep|pr view|update-branch/);
+  }));
+  test(`${kind}: native auto-merge happy path exits before GitHub lands passing checks`, () => fixture(f => {
+    f.env.MODEL_NATIVE_LANDING = "1";
+    f.env.REMOTE_CHECK_CONCLUSION = "pending";
+    const before = f.nativeState().baseSha;
+    const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
+    assert.equal(f.nativeState().baseSha, before, "the runner exits before native checks finish");
+    assert.equal(f.nativeState().armed, true);
+    const calls = f.receipts();
+    assert.equal(calls.split("\n").filter(line => line.startsWith("pr merge")).length, 1);
+    assert.match(calls, /pr merge 7 .*--auto --squash --match-head-commit [a-f0-9]{40}/);
+    assert.doesNotMatch(calls, /--admin|--force|sleep|pr view|update-branch/);
+    f.completeRequiredChecks("success");
+    assert.equal(f.nativeState().baseSha, f.nativeState().headSha, "GitHub lands only after the passing native check event");
+    assert.equal(f.receipts(), calls, "landing does not re-enter or hold the exited runner");
+  }));
   test(`${kind}: classic protection with required checks arms auto-merge after reading both sources`, () => fixture(f => {
     for (const checks of [{ contexts: ["CI"], checks: [] }, { contexts: [], checks: [{ context: "CI", app_id: 7 }] }]) {
       f.env.CLASSIC_CHECKS = JSON.stringify(checks);
@@ -252,7 +324,7 @@ for (const kind of ["sync", "closeout"]) {
     f.env.PARKED_URL = "https://github.com/acme/widgets/actions/runs/123";
     const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
     assert.doesNotMatch(f.receipts(), /pr merge|CLOSEOUT_AUTOMERGE_ALLOWED=true|sleep/);
-    assert.match(String(r.stdout), /::notice::Squash auto-merge unavailable: base branch must require at least one PR CI status check/);
+    assert.match(String(r.stdout), /::notice title=required_checks_unconfigured::Squash auto-merge unavailable: base branch must require at least one PR CI status check/);
     assert.match(String(r.stdout), /the next scheduled run retries/);
     assert.match(String(r.stdout), /maintainer approval: https:\/\/github.com\/acme\/widgets\/actions\/runs\/123/);
   }));
@@ -264,7 +336,7 @@ for (const kind of ["sync", "closeout"]) {
       const r = f.execute(kind); assert.equal(r.status, 0, String(r.stderr) + String(r.stdout));
       assert.match(String(r.stderr), new RegExp(`HTTP ${code}`));
       assert.doesNotMatch(f.receipts(), /pr merge|CLOSEOUT_AUTOMERGE_ALLOWED=true|sleep/);
-      assert.match(String(r.stdout), /::notice::Squash auto-merge unavailable: required PR CI status checks could not be verified.*rules API could not be read/);
+      assert.match(String(r.stdout), /::notice title=required_checks_unverified::Squash auto-merge unavailable: required PR CI status checks could not be verified.*rules API could not be read/);
       assert.match(String(r.stdout), /the next scheduled run retries/);
     }
   }));

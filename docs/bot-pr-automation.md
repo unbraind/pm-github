@@ -167,7 +167,9 @@ status check, from classic protection (`required_status_checks.contexts` or
 paginated branch-rules API are read before arming; reviews or conversations alone
 are insufficient. Unreadable APIs (including permission errors, 404s and rate
 limits), malformed metadata or absent required checks produce a notice naming
-the missing prerequisite and use the scheduled fallback. A later run retries; a
+the missing prerequisite and use the scheduled fallback. The stable notice titles
+are `required_checks_unconfigured` for absent required checks and
+`required_checks_unverified` for an unreadable branch-rules API. A later run retries; a
 persistent configuration problem still needs maintainer attention. No bypass or
 thread resolution is attempted. A base advance after publication,
 or an unavailable auto-merge, is handled by the next scheduled run, which

@@ -732,7 +732,7 @@ jobs:
             # Read both sources even when classic protection already names checks;
             # an unreadable rules API is an unverifiable prerequisite, not absence.
             if ! rules_json="$(gh api "repos/${REPOSITORY}/rules/branches/${base_ref}" --paginate --slurp)"; then
-              echo "::notice::Squash auto-merge unavailable: required PR CI status checks could not be verified because the base branch rules API could not be read; the next scheduled run retries."
+              echo "::notice title=required_checks_unverified::Squash auto-merge unavailable: required PR CI status checks could not be verified because the base branch rules API could not be read; the next scheduled run retries."
               return 1
             fi
             if ! jq -en --argjson branch "${branch_json}" --argjson rules "${rules_json}" '
@@ -740,7 +740,7 @@ jobs:
               + [ $rules[][] | select(.type == "required_status_checks") | .parameters.required_status_checks[]?.context ]
               | any(.[]; type == "string" and length > 0)
             ' >/dev/null; then
-              echo "::notice::Squash auto-merge unavailable: base branch must require at least one PR CI status check through classic protection or an applicable ruleset; no required check could be verified; the next scheduled run retries."
+              echo "::notice title=required_checks_unconfigured::Squash auto-merge unavailable: base branch must require at least one PR CI status check through classic protection or an applicable ruleset; no required check could be verified; the next scheduled run retries."
               return 1
             fi
             merge_error="$(mktemp)"

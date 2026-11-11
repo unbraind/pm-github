@@ -1127,6 +1127,11 @@ branch protection, or the repository setting disabled — emits a notice naming
 the reason and exits. The step checks the repository setting and protected
 base once before invoking `gh`, because `--auto` can merge immediately when
 nothing blocks the PR. Failed or unverifiable reads use the same fallback.
+The base must require at least one named PR CI status check, through classic
+protection or an applicable ruleset; reviews or conversations alone are
+insufficient. No required check produces `required_checks_unconfigured`, and an
+unreadable branch-rules API produces `required_checks_unverified`. Both notices
+use the scheduled-retry fallback.
 The next scheduled run rebuilds and retries; persistent settings or protection
 problems require maintainer attention before unattended landing can work.
 Without an App, maintainers approve native PR runs, wait for required checks and
