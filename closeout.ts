@@ -1,3 +1,4 @@
+import { parseGithubUrl, parseGithubIssueUrl, githubUrlTokens } from "./github-url.ts";
 import { readGithubWorkspace, githubStatusIsTerminal } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
 import { normalizeImportValue } from "./import-fidelity.ts";
@@ -163,8 +164,9 @@ function pullRequest(value: unknown, repo: string, number: number): PullRequest 
   const base = record(raw.base);
   const baseRepo = record(base.repo);
   const head = raw.head === null || raw.head === undefined ? {} : record(raw.head);
+  const locator = parseGithubIssueUrl(raw.html_url);
   if (raw.number !== number || text(baseRepo.full_name).toLowerCase() !== repo.toLowerCase()
-    || text(raw.html_url).toLowerCase() !== `https://github.com/${repo}/pull/${number}`.toLowerCase()
+    || locator?.key !== `${repo.toLowerCase()}#${number}` || locator.kind !== "pull" || locator.api || locator.url.protocol !== "https:"
     || (raw.body !== null && typeof raw.body !== "string")) throw new Error("Pull-request identity or body is unverifiable.");
   return {
     number, body: raw.body as string | null, merged: typeof raw.merged === "boolean" ? raw.merged : null,
@@ -373,27 +375,30 @@ export function declaresDelivery(prefix: string, suffix = ""): boolean {
 
 /** Extract only canonical tracker links, retaining foreign references solely for skip rows. */
 export function extractCloseoutItems(body: string): { item: string; repo: string; declared: boolean }[] {
-  const links = body.matchAll(/https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/blob\/main\/\.agents\/pm\/((?:[^/\s?#<>)\]"']+\/)+)([^/\s?#<>)\]"']+)\.toon(?=$|[\s?#<>)\]"'])/g);
+  const links = githubUrlTokens(body);
   const seen = new Set<string>();
   const refs: { key: string; repo: string; item: string; declared: boolean }[] = [];
   return [...links].flatMap(match => {
+    const target = parseGithubUrl(match.raw);
+    if (!target || target.api || target.url.protocol !== "https:" || target.kind !== "blob" || target.value !== "main" || target.tail[0] !== ".agents" || target.tail[1] !== "pm" || target.tail.length < 4 || !target.tail.at(-1)!.endsWith(".toon")) return [];
     let components: string[];
-    try {
-      components = [...match[2]!.slice(0, -1).split("/"), match[3]!].map(decodeURIComponent);
-    } catch { return []; }
+    try { components = target.tail.slice(2).map(decodeURIComponent); }
+    catch { return []; }
     if (components.some(component => /^\.{1,2}$|[/\\\0]/.test(component))) return [];
-    const item = components.at(-1)!;
-    const key = `${match[1]!.toLowerCase()}/${item}`;
+    const item = components.at(-1)!.slice(0, -5);
+    if (!item) return [];
+    const repository = `${target.owner}/${target.name}`;
+    const key = `${target.repo}/${item}`;
     const lineEnd = body.indexOf("\n", match.index);
     const declared = declaresDelivery(body.slice(body.lastIndexOf("\n", match.index) + 1, match.index),
-      body.slice(match.index + match[0].length, lineEnd < 0 ? body.length : lineEnd));
+      body.slice(match.index + match.raw.length, lineEnd < 0 ? body.length : lineEnd));
     if (seen.has(key)) {
       // A later "Closes <link>" line still declares an item an earlier line only mentioned.
       if (declared) for (const entry of refs) if (entry.key === key) entry.declared = true;
       return [];
     }
     seen.add(key);
-    const entry = { key, repo: match[1]!, item, declared };
+    const entry = { key, repo: repository, item, declared };
     refs.push(entry);
     return [entry];
   }).map(({ repo, item, declared }) => ({ repo, item, declared }));

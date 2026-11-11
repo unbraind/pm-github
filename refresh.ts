@@ -1,3 +1,4 @@
+import { parseGithubIssueUrl } from "./github-url.ts";
 import { readGithubWorkspace, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
 import { importTagValues } from "./import-tags.ts";
@@ -8,11 +9,11 @@ import { join, basename } from "node:path";
 import { listAllComplete, certifyCompleteListResult, previewItemMutations, resolvePmRoot } from "@unbrained/pm-cli/sdk";
 import {
   CommandError, EXIT_CODE, decodeCompletePmItems, githubGraphQLResponse, importGithubAtomic,
-  listUnfinishedGithubImports, parseImportOptions, prepareGithubImport, readGithubImportPlan,
-  resolveGitHubToken, resumeGithubImport, validateGithubImportFidelity, validateGithubImportPlan,
+  listUnfinishedGithubImports, listRetainedGithubImportPlans, parseImportOptions, prepareGithubImport, readGithubImportPlan,
+  resolveGitHubToken, resumeGithubImport, assertGithubImportReplayPreflight, validateGithubImportFidelity, validateGithubImportPlan,
   type GhIssue, type PmItem, type PreparedGithubImport,
 } from "./index.ts";
-import { fetchImportTimeline, importIdentityKeys, importFidelityFields, normalizeImportValue, readImportReleases } from "./import-fidelity.ts";
+import { fetchImportTimeline, legacyGithubIdentityConflict, importIdentityKeys, importFidelityFields, normalizeImportValue, readImportReleases } from "./import-fidelity.ts";
 
 /** An existing item and its unique linked issue number. */
 export interface RefreshTarget { id: string; number: number; item: PmItem }
@@ -33,7 +34,7 @@ export function selectRefreshTargets(items: readonly PmItem[], repo: string): Re
     if (!item.id) continue;
     const identities = importIdentityKeys(item);
     // The refresh GraphQL path queries issue(), so PR owners are excluded.
-    if (typeof item.github_url === "string" && /github\.com\/[^/]+\/[^/]+\/pull\//i.test(item.github_url)) continue;
+    if (parseGithubIssueUrl(item.github_url)?.kind === "pull") continue;
     if (typeof item.github_repo === "string" && item.github_repo.toLowerCase() === repo && typeof item.github_number === "number" && (!Number.isSafeInteger(item.github_number) || item.github_number < 1)) throw new CommandError(`Refresh found an invalid issue number for ${item.id}.`);
     const numbers = new Set<number>();
     for (const key of identities) {
@@ -76,7 +77,7 @@ async function fetchRefreshBatch(repo: string, targets: readonly RefreshTarget[]
     if (error && error.type !== "NOT_FOUND") reason = error.type === "FORBIDDEN" ? "inaccessible" : "api_error";
     else if (response.data!.repository === null || node === null) reason = "not_found_or_inaccessible";
     else if (node === undefined) reason = "incomplete_response";
-    else if (node.url.toLowerCase() !== `https://github.com/${repo}/issues/${target.number}`) reason = "transferred";
+    else if (parseGithubIssueUrl(node.url)?.key !== `${repo}#${target.number}` || parseGithubIssueUrl(node.url)?.kind !== "issues") reason = "transferred";
     else if (node.number !== target.number || !node.title.trim() || !["OPEN", "CLOSED"].includes(node.state)) reason = "invalid_issue";
     if (reason) { results.push({ target, reason }); continue; }
     const issue = node!;
@@ -156,6 +157,7 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
   const state = await readRefreshState(pmRoot);
   const workspace = state.workspace;
   let items = state.items;
+  const identityConflicts = items.flatMap(item => { const conflict = legacyGithubIdentityConflict(item); return conflict ? [conflict] : []; });
   let all = selectRefreshTargets(items, repo);
   let targets = bounded(all);
   const token = resolveGitHubToken();
@@ -165,14 +167,21 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
   // ordinary no-op report and never commit.
   const pending = (await listUnfinishedGithubImports(pmRoot))
     .filter(journal => !journal.itemIds.length || journal.itemIds.some(id => targets.some(target => target.id === id)));
+  // Retained side-data plans can outlive a committed SDK journal. Recover those
+  // before polling, so a newly fetched plan is never reported as the old replay.
+  const recovery = new Map(pending.map(journal => [journal.transactionId, { transactionId: journal.transactionId, status: String(journal.status) }]));
+  for (const record of await listRetainedGithubImportPlans(pmRoot)) {
+    const ids = record.itemIds?.map(pair => pair[1]) ?? record.entries?.flatMap(entry => entry.match?.id ? [entry.match.id] : []) ?? [];
+    if (ids.some(id => targets.some(target => target.id === id))) recovery.set(record.transactionId, { transactionId: record.transactionId, status: "retained" });
+  }
   let resumed = 0;
-  if (pending.length) {
+  if (recovery.size) {
     if (opts.dryRun) {
-      throw new CommandError(`Refresh cannot preview while GitHub transaction ${pending.map(journal => journal.transactionId).join(", ")} is unfinished for selected linked items. Re-run without --dry-run to complete it.`);
+      throw new CommandError(`Refresh cannot preview while GitHub transaction ${[...recovery.keys()].join(", ")} is unfinished for selected linked items. Re-run without --dry-run to complete it.`);
     }
     // Validate the complete recovery set before the first transaction can write.
     const records = [];
-    for (const journal of pending) {
+    for (const journal of recovery.values()) {
       const record = await readGithubImportPlan(pmRoot, journal.transactionId);
       if (!record || record.transactionId !== journal.transactionId) {
         throw new CommandError(
@@ -181,6 +190,7 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
         );
       }
       validateGithubImportPlan(record, items);
+      assertGithubImportReplayPreflight(pmRoot, record);
       if (record.repo.toLowerCase() !== repo) {
         throw new CommandError(`Refresh cannot replay GitHub transaction ${journal.transactionId} for ${record.repo} while refreshing ${repo}. Re-run refresh for ${record.repo} first; nothing was refreshed.`);
       }
@@ -229,6 +239,6 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
     if (opts.atomic) await importGithubAtomic(pmRoot, repo, prepared, { updateOnly: true });
     else for (const entry of prepared) await importGithubAtomic(pmRoot, repo, [entry], { updateOnly: true });
   }
-  return { repo, dryRun: opts.dryRun, atomic: opts.atomic, selected: targets.length, filtered,
+  return { ...(identityConflicts.length ? { identity_conflicts: identityConflicts } : {}), repo, dryRun: opts.dryRun, atomic: opts.atomic, selected: targets.length, filtered,
     unchanged, updated: prepared.length, missing, created: 0, resumed, plan };
 }

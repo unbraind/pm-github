@@ -1,3 +1,4 @@
+import { parseGithubIssueUrl } from "./github-url.ts";
 /** Explicit GitHub issue-comment decisions, persisted only through the host-injected SDK. */
 import { createHash } from "node:crypto";
 import { createPmCliExpectedError, getHistoryPath, readHistorySnapshot, normalizeItemId, previewItemMutations, locateItem, readLocatedItem } from "@unbrained/pm-cli/sdk";
@@ -49,7 +50,10 @@ async function evidence(input: DiscussionCaptureInput, selected: DiscussionCaptu
   if (!parsed.success) refuseDiscussion("source_unavailable", "Fetch a complete bounded comment with author, body and update timestamp; preview again.");
   const source = parsed.data;
   const url = `https://github.com/${input.repo}/issues/${input.issue}#issuecomment-${selected.comment}`;
-  if (source.id !== selected.comment || source.issue_url.toLowerCase() !== `https://api.github.com/repos/${input.repo}/issues/${input.issue}` || source.html_url.toLowerCase() !== url) {
+  const issueUrl = parseGithubIssueUrl(source.issue_url);
+  const commentUrl = parseGithubIssueUrl(source.html_url);
+  const key = `${input.repo.toLowerCase()}#${input.issue}`;
+  if (source.id !== selected.comment || issueUrl?.key !== key || !issueUrl.api || issueUrl.kind !== "issues" || commentUrl?.key !== key || commentUrl.api || commentUrl.kind !== "issues" || commentUrl.url.hash.toLowerCase() !== `#issuecomment-${selected.comment}`) {
     refuseDiscussion("invalid_selection", "Select a comment belonging to the exact repository and issue; cross-issue and PR passages are refused.");
   }
   if (selected.end <= selected.start || source.body.slice(selected.start, selected.end) !== selected.quote || selected.end > source.body.length) {

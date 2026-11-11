@@ -459,6 +459,7 @@ jobs:
           fi
           # Keep the first plan's conflicts: a successful apply makes repeat plans unchanged.
           jq -r '.plan[]? | select(.identity.title_conflict == true or .identity.conflict != null) | "- Issue #\(.issue): \([if .identity.title_conflict then "title differs (curated title preserved)" else empty end, if .identity.conflict then if .identity.conflict.rule == "preserve-provider-owner" then "state differs (provider state preserved)" else "state differs (GitHub state applied)" end else empty end] | join("; "))"' "${RUNNER_TEMP}/pm-github-import.json" > "${RUNNER_TEMP}/pm-github-import-conflicts.md"
+          jq -r '([.identity_conflicts[]? | select(.code == "ambiguous_legacy_github_identity")] | length) as $count | if $count > 0 then "- ambiguous_legacy_github_identity: \($count) item(s) with ambiguous number-only provenance preserved; set github_repo or github_url explicitly." else empty end' "${RUNNER_TEMP}/pm-github-import.json" >> "${RUNNER_TEMP}/pm-github-import-conflicts.md"
 
       # The gate step. A finding (or unreadable scan input) fails this step, so
       # the job never reaches the commit/push below with a leak in the change.

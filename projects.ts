@@ -1,3 +1,4 @@
+import { parseGithubUrl } from "./github-url.ts";
 import { canonicalGithubStatus, githubStatusKind, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
 // pm-github — GitHub Projects v2 support (pure logic layer).
@@ -114,10 +115,9 @@ export function parseProjectRef(input: string | undefined): ProjectRef | undefin
   const raw = input.trim();
   if (!raw) return undefined;
 
-  const urlMatch =
-    /^https?:\/\/github\.com\/(?:orgs|users)\/([^/\s]+)\/projects\/(\d+)/i.exec(raw);
-  if (urlMatch) {
-    return { owner: urlMatch[1], number: Number(urlMatch[2]) };
+  const url = parseGithubUrl(raw);
+  if (url && !url.api && ["orgs", "users"].includes(url.owner.toLowerCase()) && url.kind === "projects" && /^[1-9]\d*$/.test(url.value ?? "") && Number.isSafeInteger(Number(url.value))) {
+    return { owner: url.name, number: Number(url.value) };
   }
 
   const shortMatch = /^([^/#\s]+)[/#](\d+)$/.exec(raw);

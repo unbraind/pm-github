@@ -1,3 +1,4 @@
+import { normalizeGithubRepository, parseGithubUrl, parseGithubIssueUrl } from "./github-url.ts";
 import { readGithubWorkspace, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue, setOwnValue } from "./own-record.ts";
 /** Source lifecycle, release-window and cross-provider identity rules for issue imports. */
@@ -87,13 +88,8 @@ function citationReferences(text: string, repoHint: string): { key: string; inde
   for (const token of tokens) {
     const raw = token[0];
     if (/^https?:/i.test(raw)) {
-      try {
-        const url = new URL(trimLocatorPunctuation(raw, "),.;:!]}"));
-        const path = /^\/([\w.-]+\/[\w.-]+)\/(issues|pull)\/([1-9]\d*)\/?$/i.exec(url.pathname);
-        if (["github.com", "www.github.com"].includes(url.hostname) && path) {
-          references.push({ key: `${path[1]!.toLowerCase()}#${path[3]}`, index: token.index, ownsIssue: path[2]!.toLowerCase() === "issues" });
-        }
-      } catch { /* Malformed URL tokens never expose shorter hash references inside them. */ }
+      const target = parseGithubIssueUrl(trimLocatorPunctuation(raw, "),.;:!]}"));
+      if (target && !target.api) references.push({ key: target.key, index: token.index, ownsIssue: target.kind === "issues" });
     } else {
       const [repo, number] = raw.split("#");
       references.push({ key: `${repo || repoHint}#${number}`.toLowerCase(), index: token.index, ownsIssue: repo !== "" });
@@ -142,22 +138,27 @@ function hasOtherGithubUrl(text: string, repo: string, number: number): boolean 
     const segment = text.slice(site.index, sites[index + 1]?.index);
     const token = /^github\.com[^\s<>"'`[\]()*{}]*/i.exec(segment)![0];
     const locator = trimLocatorPunctuation(token, "),.;:!*_~]}");
-    const reference = /^github\.com\/([\w.-]+\/[\w.-]+)\/issues\/([1-9]\d*)\/?(?:[?#].*)?$/i.exec(locator);
-    if (!reference || reference[1]!.toLowerCase() !== repo || reference[2] !== String(number)) return true;
+    const reference = parseGithubIssueUrl(`https://${locator}`);
+    if (!reference || reference.kind !== "issues" || reference.repo !== repo || reference.number !== number) return true;
   }
   return false;
 }
 
 /** Read the immediately preceding repository without making every character a regex start position. */
 function citationRepositoryBefore(text: string, index: number, hash: boolean): string | undefined {
-  if (!hash && text[index - 1] !== "/") return undefined;
-  const end = hash ? index : index - 1;
+  if (!hash) {
+    const start = text.toLowerCase().lastIndexOf("github.com/", index);
+    if (start < 0) return undefined;
+    const token = /^[^\s<>"'`]+/.exec(text.slice(start))?.[0];
+    return token ? parseGithubIssueUrl(`https://${trimLocatorPunctuation(token)}`)?.repo : undefined;
+  }
+  const end = index;
   let repoStart = end;
   while (repoStart > 0 && /[\w.-]/.test(text[repoStart - 1]!)) repoStart--;
   if (repoStart === end || text[repoStart - 1] !== "/") return undefined;
   let ownerStart = repoStart - 1;
   while (ownerStart > 0 && /[\w.-]/.test(text[ownerStart - 1]!)) ownerStart--;
-  if (ownerStart === repoStart - 1 || (!hash && text.slice(Math.max(0, ownerStart - 11), ownerStart).toLowerCase() !== "github.com/")) return undefined;
+  if (ownerStart === repoStart - 1) return undefined;
   return text.slice(ownerStart, end).toLowerCase();
 }
 
@@ -169,8 +170,17 @@ function inspectCitationReferences(texts: readonly string[], repo: string, numbe
     // Check both retained source and joined soft lines; joining must not discard link labels or destinations.
     for (const text of new Set([source, source.replace(/(?<!\n)\\?\n(?!\n)[ \t]*/g, "")])) {
       if (hasOtherGithubUrl(text, repo, number)) unsafe = true;
-      for (const reference of text.matchAll(/(?:issues[\s/:]*|pull[\s/:]*|#)([0-9]+)/gi)) {
-        const sourceRepo = citationRepositoryBefore(text, reference.index, reference[0].startsWith("#"));
+      // A repository/owner can itself be named issues or pull. Parse URL paths
+      // once, then scan only non-path text (including query/fragment exclusions).
+      const nonPath = text.replace(/https?:\/\/[^\s<>"'`\])}]+/gi, raw => {
+        const target = parseGithubIssueUrl(trimLocatorPunctuation(raw, "),.;:!*_~]}"));
+        if (!target || target.api) return raw;
+        if (target.key === `${repo}#${number}`) mentioned = true;
+        const suffix = raw.search(/[?#]/);
+        return suffix < 0 ? " ".repeat(raw.length) : " ".repeat(suffix) + raw.slice(suffix);
+      });
+      for (const reference of nonPath.matchAll(/(?:issues[\s/:]*|pull[\s/:]*|#)([0-9]+)/gi)) {
+        const sourceRepo = citationRepositoryBefore(nonPath, reference.index, reference[0].startsWith("#"));
         const sourceNumber = reference[1];
         if (sourceNumber === String(number) && (sourceRepo === repo || sourceRepo === undefined)) mentioned = true;
         if (sourceRepo !== repo || sourceNumber !== String(number)) unsafe = true;
@@ -195,7 +205,10 @@ function hasAnchoredCitationIntent(text: string, field: number, repo: string, nu
       while (end > 0 && (line[end - 1] === " " || line[end - 1] === "\t")) end--;
       while (end > 0 && (line[end - 1] === "." || line[end - 1] === ")")) end--;
       if (end > 0 && line[end - 1] === ">") end--;
-      if (/^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/[1-9]\d*\/?(?:[?#][^\s<>]*)?$/i.test(line.slice(0, end))) return true;
+      const locator = line.slice(0, end);
+      if (/[\s<>]/.test(locator)) continue;
+      const target = parseGithubIssueUrl(locator);
+      if (target && !target.api && target.url.protocol === "https:" && target.kind === "issues") return true;
     }
   }
   return false;
@@ -222,8 +235,10 @@ export function trimLocatorPunctuation(locator: string, punctuation = "),.;"): s
 /** Normalize only complete HTTP issue/provider locators, never substring identities. */
 function locators(value: unknown): string[] {
   const text = typeof value === "string" ? value : JSON.stringify(value) ?? "";
-  return [...text.matchAll(/https?:\/\/[^\s<>"'`]+/gi)].map(match => trimLocatorPunctuation(match[0]!).replace(/\/$/, "").toLowerCase()
-    .replace(/^https?:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/]+)\/(?:issues|pull)\/(\d+)\/?(?:[?#].*)?$/, "https://github.com/$1/$2/issues/$3"));
+  return [...text.matchAll(/https?:\/\/[^\s<>"'`]+/gi)].map(match => {
+    const raw = trimLocatorPunctuation(match[0]!);
+    return parseGithubIssueUrl(raw)?.canonical ?? raw.replace(/\/$/, "").toLowerCase();
+  });
 }
 
 /** Copied body text and labels cannot transfer an established GitHub import to another owner. */
@@ -257,7 +272,6 @@ const OWNER_LINK_FIELD = /^(?:github_?url|provenance|external_?(?:links?|url)|li
  * declaration, or a GitHub issue URL in provenance/external links.
  */
 function hasStructuredOwnership(item: PmItem): boolean {
-  const issueLocator = /^https:\/\/github\.com\/[^/]+\/[^/]+\/issues\/\d+$/;
   const filled = (value: unknown) => value !== undefined && value !== null && value !== false && !(typeof value === "string" && value.trim() === "");
   return Object.entries(item).some(([key, value]) => filled(value) && (/^github/i.test(key) && !/^github_?link_?only$/i.test(key) ||
       /^(?:external_ref|source_owner)$/.test(key) || /^(?:linear|jira|ado)_(?:.*_)?(?:id|key|url|identifier)$/i.test(key))) ||
@@ -265,7 +279,7 @@ function hasStructuredOwnership(item: PmItem): boolean {
     importIdentityKeys(item).length > 0 ||
     (typeof item.description === "string" && /^GitHub issue(?:\s*:\s+|\s+)https?:\/\//i.test(item.description)) ||
     Object.entries(item).some(([key, value]) => OWNER_LINK_FIELD.test(key) &&
-      locators(value).some(url => issueLocator.test(url)));
+      locators(value).some(url => Boolean(parseGithubIssueUrl(url))));
 }
 
 /** Typed refusal for contradictory authoritative identities; references never enter this decision. */
@@ -287,8 +301,31 @@ export class GithubIdentityConflictError extends Error {
 
 /** Canonicalize an explicit issue/PR URL through the same locator normalization as ownership matching. */
 function explicitGithubKey(value: unknown): string | undefined {
-  if (typeof value !== "string" || !/^https?:\/\/(?:www\.)?github\.com\/[^/]+\/[^/]+\/(?:issues|pull)\/[1-9]\d*\/?(?:[?#].*)?$/i.test(value.trim())) return undefined;
-  return locators(value.trim())[0]?.replace("https://github.com/", "").replace("/issues/", "#");
+  const target = parseGithubIssueUrl(value);
+  return target && !target.api ? target.key : undefined;
+}
+
+/** Ambiguous number-only provenance is diagnostic evidence, never import authority. */
+export interface LegacyGithubIdentityConflict {
+  code: "ambiguous_legacy_github_identity";
+  item: string | undefined;
+  candidates: string[];
+  remedy: string;
+}
+
+/** Require one implied repository before promoting released number-only metadata. */
+export function legacyGithubIdentityConflict(item: PmItem): LegacyGithubIdentityConflict | undefined {
+  if (!Number.isSafeInteger(item.github_number) || Number(item.github_number) < 1 ||
+    normalizeGithubRepository(item.github_repo) ||
+    Object.entries(item).some(([field, value]) => /^github_?url$/i.test(field) && explicitGithubKey(value))) return undefined;
+  const references = (item.tags ?? []).flatMap(tag => { const ref = parseProvenanceTag(tag); return ref ? [ref] : []; });
+  const repositories = [...new Set(references.map(ref => ref.repo))].sort();
+  // Deterministic IDs and generated source descriptions independently establish ownership.
+  const generated = typeof item.description === "string" ? /^GH (?:issue|PR) #[1-9]\d*: (https?:\/\/\S+)(?: ·|$)/i.exec(item.description) : undefined;
+  if (repositories.length < 2 || references.some(ref => ref.number === item.github_number && importerCreatedItem(item, ref.repo, ref.number)) || generated && parseGithubIssueUrl(generated[1])?.number === item.github_number) return undefined;
+  return { code: "ambiguous_legacy_github_identity", item: item.id,
+    candidates: repositories.map(repo => `${repo}#${item.github_number}`),
+    remedy: "Set github_repo or github_url explicitly on the intended owner; keep other gh: tags as references." };
 }
 
 /** Resolve persisted identity with legacy compatibility; diagnostics may report conflicts that all write planners refuse. */
@@ -300,20 +337,22 @@ export function importIdentityKeys(item: PmItem, options: { allowConflicts?: boo
     if (key) keys.add(key);
   }
   const urlKey = [...keys][0];
-  const repository = typeof item.github_repo === "string" ? item.github_repo.trim().replace(/\/+$/, "").toLowerCase() : urlKey?.split("#")[0];
+  const repository = normalizeGithubRepository(item.github_repo) ?? urlKey?.split("#")[0];
   if (repository && Number.isSafeInteger(item.github_number) && Number(item.github_number) > 0) keys.add(`${repository}#${item.github_number}`);
   if (keys.size > 1 && !options.allowConflicts) throw new GithubIdentityConflictError(item.id, [...keys].sort());
   const references = (item.tags ?? []).flatMap(tag => {
     const parsed = parseProvenanceTag(tag);
     return parsed ? [parsed] : [];
   });
+  if (legacyGithubIdentityConflict(item)) return [];
+  const impliedRepositories = new Set(references.map(reference => reference.repo));
   const hasRepository = keys.size > 0;
   const generated = typeof item.description === "string" ? /^GH (?:issue|PR) #([1-9]\d*): (https?:\/\/\S+)(?: ·|$)/i.exec(item.description) : null;
   const legacyLocators = generated ? locators(generated[2]) : [];
   for (const reference of references) {
     const { repo, number } = reference;
     // Released links with no URL retain their source number and tagged repository.
-    const legacyNumber = !hasRepository && item.github_number === number;
+    const legacyNumber = !hasRepository && impliedRepositories.size === 1 && item.github_number === number;
     const legacyLink = !hasRepository && item.github_number === undefined && typeof item.github_link_only === "boolean" && references.length === 1;
     // Pre-fidelity releases wrote this exact generated description plus the reference tag.
     const legacyDescription = Number(generated?.[1]) === number && legacyLocators.includes(`https://github.com/${repo}/issues/${number}`);
@@ -339,14 +378,14 @@ export function indexByImportIdentity(items: readonly PmItem[]): Map<string, PmI
 export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, _tagged?: PmItem, adoptCited = false): ImportMatch {
   const issueUrl = locators(issue.html_url)[0]!;
   const bodyUrls = new Set(locators(issue.body ?? ""));
-  const repo = issue.html_url.split("/").slice(3, 5).join("/").toLowerCase();
+  const repo = parseGithubIssueUrl(issue.html_url)!.repo;
   const issueKey = `${repo}#${issue.number}`;
   /** Recognize leading native ownership declarations; later prose cannot transfer ownership. */
   const declaredOwner = (item: PmItem) => copiedProviderMarkersOwnItem(item) && typeof item.description === "string" &&
     locators(/^GitHub issue(?:\s*:\s+|\s+)(https?:\/\/\S+)/i.exec(item.description)?.[1]).includes(issueUrl);
   const candidates = items.filter(item => {
     const keys = importIdentityKeys(item);
-    if (!item.id) return false;
+    if (!item.id || legacyGithubIdentityConflict(item)) return false;
     if (keys.length) return keys.includes(issueKey);
     return importerCreatedItem(item, repo, issue.number) || declaredOwner(item) ||
       Object.entries(item).some(([key, value]) => OWNER_LINK_FIELD.test(key) && locators(value).includes(issueUrl)) ||
@@ -357,7 +396,7 @@ export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, _ta
   let cited = false;
   const incidental: CitationCandidate[] = [];
   if (!item && !issue.pull_request) {
-    const repo = issue.html_url.split("/").slice(3, 5).join("/").toLowerCase();
+    const repo = parseGithubIssueUrl(issue.html_url)!.repo;
     const citing: PmItem[] = [];
     for (const candidate of items) {
       if (!candidate.id) continue;
@@ -444,10 +483,9 @@ export function importCloseReason(issue: GhIssue, events: readonly unknown[]): s
   const records = events.filter((event): event is Record<string, unknown> => event !== null && typeof event === "object" && !Array.isArray(event));
   const closed = latestClosure(records, issue.closed_at);
   if (closed && typeof closed.commit_id === "string" && /^[a-f0-9]{40}$/i.test(closed.commit_id)) {
-    const linkedCommit = typeof closed.commit_url === "string"
-      ? /^https:\/\/api\.github\.com\/repos\/([^/]+)\/([^/]+)\/commits\/([a-f0-9]{40})$/.exec(closed.commit_url) : null;
-    const repoUrl = linkedCommit && linkedCommit[3] === closed.commit_id
-      ? `https://github.com/${linkedCommit[1]}/${linkedCommit[2]}` : issue.html_url.replace(/\/(?:issues|pull)\/\d+$/, "");
+    const linkedCommit = parseGithubUrl(closed.commit_url);
+    const repoUrl = linkedCommit?.api && linkedCommit.kind === "commits" && linkedCommit.value === closed.commit_id && !linkedCommit.tail.length
+      ? `https://github.com/${linkedCommit.repo}` : `https://github.com/${parseGithubIssueUrl(issue.html_url)!.repo}`;
     return `${base}; closing commit ${repoUrl}/commit/${closed.commit_id}`;
   }
   const graphClosed = latestClosure(records, issue.closed_at, true);
@@ -459,12 +497,13 @@ export function importCloseReason(issue: GhIssue, events: readonly unknown[]): s
     const closer = event.__typename === "ClosedEvent" ? event.closer : event.subject;
     const fields = closer && typeof closer === "object" ? closer as Record<string, unknown> : undefined;
     const url = ownValue(fields, "url");
-    if (typeof url === "string" && /^https:\/\/github\.com\/[^/]+\/[^/]+\/(pull\/\d+|commit\/[a-f0-9]{40})$/.test(url)) {
+    const target = parseGithubUrl(url);
+    if (target && !target.api && !target.tail.length && (target.kind === "pull" && Boolean(parseGithubIssueUrl(url)) || target.kind === "commit" && /^[a-f0-9]{40}$/.test(target.value ?? ""))) {
       const title = Object.hasOwn(fields!, "title") ? ownValue(fields, "title") : ownValue(fields, "messageHeadline");
-      return `${base}; ${event.__typename === "ClosedEvent" ? "closing" : "linked"} ${url.includes("/pull/") ? "PR" : "commit"} ${url}${typeof title === "string" ? ` (${JSON.stringify(title)})` : ""}`;
+      return `${base}; ${event.__typename === "ClosedEvent" ? "closing" : "linked"} ${target.kind === "pull" ? "PR" : "commit"} ${url}${typeof title === "string" ? ` (${JSON.stringify(title)})` : ""}`;
     }
   }
-  const connected = records.find(event => event.event === "connected" && typeof event.url === "string" && /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(event.url));
+  const connected = records.find(event => event.event === "connected" && parseGithubIssueUrl(event.url)?.kind === "pull");
   return connected ? `${base}; linked PR ${connected.url}` : base;
 }
 

@@ -1,3 +1,4 @@
+import { parseGithubIssueUrl, githubUrlTokens } from "./github-url.ts";
 import { ownValue } from "./own-record.ts";
 /** Offline identity diagnosis and explicitly approved, single-item provenance repairs. */
 import { createHash } from "node:crypto";
@@ -37,8 +38,10 @@ export interface IdentityRepairPlan {
 }
 /** Canonicalize exact GitHub locators; opaque external references retain provider semantics. */
 function identity(value: string): string {
-  const match = /^(?:gh:([^/\s]+\/[^#\s]+)#|https?:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/(?:issues|pull)\/)([1-9]\d*)(?:\/?(?:[?#].*)?)?$/i.exec(value);
-  return match ? `gh:${(match[1] ?? match[2]!).toLowerCase()}#${BigInt(match[3]!).toString()}` : value;
+  const url = parseGithubIssueUrl(value);
+  if (url && !url.api) return `gh:${url.key}`;
+  const tag = /^gh:([^/\s]+\/[^#\s]+)#([1-9]\d*)$/i.exec(value);
+  return tag ? `gh:${tag[1]!.toLowerCase()}#${BigInt(tag[2]!).toString()}` : value;
 }
 /** Build edges from structured identity fields; prose URLs are explicitly weaker evidence. */
 function graph(items: readonly IdentityItem[]): { nodes: IdentityNode[]; edges: IdentityEdge[] } {
@@ -61,8 +64,9 @@ function graph(items: readonly IdentityItem[]): { nodes: IdentityNode[]; edges: 
     const github = claims.some(edge => edge.strength === "claim" && edge.identity.startsWith("gh:"));
     nodes.push({ id, providers, native_owner: typeof item.source_owner === "string" ? item.source_owner : null, ownership: providers.length ? (github && item.github_link_only !== true ? "mixed" : "provider") : github ? "github" : "local" });
     edges.push(...claims);
-    for (const match of `${item.description}\n${item.body}`.matchAll(/https?:\/\/github\.com\/[^/\s<>]+\/[^/\s<>]+\/(?:issues|pull)\/[1-9]\d*/gi)) {
-      const key = identity(match[0]);
+    for (const match of githubUrlTokens(`${item.description}\n${item.body}`)) {
+      if (!parseGithubIssueUrl(match.raw)) continue;
+      const key = identity(match.raw);
       if (!claims.some(edge => edge.identity === key) && !edges.some(edge => edge.item === id && edge.identity === key && edge.strength === "mention")) edges.push({ item: id, identity: key, source: "prose", strength: "mention" });
     }
   }
