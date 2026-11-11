@@ -1,6 +1,7 @@
 import { readGithubWorkspace, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue, setOwnValue } from "./own-record.ts";
 /** Source lifecycle, release-window and cross-provider identity rules for issue imports. */
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { decodeHTML } from "entities";
 import {
@@ -73,7 +74,7 @@ export class AmbiguousCitationError extends Error {
   constructor(repo: string, number: number, candidates: string[], incidental: CitationCandidate[] = []) {
     const entry: AmbiguousCitationPlan = { action: "ambiguous_citation", issue: number, candidates,
       ...(incidental.length > 0 ? { citation_candidates: incidental } : {}),
-      remedy: `Tag the correct item with gh:${repo}#${number}, then retry.` };
+      remedy: `Set github_url to https://github.com/${repo}/issues/${number} on the intended owner, then retry.` };
     super(JSON.stringify(entry));
     this.entry = entry;
   }
@@ -227,7 +228,7 @@ function locators(value: unknown): string[] {
 
 /** Copied body text and labels cannot transfer an established GitHub import to another owner. */
 function copiedProviderMarkersOwnItem(item: PmItem): boolean {
-  return item.github_link_only !== false && !item.tags?.some(tag => /^gh:[^/]+\/[^#]+#\d+$/.test(tag));
+  return item.github_link_only !== false && importIdentityKeys(item).length === 0;
 }
 
 /** Extract declared provider fields and the description/body markers used by provider exporters. */
@@ -251,7 +252,7 @@ const OWNER_LINK_FIELD = /^(?:github_?url|provenance|external_?(?:links?|url)|li
 
 /**
  * True when an item already carries a structured GitHub or provider identity of its own. Mirrors every ownership source
- * identity.ts and the owner matcher recognize: any `github*` field (`github_url`, `githuburl`, ...), a GitHub identity tag in any case (`gh:`, `GH:`), a core `external_ref`, a native `source_owner`, provider identity fields
+ * identity.ts and the owner matcher recognize: any `github*` field (`github_url`, `githuburl`, ...), durable importer provenance, a core `external_ref`, a native `source_owner`, provider identity fields
  * (`linear_*`/`jira_*`/`ado_*` id, key, url or identifier), provider provenance, a native "GitHub issue <url>"
  * declaration, or a GitHub issue URL in provenance/external links.
  */
@@ -261,20 +262,62 @@ function hasStructuredOwnership(item: PmItem): boolean {
   return Object.entries(item).some(([key, value]) => filled(value) && (/^github/i.test(key) && !/^github_?link_?only$/i.test(key) ||
       /^(?:external_ref|source_owner)$/.test(key) || /^(?:linear|jira|ado)_(?:.*_)?(?:id|key|url|identifier)$/i.test(key))) ||
     item.github_link_only === false || Boolean(providerProvenance(item)) ||
-    Boolean(item.tags?.some(tag => /^gh:[^/\s]+\/[^#\s]+#[1-9]\d*$/i.test(tag))) ||
+    importIdentityKeys(item).length > 0 ||
     (typeof item.description === "string" && /^GitHub issue(?:\s*:\s+|\s+)https?:\/\//i.test(item.description)) ||
     Object.entries(item).some(([key, value]) => OWNER_LINK_FIELD.test(key) &&
       locators(value).some(url => issueLocator.test(url)));
 }
 
+/** Explicit persisted identity, with migration-free support for old importer snapshots. Tags alone are references. */
+export function importIdentityKeys(item: PmItem): string[] {
+  const keys = new Set<string>();
+  if (typeof item.github_url === "string") {
+    const url = /^https?:\/\/(?:www\.)?github\.com\/([^/]+\/[^/]+)\/(?:issues|pull)\/([1-9]\d*)(?:\/?(?:[?#].*)?)?$/i.exec(item.github_url);
+    if (url) keys.add(`${url[1]!.toLowerCase()}#${Number(url[2])}`);
+  }
+  if (typeof item.github_repo === "string" && Number.isSafeInteger(item.github_number) && Number(item.github_number) > 0) keys.add(`${item.github_repo.toLowerCase()}#${item.github_number}`);
+  const references = (item.tags ?? []).flatMap(tag => {
+    const parsed = parseProvenanceTag(tag);
+    return parsed ? [parsed] : [];
+  });
+  const hasRepository = keys.size > 0;
+  const generated = typeof item.description === "string" ? /^GH (?:issue|PR) #([1-9]\d*): (https?:\/\/\S+)(?: ·|$)/i.exec(item.description) : null;
+  const legacyLocators = generated ? locators(generated[2]) : [];
+  for (const reference of references) {
+    const { repo, number } = reference;
+    // Released links with no URL retain their source number and tagged repository.
+    const legacyNumber = !hasRepository && item.github_number === number;
+    const legacyLink = !hasRepository && item.github_number === undefined && typeof item.github_link_only === "boolean" && references.length === 1;
+    // Pre-fidelity releases wrote this exact generated description plus the reference tag.
+    const legacyDescription = Number(generated?.[1]) === number && legacyLocators.includes(`https://github.com/${repo}/issues/${number}`);
+    if (legacyNumber || legacyLink || legacyDescription || importerCreatedItem(item, repo, number)) keys.add(`${repo}#${number}`);
+  }
+  return [...keys];
+}
+
+/** Only the exact importer-generated external key grants full content mirroring. */
+export function importerCreatedItem(item: PmItem, repo: string, number: number): boolean {
+  const hash = createHash("sha256").update(repo.toLowerCase()).digest("hex").slice(0, 12);
+  return item.id?.endsWith(`-github-${hash}-${number}`) === true;
+}
+
+/** Index durable importer identities while allowing arbitrary shared reference tags. */
+export function indexByImportIdentity(items: readonly PmItem[]): Map<string, PmItem> {
+  const result = new Map<string, PmItem>();
+  for (const item of items) if (item.id) for (const key of importIdentityKeys(item)) result.set(key, item);
+  return result;
+}
+
 /** Match GitHub locators or provider back-links before creation, refusing multiple owners. */
-export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, tagged?: PmItem, adoptCited = false): ImportMatch {
+export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, _tagged?: PmItem, adoptCited = false): ImportMatch {
   const issueUrl = locators(issue.html_url)[0]!;
   const bodyUrls = new Set(locators(issue.body ?? ""));
+  const repo = issue.html_url.split("/").slice(3, 5).join("/").toLowerCase();
+  const issueKey = `${repo}#${issue.number}`;
   /** Recognize leading native ownership declarations; later prose cannot transfer ownership. */
   const declaredOwner = (item: PmItem) => copiedProviderMarkersOwnItem(item) && typeof item.description === "string" &&
     locators(/^GitHub issue(?:\s*:\s+|\s+)(https?:\/\/\S+)/i.exec(item.description)?.[1]).includes(issueUrl);
-  const candidates = items.filter(item => item.id && (item.id === tagged?.id ||
+  const candidates = items.filter(item => item.id && (importIdentityKeys(item).includes(issueKey) || importerCreatedItem(item, repo, issue.number) ||
     declaredOwner(item) ||
     Object.entries(item).some(([key, value]) => OWNER_LINK_FIELD.test(key) && locators(value).includes(issueUrl)) ||
     locators(providerProvenance(item)).some(url => bodyUrls.has(url))));
@@ -286,7 +329,7 @@ export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, tag
     const repo = issue.html_url.split("/").slice(3, 5).join("/").toLowerCase();
     const citing: PmItem[] = [];
     for (const candidate of items) {
-      if (!candidate.id || candidate.tags?.some(tag => parseProvenanceTag(tag) !== undefined)) continue;
+      if (!candidate.id) continue;
       const assessment = citesIssue(candidate, repo, issue.number);
       if (assessment === undefined) continue;
       // Structured ownership (a GitHub issue URL field, an issue number, provider provenance or a native declaration)
@@ -304,7 +347,7 @@ export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, tag
   const native = item && declaredOwner(item);
   return { item, linkOnly: Boolean(item && (provider || native || item.github_link_only === true)),
     ...(incidental.length > 0 ? { citation_candidates: incidental } : {}),
-    via: cited ? "citation" : item ? (provider ? "provider-link" : native ? "github-declaration" : item.id === tagged?.id ? "provenance-tag" : "github-url") : "new" };
+    via: cited ? "citation" : item ? (provider ? "provider-link" : native ? "github-declaration" : item.github_url ? "github-url" : "import-provenance") : "new" };
 }
 
 /** Read calendar release tags from the selected tracker checkout, including annotated tag dates. */
@@ -420,7 +463,17 @@ export function buildImportFidelity(issue: GhIssue, releases: readonly ImportRel
 }
 
 /** Project the import-owned metadata; undefined values remove stale native lifecycle fields. */
-export function importFidelityFields(fidelity: ImportFidelity, linkOnly: boolean): Record<string, unknown> {
+export function importFidelityFields(fidelity: ImportFidelity, linkOnly: boolean, curated?: PmItem): Record<string, unknown> {
+  if (curated && !linkOnly) {
+    // An issue can predate its local delivery tracker. Retain its exact source
+    // closure in github_closed_at without inventing an impossible native lifetime.
+    const nativeClosure = fidelity.github_closed_at && Date.parse(fidelity.github_closed_at) >= Date.parse(typeof curated.created_at === "string" ? curated.created_at : "");
+    return {
+      ...fidelity, github_link_only: false,
+      ...(fidelity.github_state === "open" ? { closed_at: undefined } : nativeClosure ? { closed_at: fidelity.github_closed_at } : {}),
+      ...(!curated.completed_at && nativeClosure ? { completed_at: fidelity.github_closed_at } : {}),
+    };
+  }
   return {
     ...fidelity, github_link_only: linkOnly,
     ...(!linkOnly ? {
@@ -479,7 +532,7 @@ export function normalizeImportValue(field: string, value: unknown, types = defa
  * Cross-provider owners retain their creation/completion dates, content and release.
  * Plain imports restore a source assignee that a native close command clears.
  */
-export async function persistImportFidelity(pmPath: string, id: string, fidelity: ImportFidelity, linkOnly: boolean, normalizeFields = false, sourceAssignee?: string): Promise<void> {
+export async function persistImportFidelity(pmPath: string, id: string, fidelity: ImportFidelity, linkOnly: boolean, normalizeFields = false, sourceAssignee?: string, preserveContent = false): Promise<void> {
   const workspace = await readGithubWorkspace(pmPath);
   const pmRoot = workspace.pmRoot;
   const { settings } = workspace;
@@ -488,8 +541,8 @@ export async function persistImportFidelity(pmPath: string, id: string, fidelity
     message: `Preserve GitHub source lifecycle for issue #${fidelity.github_number}`,
     mutate: document => {
       const before = canonicalDocument(document);
-      const fields = { ...importFidelityFields(fidelity, linkOnly),
-        ...(!linkOnly && sourceAssignee ? { assignee: sourceAssignee } : {}),
+      const fields = { ...importFidelityFields(fidelity, linkOnly, preserveContent ? document.metadata : undefined),
+        ...(!linkOnly && !preserveContent && sourceAssignee ? { assignee: sourceAssignee } : {}),
         ...(!linkOnly ? { status: normalizeStatusInput(mapState(fidelity.github_state, fidelity.github_state_reason), workspace.statuses) } : {}) };
       for (const [field, value] of Object.entries(fields)) {
         const current = ownValue(document.metadata, field);

@@ -8,11 +8,11 @@ import { join, basename } from "node:path";
 import { listAllComplete, certifyCompleteListResult, previewItemMutations, resolvePmRoot } from "@unbrained/pm-cli/sdk";
 import {
   CommandError, EXIT_CODE, decodeCompletePmItems, githubGraphQLResponse, importGithubAtomic,
-  listUnfinishedGithubImports, parseImportOptions, parseProvenanceTag, prepareGithubImport, readGithubImportPlan,
+  listUnfinishedGithubImports, parseImportOptions, prepareGithubImport, readGithubImportPlan,
   resolveGitHubToken, resumeGithubImport, validateGithubImportFidelity, validateGithubImportPlan,
   type GhIssue, type PmItem, type PreparedGithubImport,
 } from "./index.ts";
-import { fetchImportTimeline, importFidelityFields, normalizeImportValue, readImportReleases } from "./import-fidelity.ts";
+import { fetchImportTimeline, importIdentityKeys, importFidelityFields, normalizeImportValue, readImportReleases } from "./import-fidelity.ts";
 
 /** An existing item and its unique linked issue number. */
 export interface RefreshTarget { id: string; number: number; item: PmItem }
@@ -31,19 +31,14 @@ export function selectRefreshTargets(items: readonly PmItem[], repo: string): Re
   const targets = new Map<number, RefreshTarget>();
   for (const item of items) {
     if (!item.id) continue;
+    // The refresh GraphQL path queries issue(), so PR owners are excluded.
+    if (typeof item.github_url === "string" && /github\.com\/[^/]+\/[^/]+\/pull\//i.test(item.github_url)) continue;
+    if (typeof item.github_repo === "string" && item.github_repo.toLowerCase() === repo && typeof item.github_number === "number" && (!Number.isSafeInteger(item.github_number) || item.github_number < 1)) throw new CommandError(`Refresh found an invalid issue number for ${item.id}.`);
     const numbers = new Set<number>();
-    for (const tag of item.tags ?? []) {
-      const parsed = parseProvenanceTag(tag);
-      if (parsed?.repo === repo) numbers.add(parsed.number);
+    for (const key of importIdentityKeys(item)) {
+      const [repository, number] = key.split("#");
+      if (repository === repo) numbers.add(Number(number));
     }
-    if (typeof item.github_url === "string") {
-      // Only /issues/ locators are refreshable: the batch query reads issue(...)
-      // nodes, so accepting /pull/ links would report every PR-linked item as
-      // missing on each run.
-      const url = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\/(\d+)\/?$/i.exec(item.github_url);
-      if (url?.[1]!.toLowerCase() === repo) numbers.add(Number(url[2]));
-    }
-    if (typeof item.github_repo === "string" && item.github_repo.toLowerCase() === repo && typeof item.github_number === "number") numbers.add(item.github_number);
     if (numbers.size > 1) throw new CommandError(`Refresh found conflicting GitHub identities for ${item.id}.`);
     for (const number of numbers) {
       if (!Number.isSafeInteger(number) || number < 1) throw new CommandError(`Refresh found an invalid issue number for ${item.id}.`);
@@ -113,8 +108,8 @@ async function fetchRefreshBatch(repo: string, targets: readonly RefreshTarget[]
 
 /** Compare only refresh-owned fields; use the same source lifecycle projection as import finalization. */
 export function refreshChanges(entry: PreparedGithubImport, statuses?: GithubStatusRegistry): RefreshChange[] {
-  const desired = { ...importFidelityFields(entry.fidelity!, Boolean(entry.linkOnly)),
-    ...(entry.linkOnly ? {} : { title: entry.title, status: entry.status }), tags: importTagValues(entry) };
+  const desired = { ...importFidelityFields(entry.fidelity!, Boolean(entry.linkOnly), entry.preserveContent ? entry.match : undefined),
+    ...(entry.linkOnly ? {} : { ...(!entry.preserveContent ? { title: entry.title } : {}), status: entry.status }), tags: importTagValues(entry) };
   return Object.entries(desired).flatMap(([field, value]) => {
     const old = ownValue(entry.match, field) ?? null;
     const next = value ?? null;

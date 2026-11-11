@@ -31,10 +31,11 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { normalizeItemId } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness, type ExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import type { SearchProviderQueryContext } from "@unbrained/pm-cli/sdk/authoring";
 
-import extension, { parseImportOptions, runImport, type GhIssue } from "../index.ts";
+import extension, { deriveAtomicItemId, parseProvenanceTag, parseImportOptions, runImport, type GhIssue } from "../index.ts";
 import { projectItemTag } from "../projects.ts";
 import {
   captureStderr,
@@ -95,11 +96,13 @@ function freshTracker(): string {
  * through `pm close` with a factual reason. The resulting item still carries
  * the requested tag and status — only the mechanism changed.
  */
-function createLinkedItem(root: string, title: string, tag: string, status: string): string {
+function createLinkedItem(root: string, title: string, tag: string, status: string, importerOwned = false): string {
+  const reference = parseProvenanceTag(tag)!;
+  const ownedId = importerOwned ? ["--id", deriveAtomicItemId(reference.repo, reference.number, "test-", normalizeItemId)] : [];
   const createStatus = status === "closed" ? "open" : status;
   const r = spawnSync(
     PM_BIN,
-    ["--path", root, "create", "task", title, "--status", createStatus, "--tags", tag],
+    ["--path", root, "create", "task", title, "--status", createStatus, "--tags", tag, ...ownedId],
     PM_SPAWN_OPTS,
   );
   assert.strictEqual(r.status, 0, `pm create failed: ${r.error?.message ?? r.stderr}`);
@@ -1123,7 +1126,7 @@ function statusForTag(root: string, tag: string): string | undefined {
 test("runImport closes a linked item whose upstream issue was closed", async () => {
   const root = freshTracker();
   try {
-    createLinkedItem(root, "Linked", "gh:a/b#5", "open");
+    createLinkedItem(root, "Linked", "gh:a/b#5", "open", true);
     await withEnv({ GITHUB_TOKEN: "tok", GH_TOKEN: undefined }, async () => {
       await withMockGithub((request, res) => {
         if (request.url === "/graphql") graphqlOk(res, { repository: { issue: { timelineItems: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } });
@@ -1176,7 +1179,7 @@ test("runImport creates and closes an unlinked issue that is already closed upst
 test("runImport reopens a linked item whose upstream issue was reopened", async () => {
   const root = freshTracker();
   try {
-    createLinkedItem(root, "Linked", "gh:a/b#6", "closed");
+    createLinkedItem(root, "Linked", "gh:a/b#6", "closed", true);
     await withEnv({ GITHUB_TOKEN: "tok", GH_TOKEN: undefined }, async () => {
       await withMockGithub((_req, res) => {
         jsonResponse(res, 200, [upstreamIssue(6, "Linked", "open")]);

@@ -1,4 +1,5 @@
 /** Recorded consumer regressions exercised through real temporary PM trackers. */
+import { createImportMirror } from "./helpers/import-mirror.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -71,7 +72,7 @@ for (const atomic of [false, true]) {
       const issue = recorded(name);
       const checkRetry = fixtureIndex < 2;
       if (checkRetry) {
-        await create({ title: "Legacy source snapshot", type: "Issue", status: "closed", closeReason: "Legacy generic closure",
+        await createImportMirror({ title: "Legacy source snapshot", type: "Issue", status: "closed", closeReason: "Legacy generic closure",
           tags: `gh:${issue.html_url.split("/").slice(3, 5).join("/")}#${issue.number}` }, { pmRoot });
         const beforePreview = (await listItems(pmRoot));
         const preview = await importing(pmRoot, issue, atomic, true);
@@ -113,7 +114,7 @@ for (const atomic of [false, true]) {
 
   test(`pm-csv-72: ${atomic ? "atomic" : "plain"} conflicting GitHub-owned record refreshes state and lifecycle together`, async () => tracker(async (_directory, pmRoot) => {
     const issue = recorded("pm-csv-72");
-    const item = (await create({ title: issue.title, type: "Issue", status: "open", tags: "gh:unbraind/pm-csv#72" }, { pmRoot })).item;
+    const item = (await createImportMirror({ title: issue.title, type: "Issue", status: "open", tags: "gh:unbraind/pm-csv#72" }, { pmRoot })).item;
     const preview = await importing(pmRoot, issue, atomic, true);
     assert.deepEqual(((preview.plan as Array<{ identity: { conflict: unknown } }>)[0]!).identity.conflict,
       { local: "open", github: "closed", rule: "github-source-wins" });
@@ -184,12 +185,13 @@ for (const atomic of [false, true]) {
     assert.equal((await listItems(pmRoot)).length, 1);
     const actual = (await get(owner.id, {}, { pmRoot })).item;
     assert.equal(actual.status, "closed");
-    assert.equal(actual.created_at, issue.created_at);
-    assert.equal(actual.closed_at, issue.closed_at);
-    assert.equal(actual.completed_at, issue.closed_at);
+    assert.equal(actual.created_at, owner.created_at);
+    assert.equal(actual.closed_at, owner.closed_at);
+    assert.equal(actual.completed_at, owner.completed_at);
+    assert.equal(actual.title, owner.title);
     assert.equal(actual.release, "stale-release", "a closure without a matching calendar tag preserves the existing release");
     assert.equal(actual.github_link_only, false);
-    assert.match(actual.close_reason!, /^Closed on GitHub/);
+    assert.equal(actual.close_reason, owner.close_reason);
   }));
 
   test(`explicit native GitHub issue declaration reuses its owner without changing local delivery (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
@@ -427,8 +429,8 @@ test("closure and identity edge cases retain exact evidence rather than inventin
   assert.equal(buildImportFidelity({ ...issue, state: "open", state_reason: null }, [], []).github_state_reason, "unspecified");
   const tagged = { id: "tagged", tags: ["gh:unbraind/pm-beads#85"] };
   assert.equal(matchImportedIssue([tagged], issue, tagged).linkOnly, false);
-  assert.equal(matchImportedIssue([{ id: "tagged", github_link_only: true }], issue, tagged).linkOnly, true);
-  assert.equal(matchImportedIssue([{ id: "provider", github_url: issue.html_url, tags: ["jira:EX-1"] }], issue).via, "provider-link");
+  assert.equal(matchImportedIssue([{ id: "tagged", github_link_only: true, github_url: issue.html_url }], issue, tagged).linkOnly, true);
+  assert.equal(matchImportedIssue([{ id: "provider", github_url: issue.html_url, tags: ["jira:EX-1"] }], issue).via, "github-url");
   assert.equal(matchImportedIssue([{ links: [issue.html_url] }, { id: "other", github_url: undefined, ado_url: undefined }], { ...issue, body: null }).item, undefined);
   assert.deepEqual(readImportReleases(tmpdir()), []);
 });
@@ -639,7 +641,7 @@ for (const atomic of [false, true]) {
   for (const copied of ["body", "label"]) {
     test(`legacy GitHub ownership survives copied provider ${copied} (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
       const issue = { ...recorded("pm-csv-72"), title: "Upstream revised title" };
-      const created = (await create({ title: "Old imported title", type: "Issue", status: "open",
+      const created = (await createImportMirror({ title: "Old imported title", type: "Issue", status: "open",
         tags: "gh:unbraind/pm-csv#72", description: `GH issue #72: ${issue.html_url}` }, { pmRoot })).item;
       await commitImportedItem({ pmRoot, id: created.id, itemPath: getItemPath(pmRoot, "Issue", created.id),
         document: { metadata: { ...created, ...(copied === "label" ? { tags: [...created.tags!, "linear:documentation"] } : {}) },
@@ -661,14 +663,14 @@ for (const atomic of [false, true]) {
   }
   test(`provider-only descriptor preserves external ownership without a locator (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
     const issue = { ...recorded("pm-csv-72"), labels: [{ name: "fresh" }] };
-    const owner = await identityItem(pmRoot, { provider: "pm-jira", tags: ["gh:unbraind/pm-csv#72", "jira:EX-1", " ONE,TWO "], release: "external-release" });
+    const owner = await identityItem(pmRoot, { provider: "pm-jira", github_url: issue.html_url, tags: ["gh:unbraind/pm-csv#72", "jira:EX-1", " ONE,TWO "], release: "external-release" });
     assert.equal(owner.external_url, undefined);
     assert.equal(owner.github_link_only, undefined);
     for (let attempt = 0; attempt < 2; attempt++) {
       await importing(pmRoot, issue, atomic);
       const actual = (await get(owner.id, {}, { pmRoot })).item;
       for (const key of ["title", "status", "created_at", "closed_at", "completed_at", "release", "body"] as const) assert.equal(actual[key], owner[key]);
-      assert.deepEqual(new Set(actual.tags), new Set([...owner.tags!, "fresh"]));
+      assert.deepEqual(new Set(actual.tags), new Set(owner.tags));
       assert.equal(actual.github_link_only, true);
       assert.equal((await listItems(pmRoot)).length, 1);
     }

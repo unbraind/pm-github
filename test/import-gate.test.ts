@@ -111,9 +111,9 @@ function planEntry(issueNumber: number, tags: string[], match?: PmItem): Prepare
 test("recovered journals cannot substitute for a complete persisted provenance corpus", () => {
   const prepared = [planEntry(1, ["gh:acme/widgets#1"])];
   assert.throws(() => verifyImportedProvenance([], prepared, "acme/widgets"), CommandError);
-  assert.equal(verifyImportedProvenance([{ id: "item-a", tags: ["gh:acme/widgets#1"] }], prepared, "acme/widgets"), 1);
+  assert.equal(verifyImportedProvenance([{ id: "item-a", github_url: "https://github.com/acme/widgets/issues/1", tags: ["gh:acme/widgets#1"] }], prepared, "acme/widgets"), 1);
   assert.throws(() => verifyImportedProvenance([
-    { id: "item-a", tags: ["gh:acme/widgets#1"] }, { id: "item-b", tags: ["gh:acme/widgets#1"] },
+    { id: "item-a", github_url: "https://github.com/acme/widgets/issues/1", tags: ["gh:acme/widgets#1"] }, { id: "item-b", github_url: "https://github.com/acme/widgets/issues/1", tags: ["gh:acme/widgets#1"] },
   ], prepared, "acme/widgets"), CommandError);
 });
 
@@ -381,15 +381,15 @@ test("verifyImportPlanCompleteness passes a reconciling plan and fails every dri
 
 test("verifyImportIdempotency fails duplicate provenance, untagged creates, and conflicting targets", () => {
   const existing = [
-    { id: "item-a", tags: ["gh:acme/widgets#1"] },
-    { id: "item-b", tags: ["gh:acme/widgets#1"] }, // duplicate provenance
+    { id: "item-a", github_url: "https://github.com/acme/widgets/issues/1", tags: ["gh:acme/widgets#1"] },
+    { id: "item-b", github_url: "https://github.com/acme/widgets/issues/1", tags: ["gh:acme/widgets#1"] }, // duplicate provenance
   ];
   assert.throws(
     () =>
       verifyImportIdempotency(existing, [planEntry(2, ["gh:acme/widgets#2"])], "acme/widgets"),
     (err: unknown) => {
       assert.ok(err instanceof CommandError);
-      assert.match(err.message, /1 duplicate provenance tag\(s\)/);
+      assert.match(err.message, /1 duplicate import identity claim\(s\)/);
       return true;
     },
   );
@@ -409,10 +409,10 @@ test("verifyImportIdempotency fails duplicate provenance, untagged creates, and 
   assert.throws(
     () =>
       verifyImportIdempotency(
-        [{ id: "item-a", tags: ["gh:acme/widgets#1"] }],
+        [{ id: "item-a", github_url: "https://github.com/acme/widgets/issues/1", tags: ["gh:acme/widgets#1"] }],
         [
-          planEntry(1, ["gh:acme/widgets#1"], { id: "item-a", tags: ["gh:acme/widgets#1"] }),
-          planEntry(2, ["gh:acme/widgets#2"], { id: "item-a", tags: ["gh:acme/widgets#1"] }),
+          planEntry(1, ["gh:acme/widgets#1"], { id: "item-a", github_url: "https://github.com/acme/widgets/issues/1", tags: ["gh:acme/widgets#1"] }),
+          planEntry(2, ["gh:acme/widgets#2"], { id: "item-a", github_url: "https://github.com/acme/widgets/issues/1", tags: ["gh:acme/widgets#1"] }),
         ],
         "acme/widgets",
       ),
@@ -425,9 +425,9 @@ test("verifyImportIdempotency fails duplicate provenance, untagged creates, and 
 
   // A clean plan is proven a no-op: every entry matched by provenance or born tagged.
   const receipts = verifyImportIdempotency(
-    [{ id: "item-a", tags: ["gh:acme/widgets#1"] }],
+    [{ id: "item-a", github_url: "https://github.com/acme/widgets/issues/1", tags: ["gh:acme/widgets#1"] }],
     [
-      planEntry(1, ["gh:acme/widgets#1"], { id: "item-a", tags: ["gh:acme/widgets#1"] }),
+      planEntry(1, ["gh:acme/widgets#1"], { id: "item-a", github_url: "https://github.com/acme/widgets/issues/1", tags: ["gh:acme/widgets#1"] }),
       planEntry(2, ["gh:acme/widgets#2"]),
     ],
     "acme/widgets",
@@ -446,8 +446,8 @@ test("a gated import refuses to write when the corpus cannot yield an idempotent
         resolveToken: () => undefined,
         fetchIssues: async () => issues,
         readItems: () => [
-          { id: "dup-a", tags: ["gh:acme/widgets#1"] },
-          { id: "dup-b", tags: ["gh:acme/widgets#1"] },
+          { id: "dup-a", github_url: "https://github.com/acme/widgets/issues/1", tags: ["gh:acme/widgets#1"] },
+          { id: "dup-b", github_url: "https://github.com/acme/widgets/issues/1", tags: ["gh:acme/widgets#1"] },
         ],
       }),
       (err: unknown) => {

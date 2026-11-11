@@ -1,4 +1,5 @@
 /** Real no-git trackers and HTTP transport prove authenticated durable reconciliation. */
+import { createImportMirror } from "./helpers/import-mirror.ts";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash, createHmac } from "node:crypto";
@@ -6,7 +7,7 @@ import type { ServerResponse } from "node:http";
 import { mkdtemp, rm, readdir, readFile, writeFile, mkdir, cp, symlink, open, chmod } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
-import { init, create, get, acquireLock } from "@unbrained/pm-cli/sdk";
+import { init, get, acquireLock } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension, { acceptGithubWebhook, reconcileGithubWebhooks, WebhookRefusal, type GithubWebhookDelivery } from "../index.ts";
 import { runRefresh } from "../refresh.ts";
@@ -103,8 +104,8 @@ test("signed unsupported, malformed and cross-repository payloads are refused wi
 }));
 
 test("old reopened events cannot regress lifecycle; proposals read current state and polling recovers", async () => fixture(async root => {
-  const local = (await create({ title: "Local stale title", tags: "gh:fixture/repo#1" }, { cwd: root, pmRoot: root })).item;
-  await create({ title: "Unrelated linked issue", tags: "gh:fixture/repo#2" }, { cwd: root, pmRoot: root });
+  const local = (await createImportMirror({ title: "Local stale title", tags: "gh:fixture/repo#1" }, { cwd: root, pmRoot: root })).item;
+  await createImportMirror({ title: "Unrelated linked issue", tags: "gh:fixture/repo#2" }, { cwd: root, pmRoot: root });
   for (const [id, action] of [["new", "closed"], ["old", "reopened"], ["missing-link", "opened"]]) await acceptGithubWebhook(root, delivery(id, id === "missing-link" ? 99 : 1, action));
   let state = "CLOSED";
   await withMockGithub((request, response, body) => {
@@ -139,7 +140,7 @@ test("old reopened events cannot regress lifecycle; proposals read current state
 }));
 
 test("missing provider state stays pending, limits drain batches, and API failures retry", async () => fixture(async root => {
-  await create({ title: "Local", tags: "gh:fixture/repo#1" }, { cwd: root, pmRoot: root });
+  await createImportMirror({ title: "Local", tags: "gh:fixture/repo#1" }, { cwd: root, pmRoot: root });
   await acceptGithubWebhook(root, delivery("first"));
   await acceptGithubWebhook(root, delivery("second"));
   await withMockGithub((_request, response) => jsonResponse(response, 200, { data: { repository: { i1: null } } }), async () => {
@@ -167,7 +168,7 @@ test("retry batches rotate durably, wrap, and advance even when provider reads t
   const ids = ["retry-a", "retry-b", "ready-c"].sort((a, b) =>
     createHash("sha256").update(a).digest("hex").localeCompare(createHash("sha256").update(b).digest("hex")));
   for (let index = 0; index < ids.length; index++) {
-    await create({ title: "Linked", tags: `gh:fixture/repo#${index + 1}` }, { cwd: root, pmRoot: root });
+    await createImportMirror({ title: "Linked", tags: `gh:fixture/repo#${index + 1}` }, { cwd: root, pmRoot: root });
     await acceptGithubWebhook(root, delivery(ids[index]!, index + 1));
   }
   let unavailable = false;
@@ -197,7 +198,7 @@ test("retry batches rotate durably, wrap, and advance even when provider reads t
 }));
 
 test("expired live processor locks cannot be stolen during delayed provider reads", async () => fixture(async root => {
-  await create({ title: "Linked", tags: "gh:fixture/repo#1" }, { cwd: root, pmRoot: root });
+  await createImportMirror({ title: "Linked", tags: "gh:fixture/repo#1" }, { cwd: root, pmRoot: root });
   await acceptGithubWebhook(root, delivery("before-read"));
   let signalRead: (response: ServerResponse) => void;
   const reading = new Promise<ServerResponse>(resolve => { signalRead = resolve; });
@@ -239,7 +240,7 @@ test("expired intake locks also require explicit recovery", async () => fixture(
 }));
 
 test("slow provider reconciliation never blocks durable authenticated intake", async () => fixture(async root => {
-  await create({ title: "Linked", tags: "gh:fixture/repo#1" }, { cwd: root, pmRoot: root });
+  await createImportMirror({ title: "Linked", tags: "gh:fixture/repo#1" }, { cwd: root, pmRoot: root });
   await acceptGithubWebhook(root, delivery("before-read"));
   let signalRead: (response: ServerResponse) => void;
   const reading = new Promise<ServerResponse>(resolve => { signalRead = resolve; });
@@ -265,7 +266,7 @@ test("slow provider reconciliation never blocks durable authenticated intake", a
 }));
 
 test("provider previews do not copy durable inbox storage", async () => fixture(async root => {
-  await create({ title: "Linked", tags: "gh:fixture/repo#1" }, { cwd: root, pmRoot: root });
+  await createImportMirror({ title: "Linked", tags: "gh:fixture/repo#1" }, { cwd: root, pmRoot: root });
   await acceptGithubWebhook(root, delivery());
   const opaque = join(root, "github-webhooks", "opaque-receipt");
   await writeFile(opaque, "Adapter-owned storage must never enter tracker previews");

@@ -76,8 +76,8 @@ test("copied prose, structured multi-provider owners, exact refs and bounded gra
   const before = snapshot(root);
   const report = await exploreGithubIdentities(root);
   assert.equal(report.scanned, 11);
-  assert.equal(report.collisions, 4);
-  assert.equal(report.mentions, 2);
+  assert.equal(report.collisions, 2);
+  assert.equal(report.mentions, 5);
   assert.equal(report.nodes.find(node => node.id === conflict)?.native_owner, "fixture-provider");
   assert.equal(report.nodes.find(node => node.id === copied)?.ownership, "local");
   assert.equal((await exploreGithubIdentities(root, { identity: "gh:fixture/repo#2" })).nodes.find(node => node.id === provider)?.ownership, "provider");
@@ -135,7 +135,7 @@ test("refuse contradictory owners, source metadata, opaque providers and changed
   const b = await item(root, { tags: ["gh:fixture/repo#2"] });
   await assert.rejects(planGithubIdentityRepair(root, "gh:fixture/repo#2", a, b), code("ambiguous_identity"));
   const external = await item(root, { external_ref: key });
-  await assert.rejects(planGithubIdentityRepair(root, key, owner, external), code("ambiguous_identity"));
+  await assert.rejects(planGithubIdentityRepair(root, key, owner, external), code("unsupported_repair"));
   const before = snapshot(root);
   await item(root, { github_url: url });
   const multiple = snapshot(root);
@@ -144,7 +144,7 @@ test("refuse contradictory owners, source metadata, opaque providers and changed
   assert.notDeepEqual(before, multiple);
 }));
 
-for (const fields of [{ github_url: url }, { github_link_only: false }, { github_number: 1 }, { source_owner: "fixture-provider" }, { tags: [key, "gh:fixture/repo#2"] }]) {
+for (const fields of [{ github_url: url }, { github_link_only: false }, { github_number: 1 }, { source_owner: "fixture-provider" }]) {
   test(`source-owned duplicates require manual review (${Object.keys(fields).join()})`, async () => tracker(async root => {
     const owner = await item(root, { description: `GitHub issue ${url}` });
     const detach = await item(root, { tags: [key], ...fields });
@@ -161,7 +161,7 @@ test("registered command uses compact host TOON/JSON, read-only graph, repair pr
   const run = async (options: Record<string, unknown>) => (await harness.runCommand({ command: "github identity", pmRoot: root, args: [], options })).result;
   assert.equal((await run({}) as { scanned: number }).scanned, 2);
   const report = await run({ limit: "1", offset: "0", identity: key }) as { collisions: number };
-  assert.equal(report.collisions, 1);
+  assert.equal(report.collisions, 0);
   const proposed = await run({ identity: key, owner, detach }) as { approval: string };
   assert.match(proposed.approval, /^[a-f0-9]{64}$/);
   await assert.rejects(run({ owner }), code("invalid_options"));

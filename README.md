@@ -6,6 +6,12 @@ Import issues from any GitHub repo as pm items, export pm items back to GitHub (
 
 ---
 
+## Issue import identity
+
+A `gh:owner/repo#N` tag is a reference: any number of items may share it. Imports resolve persisted `github_url`, repository plus `github_number`, and legacy importer provenance (a source number/link marker with its repository tag, the generated source description, or the deterministic importer ID), without migrating existing trackers. A tag alone never selects an owner. Set `github_url` explicitly to link a local item.
+
+Only deterministic `<prefix>-github-<repository hash>-<N>` records receive full content mirroring. Other linked items keep their title, description, type/folder, body, creation time and existing tags; imports merge GitHub provenance and lifecycle only (existing completion time stays). Source closures before local creation stay in `github_closed_at`. Cross-provider links retain their provider lifecycle. Title/state conflicts appear in the sync PR body for review.
+
 ## Installation
 
 ```bash
@@ -451,7 +457,7 @@ checks.
 ### Keeping a mirror current
 
 Use `refresh` when your tracker deliberately mirrors only a few issues from a busy
-repository. It selects existing `gh:owner/repo#N` tags or explicit `github_url`
+repository. It selects explicit import identities, including `github_url`
 links (also `github_repo` with `github_number`), fetches those numbers in GraphQL
 batches of at most 100, and **never creates items**. Only `/issues/N` URLs are
 refreshable links: the batch query reads issue nodes, so a `/pull/N` URL is not
@@ -544,24 +550,20 @@ pm github import owner/repo --dry-run
 | `--with-comments` | boolean | Fetch issue comments and append them to the item body |
 | `--comments-mode <mode>` | `body`\|`annotations`\|`both` | How fetched GitHub comments are persisted (default `body`). `annotations` syncs comments into the pm item's native comments collection via the SDK; `both` writes the body section AND native comments. `annotations`/`both` are idempotent on re-import (dedupe by GitHub comment id) |
 | `--atomic` | boolean | Commit every create, update, close, and reopen in one workspace-writer-locked, crash-resumable transaction (requires pm CLI/SDK >=2026.7.20). Normal failure compensation restores updated/closed items and deletes newly created items; an incomplete compensation is reported explicitly for retry or repair. |
-| `--adopt-cited` | boolean | Explicitly opt in to conservative citation adoption (default: off). Tag new items `gh:owner/repo#N` instead. Default imports only report citation candidates. |
+| `--adopt-cited` | boolean | Explicitly opt in to conservative citation adoption (default: off). Set `github_url` to link an owner explicitly. Default imports only report citation candidates. |
 | `--link-deps` | boolean | After import, map dependency references in issue **bodies** (`Blocked by #N`, `Depends on owner/repo#N`, `Blocks #N`) to pm dependency edges between the linked items. Idempotent, best-effort, and re-runnable; see [Dependency linking](#dependency-linking---link-deps) below. |
-| `--gate` | boolean | Fail-closed privacy gate: verify plan completeness (every fetched issue accounted for exactly once) and provenance idempotency (every re-import lands on exactly one `gh:owner/repo#N`-tagged item) BEFORE the write, then scan the proposed tracker change with [`pm github gate`](#pm-github-gate) AFTER it. Any finding — or any unreadable scan input — exits non-zero so an automated pipeline can never commit or push the change. Embeds `gate` receipts in the result. |
+| `--gate` | boolean | Fail-closed privacy gate: verify plan completeness (every fetched issue accounted for exactly once) and provenance idempotency (every re-import lands on exactly one explicit importer identity) BEFORE the write, then scan the proposed tracker change with [`pm github gate`](#pm-github-gate) AFTER it. Any finding — or any unreadable scan input — exits non-zero so an automated pipeline can never commit or push the change. Embeds `gate` receipts in the result. |
 | `--dry-run` | boolean | Preview without writing |
 | `--type <type>` | string | Override pm item type (default: Issue) |
 
-Each imported item records GitHub provenance: the `gh:owner/repo#N` idempotency tag, a `github_author:<login>` tag, and an enriched description (`author @<login> · state reason <reason> · created <iso> · updated <iso>`). GitHub issues closed as `not_planned` import as pm `canceled` instead of `closed`, preserving the difference between completed work and deliberately dropped work. The integration declares the `github_url`, `github_number`, `github_state`, `github_author`, `github_created_at`, and `github_updated_at` schema fields.
+Each imported item records GitHub provenance: a `gh:owner/repo#N` reference tag, a `github_author:<login>` tag, and an enriched description (`author @<login> · state reason <reason> · created <iso> · updated <iso>`). GitHub issues closed as `not_planned` import as pm `canceled` instead of `closed`, preserving the difference between completed work and deliberately dropped work. The integration declares the `github_url`, `github_number`, `github_state`, `github_author`, `github_created_at`, and `github_updated_at` schema fields.
 
-The primary way to prevent duplicate imports is to tag an item
-`gh:owner/repo#N` **when it is created**, for example
-`pm create issue "Fix widget behavior" --tags "gh:acme/widgets#30"`.
-For an existing item, use `pm update <id> --add-tags "gh:acme/widgets#30"`. A prose URL is context, not an
-ownership declaration. Existing tag/structured URL/provider matching takes
-precedence and is unchanged.
+To reuse a curated local item, set its `github_url` field to the exact issue URL.
+A `gh:owner/repo#N` tag or prose URL remains a reference; it cannot claim import ownership.
 
 **Citation adoption is off by default.** Manual imports, the legacy alias and
 scheduled gated syncs retain normal create behavior when explicit ownership is
-absent. They report read-only `citation_candidates` so an agent can tag the
+absent. They report read-only `citation_candidates` so an agent can explicitly link the
 correct item, including when several candidates exist. No candidate is adopted
 or ambiguity-blocked by default.
 
@@ -643,7 +645,7 @@ pm github import owner/repo --with-comments --comments-mode annotations  # same 
 
 ### Dependency linking (`--link-deps`)
 
-GitHub issue authors declare cross-issue dependencies in prose — `Blocked by #12`, `Depends on owner/repo#5`, `Blocks #9`. A flat import throws that structure away, leaving pm items with no blocker graph. `--link-deps` runs an opt-in second pass that parses those references from each issue's **body** and materializes them as pm dependency edges between the corresponding pm items, resolved through the same `gh:owner/repo#N` provenance tags the import writes.
+GitHub issue authors declare cross-issue dependencies in prose — `Blocked by #12`, `Depends on owner/repo#5`, `Blocks #9`. A flat import throws that structure away, leaving pm items with no blocker graph. `--link-deps` runs an opt-in second pass that parses those references from each issue's **body** and materializes them as pm dependency edges between the corresponding pm items, resolved through the same explicit identities the import writes.
 
 The effect is context you can act on: `pm next` and `pm deps` surface the real ready/blocked ordering instead of an undifferentiated list.
 
@@ -822,7 +824,7 @@ Unreadable input, malformed or truncated diffs, binary input, invalid UTF-8, Git
 
 1. **dry-run plan** — every fetched issue is prepared up front;
 2. **completeness check** — every fetched issue is accounted for exactly once (planned or explicitly skipped), nothing outside the fetch appears, counts reconcile — all before any mutation;
-3. **idempotency check** — no duplicate `gh:owner/repo#N` provenance tags in the existing corpus, every new entry born with its tag, no two plan entries resolving to the same item — so a second run reuses the existing item;
+3. **idempotency check** — no duplicate explicit importer identities in the existing corpus, every new entry born with its tag, no two plan entries resolving to the same item — so a second run reuses the existing item;
 4. **write** — the ordinary (atomic or per-item) import;
 5. **gate** — the proposed tracker change is scanned; a finding exits non-zero, so the caller never commits or pushes.
 
@@ -1180,7 +1182,7 @@ Optional inputs:
 
 | Input | Default | Behavior |
 | --- | --- | --- |
-| `adopt-cited` | `false` | Explicitly enable conservative normalized citation adoption for preview, import and repeat verification. Primary prevention is creating items with `gh:owner/repo#N` tags. Leave false to retain normal creates with read-only candidate hints. |
+| `adopt-cited` | `false` | Explicitly enable conservative normalized citation adoption for preview, import and repeat verification. Use `github_url` to link an owner explicitly. Leave false to retain normal creates with read-only candidate hints. |
 | `npm-project-dir` | `.` | Relative npm project directory for `npm ci --ignore-scripts`, the CLI `node_modules/.bin` PATH entry, and `post-import-script`. Must have `package.json`, contain no `..` segments, and resolve inside the workspace (including symlinks); invalid paths fail before caching/install. The tracker and publication scope stay at the repository root. |
 | `post-import-script` | `changelog:full` | Caller npm script name invoked with `npm run --if-present` after import and before the final scan. Override for a different package script, or set `""` to disable. Missing scripts are skipped. Raw shell commands are not accepted. Generated `CHANGELOG.md` is staged with the tracker. Changing any file outside the documented scope fails the run, whether staged, unstaged, or untracked. |
 | `automation-app-client-id` | `""` | Optional GitHub App client ID, paired with the `automation_app_private_key` workflow-call secret. Enables eligible native PR runs through a fresh repo-scoped token; absent credentials retain GITHUB_TOKEN with a notice. |
@@ -1319,7 +1321,7 @@ github_link_only: false
 
 Release attribution uses the actual dates of locally available calendar tags, including annotated tag dates. A closed issue belongs to the first tag at or after its closure: before the first tag goes to that first release, between two tags goes to the second, and after the latest tag remains pending. Fetch the complete tag history before importing; the reusable sync workflow already does this. Regenerate with pm-changelog's `--respect-item-release` so a historical import stays in its declared release window.
 
-Before creating an item, import checks the complete tracker for its provenance tag, GitHub URLs in provenance or link metadata, and Linear/Jira/ADO links referenced by the GitHub issue body. A unique existing external owner receives the GitHub tag and source metadata; its title, body, provider identity, creation/completion dates and release remain intact. A persisted `github_link_only` marker preserves that ownership on subsequent syncs. Free-text descriptions and bodies do not declare GitHub ownership. Ambiguous matches refuse the import before writes with `--gate` or `--atomic`. A plain multi-issue import may write earlier issues before rejecting a later ambiguous match.
+Before creating an item, import checks the complete tracker for explicit importer identity, legacy GitHub URLs in provenance or link metadata, and Linear/Jira/ADO links referenced by the GitHub issue body. A unique existing external owner receives the GitHub tag and source metadata; its title, body, provider identity, creation/completion dates and release remain intact. A persisted `github_link_only` marker preserves that ownership on subsequent syncs. Free-text descriptions and bodies do not declare GitHub ownership. Ambiguous matches refuse the import before writes with `--gate` or `--atomic`. All import modes resolve the complete identity plan before writing.
 
 With `--gate` and a nonempty filtered issue list, both preview and apply results include a `plan` with source dates, closure reason, release, target identity, link/create/update action and state-conflict decision. An empty filtered issue list returns without a `plan`, including with `--gate --dry-run`. GitHub wins lifecycle conflicts for GitHub-owned imports. A canceled item that GitHub later reports as completed uses the SDK's explicit repeat-closure transition with the source reason. A linked external owner keeps its local status, and the plan records `preserve-provider-owner`; `github_state` still records the source state. Atomic transaction identity includes the latest external edit or different lifecycle generation in history. Local state edits and repeated state cycles force reconciliation, while staging and compensation keep crash retries on the same journal. Finalization runs before the SDK commits; its compensation has the known SDK limitation below. It is idempotent and runs again after a recovered atomic journal, so an interrupted finalization can be repaired by retrying the same import before the gate permits a push.
 

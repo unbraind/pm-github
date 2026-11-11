@@ -118,7 +118,7 @@ test("atomic dry-run previews creates and updates without invoking the SDK", asy
       {
         resolveToken: () => undefined,
         fetchIssues: async () => [issue(1, "New"), issue(2, "Existing"), issue(3, "   ")],
-        readItems: () => [{ id: "existing-id", tags: ["gh:acme/widgets#2"] }],
+        readItems: () => [{ id: "existing-id", github_url: "https://github.com/acme/widgets/issues/2", tags: ["gh:acme/widgets#2"] }],
         commitAtomic: async () => {
           sdkCalls++;
           throw new Error("atomic dry-run must not call the SDK commit path");

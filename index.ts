@@ -34,7 +34,7 @@ import { compileIssueForm, completeIssueForm, readRepositoryIssueForm, refuseIss
 export { compileIssueForm, completeIssueForm, readRepositoryIssueForm } from "./issue-forms.ts";
 export type { IssueFormInput, IssueFormSelection, IssueFormContract, IssueFormReport, IssueFormCompletion, IssueFormRefusalCode, FormField, FormRepair, IssueFormReader } from "./issue-forms.ts";
 import {
-  AmbiguousCitationError, buildImportFidelity, fetchImportTimeline, importFidelityFields, matchImportedIssue, normalizeImportValue, persistImportFidelity, readImportReleases, selectImportContextIndex, serializeImportTags, validateImportLifetime,
+  AmbiguousCitationError, importIdentityKeys, indexByImportIdentity, importerCreatedItem, buildImportFidelity, fetchImportTimeline, importFidelityFields, matchImportedIssue, normalizeImportValue, persistImportFidelity, readImportReleases, selectImportContextIndex, serializeImportTags, validateImportLifetime,
   type AmbiguousCitationPlan, type CitationCandidate, type ImportFidelity,
 } from "./import-fidelity.ts";
 import { refreshChanges, runRefresh } from "./refresh.ts";
@@ -829,10 +829,8 @@ export class CommandError extends Error {
 /**
  * Build the `gh:owner/repo#N` provenance tag linking a pm item to a GitHub issue.
  *
- * The tag is the idempotency key: it round-trips losslessly through
- * `pm create --tags` / `pm list --json`, so a re-import can find the existing
- * item and UPDATE it instead of duplicating. Provenance also rides on declared
- * schema fields and the description, but the tag is what matching keys on.
+ * Tags are portable references for search and review. Import identity comes
+ * from importer-owned provenance; shared references never select an owner.
  *
  * @param repo - `owner/repo`, lowercased into the tag.
  * @param issueNumber - The issue/PR number.
@@ -1338,8 +1336,10 @@ export interface PreparedGithubImport {
   fidelity?: ImportFidelity;
   /** Existing external owner receives a link without replacing its provider context. */
   linkOnly?: boolean;
+  /** Existing local content is curated; only source lifecycle and provenance may merge. */
+  preserveContent?: boolean;
   /** Auditable identity and lifecycle conflict decision. */
-  identity?: { via: string; conflict?: { local: string; github: string; rule: string } };
+  identity?: { via: string; title_conflict?: boolean; conflict?: { local: string; github: string; rule: string } };
   /** Rejected prose references remain visible for explicit manual provenance tagging. */
   citation_candidates?: CitationCandidate[];
   match?: PmItem;
@@ -1431,6 +1431,7 @@ export function deriveAtomicTransactionId(
       milestone: entry.milestone ?? null,
       fidelity: entry.fidelity ?? null,
       linkOnly: entry.linkOnly ?? false,
+      ...(entry.preserveContent ? { preserveContent: true } : {}),
     }));
   const payload = crypto
     .createHash("sha256")
@@ -1474,7 +1475,7 @@ export function buildAtomicImportMutations(
   const closing = canonicalGithubStatus(entry.status, statuses) === canonicalGithubStatus("closed", statuses);
   const changed = updateOnly ? new Set(refreshChanges(entry, statuses).map(change => change.field)) : undefined;
   const audit = updateOnly ? { comment: [`Refreshed linked GitHub issue ${repo.toLowerCase()}#${entry.issueNumber}`] } : {};
-  if (entry.linkOnly && entry.match?.id) {
+  if ((entry.linkOnly || entry.preserveContent) && entry.match?.id) {
     return { itemId: entry.match.id, mutations: [{ op: "update", id: entry.match.id, options: { ...(!changed || changed.has("tags") ? importTagOptions(entry) : {}), ...audit } }] };
   }
   const sharedOptions: Record<string, unknown> = {
@@ -1705,7 +1706,7 @@ async function commitGithubImportTransaction(config: {
   /** Finalize before the SDK commits, and repair source metadata on recovered journals. */
   const finalize = async (): Promise<void> => {
     for (const entry of entries) {
-      if (entry.fidelity) await persistImportFidelity(pmRoot, itemIds.get(entry.issueNumber)!, entry.fidelity, Boolean(entry.linkOnly), opts.updateOnly);
+      if (entry.fidelity) await persistImportFidelity(pmRoot, itemIds.get(entry.issueNumber)!, entry.fidelity, Boolean(entry.linkOnly), opts.updateOnly, undefined, entry.preserveContent);
     }
   };
   let committed = false;
@@ -1847,12 +1848,12 @@ export function validateGithubImportFidelity(entry: PreparedGithubImport, repo: 
     // Missing source closure dates preserve native completion metadata.
     // Check the effective lifecycle from the current read-only snapshot too.
     const current = items?.find(item => item.id === entry.match!.id) ?? entry.match;
-    const projected = { ...current, ...importFidelityFields(fidelity, Boolean(entry.linkOnly)) };
+    const projected = { ...current, ...importFidelityFields(fidelity, Boolean(entry.linkOnly), entry.preserveContent ? current : undefined) };
     if (projected.closed_at && Date.parse(String(projected.closed_at)) < Date.parse(String(projected.created_at))) {
       throw new CommandError(`${context}: its persisted fidelity conflicts with the native closure date.`);
     }
   }
-  if (entry.linkOnly !== undefined && typeof entry.linkOnly !== "boolean") {
+  if ((entry.linkOnly !== undefined && typeof entry.linkOnly !== "boolean") || (entry.preserveContent !== undefined && typeof entry.preserveContent !== "boolean")) {
     throw new CommandError(`${context}: its persisted ownership is invalid.`);
   }
 }
@@ -2807,7 +2808,7 @@ export interface ResolvedDepEdge {
 }
 
 /** Minimal item-metadata shape the link pass reads (subset of the SDK `ItemMetadata`). */
-export interface DepLinkSnapshotItem {
+export interface DepLinkSnapshotItem extends PmItem {
   id: string;
   tags: string[];
   dependencies?: Array<{ id: string; kind: string }>;
@@ -2909,14 +2910,8 @@ export function buildProvenanceIndexFromMetadata(
   const index = new Map<string, string>();
   for (const item of items) {
     if (!item.id) continue;
-    for (const tag of item.tags ?? []) {
-      const p = parseProvenanceTag(tag);
-      // First writer wins: a provenance tag is a 1:1 issue↔item link, and the
-      // import guarantees uniqueness; guarding keeps a hand-edited duplicate
-      // deterministic rather than order-dependent.
-      if (p && !index.has(`${p.repo}#${p.number}`)) {
-        index.set(`${p.repo}#${p.number}`, item.id);
-      }
+    for (const key of importIdentityKeys(item)) {
+      if (!index.has(key)) index.set(key, item.id);
     }
   }
   return index;
@@ -2994,9 +2989,7 @@ function defaultDepLinkSdk(): DepLinkSdk {
     listAllItemMetadata: async (pmRoot: string) => {
       const raw = await sdkListAllItemMetadata(pmRoot);
       return raw.map((i) => ({
-        id: i.id,
-        tags: i.tags,
-        dependencies: i.dependencies,
+        ...i,
       }));
     },
     collectNewOrderingCycleWarnings:
@@ -3132,10 +3125,11 @@ export async function prepareGithubImport(
 
   const identity = matchImportedIssue(fidelityContext.items, issue, match, opts.adoptCited === true);
   match = identity.item;
+  const preserveContent = Boolean(match && !importerCreatedItem(match, repo, issue.number));
   const timeline = await fidelityContext.timeline(issue, repo, token);
   const fidelity = buildImportFidelity(issue, fidelityContext.releases, timeline);
   const targetStatus = mapState(issue.state, issue.state_reason);
-  const conflict = match?.status && canonicalGithubStatus(match.status, fidelityContext.statuses) !== canonicalGithubStatus(targetStatus, fidelityContext.statuses) && (githubStatusIsTerminal(match.status, fidelityContext.statuses) || issue.state === "closed")
+  const conflict = match?.status && canonicalGithubStatus(match.status, fidelityContext.statuses) !== canonicalGithubStatus(targetStatus, fidelityContext.statuses) && (preserveContent || githubStatusIsTerminal(match.status, fidelityContext.statuses) || issue.state === "closed")
     ? { local: match.status, github: issue.state, rule: identity.linkOnly ? "preserve-provider-owner" : "github-source-wins" } : undefined;
   const kind = issue.pull_request ? "PR" : "issue";
   const labels = issue.labels.map((label) => label.name).filter(Boolean);
@@ -3168,7 +3162,7 @@ export async function prepareGithubImport(
       (issue.state_reason ? ` · state reason ${issue.state_reason}` : "") +
       ` · created ${issue.created_at} · updated ${issue.updated_at}`,
     body: writeCommentsToBody ? composeBody(issue, comments) : (issue.body || ""),
-    tags: toImportTags([...(identity.linkOnly || identity.via === "citation" ? match!.tags ?? [] : []), ...githubLabelsToTags([...labels, tag, ...(ghAuthorTag ? [ghAuthorTag] : [])])]),
+    tags: toImportTags([...(preserveContent || identity.linkOnly || identity.via === "citation" ? match!.tags ?? [] : []), ...githubLabelsToTags(preserveContent ? [tag] : [...labels, tag, ...(ghAuthorTag ? [ghAuthorTag] : [])])]),
     assignee: issue.assignee?.login,
     milestone: issue.milestone?.title,
     comments,
@@ -3176,7 +3170,8 @@ export async function prepareGithubImport(
     closedAt: issue.closed_at ?? undefined,
     fidelity,
     linkOnly: identity.linkOnly,
-    identity: { via: identity.via, ...(conflict ? { conflict } : {}) },
+    ...(preserveContent ? { preserveContent: true } : {}),
+    identity: { via: identity.via, ...(preserveContent && match!.title !== title ? { title_conflict: true } : {}), ...(conflict ? { conflict } : {}) },
     ...(identity.citation_candidates ? { citation_candidates: identity.citation_candidates } : {}),
     match,
   };
@@ -3185,7 +3180,7 @@ export async function prepareGithubImport(
 /** Recognize a complete source projection without treating the SDK mutation clock as content. */
 export function importEntryUnchanged(entry: PreparedGithubImport, types?: ReadonlyMap<string, string>, statuses?: GithubStatusRegistry): boolean {
   if (!entry.match?.id || !entry.fidelity || refreshChanges(entry, statuses).length !== 0) return false;
-  if (entry.linkOnly) return true;
+  if (entry.linkOnly || entry.preserveContent) return true;
   const fields: Record<string, unknown> = { type: entry.itemType, description: entry.description, body: entry.body,
     ...(entry.assignee ? { assignee: entry.assignee } : {}), ...(entry.milestone ? { sprint: entry.milestone } : {}) };
   return Object.entries(fields).every(([field, value]) => normalizeImportValue(field, ownValue(entry.match, field) ?? "", types, statuses) === normalizeImportValue(field, value, types, statuses));
@@ -3205,9 +3200,9 @@ export interface ImportPlanCompletenessReceipts {
 export interface ImportIdempotencyReceipts {
   /** Existing untagged items selected by exact prose citation, each with one landing target. */
   readonly adopted: number;
-  /** Distinct `gh:owner/repo#N` provenance keys in the existing corpus. */
+  /** Distinct durable import identity keys in the existing corpus. */
   readonly provenance_indexed: number;
-  /** Number of plan entries matched to an existing item via its provenance tag. */
+  /** Number of plan entries matched to an existing importer identity. */
   readonly matched_by_provenance: number;
   /** Number of plan entries that will be born new; each must carry its tag. */
   readonly new_entries: number;
@@ -3264,14 +3259,11 @@ export function verifyImportPlanCompleteness(
 }
 
 /**
- * Verify that a gated import's plan keeps a second run a no-op via provenance tags.
+ * Verify that explicit import identities and planned targets are unique.
  *
- * Idempotency is only real when every re-import lands on exactly one item: a
- * corpus with two items sharing a `gh:owner/repo#N` tag updates one and lets the
- * other drift, and a plan entry targeting a second entry's item would write the
- * same item twice. The check fails closed on duplicate provenance tags in the
- * existing corpus, on plan entries that would create a new item without its
- * provenance tag, and on two plan entries resolving to the same existing item.
+ * Shared gh: references are unrestricted. Persisted importer claims must still
+ * identify one item, and every new entry must carry its reference for review.
+ * Two planned issues cannot write the same existing local item.
  *
  * @param existing - The complete existing pm item corpus.
  * @param prepared - The plan entries about to be written.
@@ -3283,17 +3275,14 @@ export function verifyImportIdempotency(
   prepared: readonly PreparedGithubImport[],
   repo: string,
 ): ImportIdempotencyReceipts {
-  const tagOwners = new Map<string, string>();
-  const duplicateTags = new Set<string>();
+  const identityOwners = new Map<string, string>();
+  const duplicateIdentities = new Set<string>();
   for (const item of existing) {
     if (!item.id) continue;
-    for (const tag of item.tags ?? []) {
-      const parsed = parseProvenanceTag(tag);
-      if (!parsed) continue;
-      const key = `${parsed.repo}#${parsed.number}`;
-      const prior = tagOwners.get(key);
-      if (prior && prior !== item.id) duplicateTags.add(key);
-      else tagOwners.set(key, item.id);
+    for (const key of importIdentityKeys(item)) {
+      const prior = identityOwners.get(key);
+      if (prior && prior !== item.id) duplicateIdentities.add(key);
+      else identityOwners.set(key, item.id);
     }
   }
   const matchedIds: string[] = [];
@@ -3307,9 +3296,9 @@ export function verifyImportIdempotency(
     if (!importTagValues(entry).includes(provenanceTag(repo, entry.issueNumber))) untaggedNewEntries++;
   }
   const conflictingTargets = matchedIds.length - new Set(matchedIds).size;
-  if (duplicateTags.size > 0 || untaggedNewEntries > 0 || conflictingTargets > 0) {
+  if (duplicateIdentities.size > 0 || untaggedNewEntries > 0 || conflictingTargets > 0) {
     throw new CommandError(
-      `pm github gate: import plan is not idempotent — ${duplicateTags.size} duplicate provenance tag(s) ` +
+      `pm github gate: import plan is not idempotent — ${duplicateIdentities.size} duplicate import identity claim(s) ` +
         `in the existing corpus, ${untaggedNewEntries} new entr(y/ies) without a provenance tag, ` +
         `${conflictingTargets} conflicting target(s). No item was written.`,
       EXIT_CODE.GENERIC_FAILURE,
@@ -3317,7 +3306,7 @@ export function verifyImportIdempotency(
   }
   return {
     adopted: prepared.filter(entry => entry.identity?.via === "citation").length,
-    provenance_indexed: tagOwners.size,
+    provenance_indexed: identityOwners.size,
     matched_by_provenance: prepared.filter(entry => entry.match?.id && entry.identity?.via !== "citation").length,
     new_entries: prepared.length - matchedIds.length,
   };
@@ -3335,7 +3324,7 @@ export function verifyImportIdempotency(
  * @returns Number of durable issue identities verified.
  */
 export function verifyImportedProvenance(existing: PmItem[], prepared: readonly PreparedGithubImport[], repo: string): number {
-  const index = indexByProvenance(existing);
+  const index = indexByImportIdentity(existing);
   const persisted = prepared.map(entry => ({ ...entry, match: index.get(`${repo.toLowerCase()}#${entry.issueNumber}`) }));
   if (persisted.some(entry => !entry.match?.id)) throw new CommandError("pm github gate: persisted corpus does not account for the complete import plan. Nothing may be pushed.");
   verifyImportIdempotency(existing, persisted, repo);
@@ -3499,7 +3488,7 @@ export async function runImport(
     return decodeCompletePmItems(corpus);
   };
   const existingItems = await readImportItems();
-  const existing = indexByProvenance(existingItems);
+  const existing = indexByImportIdentity(existingItems);
   const fidelityContext = { statuses: workspace.statuses, items: existingItems, releases: readImportReleases(pmRoot),
     timeline: dependencies.fetchIssueTimeline ?? (dependencies.fetchIssues ? async () => [] : fetchImportTimeline) };
 
@@ -3572,8 +3561,8 @@ export async function runImport(
     if (opts.gate) {
       const preview = runCommandTrackerGate({ pmRoot, planOnly: opts.dryRun, plannedItems: planned.map(entry => ({
         itemId: entry.match?.id ?? `github-issue-${entry.issueNumber}`,
-        fields: { ...entry.fidelity, title: entry.title, description: entry.description, body: entry.body, tags: entry.tags,
-          assignee: entry.assignee, sprint: entry.milestone,
+        fields: { ...entry.fidelity, title: entry.preserveContent ? entry.match!.title : entry.title, description: entry.preserveContent ? entry.match!.description : entry.description, body: entry.preserveContent ? entry.match!.body : entry.body, tags: entry.tags,
+          assignee: entry.preserveContent ? entry.match!.assignee : entry.assignee, sprint: entry.preserveContent ? entry.match!.sprint : entry.milestone,
           comments: entry.syncAnnotations ? entry.comments.map(comment => ({
             author: comment.user?.login, text: comment.body, created_at: comment.created_at,
           })) : [] },
@@ -3593,11 +3582,11 @@ export async function runImport(
     return { issue: entry.issueNumber, item: entry.match?.id,
       action: importEntryUnchanged(entry, typeNames, workspace.statuses) ? "unchanged" : entry.identity?.via === "citation" ? "adopt" : entry.linkOnly ? "link" : entry.match?.id ? "update" : "create", status: entry.status,
       ...source, github_close_reason: reason,
-      created_at: entry.linkOnly ? entry.match!.created_at : source.github_created_at,
+      created_at: entry.linkOnly || entry.preserveContent ? entry.match!.created_at : source.github_created_at,
       updated_at_policy: "sdk-mutation-clock; source in github_updated_at",
-      closed_at: entry.linkOnly ? entry.match!.closed_at : source.github_closed_at,
-      close_reason: entry.linkOnly ? "preserved-provider-owner" : reason,
-      release: entry.linkOnly ? "preserved-provider-owner" : source.github_release,
+      closed_at: entry.linkOnly ? entry.match!.closed_at : importFidelityFields(source, false, entry.preserveContent ? entry.match : undefined).closed_at,
+      close_reason: entry.linkOnly ? "preserved-provider-owner" : entry.preserveContent ? "preserved-local-owner" : reason,
+      release: entry.linkOnly ? "preserved-provider-owner" : entry.preserveContent ? "preserved-local-owner" : source.github_release,
       identity: entry.identity,
       ...(entry.citation_candidates ? { citation_candidates: entry.citation_candidates } : {}) };
   });
@@ -3783,13 +3772,13 @@ export async function runImport(
       continue;
     }
 
-    if (prepared.linkOnly) {
+    if (prepared.linkOnly || prepared.preserveContent) {
       const ownerId = match!.id!;
       const nativeTags = importTagArguments(prepared);
       const linked = nativeTags.length
         ? pmRun(["--path", pmRoot, "update", ownerId, ...nativeTags]) : { ok: true };
       if (!linked.ok) throw new CommandError(`Could not link GitHub issue #${issue.number} to its existing owner.`);
-      await persistImportFidelity(pmRoot, ownerId, prepared.fidelity!, true);
+      await persistImportFidelity(pmRoot, ownerId, prepared.fidelity!, Boolean(prepared.linkOnly), false, undefined, prepared.preserveContent);
       if (prepared.identity?.via === "citation") adopted++;
       else updated++;
       continue;
@@ -3856,6 +3845,7 @@ export async function runImport(
     const createArgs = [
       "--path", pmRoot, "create",
       "--title", title,
+      "--id", deriveAtomicItemId(repo, issue.number, workspace.settings.id_prefix, sdkNormalizeItemId),
       "--type", opts.itemType,
       "--status", createStatus,
       "--description", description,
@@ -6707,7 +6697,7 @@ export function isMutatingGithubCommand(command: string, options: Record<string,
 // ---------------------------------------------------------------------------
 
 const IMPORT_FLAGS = [
-  { long: "--adopt-cited", description: "Opt in to normalized, anchored citation adoption (default: off). Tag items gh:owner/repo#N when creating them; default imports only report citation candidates" },
+  { long: "--adopt-cited", description: "Opt in to normalized, anchored citation adoption (default: off). Set github_url to explicitly link an owner; default imports only report citation candidates" },
   { long: "--issue", value_name: "N[,N...]", description: "Fetch exactly these issue numbers, #N, or same-repo owner/repo#N references; conflicts with --state/--all/--labels/--since/--assignee/--milestone/--limit. Missing numbers fail before writes (reported by --dry-run); PRs require --include-prs" },
   { long: "--limit", value_name: "n", description: "Positive list-mode issue cap, newest-updated first; reports limit and truncated when more exist (one extra matching issue is fetched to check). Invalid with --issue" },
   { long: "--all", description: "Include closed issues (shorthand for --state all)" },
@@ -6723,7 +6713,7 @@ const IMPORT_FLAGS = [
   { long: "--comments-mode", value_name: "body|annotations|both", description: "How to persist fetched GitHub comments: `body` (default, embed in item body), `annotations` (sync to the pm item's native comments collection), or `both`. `annotations`/`both` are idempotent on re-import (dedupe by GitHub comment id)" },
   { long: "--atomic", description: "Commit the complete import as one workspace-writer-locked, crash-resumable transaction (pm-cli >=2026.7.20); compensate applied mutations on failure and report incomplete compensation" },
   { long: "--link-deps", description: "After import, map dependency references in issue bodies (`Blocked by #N`, `Depends on owner/repo#N`, `Blocks #N`) to pm dependency edges between the linked items. Idempotent; skips self- and unresolved references; ordering cycles are reported (via the SDK ordering-cycle advisory), not rejected" },
-  { long: "--gate", description: "Fail-closed privacy gate: verify plan completeness and provenance-tag idempotency before the write, then scan the proposed tracker change for credentials, personal data, and host paths after it; any finding (or unreadable scan input) fails the import so nothing is ever pushed" },
+  { long: "--gate", description: "Fail-closed privacy gate: verify plan completeness and explicit-identity idempotency before the write, then scan the proposed tracker change for credentials, personal data, and host paths after it; any finding (or unreadable scan input) fails the import so nothing is ever pushed" },
   { long: "--dry-run", description: "Preview without writing" },
   { long: "--type", value_name: "type", description: "Override pm item type (default: Issue)" },
 ];
@@ -6865,7 +6855,7 @@ export default defineExtension({
     }, {
       description:
         "Fetch GitHub issues from a repo and create/update pm items (idempotent " +
-        "on re-import via the `gh:owner/repo#N` provenance tag). Skips pull " +
+        "on re-import via persisted GitHub identity). Skips pull " +
         "requests by default.",
       intent: "import GitHub issues as pm items",
       arguments: [
@@ -7170,7 +7160,7 @@ export default defineExtension({
       name: "gh-issues import",
       description:
         "Fetch GitHub issues from a repo and create/update pm items (idempotent " +
-        "on re-import via the `gh:owner/repo#N` provenance tag). Skips pull " +
+        "on re-import via persisted GitHub identity). Skips pull " +
         "requests by default. Uses GITHUB_TOKEN/GH_TOKEN (or the authenticated " +
         "gh CLI) when available for 5000 req/hr and private repos; falls back to " +
         "the unauthenticated API (60 req/hr). Equivalent to `pm github import`.",

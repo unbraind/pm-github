@@ -1,0 +1,14 @@
+id: pm-github-project-reference-followup
+title: Audit Projects v2 reference fallback and curated item ownership
+description: "Static inspection found a separate board-import path: projects.ts indexPmByIssue indexes free-form gh tags, buildProjectImportPlan uses that fallback, and index.ts runProjectImport writes title, description and body on an update. Reproduce with real SDK trackers, then define explicit board ownership and migration-free compatibility for existing gh-project markers. This is separate from the gated REST issue importer fixed by issue 230."
+type: Issue
+status: open
+priority: 2
+tags[4]: follow-up,"gh:unbraind/pm-github#230",projects,reference-identity
+created_at: "2026-11-11T11:09:25.465Z"
+updated_at: "2026-11-11T11:09:27.552Z"
+author: codex-github230-1111
+files[2]{path,scope}:
+  index.ts,project
+  projects.ts,project
+body: ""

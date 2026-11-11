@@ -1,0 +1,60 @@
+id: pm-github-reference-identity
+title: Keep GitHub reference tags separate from import identity
+description: "Preserve curated local fields, allow shared reference tags, and retain migration-free matching of existing importer provenance."
+type: Issue
+status: in_progress
+priority: 2
+tags[1]: "gh:unbraind/pm-github#230"
+created_at: "2026-11-11T10:19:25.073Z"
+updated_at: "2026-11-11T11:42:48.949Z"
+author: codex-github230-1111
+comments[8]{created_at,author,text}:
+  "2026-11-11T10:19:28.756Z",codex-github230-1111,"Read issue 230 and all comments. Branch starts from main; PR229 changes workflows and docs separately. Plan: distinguish explicit importer identity from references, preserve curated linked content, retain legacy persisted provenance, and prove behavior with real SDK trackers and behavioral reverts. Task-specific gate budget applies: focused importer/sync/dependent tests, lint and typecheck; full suite only within 45 minutes."
+  "2026-11-11T10:24:30.654Z",codex-github230-1111,"Implemented separate durable import identity lookup; shared gh references no longer select owners or collide. Curated links merge provenance/lifecycle while deterministic importer records mirror content. New real SDK regressions pass 9/9, including no-git curated links and byte-identical legacy resync beside shared references. Reviewing existing tests that assumed tag-only ownership; updating mirror fixtures to explicit importer identities."
+  "2026-11-11T10:33:45.352Z",codex-github230-1111,"Behavioral revert proof in a disposable package copy: rebuilt after restoring released matchImportedIssue, prepareGithubImport and verifyImportIdempotency plus tag-only identity lookup. node --test --test-concurrency=2 test/reference-import-identity.test.ts: 14 tests, 13 fail, 1 pass. All four required scenarios fail: single curated Chore, shared references, mirror title refresh beside a reference, and byte-identical legacy resync beside a reference. The passing legacy link-marker case is existing supported behavior. Package worktree was never reverted. Fixed regressions are being rerun through pm test; full npm test follows within the task budget."
+  "2026-11-11T10:39:30.901Z",codex-github230-1111,"Linked pm test run passed 16/16 (real SDK trackers, both import modes, no-git linking, legacy compatibility, safe PR conflict rendering and dependency routing). Lint and typecheck pass; docstring gate documents 29 files/280 declarations; duplication gate has zero clones at the unchanged 50-token threshold across 30 authored modules. Added seeded preview/apply equivalence coverage. Full npm test is running with two workers and a 45-minute cap; npm/bun release:check and coverage are delegated to CI under the explicit task gate budget."
+  "2026-11-11T10:55:16.026Z",codex-github230-1111,"Optional full npm test was stopped under the task gate budget: an unrelated closeout workflow file had already used over 11 minutes before its large decision matrix. No failures were reported in the observed output before cancellation; this is incomplete evidence, not a passing full suite. Running all 46 required importer/sync/direct-dependent and sync-workflow test files separately now, with two file workers and a hard 1200-second limit per file. CI owns full-suite and release certification."
+  "2026-11-11T11:09:29.505Z",codex-github230-1111,The audit also found a separate Projects v2 board-import reference fallback. Tracked static evidence and required real-SDK reproduction in pm-github-project-reference-followup; board ownership/mirroring is a separate model from the gated REST issue importer and was not changed here.
+  "2026-11-11T11:38:48.163Z",codex-github230-1111,"Final fixture reruns passed: import-fidelity 53 pass/1 existing SDK quarantine; handler failures 38/38; import projection 6/6; label-model properties 3/3 (including both 500-case SDK corpora); daily-sync properties 3/3. The new regression files pass 18/18, including mixed-case legacy URLs. Corrected an embedded child-script fixture import and verified coverage-remainder 25/25; repeating its final file with explicit pinned-CLI PATH. Standalone new regressions now pin their child CLI too."
+  "2026-11-11T11:42:48.057Z",codex-github230-1111,"Final local evidence: 46 selected files attempted with two workers and a 1200-second limit per file. Completed 45 files: 869 tests, 867 pass, zero fail, two unchanged SDK quarantines. import-gate.test.ts reached its 20-minute cap after 63 passes and one canceled test; it is incomplete CI evidence. Every other file passed after fixture corrections. Exact file command was node --test --test-concurrency=1 followed by that file, with the repository CLI first on PATH and global Git configuration disabled. The linked regression command was rerun through pm test --run --progress after the disposable behavioral revert: 18/18 pass. Latest revert: 17 tests, 16 fail, one legacy link-marker pass; all four required scenarios fail. Lint, typecheck, test compilation, 280 documented declarations and zero duplication at the unchanged threshold pass. Full npm test, coverage and npm/Bun release certification remain for CI. No consumer holds or trackers were changed."
+files[28]{path,scope}:
+  .github/workflows/pm-github-sync.yml,project
+  identity.ts,project
+  import-fidelity.ts,project
+  import-tags.ts,project
+  index.ts,project
+  refresh.ts,project
+  test/atomic.test.ts,project
+  test/cited-issue-adoption.test.ts,project
+  test/coverage-remainder.test.ts,project
+  test/daily-sync-idempotency.test.ts,project
+  test/dryrun-preview.test.ts,project
+  test/fixtures/refresh-crash.ts,project
+  test/handler-failures.test.ts,project
+  test/helpers/import-mirror.ts,project
+  test/identity.test.ts,project
+  test/import-conflict-report.test.ts,project
+  test/import-errors.test.ts,project
+  test/import-fidelity.test.ts,project
+  test/import-gate.test.ts,project
+  test/import-projection.test.ts,project
+  test/label-import-model.test.ts,project
+  test/link-deps.test.ts,project
+  test/reference-import-identity.test.ts,project
+  test/refresh.test.ts,project
+  test/repeat-import-noop.test.ts,project
+  test/scheduled-refusals.test.ts,project
+  test/typed-sentinel-normalization.test.ts,project
+  test/webhooks.test.ts,project
+tests[4]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  node --test --test-concurrency=2 test/reference-import-identity.test.ts test/import-conflict-report.test.ts,project,1200,codex-github230-1111,"2026-11-11T10:32:07.555Z",local_mutation,fix/reference-tags-are-not-import-identity
+  npm run lint,project,1200,codex-github230-1111,"2026-11-11T10:39:23.496Z",local_mutation,fix/reference-tags-are-not-import-identity
+  npm run typecheck,project,1200,codex-github230-1111,"2026-11-11T10:39:25.518Z",local_mutation,fix/reference-tags-are-not-import-identity
+  npm test,project,2700,codex-github230-1111,"2026-11-11T10:39:28.387Z",local_mutation,fix/reference-tags-are-not-import-identity
+docs[3]{path,scope}:
+  docs/cited-issue-adoption-validation.md,project
+  docs/identity-collisions.md,project
+  README.md,project
+github_number: 230
+github_url: "https://github.com/unbraind/pm-github/issues/230"
+body: ""

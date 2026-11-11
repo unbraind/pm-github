@@ -1,3 +1,4 @@
+import { normalizeItemId } from "@unbrained/pm-cli/sdk";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -5,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
 import {
-  EXIT_CODE, acquireImportLock, importCommentSyncLockPath, parseImportOptions,
+  deriveAtomicItemId, EXIT_CODE, acquireImportLock, importCommentSyncLockPath, parseImportOptions,
   readPmItems, resolveCommitItemMutations, runImport, syncGithubCommentsToAnnotations,
   type CommandError, type GhIssue,
 } from "../index.ts";
@@ -76,7 +77,7 @@ test("ungated import tolerates unavailable comments and still writes the issue",
 
 test("import reports real mutation failures after a linked local item disappears", async t => {
   const root = tracker(t);
-  const created = JSON.parse(pm(root, ["create", "task", "Linked", "--tags", "gh:acme/widgets#1", "--json"])) as { id: string };
+  const created = JSON.parse(pm(root, ["create", "task", "Linked", "--id", deriveAtomicItemId("acme/widgets", 1, "fixture-", normalizeItemId), "--tags", "gh:acme/widgets#1", "--json"])) as { id: string };
   const snapshot = readPmItems(root);
   pm(root, ["delete", created.id, "--message", "Fixture concurrent deletion"]);
   await withMockGithub((_req, res) => jsonResponse(res, 200, [issue()]), async () => {
@@ -103,7 +104,7 @@ test("import rejects an unknown item type and allows a corrected retry", async t
 
 test("import reconciles a canceled item when GitHub reports completion", async t => {
   const root = tracker(t);
-  pm(root, ["create", "task", "Canceled", "--status", "canceled", "--tags", "gh:acme/widgets#1"]);
+  pm(root, ["create", "task", "Canceled", "--id", deriveAtomicItemId("acme/widgets", 1, "fixture-", normalizeItemId), "--status", "canceled", "--tags", "gh:acme/widgets#1"]);
   await withMockGithub((_req, res) => jsonResponse(res, 200, [issue({ state: "closed" })]), async () => {
     const result = await runImport("acme/widgets", root, parseImportOptions({}), { resolveToken: () => undefined });
     assert.ok("updated" in result);

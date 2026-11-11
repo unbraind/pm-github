@@ -68,7 +68,7 @@ test("mixed new and linked closed issues plus an open issue repeat with identica
   const issues = [issue(1), issue(2), issue(3, true), { ...issue(4), state: "open" as const, state_reason: null, closed_at: null }];
   const first = await importing(pmRoot, issues);
   assert.equal(first.imported, 3);
-  assert.equal(first.updated, 1);
+  assert.equal(first.updated, 0, "curated local content already has the complete source lifecycle");
   // Inspect every target via its normal provenance-aware plan, not result formatting.
   const items = (await listAllComplete({ includeBody: true }, { pmRoot, noExtensions: true })).items;
   const before = await Promise.all(items.map(item => bytes(pmRoot, item.id)));

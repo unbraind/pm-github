@@ -37,7 +37,7 @@ async function previewImport(atomic: boolean) {
         resolveToken: () => undefined,
         fetchIssues: async () => [issue(1, "Brand new"), issue(2, "Already linked")],
         // #2 is already in the workspace, carrying the provenance tag the import writes.
-        readItems: () => [{ id: "existing-id", tags: ["gh:acme/widgets#2"] }],
+        readItems: () => [{ id: "existing-id", github_url: "https://github.com/acme/widgets/issues/2", tags: ["gh:acme/widgets#2"] }],
       },
     );
     return { result, messages };

@@ -24,7 +24,7 @@ on:
         required: false
         default: ${{ github.repository }}
       adopt-cited:
-        description: "Opt in to conservative citation adoption; tag new items gh:owner/repo#N instead"
+        description: "Opt in to conservative citation adoption; explicit github_url links take precedence"
         type: boolean
         required: false
         default: false
@@ -457,6 +457,8 @@ jobs:
             report_workflow_failure "${RUNNER_TEMP}/pm-github-import.json" "${RUNNER_TEMP}/pm-github-import.err"
             exit 1
           fi
+          # Keep the first plan's conflicts: a successful apply makes repeat plans unchanged.
+          jq -r '.plan[]? | select(.identity.title_conflict == true or .identity.conflict != null) | "- Issue #\(.issue): \([if .identity.title_conflict then "title differs (curated title preserved)" else empty end, if .identity.conflict then if .identity.conflict.rule == "preserve-provider-owner" then "state differs (provider state preserved)" else "state differs (GitHub state applied)" end else empty end] | join("; "))"' "${RUNNER_TEMP}/pm-github-import.json" > "${RUNNER_TEMP}/pm-github-import-conflicts.md"
 
       # The gate step. A finding (or unreadable scan input) fails this step, so
       # the job never reaches the commit/push below with a leak in the change.
@@ -654,6 +656,10 @@ jobs:
             printf '%s\n\n' "The import ran with \`--gate\`: the plan was verified for completeness and provenance idempotency before the write, and the proposed tracker change passed the fail-closed privacy gate before anything was committed. \`${DEFAULT_BRANCH}\` is never pushed directly."
             printf '%s\n\n' "Tracker items changed:"
             cat "${links_file}"
+            if [[ -s "${RUNNER_TEMP}/pm-github-import-conflicts.md" ]]; then
+              printf '\n%s\n\n' "Import conflicts for review:"
+              cat "${RUNNER_TEMP}/pm-github-import-conflicts.md"
+            fi
           } > "${body_file}"
           pr_number="$(own_open_pr)"
           if [[ -z "${pr_number}" ]]; then

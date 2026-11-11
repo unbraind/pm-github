@@ -25,11 +25,11 @@ credentials and provider payloads are absent from the report.
 Contradictory GitHub claims on one item also count as collisions. The node
 includes the tracker's explicit `source_owner` as `native_owner` when present.
 
-A claim comes from `external_ref`, an exact `gh:owner/repo#N` tag, `github_url`,
+A claim comes from `external_ref`, durable importer provenance, `github_url`,
 or a leading `GitHub issue URL` declaration. GitHub URL case and issue/pull URL
 forms normalize to one identity. Other external references remain opaque and
 case-sensitive: this command does not reinterpret Jira or Linear identifiers.
-URLs elsewhere in prose are `mention` edges and never establish ownership.
+Free-form `gh:owner/repo#N` tags and URLs elsewhere in prose are `mention` edges and never establish ownership.
 A copied example containing a Linear label and an issue URL remains a local
 item with a mention. Structured Linear/Jira/ADO id/key/URL fields record real
 provider evidence. A provider item with `github_link_only: true` retains

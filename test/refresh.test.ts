@@ -1,4 +1,5 @@
 /** Refresh acceptance uses actual initialized trackers and the real HTTP transport. */
+import { createImportMirror } from "./helpers/import-mirror.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, mkdirSync, cpSync, copyFileSync, symlinkSync, writeFileSync, existsSync, renameSync } from "node:fs";
@@ -64,7 +65,7 @@ function transport(nodes: Record<string, ReturnType<typeof node> | null>, errors
 
 for (const atomic of [false, true]) {
   test(`apply then re-apply preserves every byte and history line without cache priming (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
-    const linked = (await create({ title: "Stale", tags: "gh:fixture/repo#1,area,api" }, { pmRoot })).item;
+    const linked = (await createImportMirror({ title: "Stale", tags: "gh:fixture/repo#1,area,api" }, { pmRoot })).item;
     const upstream = node();
     upstream.labels.nodes.push({ name: "second-label" });
     upstream.labels.nodes.push(...["area,api", '["json"]', 'quote"tag', " É,ß "].map(name => ({ name })));
@@ -103,8 +104,8 @@ for (const atomic of [false, true]) {
   }));
 
   test(`refresh only linked items with zero creates, real dates, labels, audit and reopen (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
-    const linked = (await create({ title: "Stale", type: "Task", tags: "gh:fixture/repo#1,old-label", body: "keep local body" }, { pmRoot })).item;
-    const other = (await create({ title: "Other repo", tags: "gh:fixture/other#2" }, { pmRoot })).item;
+    const linked = (await createImportMirror({ title: "Stale", type: "Task", tags: "gh:fixture/repo#1,old-label", body: "keep local body" }, { pmRoot })).item;
+    const other = (await createImportMirror({ title: "Other repo", tags: "gh:fixture/other#2" }, { pmRoot })).item;
     const unrelated = (await create({ title: "Unlinked", body: "See https://github.com/fixture/repo/issues/3" }, { pmRoot })).item;
     const otherBefore = (await get(other.id, {}, { pmRoot })).item;
     const unrelatedBefore = (await get(unrelated.id, {}, { pmRoot })).item;
@@ -156,7 +157,7 @@ for (const atomic of [false, true]) {
 }
 
 test("GraphQL bot authors retain REST bot-tag spelling across repeated refreshes", async () => tracker(async (_directory, pmRoot) => {
-  const linked = (await create({ title: "Stale", tags: "gh:fixture/repo#1,github_author:fixture-bot[bot]" }, { pmRoot })).item;
+  const linked = (await createImportMirror({ title: "Stale", tags: "gh:fixture/repo#1,github_author:fixture-bot[bot]" }, { pmRoot })).item;
   const upstreams = new Map([[1, { ...node(), author: { login: "fixture-bot", __typename: "Bot" } }]]);
   await withMockGithub((...args) => transport({ i1: upstreams.get(1)! })(...args), async () => {
     const first = await runRefresh("fixture/repo", pmRoot, { atomic: true });
@@ -185,15 +186,14 @@ test("explicit fields select existing owners; mentions, wrong repos, malformed a
     { id: "text", github_number: 9, body: "https://github.com/fixture/repo/issues/9" }, {},
   ], "fixture/repo").map(target => [target.id, target.number]), [["url", 2], ["fields", 3]]);
   for (const items of [
-    [{ id: "a", tags: ["gh:fixture/repo#1", "gh:fixture/repo#2"] }],
-    [{ id: "a", tags: ["gh:fixture/repo#1"] }, { id: "b", github_url: "https://github.com/fixture/repo/issues/1" }],
-    [{ id: "a", tags: ["gh:fixture/repo#0"] }],
+    [{ id: "a", github_url: "https://github.com/fixture/repo/issues/1", github_repo: "fixture/repo", github_number: 2 }],
+    [{ id: "a", github_url: "https://github.com/fixture/repo/issues/1" }, { id: "b", github_url: "https://github.com/fixture/repo/issues/1" }],
     [{ id: "a", github_repo: "fixture/repo", github_number: Number.MAX_SAFE_INTEGER + 1 }],
   ]) assert.throws(() => selectRefreshTargets(items, "fixture/repo"));
 });
 
 test("missing, transferred and forbidden issues have typed reports and no writes", async () => tracker(async (_directory, pmRoot) => {
-  for (let number = 1; number <= 6; number++) await create({ title: `Local ${number}`, tags: `gh:fixture/repo#${number}` }, { pmRoot });
+  for (let number = 1; number <= 6; number++) await createImportMirror({ title: `Local ${number}`, tags: `gh:fixture/repo#${number}` }, { pmRoot });
   const upstream = { i1: null, i2: { ...node(2), url: "https://github.com/fixture/other/issues/2" }, i3: null,
     i4: node(4), i5: { ...node(5), title: " " }, i6: { ...node(6), number: 77 } };
   await withMockGithub(transport(upstream, [
@@ -217,7 +217,7 @@ test("100-item batches and limits only request selected linked numbers; since us
     const id = `${settings.id_prefix}batch-${number}`;
     await commitImportedItem({ pmRoot, id, itemPath: getItemPath(pmRoot, "Task", id), settings,
       document: { metadata: { id, title: `Local ${number}`, description: "", type: "Task", status: "open", priority: 2,
-        tags: [`gh:fixture/repo#${number}`], created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" }, body: "" },
+        github_url: `https://github.com/fixture/repo/issues/${number}`, tags: [`gh:fixture/repo#${number}`], created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" }, body: "" },
       author: "fixture", message: "Seed linked batch fixture", conflictWarningPrefix: "fixture" });
     nodes[`i${number}`] = node(number);
   }
@@ -239,7 +239,7 @@ test("100-item batches and limits only request selected linked numbers; since us
 test("update-only import refuses absent matches and cannot upsert a missing deterministic target", async () => tracker(async (_directory, pmRoot) => {
   const prefix = (await readSettings(pmRoot)).id_prefix;
   const id = deriveAtomicItemId("fixture/repo", 1, prefix, normalizeItemId);
-  const local = (await create({ id, title: "Linked", tags: "gh:fixture/repo#1" }, { pmRoot })).item;
+  const local = (await createImportMirror({ id, title: "Linked", tags: "gh:fixture/repo#1" }, { pmRoot })).item;
   const entry = (await prepareGithubImport({ number: 1, title: "New", body: null, state: "open", labels: [], assignee: null, milestone: null,
     created_at: "2026-01-01T00:00:00Z", updated_at: "2026-02-03T00:00:00Z", html_url: "https://github.com/fixture/repo/issues/1" },
   "fixture/repo", parseImportOptions({}), "fixture", local, undefined, { items: [local], releases: [], timeline: fetchImportTimeline }))!;
@@ -282,7 +282,7 @@ test("registered command executes against a real tracker and rejects usage befor
 }));
 
 test("label pagination is complete and cursor or API failures abort before any item writes", async () => tracker(async (_directory, pmRoot) => {
-  await create({ title: "Labels", tags: "gh:fixture/repo#1" }, { pmRoot });
+  await createImportMirror({ title: "Labels", tags: "gh:fixture/repo#1" }, { pmRoot });
   const issue = node();
   issue.author = null;
   issue.labels.pageInfo = { hasNextPage: true, endCursor: "page-1" };
@@ -313,7 +313,7 @@ test("label pagination is complete and cursor or API failures abort before any i
 }));
 
 test("sparse, repository-level and pathless GraphQL failures remain typed and cannot mutate items", async () => tracker(async (_directory, pmRoot) => {
-  await create({ title: "Linked", tags: "gh:fixture/repo#1" }, { pmRoot });
+  await createImportMirror({ title: "Linked", tags: "gh:fixture/repo#1" }, { pmRoot });
   for (const [data, errors, reason] of [
     [{ repository: {} }, undefined, "incomplete_response"],
     [{ repository: null }, undefined, "not_found_or_inaccessible"],
@@ -363,7 +363,7 @@ test("refresh preserves an existing release when GitHub has no release evidence"
   const id = `${settings.id_prefix}release-owner`;
   await commitImportedItem({ pmRoot, id, itemPath: getItemPath(pmRoot, "Task", id), settings,
     document: { metadata: { id, title: "Release owner", description: "", type: "Task", status: "open", priority: 2,
-      tags: ["gh:fixture/repo#1"], created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", release: "v2026.9.1" }, body: "" },
+      github_url: "https://github.com/fixture/repo/issues/1", tags: ["gh:fixture/repo#1"], created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", release: "v2026.9.1" }, body: "" },
     author: "fixture", message: "Seed release fixture", conflictWarningPrefix: "fixture" });
   await withMockGithub(transport({ i1: node() }), async () => {
     const receipt = await runRefresh("fixture/repo", pmRoot, { atomic: true });
@@ -564,8 +564,8 @@ test("persisted fidelity in every recovery plan is validated before any journal 
 
 for (const atomic of [false, true]) {
   test(`fresh refresh validates every finalization projection before the first write (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
-    await create({ title: "Stale first", tags: "gh:fixture/repo#1" }, { pmRoot });
-    const local = (await create({ title: "Closed second", tags: "gh:fixture/repo#2", type: "Task" }, { pmRoot })).item;
+    await createImportMirror({ title: "Stale first", tags: "gh:fixture/repo#1" }, { pmRoot });
+    const local = (await createImportMirror({ title: "Closed second", tags: "gh:fixture/repo#2", type: "Task" }, { pmRoot })).item;
     await commitImportedItem({ pmRoot, id: local.id, itemPath: getItemPath(pmRoot, "Task", local.id), settings: await readSettings(pmRoot),
       document: { metadata: { ...local, status: "closed", created_at: "2025-01-01T00:00:00Z",
         closed_at: "2025-02-01T00:00:00Z", completed_at: "2025-02-01T00:00:00Z" }, body: "" },
@@ -611,7 +611,10 @@ test("persisted fidelity accepts empty and nullable source values and legacy ent
 test("recovery refuses a different repository even when the selected item overlaps", async () => tracker(async (_directory, pmRoot) => {
   const record = interruptedPlan(pmRoot);
   const id = record.entries[0]!.match!.id!;
-  await update(id, { addTags: ["gh:fixture/other#1"] }, { pmRoot });
+  const local = (await get(id, {}, { pmRoot })).item;
+  await commitImportedItem({ pmRoot, id, itemPath: getItemPath(pmRoot, local.type!, id), settings: await readSettings(pmRoot),
+    document: { metadata: { ...local, title: local.title!, description: local.description ?? "", type: local.type!, status: local.status!, priority: local.priority ?? 2, created_at: local.created_at!, updated_at: local.updated_at!, tags: local.tags ?? [], github_repo: "fixture/other", github_number: 1 }, body: local.body ?? "" },
+    author: "fixture", message: "Seed conflicting explicit repository", conflictWarningPrefix: "fixture" });
   const before = snapshot(pmRoot);
   await assert.rejects(() => runRefresh("fixture/other", pmRoot, {}), new RegExp(`${record.transactionId}.*fixture/repo.*fixture/other`));
   assert.deepEqual(snapshot(pmRoot), before);
@@ -641,7 +644,7 @@ test("request failure after recovery preserves committed recovery writes as docu
 }));
 
 test("canceled update mutation carries the required reason only with a status change", async () => tracker(async (_directory, pmRoot) => {
-  const linked = (await create({ title: "Stale", tags: "gh:fixture/repo#1" }, { pmRoot })).item;
+  const linked = (await createImportMirror({ title: "Stale", tags: "gh:fixture/repo#1" }, { pmRoot })).item;
   const entry = (await prepareGithubImport({ number: 1, title: "Stale", body: null, state: "closed", state_reason: "not_planned", closed_at: "2026-02-02T00:00:00Z", labels: [], assignee: null, milestone: null,
     created_at: "2026-01-01T00:00:00Z", updated_at: "2026-02-03T00:00:00Z", html_url: "https://github.com/fixture/repo/issues/1" },
   "fixture/repo", parseImportOptions({}), "fixture", linked, undefined, { items: [linked], releases: [], timeline: async () => [] }))!;

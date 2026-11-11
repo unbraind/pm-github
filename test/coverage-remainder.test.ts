@@ -5,6 +5,7 @@
  * the local HTTP stand-in. Injected dependencies are the production seams
  * (fetch, commit, pm subprocess via PATH), not substitutes for the unit.
  */
+import { createImportMirror } from "./helpers/import-mirror.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { spawn, spawnSync } from "node:child_process";
@@ -13,11 +14,11 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { create, listAllComplete, certifyCompleteListResult } from "@unbrained/pm-cli/sdk";
+import { normalizeItemId, create, listAllComplete, certifyCompleteListResult } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness, type ExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 
 import extension, {
-  applyClientFilters,
+  deriveAtomicItemId, applyClientFilters,
   applyExportPlan,
   buildIssuesUrl,
   collectProjectsV2Pages,
@@ -46,6 +47,8 @@ const harnessPromise: Promise<ExtensionTestHarness> = createExtensionTestHarness
 });
 
 const REAL_PM = fileURLToPath(new URL("../node_modules/.bin/pm", import.meta.url));
+// Standalone test invocations use the same pinned CLI as npm test.
+process.env.PATH = path.dirname(REAL_PM) + path.delimiter + process.env.PATH;
 
 function issue(overrides: Partial<GhIssue> = {}): GhIssue {
   return {
@@ -82,9 +85,12 @@ function gitTracker(prefix: string): string {
 
 /** Create the real target represented by a command-failure fixture snapshot. */
 async function seedGithubItem(root: string, number: number) {
-  return (await create({ title: "old", type: "Task", tags: `gh:acme/widgets#${number}` },
+  return (await createImportMirror({ title: "old", type: "Task", tags: `gh:acme/widgets#${number}` },
     { pmRoot: path.join(root, ".agents/pm") })).item;
 }
+
+/** Explicit importer-generated targets for command-failure snapshots. */
+function mirrorId(number: number): string { return deriveAtomicItemId("acme/widgets", number, "test-", normalizeItemId); }
 
 /** Prime source metadata so a readonly fixture isolates optional annotation writes. */
 async function primeSourceTask(root: string): Promise<string> {
@@ -209,8 +215,8 @@ test("dependency linking reports a non-Error snapshot failure and a detector fai
   assert.match(skipped.failures[0] ?? "", /metadata down/);
   const advised = await linkImportedDependencies("acme/widgets", [issue({ number: 1, body: "Blocked by #2" })], "unused", {
     listItemMetadata: async () => [
-      { id: "pm-1", tags: ["gh:acme/widgets#1"], status: "open" },
-      { id: "pm-2", tags: ["gh:acme/widgets#2"], status: "open" },
+      { id: "pm-1", github_repo: "acme/widgets", github_number: 1, tags: ["gh:acme/widgets#1"], status: "open" },
+      { id: "pm-2", github_repo: "acme/widgets", github_number: 2, tags: ["gh:acme/widgets#2"], status: "open" },
     ],
     applyDependencyLink: () => ({ ok: true, stderr: "" }),
     collectOrderingCycleWarnings: () => { throw "detector down"; },
@@ -319,7 +325,7 @@ for (const linking of [false, true]) {
     const source: GhIssue = { ...recorded, state_reason: "not_planned",
       ...(linking ? { body: "Mirrored from https://linear.app/fixture/issue/ENG-85" } : {}) };
     try {
-      const owner = (await create({ title: "Existing owner", type: "Task",
+      const owner = (await (linking ? create : createImportMirror)({ title: "Existing owner", type: "Task",
         description: linking ? "[linear] linear_id=fixture linear_url=https://linear.app/fixture/issue/ENG-85" : "Existing GitHub owner",
         tags: linking ? "linear:fixture" : "gh:unbraind/pm-beads#85" }, { pmRoot: tracker })).item;
       const refused = linking ? "--add-tags" : "canceled";
@@ -435,7 +441,7 @@ test("a gated atomic import fails closed when committed items lack their planned
   try {
     await assert.rejects(captureStderr(() => runImport("acme/widgets", tracker, opts({ atomic: true, gate: true, "comments-mode": "annotations" }), {
       resolveToken: () => "tok",
-      readItems: () => [{ id: "pm-fresh", title: "t", status: "open", tags: ["gh:acme/widgets#7"] }],
+      readItems: () => [{ id: mirrorId(7), title: "t", status: "open", tags: ["gh:acme/widgets#7"] }],
       fetchIssues: async () => [issue({ comments: 1 })],
       fetchIssueComments: async () => [{ id: 41, user: { login: "octo" }, created_at: "2026-01-01T00:00:00Z", body: "note" }],
       // The commit "succeeds" but routes no created id, so the planned comment
@@ -502,7 +508,7 @@ test("non-atomic import reports update, close, reopen, and unparsed-id failures"
     `, async () => {
       const { stderr } = await captureStderr(() => assert.rejects(runImport("acme/widgets", root, opts(), {
         resolveToken: () => "tok",
-        readItems: () => [{ id: "pm-existing", title: "old", status: "open", tags: ["gh:acme/widgets#7"] }],
+        readItems: () => [{ id: mirrorId(7), title: "old", status: "open", tags: ["gh:acme/widgets#7"] }],
         fetchIssues: async () => [issue({ assignee: { login: "octo" }, milestone: { title: "Now" } })],
       }), /Imported 0 issue/));
 
@@ -517,7 +523,7 @@ test("non-atomic import reports update, close, reopen, and unparsed-id failures"
     `, async () => {
       const closed = await captureStderr(() => assert.rejects(runImport("acme/widgets", root, opts(), {
         resolveToken: () => "tok",
-        readItems: () => [{ id: "pm-existing", title: "old", status: "open", tags: ["gh:acme/widgets#8"] }],
+        readItems: () => [{ id: mirrorId(8), title: "old", status: "open", tags: ["gh:acme/widgets#8"] }],
         fetchIssues: async () => [issue({ number: 8, state: "closed", state_reason: "completed", closed_at: "2026-02-01T00:00:00Z" })],
       }), /Imported 0 issue/));
       assert.match(closed.stderr.join("\n"), /close reconciliation failed|close after import failed/);
@@ -531,7 +537,7 @@ test("non-atomic import reports update, close, reopen, and unparsed-id failures"
     `, async () => {
       const reopened = await captureStderr(() => assert.rejects(runImport("acme/widgets", root, opts(), {
         resolveToken: () => "tok",
-        readItems: () => [{ id: "pm-existing", title: "old", status: "closed", tags: ["gh:acme/widgets#9"] }],
+        readItems: () => [{ id: mirrorId(9), title: "old", status: "closed", tags: ["gh:acme/widgets#9"] }],
         fetchIssues: async () => [issue({ number: 9, state: "open" })],
       }), /Imported 0 issue/));
       assert.match(reopened.stderr.join("\n"), /reopen reconciliation failed/);
