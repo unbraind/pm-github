@@ -31,11 +31,12 @@ export function selectRefreshTargets(items: readonly PmItem[], repo: string): Re
   const targets = new Map<number, RefreshTarget>();
   for (const item of items) {
     if (!item.id) continue;
+    const identities = importIdentityKeys(item);
     // The refresh GraphQL path queries issue(), so PR owners are excluded.
     if (typeof item.github_url === "string" && /github\.com\/[^/]+\/[^/]+\/pull\//i.test(item.github_url)) continue;
     if (typeof item.github_repo === "string" && item.github_repo.toLowerCase() === repo && typeof item.github_number === "number" && (!Number.isSafeInteger(item.github_number) || item.github_number < 1)) throw new CommandError(`Refresh found an invalid issue number for ${item.id}.`);
     const numbers = new Set<number>();
-    for (const key of importIdentityKeys(item)) {
+    for (const key of identities) {
       const [repository, number] = key.split("#");
       if (repository === repo) numbers.add(Number(number));
     }

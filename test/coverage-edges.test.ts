@@ -28,7 +28,7 @@ function tracker(t: TestContext, git = false): string {
 }
 function issue(extra: Partial<github.GhIssue> = {}): github.GhIssue {
   return { number: 1, title: "Widget", body: null, state: "open", labels: [], assignee: null, milestone: null,
-    created_at: "2026-01-01T00:00:00Z", updated_at: "2026-10-01T00:00:00Z", html_url: `https://example.test/acme/widgets/issues/${extra.number ?? 1}`, user: null, ...extra };
+    created_at: "2026-01-01T00:00:00Z", updated_at: "2026-10-01T00:00:00Z", html_url: `https://github.com/acme/widgets/issues/${extra.number ?? 1}`, user: null, ...extra };
 }
 function entry(extra: Partial<github.PreparedGithubImport> = {}): github.PreparedGithubImport {
   return { issueNumber: 1, title: "Widget", itemType: "Task", status: "open", description: "d", body: "b",
@@ -132,11 +132,11 @@ test("scoped sync and labelled export apply preserve receipts after partial remo
       else if (req.method === "PATCH") jsonResponse(res, 200, { number: 1 });
       else jsonResponse(res, 422, { message: "refused" });
     }, async () => {
-      const preview = await captureStderr(() => command(root, "github sync", { repo: "acme/widgets", ids: first.item.id, "dry-run": true }));
+      const preview = await captureStderr(() => command(root, "github sync", { repo: "acme/widgets", ids: first.item.id, "allow-reference-tags": true, "dry-run": true }));
       assert.ok(preview.result.result);
-      const synced = await captureStderr(() => command(root, "github sync", { repo: "acme/widgets", ids: first.item.id, apply: true }));
+      const synced = await captureStderr(() => command(root, "github sync", { repo: "acme/widgets", ids: first.item.id, "allow-reference-tags": true, apply: true }));
       assert.ok(synced.result.result);
-      const exported = await captureStderr(() => command(root, "github export", { repo: "acme/widgets", ids: `${first.item.id},${second.item.id}`, apply: true, "label-map": "bug=defect" }));
+      const exported = await captureStderr(() => command(root, "github export", { repo: "acme/widgets", ids: `${first.item.id},${second.item.id}`, "allow-reference-tags": true, apply: true, "label-map": "bug=defect" }));
       assert.match(exported.stderr.join("\n"), /1 item\(s\) failed/);
     });
   });

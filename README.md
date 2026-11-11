@@ -10,7 +10,11 @@ Import issues from any GitHub repo as pm items, export pm items back to GitHub (
 
 A `gh:owner/repo#N` tag is a reference: any number of items may share it. Imports resolve persisted `github_url`, repository plus `github_number`, and legacy importer provenance (a source number/link marker with its repository tag, the generated source description, or the deterministic importer ID), without migrating existing trackers. A tag alone never selects an owner. Set `github_url` explicitly to link a local item.
 
-Only deterministic `<prefix>-github-<repository hash>-<N>` records receive full content mirroring. Other linked items keep their title, description, type/folder, body, creation time and existing tags; imports merge GitHub provenance and lifecycle only (existing completion time stays). Source closures before local creation stay in `github_closed_at`. Cross-provider links retain their provider lifecycle. Title/state conflicts appear in the sync PR body for review.
+Only deterministic `<prefix>-github-<repository hash>-<N>` records receive full content mirroring. Other linked items keep their title, description, type/folder, body, creation time and existing tags; imports merge GitHub provenance, lifecycle, and native comments/annotations (existing completion time stays). Body-mode comments on a curated item are stored as native annotations so its body stays intact. Source closures before local creation stay in `github_closed_at`. Cross-provider links retain their provider lifecycle. Title/state conflicts appear in the sync PR body for review.
+
+Contradictory explicit identities refuse before writes with `github_identity_conflict`, naming both targets and the correction. Case, trailing slashes, and equivalent issue/PR URL spellings normalize to one identity. Interrupted atomic imports replay their durably saved original entries, ordered mutations, targets, comments, and dependency inputs before fetching current GitHub data; a missing or invalid original plan refuses recovery. A subsequent normal sync can apply newer source data.
+
+Status sync and export updates use explicit upstream ownership too. Shared reference tags never select an existing remote target by default. `--allow-reference-tags` explicitly restores historical tag-only upstream links; competing owners refuse before remote writes, including owners outside `--ids`. Exporting a reference-only item proposes a new issue.
 
 ## Installation
 
@@ -626,11 +630,13 @@ still require a Git worktree for the proposed-change privacy scan.
 
 `--limit` bounds the matching list after PR, draft, and milestone filters. Pagination stops once one extra matching issue establishes truncation, so at most `n + 1` eligible issues are retained; GitHub pages may also contain excluded entries. Without a limit, existing list ordering is unchanged.
 
-`--atomic` derives its durable transaction identity from the repository, complete rendered issue state, and exact ordered mutation plan (including target item ids), and derives each create id from the stable `owner/repo#number` external key rather than fetch position. Retrying the same response in a different order therefore resumes without duplicates; changed content, workspace prefixes, or resolved targets create a fresh compatible transaction. Native comment annotations run only after the item transaction commits and retain their cross-process deduplication lock.
+`--atomic` derives its durable transaction identity from the repository, complete rendered issue state, and exact ordered mutation plan (including target item ids), and derives each create id from the stable `owner/repo#number` external key rather than fetch position. Every producer mode saves its complete plan before the SDK writes. An interrupted or partially compensated attempt replays that original plan and transaction ID before polling new input, even if content, workspace prefixes or resolved targets have changed. Once recovery finishes, a subsequent sync can plan new input. Released update-only refresh plans remain replayable without migration. If delete compensation leaves an original create ID reserved by SDK history, recovery refuses with `github_import_plan_drift` and retains its plan: inspect `pm history`, explicitly restore the original live version with `pm restore`, then retry the same transaction. Native comment annotations run only after the item transaction commits and retain their cross-process deduplication lock.
 
 ### Native comment sync (`--comments-mode`)
 
-By default (`--comments-mode body`, or `--with-comments`), fetched GitHub issue comments are flattened into the item body as blockquoted markdown under a `### GitHub comments (N)` heading — the historical behavior, byte-identical across releases.
+For importer-created records, by default (`--comments-mode body`, or `--with-comments`), fetched GitHub issue comments are flattened into the item body as blockquoted markdown under a `### GitHub comments (N)` heading — the historical behavior, byte-identical across releases.
+
+Curated linked items always retain their body: fetched comments use native annotations in every comment mode.
 
 `--comments-mode annotations` instead syncs each GitHub comment into the pm item's **native comments collection** via the public SDK `comments()` primitive, so agents get structured, queryable comments (`pm comments <id>`) instead of body-embedded text. Each stored comment carries a hidden marker with the GitHub comment id (`<!-- pm-github:comment:N -->`), so re-running import is **idempotent** — already-synced comments are skipped and never duplicated. `--comments-mode both` writes the body section *and* the native comments.
 
@@ -678,7 +684,7 @@ The import result gains `linkedDependencies`, `unresolvedDependencyRefs`, `order
 
 ### `pm github export`
 
-**Safe by default.** Export previews the create/update plan and writes *nothing* unless you explicitly opt in with `--apply` **and** name a `--repo`. With a `--repo`, items already linked to an issue in that repo (via the `gh:owner/repo#N` provenance tag) are **updated** (upsert) instead of duplicated.
+**Safe by default.** Export previews the create/update plan and writes *nothing* unless you explicitly opt in with `--apply` **and** name a `--repo`. With a `--repo`, items with explicit upstream identity in that repo (for example `github_url`) are **updated** (upsert) instead of duplicated.
 
 ```bash
 pm github export --repo owner/repo            # DRY-RUN: print the create/update plan, write nothing
@@ -692,6 +698,7 @@ pm github export --repo owner/repo --ids pm-12,pm-34 --apply
 | Flag | Type | Description |
 |---|---|---|
 | `--repo <owner/repo>` | string | Target repo; decides create-vs-update and is required for `--apply` |
+| `--allow-reference-tags` | boolean | Explicit historical tag-only links; refuses competing upstream owners |
 | `--ids <pm-1,pm-2>` | string | Scope export to specific pm item IDs (comma-separated); unknown IDs fail fast |
 | `--format <json\|md>` | string | Dry-run output format (default: json) |
 | `--apply` | boolean | Perform real GitHub writes (alias: `--no-dry-run`, legacy `--push`). Requires a token + `--repo` |
@@ -701,7 +708,7 @@ pm github export --repo owner/repo --ids pm-12,pm-34 --apply
 
 ### `pm github sync`
 
-Push pm status changes back to GitHub: close/reopen the linked issue to match the pm item's status. Requires a token and explicit `--repo`.
+Push pm status changes back to GitHub: close/reopen the explicitly linked issue to match the pm item's status. Requires a token and explicit `--repo`. Shared reference tags do not select a target; `--allow-reference-tags` explicitly enables historical tag-only links, refusing competing owners before writes.
 
 ```bash
 pm github sync --repo owner/repo --dry-run    # preview the close/reopen plan

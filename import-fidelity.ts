@@ -268,14 +268,41 @@ function hasStructuredOwnership(item: PmItem): boolean {
       locators(value).some(url => issueLocator.test(url)));
 }
 
-/** Explicit persisted identity, with migration-free support for old importer snapshots. Tags alone are references. */
-export function importIdentityKeys(item: PmItem): string[] {
-  const keys = new Set<string>();
-  if (typeof item.github_url === "string") {
-    const url = /^https?:\/\/(?:www\.)?github\.com\/([^/]+\/[^/]+)\/(?:issues|pull)\/([1-9]\d*)(?:\/?(?:[?#].*)?)?$/i.exec(item.github_url);
-    if (url) keys.add(`${url[1]!.toLowerCase()}#${Number(url[2])}`);
+/** Typed refusal for contradictory authoritative identities; references never enter this decision. */
+export class GithubIdentityConflictError extends Error {
+  /** Machine-readable refusal category for command callers. */
+  readonly code = "github_identity_conflict";
+  /** Treat contradictory operator-owned provenance as a usage conflict. */
+  readonly exitCode = 2;
+  /** Distinct normalized explicit targets named by the item. */
+  readonly identities: readonly string[];
+  /** Correction to establish one owner while retaining contextual references. */
+  readonly remedy = "Correct github_url and github_repo/github_number to name one issue; keep other issue references in gh: tags.";
+  /** Name both normalized identities and retain the correction instruction. */
+  constructor(id: string | undefined, identities: readonly string[]) {
+    super(`GitHub identity conflict for ${id ?? "<unknown>"}: ${identities.join(" versus ")}. Correct github_url and github_repo/github_number to name one issue; keep other issue references in gh: tags. No item was written.`);
+    this.identities = identities;
   }
-  if (typeof item.github_repo === "string" && Number.isSafeInteger(item.github_number) && Number(item.github_number) > 0) keys.add(`${item.github_repo.toLowerCase()}#${item.github_number}`);
+}
+
+/** Canonicalize an explicit issue/PR URL through the same locator normalization as ownership matching. */
+function explicitGithubKey(value: unknown): string | undefined {
+  if (typeof value !== "string" || !/^https?:\/\/(?:www\.)?github\.com\/[^/]+\/[^/]+\/(?:issues|pull)\/[1-9]\d*\/?(?:[?#].*)?$/i.test(value.trim())) return undefined;
+  return locators(value.trim())[0]?.replace("https://github.com/", "").replace("/issues/", "#");
+}
+
+/** Resolve persisted identity with legacy compatibility; diagnostics may report conflicts that all write planners refuse. */
+export function importIdentityKeys(item: PmItem, options: { allowConflicts?: boolean } = {}): string[] {
+  const keys = new Set<string>();
+  for (const [field, value] of Object.entries(item)) {
+    if (!/^github_?url$/i.test(field)) continue;
+    const key = explicitGithubKey(value);
+    if (key) keys.add(key);
+  }
+  const urlKey = [...keys][0];
+  const repository = typeof item.github_repo === "string" ? item.github_repo.trim().replace(/\/+$/, "").toLowerCase() : urlKey?.split("#")[0];
+  if (repository && Number.isSafeInteger(item.github_number) && Number(item.github_number) > 0) keys.add(`${repository}#${item.github_number}`);
+  if (keys.size > 1 && !options.allowConflicts) throw new GithubIdentityConflictError(item.id, [...keys].sort());
   const references = (item.tags ?? []).flatMap(tag => {
     const parsed = parseProvenanceTag(tag);
     return parsed ? [parsed] : [];
@@ -290,7 +317,7 @@ export function importIdentityKeys(item: PmItem): string[] {
     const legacyLink = !hasRepository && item.github_number === undefined && typeof item.github_link_only === "boolean" && references.length === 1;
     // Pre-fidelity releases wrote this exact generated description plus the reference tag.
     const legacyDescription = Number(generated?.[1]) === number && legacyLocators.includes(`https://github.com/${repo}/issues/${number}`);
-    if (legacyNumber || legacyLink || legacyDescription || importerCreatedItem(item, repo, number)) keys.add(`${repo}#${number}`);
+    if (!hasRepository && (legacyNumber || legacyLink || legacyDescription || importerCreatedItem(item, repo, number))) keys.add(`${repo}#${number}`);
   }
   return [...keys];
 }
@@ -317,10 +344,14 @@ export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, _ta
   /** Recognize leading native ownership declarations; later prose cannot transfer ownership. */
   const declaredOwner = (item: PmItem) => copiedProviderMarkersOwnItem(item) && typeof item.description === "string" &&
     locators(/^GitHub issue(?:\s*:\s+|\s+)(https?:\/\/\S+)/i.exec(item.description)?.[1]).includes(issueUrl);
-  const candidates = items.filter(item => item.id && (importIdentityKeys(item).includes(issueKey) || importerCreatedItem(item, repo, issue.number) ||
-    declaredOwner(item) ||
-    Object.entries(item).some(([key, value]) => OWNER_LINK_FIELD.test(key) && locators(value).includes(issueUrl)) ||
-    locators(providerProvenance(item)).some(url => bodyUrls.has(url))));
+  const candidates = items.filter(item => {
+    const keys = importIdentityKeys(item);
+    if (!item.id) return false;
+    if (keys.length) return keys.includes(issueKey);
+    return importerCreatedItem(item, repo, issue.number) || declaredOwner(item) ||
+      Object.entries(item).some(([key, value]) => OWNER_LINK_FIELD.test(key) && locators(value).includes(issueUrl)) ||
+      locators(providerProvenance(item)).some(url => bodyUrls.has(url));
+  });
   if (candidates.length > 1) throw new CommandError(`GitHub issue #${issue.number} has multiple existing owners; import plan is not idempotent. No item was written for this issue.`);
   let item = candidates[0];
   let cited = false;

@@ -613,8 +613,8 @@ test("recovery refuses a different repository even when the selected item overla
   const id = record.entries[0]!.match!.id!;
   const local = (await get(id, {}, { pmRoot })).item;
   await commitImportedItem({ pmRoot, id, itemPath: getItemPath(pmRoot, local.type!, id), settings: await readSettings(pmRoot),
-    document: { metadata: { ...local, title: local.title!, description: local.description ?? "", type: local.type!, status: local.status!, priority: local.priority ?? 2, created_at: local.created_at!, updated_at: local.updated_at!, tags: local.tags ?? [], github_repo: "fixture/other", github_number: 1 }, body: local.body ?? "" },
-    author: "fixture", message: "Seed conflicting explicit repository", conflictWarningPrefix: "fixture" });
+    document: { metadata: { ...local, title: local.title!, description: local.description ?? "", type: local.type!, status: local.status!, priority: local.priority ?? 2, created_at: local.created_at!, updated_at: local.updated_at!, tags: local.tags ?? [], github_repo: "fixture/other", github_url: "https://github.com/fixture/other/issues/1", github_number: 1 }, body: local.body ?? "" },
+    author: "fixture", message: "Seed changed explicit repository", conflictWarningPrefix: "fixture" });
   const before = snapshot(pmRoot);
   await assert.rejects(() => runRefresh("fixture/other", pmRoot, {}), new RegExp(`${record.transactionId}.*fixture/repo.*fixture/other`));
   assert.deepEqual(snapshot(pmRoot), before);
@@ -685,6 +685,8 @@ for (const failure of ["interrupted", "inspection", "cleanup", "finalize"]) {
     const record = interruptedPlan(pmRoot);
     const planFile = join(pmRoot, "transactions/pm-github", `${record.transactionId}.json`);
     const sdkDir = join(pmRoot, "transactions/sdk");
+    const nativeFile = getItemPath(pmRoot, String(record.entries[0]!.match!.type), record.entries[0]!.match!.id!);
+    const originalNative = readFileSync(nativeFile, "utf8");
     await assert.rejects(() => resumeGithubImport(pmRoot, record, { onTransition: context => {
       if (context.transition === "committing" && ["interrupted", "inspection"].includes(failure)) {
         if (failure === "inspection") {
@@ -716,7 +718,12 @@ for (const failure of ["interrupted", "inspection", "cleanup", "finalize"]) {
       await resumeGithubImport(pmRoot, record);
       assert.ok(!existsSync(planFile));
     } else if (failure === "finalize") {
-      assert.ok(!existsSync(planFile), "a terminal journal cannot keep a sensitive orphan plan");
+      assert.ok(existsSync(planFile), "a committed journal retains its original finalization plan until repair succeeds");
+      assert.equal((await listUnfinishedGithubImports(pmRoot)).length, 0);
+      // Restore the missing native file, preserving all append-only SDK history.
+      writeFileSync(nativeFile, originalNative);
+      await resumeGithubImport(pmRoot, record);
+      assert.ok(!existsSync(planFile), "successful finalization removes the sensitive replay plan");
     } else assert.ok(existsSync(join(planFile, "held")), "cleanup failure must not mask the transaction error");
   }));
 }

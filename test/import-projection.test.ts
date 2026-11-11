@@ -241,7 +241,7 @@ test("packed npm and native Bun consumers preserve mixed-import bytes in JSON an
       await run(cli, ["--path", root, "update", custom.item.id, "--status", "settled", "--close-reason", "Fixture verification"], root, environment);
       const providerBefore = durable(pmRoot);
       for (const bin of ["npm", "bun"]) for (const json of [true, false]) for (const command of ["sync", "export"]) {
-        const args = ["--path", root, "github", command, "--repo", "fixture/project", "--ids", custom.item.id, "--dry-run", ...(json ? ["--json"] : [])];
+        const args = ["--path", root, "github", command, "--repo", "fixture/project", "--ids", custom.item.id, "--allow-reference-tags", "--dry-run", ...(json ? ["--json"] : [])];
         const output = await run(bin, bin === "npm" ? ["exec", "--offline", "--", "pm", ...args] : ["--bun", cli, ...args], root, environment);
         const receipt = (json ? JSON.parse(output) : decode(output)) as { wouldSync: number; plan: Array<{ payload: { state: string } }> };
         if (command === "sync") assert.equal(receipt.wouldSync, 1);

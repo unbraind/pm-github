@@ -57,7 +57,7 @@ test("workspace path and alias property matches SDK writers across fidelity and 
       const terminal = isTerminalStatus(canonical, resolved.statuses);
       const item: BlockerPmItem = { id: native.id, title: "Fixture", status: spelling, description: "", tags: ["gh:fixture/project#1"],
         dependencies: [{ id: "github:fixture/project#8", kind: "blocked_by" }], comments: [] };
-      assert.equal(planSync([item], "fixture/project", resolved.statuses)[0]!.to, terminal ? "closed" : "open");
+      assert.equal(planSync([{ ...item, github_url: "https://github.com/fixture/project/issues/1" }], "fixture/project", resolved.statuses)[0]!.to, terminal ? "closed" : "open");
       assert.equal(buildExportPlan([item], "fixture/project", undefined, resolved.statuses)[0]!.payload.state, terminal ? "closed" : "open");
       assert.equal(selectBlockerCandidates([item], resolved.statuses).length, terminal ? 0 : 1);
       const kind = githubStatusKind(spelling, resolved.statuses);

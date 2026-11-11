@@ -357,9 +357,9 @@ test("parseProvenanceTag normalizes repository casing", () => {
   });
 });
 
-test("planSync matches provenance tags case-insensitively", () => {
+test("planSync matches explicit provenance case-insensitively", () => {
   const plan = planSync([
-    { id: "pm-1", status: "closed", tags: ["gh:Owner/Repo#123"] },
+    { id: "pm-1", status: "closed", github_url: "https://github.com/Owner/Repo/issues/123", tags: ["gh:Owner/Repo#123"] },
   ], "owner/repo");
 
   assert.deepEqual(plan, [{
@@ -387,7 +387,7 @@ test("resolveGitHubToken prefers the GITHUB_TOKEN env var", () => {
 test("buildExportPlan marks linked items update, unlinked items create", () => {
   const plan = buildExportPlan(
     [
-      { id: "pm-1", title: "Linked", tags: ["bug", "gh:owner/repo#42"], status: "open" },
+      { id: "pm-1", title: "Linked", github_url: "https://github.com/owner/repo/issues/42", tags: ["bug", "gh:owner/repo#42"], status: "open" },
       { id: "pm-2", title: "New", tags: ["enhancement"], status: "closed" },
     ],
     "owner/repo",
@@ -948,6 +948,7 @@ test("buildExportPlan strips both gh: and gh-project: provenance tags, keeps use
       {
         id: "pm-1",
         title: "Dual-linked",
+        github_url: "https://github.com/owner/repo/issues/42",
         // Normal user tag + issue provenance + project provenance + a user
         // label that merely contains similar text (not a real provenance tag).
         tags: ["bug", "gh:owner/repo#42", projectTag, "gh-project-notes"],

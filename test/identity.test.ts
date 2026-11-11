@@ -298,6 +298,9 @@ test("an owner with a conflicting github_number cannot authorize detaching anoth
   const owner = await item(root, { github_url: url, github_number: 2 });
   const detach = await item(root, { tags: [key] });
   const before = snapshot(root);
+  const report = await exploreGithubIdentities(root);
+  assert.equal(report.collisions, 2, "read-only diagnostics must still expose both contradictory claims");
+  assert.deepEqual(report.edges.filter(edge => edge.item === owner && edge.strength === "claim").map(edge => edge.identity).sort(), [key, "gh:fixture/repo#2"]);
   await assert.rejects(planGithubIdentityRepair(root, key, owner, detach), code("ambiguous_identity"));
   await assert.rejects(applyGithubIdentityRepair(root, { identity: key, owner, detach, approval: "a".repeat(64), author: "fixture" }), code("ambiguous_identity"));
   assert.deepEqual(snapshot(root), before);

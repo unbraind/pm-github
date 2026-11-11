@@ -108,11 +108,17 @@ test("scheduled repeat import preserves item and history bytes after identical G
     await assert.rejects(commitItemMutations({ ...pending, onTransition: context => {
       if (context.transition === "committing") throw new WorkspaceTransactionInterruptedError("Fixture interruption");
     } }), WorkspaceTransactionInterruptedError);
-    // Keep the source projection matched while leaving a real journal unfinished.
-    await runImport("fixture/project", root, opts);
-    const held = await runImport("fixture/project", root, opts);
-    assert.ok(!("unchanged" in held), "An unfinished journal cannot hide behind a no-op receipt.");
+    // A legacy journal without an original plan cannot be replaced by fresh input.
+    const held = snapshot(root);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await assert.rejects(() => runImport("fixture/project", root, opts), { code: "github_import_plan_missing" });
+      assert.equal(snapshot(root), held, "Refusal must preserve all durable tracker bytes.");
+    }
     await commitItemMutations(pending);
+    await runImport("fixture/project", root, opts);
+    const restored = snapshot(root);
+    await runImport("fixture/project", root, opts);
+    assert.equal(snapshot(root), restored);
   });
 }));
 

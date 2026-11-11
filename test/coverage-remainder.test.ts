@@ -61,7 +61,7 @@ function issue(overrides: Partial<GhIssue> = {}): GhIssue {
     milestone: null,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-10-01T00:00:00Z",
-    html_url: `https://example.test/acme/widgets/issues/${overrides.number ?? 7}`,
+    html_url: `https://github.com/acme/widgets/issues/${overrides.number ?? 7}`,
     user: null,
     ...overrides,
   };
@@ -720,7 +720,7 @@ test("sync reports a non-retryable PATCH failure and the after-command hook name
         else jsonResponse(res, 200, { state: "open", title: "Linked", number: 5 });
       }, () => ext.runCommand({
         command: "github sync",
-        options: { repo: "acme/widgets" },
+        options: { repo: "acme/widgets", "allow-reference-tags": true },
         pmRoot: root,
         global: { json: false },
       })));

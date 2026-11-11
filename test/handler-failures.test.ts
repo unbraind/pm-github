@@ -246,7 +246,7 @@ test("runSync --dry-run previews a divergence (pm open, GitHub closed → would 
       }, async () => {
         const { result } = await ext.runCommand({
           command: "github sync",
-          options: { repo: "a/b", "dry-run": true },
+          options: { repo: "a/b", "allow-reference-tags": true, "dry-run": true },
           pmRoot: root,
           global: { json: true },
         });
@@ -276,7 +276,7 @@ test("runSync --apply PATCHes GitHub to match pm status", async () => {
       }, async (server) => {
         const { result } = await ext.runCommand({
           command: "github sync",
-          options: { repo: "a/b" },
+          options: { repo: "a/b", "allow-reference-tags": true },
           pmRoot: root,
           global: { json: true },
         });
@@ -303,7 +303,7 @@ test("runSync skips an issue already in the desired state", async () => {
       }, async (server) => {
         const { result } = await ext.runCommand({
           command: "github sync",
-          options: { repo: "a/b" },
+          options: { repo: "a/b", "allow-reference-tags": true },
           pmRoot: root,
           global: { json: true },
         });
@@ -330,7 +330,7 @@ test("runSync tolerates a 404 reading upstream state (skipped, not aborted)", as
       }, async (server) => {
         const { result } = await ext.runCommand({
           command: "github sync",
-          options: { repo: "a/b" },
+          options: { repo: "a/b", "allow-reference-tags": true },
           pmRoot: root,
           global: { json: true },
         });

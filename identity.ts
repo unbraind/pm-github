@@ -53,7 +53,7 @@ function graph(items: readonly IdentityItem[]): { nodes: IdentityNode[]; edges: 
       const value = ownValue(item, source);
       if (typeof value === "string" && value.trim()) claims.push({ item: id, identity: identity(value), source, strength: "claim" });
     }
-    for (const key of importIdentityKeys(item)) if (!claims.some(edge => edge.identity === `gh:${key}` && edge.strength === "claim")) {
+    for (const key of importIdentityKeys(item, { allowConflicts: true })) if (!claims.some(edge => edge.identity === `gh:${key}` && edge.strength === "claim")) {
       claims.push({ item: id, identity: `gh:${key}`, source: "import-provenance", strength: "claim" });
     }
     const declared = /^GitHub issue(?:\s*:\s+|\s+)(https?:\/\/\S+)/i.exec(item.description);

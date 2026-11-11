@@ -13,6 +13,8 @@ import {
   deriveAtomicItemId,
   deriveAtomicTransactionId,
   importGithubAtomic,
+  listUnfinishedGithubImports,
+  readGithubImportPlan,
   parseImportOptions,
   resolveCommitItemMutations,
   runImport,
@@ -403,29 +405,39 @@ test("a failed mixed batch restores pre-existing updates and closes", async () =
 });
 
 test("incomplete compensation is reported as potentially partial and resumable", async () => {
-  const incomplete = new AggregateError(
-    [new Error("apply failed"), new Error("restore failed")],
-    "Workspace transaction failed and compensation failed: restore failed",
-  );
-  await assert.rejects(
-    () => importGithubAtomic(
-      "/unused-incomplete-compensation-workspace",
-      "acme/widgets",
-      [entry(50, "Needs repair")],
-      {
-        commitItemMutations: async () => { throw incomplete; },
-        normalizeItemId: (input, prefix) => `${prefix}${input}`,
-        readSettings: async () => ({ id_prefix: "test-" }),
+  const root = freshTracker();
+  try {
+    await assert.rejects(
+      () => importGithubAtomic(root, "acme/widgets", [entry(50, "Original recovery plan")], {
+        onTransition: context => {
+          if (context.transition === "step_recorded") throw new Error("Fixture apply failed");
+          if (context.transition === "compensating") throw new Error("Fixture compensation interrupted");
+        },
+      }),
+      (err: unknown) => {
+        assert.ok(err instanceof CommandError);
+        assert.match(err.message, /compensation was incomplete/);
+        assert.match(err.message, /may contain partially applied state/);
+        assert.doesNotMatch(err.message, /no new partial committed state/);
+        return true;
       },
-    ),
-    (err: unknown) => {
-      assert.ok(err instanceof CommandError);
-      assert.match((err as Error).message, /compensation was incomplete/);
-      assert.match((err as Error).message, /may contain partially applied state/);
-      assert.doesNotMatch((err as Error).message, /no new partial committed state/);
-      return true;
-    },
-  );
+    );
+    const pending = await listUnfinishedGithubImports(root);
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0]!.status, "compensating");
+    await assert.rejects(() => importGithubAtomic(root, "acme/widgets", [entry(50, "Changed retry input")]), { code: "github_import_plan_drift" });
+    const originalPlan = await readGithubImportPlan(root, pending[0]!.transactionId);
+    assert.ok(originalPlan, "a compensated create keeps the original plan while its history reserves the identity");
+    assert.equal(originalPlan.entries[0]!.title, "Original recovery plan");
+    assert.equal(itemCount(root), 0);
+    const originalId = originalPlan.itemIds![0]![1];
+    await sdk.restore(originalId, "1", { author: "fixture", message: "Explicitly restore original transaction birth" }, { pmRoot: root });
+    const recovered = await importGithubAtomic(root, "acme/widgets", [entry(50, "Changed retry input")]);
+    assert.equal(recovered.transactionId, pending[0]!.transactionId);
+    assert.equal(listItems(root)[0]!.title, "Original recovery plan");
+    assert.deepEqual(await listUnfinishedGithubImports(root), []);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+
 });
 
 test("SDK resolution reports an actionable version error", async () => {
