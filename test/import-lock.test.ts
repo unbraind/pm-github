@@ -603,40 +603,25 @@ function replaceMethod<T extends object, K extends keyof T>(target: T, key: K, i
   return () => { target[key] = original; };
 }
 
-test("a failed lock write still releases the partial file when close and unlink fail", async () => {
+test("a failed atomic lock publication leaves no visible partial lease", async () => {
   const root = mkdtempSync(join(tmpdir(), "pm-github-lock-write-"));
-  const originalWrite = fs.writeFileSync;
-  const originalClose = fs.closeSync;
-  let descriptor: number | undefined;
-  let closeCalls = 0;
-  let unlinkCalls = 0;
-  const closeMock = replaceMethod(fs, "closeSync", () => {
-    closeCalls++;
-    throw Object.assign(new Error("close failed"), { code: "EIO" });
-  });
-  const unlinkMock = replaceMethod(fs, "unlinkSync", () => {
-    unlinkCalls++;
-    throw Object.assign(new Error("unlink failed"), { code: "EIO" });
-  });
-  const writeMock = replaceMethod(fs, "writeFileSync", ((target: fs.PathOrFileDescriptor, data: string) => {
-    if (typeof target === "number") {
-      descriptor = target;
-      throw Object.assign(new Error("write failed"), { code: "EIO" });
-    }
-    return originalWrite(target, data);
-  }) as typeof fs.writeFileSync);
+  let partialVisible = false;
+  let injected = false;
   try {
-    const acq = await acquireImportLock(root, "pm-write", { waitMs: 50 });
+    const acq = await acquireImportLock(root, "pm-write", { waitMs: 50, onStaged: async ({ file, staged }) => {
+      await fs.promises.writeFile(staged, "{");
+      injected = true;
+      if (existsSync(file)) {
+        try { JSON.parse(readFileSync(file, "utf8")); } catch { partialVisible = true; }
+      }
+      throw Object.assign(new Error("Injected partial lease publication failure"), { code: "EIO" });
+    } });
+    if (acq.status === "acquired") acq.lock.release();
+    assert.equal(injected, true);
+    assert.equal(partialVisible, false, "A lease reader observed an empty or partial reserved final file");
     assert.equal(acq.status, "degraded");
-    assert.ok(closeCalls > 0);
-    assert.ok(unlinkCalls > 0);
-  } finally {
-    writeMock();
-    closeMock();
-    unlinkMock();
-    if (descriptor !== undefined) originalClose(descriptor);
-    rmSync(root, { recursive: true, force: true });
-  }
+    assert.equal(existsSync(importCommentSyncLockPath(root, "pm-write")), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("a vanished breaker sidecar is ignored and a vanished lock is treated as already gone", async () => {

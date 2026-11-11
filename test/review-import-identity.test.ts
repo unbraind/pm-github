@@ -259,7 +259,7 @@ for (const corruption of ["missing", "unreadable", "mismatched"] as const) {
     else writeFileSync(planFile, corruption === "unreadable" ? "{" : JSON.stringify({ ...JSON.parse(original), transactionId: "wrong-original-plan" }));
     const before = await bytes(root, owner.id);
     await assert.rejects(() => captureStderr(() => runImport(repo, root, options, deps)), error => {
-      assert.equal((error as { code: string }).code, "github_import_plan_missing");
+      assert.equal((error as { code: string }).code, corruption === "missing" ? "github_import_plan_missing" : "github_import_plan_corrupt");
       assert.match(String(error), /Restore its original plan/);
       return true;
     });

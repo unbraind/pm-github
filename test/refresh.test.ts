@@ -469,7 +469,7 @@ for (const boundary of ["step_applied", "committing"]) {
       await assert.rejects(() => runRefresh("fixture/repo", pmRoot, { atomic: true }),
         new RegExp(`unfinished GitHub transaction ${transactionId}.*original plan is missing`));
       writeFileSync(planFile, JSON.stringify({ ...JSON.parse(plan), transactionId: "github-import-wrong" }));
-      await assert.rejects(() => runRefresh("fixture/repo", pmRoot, { atomic: true }), /original plan is missing or mismatched/);
+      await assert.rejects(() => runRefresh("fixture/repo", pmRoot, { atomic: true }), /original plan is corrupt or unreadable/);
       writeFileSync(planFile, plan);
       const receipt = await runRefresh("fixture/repo", pmRoot, { atomic: true, limit: "1" });
       assert.equal(JSON.parse(readFileSync(join(journalDir, `${transactionId}.json`), "utf8")).status, "committed");

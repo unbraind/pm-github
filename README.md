@@ -616,7 +616,7 @@ fields, including a closed item's completion state.
 With explicit opt-in, one eligible untagged candidate produces an `adopt` plan:
 its ID receives the provenance tag and `github_*` fields through normal upsert.
 Closed/canceled owners remain eligible. Two or more eligible owners refuse the
-batch with typed `ambiguous_citation`, IDs and a remedy to tag the correct item.
+batch with typed `ambiguous_citation`, IDs and a remedy to set `github_url` on the correct item.
 The default path never applies that fallback ambiguity refusal. Existing
 structured-identity collision checks still apply in both modes.
 
@@ -630,7 +630,7 @@ still require a Git worktree for the proposed-change privacy scan.
 
 `--limit` bounds the matching list after PR, draft, and milestone filters. Pagination stops once one extra matching issue establishes truncation, so at most `n + 1` eligible issues are retained; GitHub pages may also contain excluded entries. Without a limit, existing list ordering is unchanged.
 
-`--atomic` derives its durable transaction identity from the repository, complete rendered issue state, and exact ordered mutation plan (including target item ids), and derives each create id from the stable `owner/repo#number` external key rather than fetch position. Every producer mode saves its complete plan before the SDK writes. An interrupted or partially compensated attempt replays that original plan and transaction ID before polling new input, even if content, workspace prefixes or resolved targets have changed. Once recovery finishes, a subsequent sync can plan new input. Released update-only refresh-plan mutation formats remain readable; recovery requires a saved passing privacy preflight and a fresh passing scan. Refresh also discovers retained plans after SDK commit before polling new source data. If delete compensation leaves an original create ID reserved by SDK history, recovery refuses with `github_import_plan_drift` and retains its plan: inspect `pm history`, explicitly restore the original live version with `pm restore`, then retry the same transaction. Native comment annotations run only after the item transaction commits and retain their cross-process deduplication lock.
+`--atomic` derives its durable transaction identity from the repository, complete rendered issue state, and exact ordered mutation plan (including target item ids), and derives each create id from the stable `owner/repo#number` external key rather than fetch position. Every producer mode saves its complete plan before the SDK writes. An interrupted or partially compensated attempt replays that original plan and transaction ID before polling new input, even if content, workspace prefixes or resolved targets have changed. Once recovery finishes, a subsequent sync can plan new input. Released update-only refresh-plan mutation formats remain readable; recovery requires a saved passing privacy preflight and a fresh passing scan. Refresh also discovers retained plans after SDK commit before polling new source data. If delete compensation leaves an original create ID reserved by SDK history, recovery refuses with `github_import_plan_drift` and retains its plan: inspect `pm history`, explicitly restore the original live version with `pm restore`, then retry the same transaction. Native comment annotations run only after the item transaction commits and retain their cross-process deduplication lock. Package-owned plans, comment leases and webhook receipts/cursors publish complete fsynced state atomically; exclusive publication preserves an existing owner. A corrupt or unreadable original plan refuses with `github_import_plan_corrupt`: restore the verified original plan or reconcile its SDK journal while retaining native history, then retry. Unpublished staging files never become recovery identities.
 
 ### Native comment sync (`--comments-mode`)
 
@@ -1215,7 +1215,7 @@ jobs:
     uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@RELEASE_COMMIT_SHA # vRELEASE_VERSION
     with:
       automation-app-client-id: ${{ vars.PM_GITHUB_APP_CLIENT_ID }}
-      adopt-cited: false # Tag new items gh:owner/repo#N; opt in only for deliberate adoption.
+      adopt-cited: false # Set github_url on intended owners; opt in only for deliberate adoption.
     secrets:
       automation_app_private_key: ${{ secrets.PM_GITHUB_APP_PRIVATE_KEY }}
 ```

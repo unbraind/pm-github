@@ -1,3 +1,4 @@
+import { writeGithubStateAtomic, type GithubStateWriteOptions } from "./durable-state.ts";
 import { parseGithubIssueUrl, githubUrlTokens } from "./github-url.ts";
 import { readGithubWorkspace, canonicalGithubStatus, githubStatusKind, githubStatusIsTerminal, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
@@ -72,7 +73,6 @@ import {
   readSettings as sdkReadSettings,
   resolvePmRoot as sdkResolvePmRoot,
   toImportTags,
-  writeFileAtomic,
   getHistoryPath as sdkGetHistoryPath,
   readHistorySnapshot as sdkReadHistorySnapshot,
   type BulkItemMutation,
@@ -247,6 +247,8 @@ type ReadSettings = (pmRoot: string) => Promise<{ id_prefix?: string }>;
  * defaults; a test overrides only the ones it needs.
  */
 export interface AtomicImportOptions {
+  /** Observe a fully flushed recovery plan before its atomic exclusive publication. */
+  onPlanStaged?: GithubStateWriteOptions["onStaged"];
   /** Refuse unmatched entries and emit updates only, including deterministic imported ids. */
   updateOnly?: boolean;
   /** Enforce the preflight verdict for a fresh public import too. */
@@ -1707,24 +1709,29 @@ export async function listRetainedGithubImportPlans(pmRoot: string): Promise<Git
 }
 
 /** Persist the exact pre-commit plan so an interrupted journal can be replayed verbatim. */
-async function persistGithubImportPlan(pmRoot: string, record: GithubImportPlanRecord): Promise<void> {
-  await fs.promises.mkdir(importPlanDir(pmRoot), { recursive: true });
+async function persistGithubImportPlan(pmRoot: string, record: GithubImportPlanRecord, onStaged?: GithubStateWriteOptions["onStaged"]): Promise<void> {
   const file = path.join(importPlanDir(pmRoot), `${record.transactionId}.json`);
-  let handle;
-  try { handle = await fs.promises.open(file, "wx"); }
-  catch { throw new GithubImportRecoveryError("github_import_plan_drift", `Transaction ${record.transactionId} already has a recorded plan. Retry to replay that plan; no new plan was written.`); }
-  try { await handle.writeFile(`${JSON.stringify(record, null, 2)}\n`); await handle.sync(); }
-  finally { await handle.close(); }
+  try { await writeGithubStateAtomic(file, `${JSON.stringify(record, null, 2)}\n`, { exclusive: true, onStaged }); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "EEXIST") throw new GithubImportRecoveryError("github_import_plan_drift", `Transaction ${record.transactionId} already has a recorded plan. Retry to replay that plan; no new plan was written.`);
+    throw new GithubImportRecoveryError("github_import_plan_write_failed", `Transaction ${record.transactionId} original plan could not be published durably. Retain any original plan and retry the import; no SDK mutation started.`);
+  }
 }
 
-/** Read one persisted plan; null when the tracker holds no plan for that transaction. */
+/** Read one persisted plan; only absence returns null, while corrupt bytes require explicit recovery. */
 export async function readGithubImportPlan(pmRoot: string, transactionId: string): Promise<GithubImportPlanRecord | null> {
   if (!/^[a-zA-Z0-9._-]+$/.test(transactionId)) return null;
   const file = path.join(importPlanDir(sdkResolvePmRoot(process.cwd(), pmRoot)), `${transactionId}.json`);
   try {
-    return JSON.parse(await fs.promises.readFile(file, "utf8")) as GithubImportPlanRecord;
-  } catch {
-    return null;
+    const record: unknown = JSON.parse(await fs.promises.readFile(file, "utf8"));
+    if (!record || typeof record !== "object" || Array.isArray(record)) throw new Error("Invalid plan document");
+    validateGithubImportPlan(record as GithubImportPlanRecord);
+    if ((record as GithubImportPlanRecord).transactionId !== transactionId) throw new Error("Mismatched recovery identity");
+    return record as GithubImportPlanRecord;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+    if (error instanceof GithubImportRecoveryError) throw error;
+    throw new GithubImportRecoveryError("github_import_plan_corrupt", `Transaction ${transactionId} original plan is corrupt or unreadable. Restore its original plan from a verified copy or reconcile its SDK journal before retrying; retain tracker history and do not start a new import.`);
   }
 }
 
@@ -1878,7 +1885,7 @@ export async function importGithubAtomic(
   if (opts.gate && preflight.verdict !== "pass") throw new GithubImportRecoveryError("github_import_preflight_failed", "GitHub import privacy preflight failed; no item was written.");
   const plan = { transactionId, repo: repo.toLowerCase(), preflight, entries, mutations, updateOnly: Boolean(opts.updateOnly), ...(opts.linkDeps ? { linkDeps: true, dependencyIssues: opts.dependencyIssues } : {}), itemIds: [...itemIds] };
   validateGithubImportPlan(plan);
-  await persistGithubImportPlan(pmRoot, plan);
+  await persistGithubImportPlan(pmRoot, plan, opts.onPlanStaged);
   const result = await commitGithubImportTransaction({ pmRoot, repo, entries, mutations, transactionId, itemIds, opts, commit });
   await removeGithubImportPlan(pmRoot, transactionId);
   return result;
@@ -2170,7 +2177,7 @@ export function composeBody(issue: GhIssue, comments: GhComment[]): string {
 //     prefix keeps our namespace disjoint from the CLI's per-item mutation
 //     locks (<itemId>.lock): we hold our lock ACROSS several CLI mutations, so
 //     sharing a name would make the very mutations we wrap conflict with it.
-//   - acquire   fs.openSync(path, "wx") — atomic O_EXCL create on POSIX.
+//   - acquire   atomic link publishes the fully flushed payload with exclusive-create semantics.
 //   - stale     a lock is broken (with a stderr warning) only when its owner
 //     is provably gone: the recorded owner PID is dead, or it equals our own
 //     PID (we know we don't hold it, so the PID was recycled). A lock with a
@@ -2318,6 +2325,8 @@ export function isLockOwnerAlive(pid: number): boolean {
 // same-pid payload that is legitimately ours (in-process contention → wait)
 // from a leftover written by a dead process whose PID we inherited (→ break).
 const heldImportLocks = new Set<string>();
+// A complete lease can become visible before its publisher finishes directory fsync.
+const publishingImportLockTokens = new Set<string>();
 
 /**
  * Decide whether a held lock is stale and why.
@@ -2347,7 +2356,7 @@ function importLockStaleReason(
       // Our own PID: either another async task in THIS process holds it (the
       // in-process race the caller serializes too — contend, don't break), or
       // we provably don't hold it and the PID was recycled by a dead owner.
-      return heldImportLocks.has(lockPath)
+      return heldImportLocks.has(lockPath) || (typeof payload?.token === "string" && publishingImportLockTokens.has(payload.token))
         ? undefined
         : `owner pid ${pid} is this process but the lock is not held in-process (pid recycled, lock abandoned)`;
     }
@@ -2388,11 +2397,10 @@ export const IMPORT_LOCK_BREAKER_TTL_MS = 10_000;
  * @param reason - Human-readable staleness reason, surfaced in the break warning.
  * @returns True when the stale lock was removed (retry acquire now); false when the election was lost or the lock is live again.
  */
-function breakStaleImportLock(lockPath: string, ttlMs: number, reason: string): boolean {
+async function breakStaleImportLock(lockPath: string, ttlMs: number, reason: string): Promise<boolean> {
   const breakerPath = `${lockPath}.break`;
-  let bfd: number | undefined;
   try {
-    bfd = fs.openSync(breakerPath, "wx");
+    await writeGithubStateAtomic(breakerPath, "", { exclusive: true });
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException)?.code === "EEXIST") {
       // Another breaker is active. If IT crashed mid-break, its sidecar is
@@ -2408,7 +2416,6 @@ function breakStaleImportLock(lockPath: string, ttlMs: number, reason: string): 
     return false;
   }
   try {
-    fs.closeSync(bfd);
     // Re-verify under the mutex: the lock we judged stale may have been
     // broken and re-acquired by a live owner since we looked at it.
     let payload: ImportLockPayload | undefined;
@@ -2446,13 +2453,13 @@ function breakStaleImportLock(lockPath: string, ttlMs: number, reason: string): 
  *
  * @param pmRoot - Workspace root or pm data dir passed to {@link resolvePmDataDir}.
  * @param itemId - The pm item whose comment critical section is serialized.
- * @param opts - Optional overrides for the staleness TTL and wait budget.
+ * @param opts - Optional TTL/wait overrides and observation of the candidate before publication.
  * @returns The acquisition outcome.
  */
 export async function acquireImportLock(
   pmRoot: string,
   itemId: string,
-  opts: { ttlMs?: number; waitMs?: number } = {},
+  opts: { ttlMs?: number; waitMs?: number; onStaged?: GithubStateWriteOptions["onStaged"] } = {},
 ): Promise<ImportLockAcquisition> {
   const ttlMs = opts.ttlMs ?? IMPORT_LOCK_TTL_MS_DEFAULT;
   const waitMs = opts.waitMs ?? IMPORT_LOCK_WAIT_MS_DEFAULT;
@@ -2477,12 +2484,9 @@ export async function acquireImportLock(
   let backoffMs = IMPORT_LOCK_INITIAL_BACKOFF_MS;
   let staleBreaks = 0;
   for (;;) {
-    let fd: number | undefined;
     try {
-      fd = fs.openSync(lockPath, "wx");
-      fs.writeFileSync(fd, `${JSON.stringify(payload, null, 2)}\n`);
-      fs.closeSync(fd);
-      fd = undefined;
+      publishingImportLockTokens.add(payload.token);
+      await writeGithubStateAtomic(lockPath, `${JSON.stringify(payload, null, 2)}\n`, { exclusive: true, onStaged: opts.onStaged });
       heldImportLocks.add(lockPath);
       let released = false;
       return {
@@ -2507,28 +2511,13 @@ export async function acquireImportLock(
         },
       };
     } catch (err: unknown) {
-      if (fd !== undefined) {
-        try {
-          fs.closeSync(fd);
-        } catch {
-          // Ignore close errors on the failure path.
-        }
-        // We created the lockfile but failed to write/close it. Remove the
-        // empty/partial file so other processes are not blocked until the
-        // TTL expires on a lock that was never validly held.
-        try {
-          fs.unlinkSync(lockPath);
-        } catch {
-          // Best-effort: already gone.
-        }
-      }
       const code = (err as NodeJS.ErrnoException)?.code;
       if (code !== "EEXIST") {
         const msg = errorMessage(err);
         console.error(`pm-github: comment-sync lock failed (${msg}) — proceeding without cross-process serialization`);
         return { status: "degraded" };
       }
-      // The lock exists for open(O_EXCL) but cannot be stat'd (it vanished, or
+      // The lock exists for exclusive publication but cannot be stat'd (it vanished, or
       // it is a broken symlink). Retry, but honor the wait budget: a persistent
       // stat failure must not busy-spin the process until an external killer.
       let existing: ImportLockPayload | undefined;
@@ -2545,7 +2534,7 @@ export async function acquireImportLock(
       const staleReason = importLockStaleReason(lockPath, existing, mtimeMs, ttlMs);
       if (staleReason && staleBreaks < IMPORT_LOCK_MAX_STALE_BREAKS) {
         staleBreaks++;
-        if (breakStaleImportLock(lockPath, ttlMs, staleReason)) continue;
+        if (await breakStaleImportLock(lockPath, ttlMs, staleReason)) continue;
         // Lost the breaker election or the lock turned out live on re-check —
         // fall through to the normal wait/backoff below.
       }
@@ -2555,7 +2544,7 @@ export async function acquireImportLock(
       const jittered = Math.max(1, Math.round(backoffMs * (0.5 + Math.random())));
       await sleep(Math.min(jittered, waitMs - elapsedMs));
       backoffMs = Math.min(backoffMs * 2, IMPORT_LOCK_MAX_BACKOFF_MS);
-    }
+    } finally { publishingImportLockTokens.delete(payload.token); }
   }
 }
 

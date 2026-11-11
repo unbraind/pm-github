@@ -1,0 +1,15 @@
+id: pm-github-pr-url-alias-followup
+title: Exclude PR owners in every supported explicit URL field during refresh
+description: "Review follow-up from PR #233 thread PRRT_kwDOTbN4pM62Q99D: identity resolution recognizes GitHubURL aliases, while refresh PR exclusion checks github_url only. Evaluate all supported explicit URL fields before the issue-only GraphQL query. Separate from round-4 durable-state publication; retain real tracker tests for aliases and issue owners."
+type: Issue
+status: open
+priority: 3
+tags[2]: "gh:unbraind/pm-github#233",review-followup
+created_at: "2026-11-11T18:20:19.928Z"
+updated_at: "2026-11-11T18:22:31.188Z"
+author: codex-github230-1111
+files[1]{path,scope}:
+  refresh.ts,project
+docs[1]{path,scope}:
+  "https://github.com/unbraind/pm-github/pull/233#discussion_r4540585165",project
+body: ""

@@ -1,8 +1,9 @@
+import { writeGithubStateAtomic } from "./durable-state.ts";
 /** Durable authenticated issue-event hints; provider reads, never event payloads, produce proposals. */
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { open, mkdir, readdir, readFile } from "node:fs/promises";
 import { join, basename } from "node:path";
-import { acquireLock, writeFileAtomic, resolvePmRoot, ensureTrackerInitialized } from "@unbrained/pm-cli/sdk";
+import { acquireLock, resolvePmRoot, ensureTrackerInitialized } from "@unbrained/pm-cli/sdk";
 import { runRefresh } from "./refresh.ts";
 
 /** Stable refusal discriminators; no secret, payload or storage path is included in diagnostics. */
@@ -80,7 +81,7 @@ function refusal(error: unknown, code: WebhookRefusalCode, remedy: string): neve
 }
 /** Flush published records and the containing directory before acknowledging durable intake. */
 async function persist(file: string, value: unknown): Promise<void> {
-  await writeFileAtomic(file, JSON.stringify(value) + "\n");
+  await writeGithubStateAtomic(file, JSON.stringify(value) + "\n");
   await flush(file);
 }
 /** Finish a prior publisher's flush as well as a fresh receipt's durable acknowledgment. */
