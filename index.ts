@@ -1,5 +1,5 @@
 import { writeGithubStateAtomic, syncGithubStatePath, type GithubStateWriteOptions } from "./durable-state.ts";
-import { assertGithubImportOwner, GithubImportOwnershipError, readGithubImportOwner, withGithubImportOwners, mutateGithubOwnedItem, type GithubOwnedTarget } from "./import-ownership.ts";
+import { githubOwnershipClaims, githubOwnedIdentityKeys, assertGithubOwnershipConsistency, assertGithubImportOwner, GithubImportOwnershipError, readGithubImportOwner, withGithubImportOwners, mutateGithubOwnedItem, type GithubOwnedTarget } from "./import-ownership.ts";
 import { parseGithubIssueUrl, githubUrlTokens } from "./github-url.ts";
 import { readGithubWorkspace, canonicalGithubStatus, githubStatusKind, githubStatusIsTerminal, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
@@ -37,7 +37,7 @@ import { compileIssueForm, completeIssueForm, readRepositoryIssueForm, refuseIss
 export { compileIssueForm, completeIssueForm, readRepositoryIssueForm } from "./issue-forms.ts";
 export type { IssueFormInput, IssueFormSelection, IssueFormContract, IssueFormReport, IssueFormCompletion, IssueFormRefusalCode, FormField, FormRepair, IssueFormReader } from "./issue-forms.ts";
 import {
-  AmbiguousCitationError, legacyGithubIdentityConflict, importIdentityKeys, indexByImportIdentity, importerCreatedItem, buildImportFidelity, fetchImportTimeline, importFidelityFields, matchImportedIssue, normalizeImportValue, persistImportFidelity, readImportReleases, selectImportContextIndex, serializeImportTags, validateImportLifetime,
+  AmbiguousCitationError, legacyGithubIdentityConflict, indexByImportIdentity, importerCreatedItem, buildImportFidelity, fetchImportTimeline, importFidelityFields, matchImportedIssue, normalizeImportValue, persistImportFidelity, readImportReleases, selectImportContextIndex, serializeImportTags, validateImportLifetime,
   type AmbiguousCitationPlan, type CitationCandidate, type ImportFidelity,
 } from "./import-fidelity.ts";
 import { refreshChanges, runRefresh } from "./refresh.ts";
@@ -1237,8 +1237,7 @@ export function readPmItems(
   return decodeCompletePmItems(parsed);
 }
 
-// Index existing pm items by their GitHub provenance tag for O(1) idempotent
-// matching on re-import.
+// Associate remote search hits with uniquely owned local issue identities.
 /**
  * Narrow one runtime search document to a {@link PmItem}.
  *
@@ -1279,21 +1278,15 @@ export function resolveSearchCorpus(documents: unknown, pmRootValue: unknown): P
 /**
  * Index complete pm items by their normalized GitHub issue provenance.
  *
- * Items without a stable local id or a valid `gh:owner/repo#N` tag are skipped.
- * When legacy data contains duplicate provenance, the last corpus row wins;
- * the complete reader prevents duplicate local item ids separately.
+ * References alone never identify a local owner. Contradictory or competing
+ * ownership is refused before associating a search result with a tracker item.
  *
  * @param items - Complete runtime-validated pm item corpus.
  * @returns Map keyed by lowercase `owner/repo#N` provenance.
  */
 export function indexByProvenance(items: PmItem[]): Map<string, PmItem> {
   const index = new Map<string, PmItem>();
-  for (const item of items) {
-    for (const tag of item.tags ?? []) {
-      const p = parseProvenanceTag(tag);
-      if (p && item.id) index.set(`${p.repo}#${p.number}`, item);
-    }
-  }
+  for (const item of items) if (item.id) for (const key of githubOwnedIdentityKeys(item, items)) index.set(key, item);
   return index;
 }
 
@@ -1869,7 +1862,7 @@ async function commitGithubImportTransaction(config: Parameters<typeof commitGit
 /** Carry a verified first-link decision without letting it override an existing GitHub owner. */
 export function githubImportTarget(repo: string, entry: PreparedGithubImport, id: string, allowCreate = false): GithubOwnedTarget {
   return { id, repo, number: entry.issueNumber, allowCreate, mirrorContent: !entry.linkOnly && !entry.preserveContent,
-    ...(entry.match?.id === id && entry.identity?.via && entry.identity.via !== "new" && importIdentityKeys(entry.match).length === 0 ? {
+    ...(entry.match?.id === id && entry.identity?.via && entry.identity.via !== "new" && githubOwnedIdentityKeys(entry.match).length === 0 ? {
       initialLink: (item: PmItem) => matchImportedIssue([item], {
         number: entry.issueNumber, html_url: entry.fidelity!.github_url, body: entry.sourceBody ?? entry.body,
       } as GhIssue, undefined, entry.identity?.via === "citation").item?.id === id,
@@ -1950,7 +1943,7 @@ export function validateGithubImportFidelity(entry: PreparedGithubImport, repo: 
     if (!fidelity || typeof fidelity !== "object" || Array.isArray(fidelity) ||
       Object.keys(fidelity).some(field => !fields.includes(field)) ||
       typeof fidelity.github_url !== "string" ||
-      !importIdentityKeys({ github_url: fidelity.github_url }).includes(`${repo.toLowerCase()}#${entry.issueNumber}`) ||
+      parseGithubIssueUrl(fidelity.github_url)?.key !== `${repo.toLowerCase()}#${entry.issueNumber}` ||
       fidelity.github_number !== entry.issueNumber ||
       !["open", "closed"].includes(fidelity.github_state) ||
       typeof fidelity.github_created_at !== "string" || typeof fidelity.github_updated_at !== "string" ||
@@ -3060,12 +3053,12 @@ export function buildProvenanceIndexFromMetadata(
   const invalid = new Set<string>();
   for (const item of items) {
     if (!item.id) continue;
-    const keys = importIdentityKeys(item, { allowConflicts: true });
-    for (const key of keys) {
+    const state = githubOwnershipClaims(item);
+    for (const key of state.claims) {
       const claimants = owners.get(key) ?? new Set<string>();
       claimants.add(item.id);
       owners.set(key, claimants);
-      if (keys.length !== 1) invalid.add(key);
+      if (state.claims.length !== 1 || state.owners.length !== 1) invalid.add(key);
     }
   }
   const index = new Map<string, string>();
@@ -3167,14 +3160,16 @@ function defaultDepLinkSdk(): DepLinkSdk {
  * @param pmRoot - Workspace root for the `pm` invocation.
  * @returns Whether the write succeeded and any stderr.
  */
-async function defaultApplyDependencyLink(edge: ResolvedDepEdge, pmRoot: string, repo: string): Promise<{ ok: boolean; stderr: string }> {
+async function defaultApplyDependencyLink(edge: ResolvedDepEdge, pmRoot: string, repo: string, targetKey: string): Promise<{ ok: boolean; stderr: string }> {
   try {
-    await mutateGithubOwnedItem(pmRoot, { id: edge.sourceId, repo, number: edge.sourceIssue }, "update", {
+    const [targetRepo, targetNumber] = targetKey.split("#");
+    await mutateGithubOwnedItem(pmRoot, { id: edge.sourceId, repo, number: edge.sourceIssue,
+      related: [{ id: edge.targetId, repo: targetRepo!, number: Number(targetNumber) }] }, "update", {
       dep: [`id=${edge.targetId},kind=${edge.kind}`],
       message: `GitHub #${edge.sourceIssue}: ${edge.phrase}`,
     });
     return { ok: true, stderr: "" };
-  } catch (error: unknown) { return { ok: false, stderr: errorMessage(error) }; }
+  } catch (error: unknown) { return { ok: false, stderr: `${error instanceof GithubImportOwnershipError || (error as { code?: string })?.code === "github_import_owner_conflict" ? "ambiguous_github_dependency_owner: " : ""}${errorMessage(error)}` }; }
 }
 
 /**
@@ -3190,7 +3185,7 @@ export async function linkImportedDependencies(
   pmRoot: string,
   deps: ImportRunDependencies = {},
 ): Promise<DepLinkResult> {
-  const applyEdge = deps.applyDependencyLink ?? ((edge: ResolvedDepEdge, root: string) => defaultApplyDependencyLink(edge, root, repo));
+  const applyEdge = deps.applyDependencyLink ?? ((edge: ResolvedDepEdge, root: string) => defaultApplyDependencyLink(edge, root, repo, [...provenance].find(([, id]) => id === edge.targetId)![0]));
   const failures: string[] = [];
 
   // Resolve the SDK-backed helpers and take the pre-edge snapshot. This runs
@@ -3446,7 +3441,7 @@ export function verifyImportIdempotency(
   const duplicateIdentities = new Set<string>();
   for (const item of existing) {
     if (!item.id) continue;
-    for (const key of importIdentityKeys(item)) {
+    for (const key of githubOwnedIdentityKeys(item, existing)) {
       const prior = identityOwners.get(key);
       if (prior && prior !== item.id) duplicateIdentities.add(key);
       else identityOwners.set(key, item.id);
@@ -4240,28 +4235,28 @@ export interface UpstreamIdentityOptions { allowReferenceTags?: boolean; corpus?
 /** Resolve one upstream target per item and reject competing owners before any remote write. */
 function upstreamTargets(items: readonly PmItem[], repo: string, options: UpstreamIdentityOptions): Map<string, number> {
   const targets = new Map<string, number>();
-  const owners = new Map<string, string>();
   for (const item of items) {
     if (!item.id) continue;
-    const explicit = importIdentityKeys(item);
-    const keys = new Set(explicit.filter(key => key.slice(0, key.lastIndexOf("#")) === repo.toLowerCase()));
-    if (!explicit.length && options.allowReferenceTags) for (const tag of item.tags ?? []) {
-      const parsed = parseProvenanceTag(tag);
-      if (parsed?.repo === repo.toLowerCase()) keys.add(`${parsed.repo}#${parsed.number}`);
-    }
-    if (keys.size > 1) throw new GithubImportRecoveryError("github_upstream_identity_conflict", `Item ${item.id} has competing upstream targets: ${[...keys].join(" versus ")}. Set one explicit github_url; keep other references as tags without tag-link opt-in.`);
-    for (const key of keys) {
-      const prior = owners.get(key);
-      if (prior && prior !== item.id) throw new GithubImportRecoveryError("github_upstream_owner_conflict", `Upstream ${key} is claimed by both ${prior} and ${item.id}. Keep one explicit owner and remove the competing identity or disable reference-tag opt-in; nothing was written.`);
-      owners.set(key, item.id);
-      targets.set(item.id, Number(key.slice(key.lastIndexOf("#") + 1)));
+    for (const key of githubOwnedIdentityKeys(item, items, repo, options.allowReferenceTags)) {
+      if (key.slice(0, key.lastIndexOf("#")) === repo.toLowerCase()) targets.set(item.id, Number(key.slice(key.lastIndexOf("#") + 1)));
     }
   }
   return targets;
 }
 
+/** Re-resolve current ownership immediately before sending an upstream write. */
+function assertCurrentUpstreamTarget(pmRoot: string, repo: string, entry: { id?: string; number?: number }, options: UpstreamIdentityOptions): void {
+  const corpus = readPmItems(pmRoot);
+  const item = corpus.find(item => item.id === entry.id);
+  if (!item) throw new GithubImportOwnershipError(entry.id ?? "<unknown>", `${repo.toLowerCase()}#${entry.number ?? "new"}`, ["missing tracker item"]);
+  githubOwnedIdentityKeys(item, corpus, undefined, options.allowReferenceTags);
+  const current = upstreamTargets(corpus, repo, options).get(item.id!);
+  if (current !== entry.number) throw new GithubImportOwnershipError(item.id!, `${repo.toLowerCase()}#${entry.number ?? "new"}`, githubOwnershipClaims(item).claims);
+}
+
 // Build the pm → GitHub state plan from the same explicit ownership resolver used by export.
 export function planSync(items: PmItem[], repo: string, statuses?: GithubStatusRegistry, options: UpstreamIdentityOptions = {}): SyncPlanEntry[] {
+  for (const item of items) githubOwnedIdentityKeys(item, options.corpus ?? items, undefined, options.allowReferenceTags);
   const targets = upstreamTargets(options.corpus ?? items, repo, options);
   return items.flatMap(item => {
     const number = item.id ? targets.get(item.id) : undefined;
@@ -4351,6 +4346,7 @@ async function runSync(ctx: CommandHandlerContext) {
       synced++;
       continue;
     }
+    assertCurrentUpstreamTarget(ctx.pm_root, repo, entry, { allowReferenceTags: optionEnabled(options, "allow-reference-tags", "allowReferenceTags") });
     try {
       await request(
         "PATCH",
@@ -4433,6 +4429,7 @@ export function buildExportPlan(
   options: UpstreamIdentityOptions = {},
 ): ExportPlanEntry[] {
   const repoLc = repo?.toLowerCase();
+  for (const item of items) githubOwnedIdentityKeys(item, options.corpus ?? items, undefined, options.allowReferenceTags);
   const targets = repoLc ? upstreamTargets(options.corpus ?? items, repoLc, options) : new Map<string, number>();
   const plan: ExportPlanEntry[] = [];
   for (const item of items) {
@@ -4445,6 +4442,7 @@ export function buildExportPlan(
       payload,
     });
   }
+  exportOwnershipContexts.set(plan, { items, options });
   return plan;
 }
 
@@ -4484,6 +4482,9 @@ export type ExportRequestFn = (
   payload?: string,
 ) => Promise<unknown>;
 
+/** Source snapshots for package-built plans; raw transport plans contain only explicit caller-supplied targets. */
+const exportOwnershipContexts = new WeakMap<ExportPlanEntry[], { items: readonly PmItem[]; options: UpstreamIdentityOptions }>();
+
 /**
  * Apply an already-built export plan to GitHub, one issue at a time.
  *
@@ -4498,11 +4499,21 @@ export async function applyExportPlan(
   repo: string,
   token: string | undefined,
   requestFn: ExportRequestFn,
+  beforeWrite?: (entry: ExportPlanEntry) => void | Promise<void>,
 ): Promise<ExportApplyResult> {
   let created = 0;
   let updated = 0;
   const failures: ExportApplyFailure[] = [];
   for (const entry of plan) {
+    const context = exportOwnershipContexts.get(plan);
+    if (context) {
+      const corpus = context.options.corpus ?? context.items;
+      const item = context.items.find(item => item.id === entry.id);
+      if (item) githubOwnedIdentityKeys(item, corpus, undefined, context.options.allowReferenceTags);
+      const number = upstreamTargets(corpus, repo, context.options).get(entry.id!);
+      if (number !== entry.number) throw new GithubImportOwnershipError(entry.id ?? "<unknown>", `${repo.toLowerCase()}#${entry.number ?? "new"}`, item ? githubOwnershipClaims(item).claims : ["missing tracker item"]);
+    }
+    await beforeWrite?.(entry);
     const p = entry.payload;
     try {
       // An "update" entry must carry the issue number; without it we must NOT
@@ -4713,6 +4724,7 @@ async function runExport(ctx: CommandHandlerContext) {
     repo,
     token,
     request,
+    entry => assertCurrentUpstreamTarget(ctx.pm_root, repo, entry, { allowReferenceTags: optionEnabled(options, "allow-reference-tags", "allowReferenceTags") }),
   );
   if (!jsonMode) {
     console.error(`Created ${created} and updated ${updated} issue(s) on ${repo}.`);
@@ -5000,7 +5012,7 @@ export function resolveBlockerReferences(
  * @param fallbackRepo - The `--repo` hint, when given.
  * @returns Deduplicated resolved references for the item.
  */
-export function collectBlockerReferences(item: BlockerPmItem, fallbackRepo: string | undefined): BlockerReference[] {
+export function collectBlockerReferences(item: BlockerPmItem, fallbackRepo: string | undefined, peers: readonly PmItem[] = [item]): BlockerReference[] {
   const texts: string[] = [];
   for (const dep of item.dependencies) {
     if (dep.kind === "blocked_by" && isGithubBlockerDependency(dep.id)) texts.push(dep.id);
@@ -5017,7 +5029,7 @@ export function collectBlockerReferences(item: BlockerPmItem, fallbackRepo: stri
     return undefined;
   })();
   const parsed = texts.flatMap((text) => parseBlockerReferences(text));
-  const ownKeys = new Set(importIdentityKeys(item));
+  const ownKeys = new Set(githubOwnedIdentityKeys(item, peers));
   return resolveBlockerReferences(parsed, itemRepo, fallbackRepo).filter((ref) => !ownKeys.has(ref.key));
 }
 
@@ -5624,7 +5636,7 @@ async function runBlockers(ctx: CommandHandlerContext) {
   const selected = requireRequestedItems(corpus, scopedIds);
   const workspace = await readGithubWorkspace(ctx.pm_root);
   const candidates = selectBlockerCandidates(selected, workspace.statuses);
-  const perItem = candidates.map((item) => ({ item, references: collectBlockerReferences(item, fallbackRepo) }));
+  const perItem = candidates.map((item) => ({ item, references: collectBlockerReferences(item, fallbackRepo, corpus) }));
 
   const unique = new Map<string, ResolvedBlockerReference>();
   for (const entry of perItem) {
@@ -6628,17 +6640,30 @@ async function applyPushEntry(
   pmById: Map<string, PmItem>,
   pmRoot: string,
   token: string | undefined,
+  projectItems: ProjectItem[],
 ): Promise<{ changed: boolean; error?: string }> {
   try {
+    const validate = () => {
+      const corpus = readPmItems(pmRoot);
+      const current = corpus.find(item => item.id === entry.pmId);
+      if (!current) throw new GithubImportOwnershipError(entry.pmId, "project association", ["missing tracker item"]);
+      githubOwnedIdentityKeys(current, corpus);
+      const content = projectItems.find(item => item.id === entry.itemId)?.content;
+      const repo = entry.issueRepo ?? content?.repo;
+      const number = entry.issueNumber ?? content?.number;
+      if (repo && number && githubOwnershipClaims(current).evidence) assertGithubOwnershipConsistency(current, { id: current.id!, repo, number }, corpus);
+    };
+    validate();
     let itemId = entry.itemId;
     if (entry.action === "add-draft") {
       const pm = pmById.get(entry.pmId);
       itemId = await gqlAddDraft(meta.id, entry.title, pm!.body || pm!.description!, token);
     } else if (entry.action === "add-issue") {
       // The private executor receives only buildProjectPushPlan entries. Its
-      // add-issue arm always sets both coordinates from a parsed provenance tag.
+      // add-issue arm sets both coordinates from shared, consistent ownership.
       const contentId = await gqlResolveIssueNodeId(entry.issueRepo!, entry.issueNumber!, token);
       if (!contentId) return { changed: false, error: `could not resolve node id for ${entry.issueRepo}#${entry.issueNumber}` };
+      validate();
       itemId = await gqlAddIssue(meta.id, contentId, token);
     }
 
@@ -6843,7 +6868,7 @@ async function runProjectSync(ctx: CommandHandlerContext) {
       if (prefer === "github" && e.action === "set-status" && pullItemIds.has(e.itemId!)) {
         continue; // pull wins for this linked item
       }
-      const r = await applyPushEntry(e, meta, ref, pmById, ctx.pm_root, token);
+      const r = await applyPushEntry(e, meta, ref, pmById, ctx.pm_root, token, projectItems);
       if (r.error && !r.changed) { console.error(`  push ${e.pmId} "${e.title}": ${r.error}`); pushFailed++; continue; }
       if (r.error) console.error(`  push ${e.pmId}: ${r.error}`);
       pushed++;
@@ -7161,7 +7186,7 @@ export default defineExtension({
             // Network/parse failure → no remote hits; pm degrades to keyword.
             return [];
           }
-          // Map remote matches back to local items via provenance tags. Prefer
+          // Map remote matches back through shared unique ownership. Prefer
           // the runtime-provided documents (already the current corpus); fall
           // back to a fresh read if absent.
           const docs = resolveSearchCorpus(qctx.documents, qctx.pm_root);
@@ -7175,7 +7200,7 @@ export default defineExtension({
     // hooks — actionable sync reminder for github-linked items.
     // Safe + no network: only emits a hint, gated on PM_GITHUB_SYNC, and names
     // the exact command to run. Triggers only when a github-linked item (one
-    // carrying a `gh:owner/repo#N` provenance tag) is closed/reopened.
+    // carrying authoritative GitHub provenance) is closed/reopened.
     // -----------------------------------------------------------------------
     api.hooks.afterCommand((ctx: AfterCommandHookContext) => {
       if (!process.env.PM_GITHUB_SYNC) return;
@@ -7192,12 +7217,14 @@ export default defineExtension({
       if (res.status !== 0) return;
       let repo: string | undefined;
       try {
-        const item = JSON.parse(res.stdout);
-        for (const tag of item?.tags ?? []) {
-          const p = parseProvenanceTag(String(tag));
-          if (p) { repo = p.repo; break; }
-        }
-      } catch {
+        JSON.parse(res.stdout); // Compact show output is not ownership evidence.
+        const corpus = readPmItems(ctx.pm_root);
+        const item = corpus.find(item => item.id === id);
+        if (!item) return;
+        const owners = githubOwnedIdentityKeys(item, corpus);
+        repo = owners[0]?.split("#")[0];
+      } catch (error: unknown) {
+        if (error instanceof GithubImportOwnershipError) console.error(`[pm-github] ${error.code}: ${error.message}`);
         return;
       }
       if (!repo) return;

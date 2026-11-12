@@ -76,7 +76,8 @@ test("copied prose, structured multi-provider owners, exact refs and bounded gra
   const before = snapshot(root);
   const report = await exploreGithubIdentities(root);
   assert.equal(report.scanned, 11);
-  assert.equal(report.collisions, 2);
+  assert.equal(report.collisions, 4);
+  assert.ok(report.edges.some(edge => edge.item === conflict && edge.identity === "gh:fixture/repo#9" && edge.strength === "claim"));
   assert.equal(report.mentions, 5);
   assert.equal(report.nodes.find(node => node.id === conflict)?.native_owner, "fixture-provider");
   assert.equal(report.nodes.find(node => node.id === copied)?.ownership, "local");
@@ -84,9 +85,9 @@ test("copied prose, structured multi-provider owners, exact refs and bounded gra
   assert.equal((await exploreGithubIdentities(root, { identity: "gh:fixture/repo#3" })).nodes.find(node => node.id === mixed)?.ownership, "mixed");
   assert.equal(report.nodes.find(node => node.id === owner)?.ownership, "github");
   const first = await exploreGithubIdentities(root, { limit: 1 });
-  assert.equal(first.total, 5);
+  assert.equal(first.total, 6);
   assert.equal(first.next, 1);
-  assert.equal((await exploreGithubIdentities(root, { limit: 1, offset: 4 })).next, null);
+  assert.equal((await exploreGithubIdentities(root, { limit: 1, offset: 5 })).next, null);
   assert.deepEqual((await exploreGithubIdentities(root, { identity: "absent" })).edges, []);
   assert.deepEqual(snapshot(root), before);
   for (const options of [{ limit: 0 }, { limit: 101 }, { limit: 1.1 }, { offset: -1 }, { offset: NaN }]) await assert.rejects(exploreGithubIdentities(root, options), code("invalid_options"));

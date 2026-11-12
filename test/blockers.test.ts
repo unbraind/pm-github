@@ -226,7 +226,7 @@ test("resolveBlockerReferences leaves hint-dependent forms unresolved without a 
 
 // Candidate selection ----------------------------------------------------------
 
-test("collectBlockerReferences excludes its owned identity while retaining reference tags", () => {
+test("collectBlockerReferences refuses contradictory ownership and keeps reference-only blockers", () => {
   const item: github.BlockerPmItem = {
     id: "fixture-imported", title: "Imported issue", status: "blocked",
     tags: ["ordinary", "gh:Unbraind/pm-cli#1", "gh:unbraind/pm-web#2"],
@@ -236,7 +236,8 @@ test("collectBlockerReferences excludes its owned identity while retaining refer
     dependencies: [{ id: "github:unbraind/pm-web#2", kind: "blocked_by" }],
     comments: [{ text: "Self: GH-1; actual blocker: #854; other: unbraind/pm-web#854" }],
   };
-  assert.deepEqual(github.collectBlockerReferences(item, "other/repo").map(ref => ref.key),
+  assert.throws(() => github.collectBlockerReferences(item, "other/repo"), { code: "github_import_owner_conflict" });
+  assert.deepEqual(github.collectBlockerReferences({ ...item, tags: ["ordinary", "gh:Unbraind/pm-cli#1"] }, "other/repo").map(ref => ref.key),
     ["unbraind/pm-cli#854", "unbraind/pm-web#2", "unbraind/pm-web#854"]);
   assert.deepEqual(github.collectBlockerReferences({ ...item, tags: ["ordinary"] }, "unbraind/pm-cli")
     .map(ref => ref.key), ["unbraind/pm-cli#1", "unbraind/pm-cli#854", "unbraind/pm-web#2", "unbraind/pm-web#854"]);

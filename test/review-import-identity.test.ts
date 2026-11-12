@@ -78,7 +78,7 @@ for (const git of [false, true]) for (const atomic of [false, true]) {
       return true;
     };
     assert.throws(() => importIdentityKeys(owner), refusal);
-    assert.throws(() => selectRefreshTargets([owner], repo), refusal);
+    assert.throws(() => selectRefreshTargets([owner], repo), { code: "github_import_owner_conflict" });
     await assert.rejects(() => captureStderr(() => runImport(repo, root, parseImportOptions({ atomic, gate: true }), {
       resolveToken: () => undefined, fetchIssues: async () => [issue], fetchIssueTimeline: async () => [],
     })), error => {
@@ -173,11 +173,11 @@ test("upstream plans ignore shared references and reject competing explicit owne
   assert.deepEqual(buildExportPlan([owner], repo).map(entry => [entry.action, entry.number]), [["update", 7]]);
   assert.deepEqual(planSync([reference], repo, undefined, { allowReferenceTags: true }).map(entry => entry.number), [7]);
   assert.equal(buildExportPlan([reference], repo, undefined, undefined, { allowReferenceTags: true })[0]!.action, "update");
-  assert.throws(() => planSync([reference], repo, undefined, { allowReferenceTags: true, corpus }), { code: "github_upstream_owner_conflict" });
+  assert.throws(() => planSync([reference], repo, undefined, { allowReferenceTags: true, corpus }), { code: "github_import_owner_conflict" });
   await linked(root);
   const competing = (await listAllComplete({ includeBody: true }, { pmRoot: root })).items;
-  assert.throws(() => planSync([owner], repo, undefined, { corpus: competing }), { code: "github_upstream_owner_conflict" });
-  assert.throws(() => buildExportPlan([owner], repo, undefined, undefined, { corpus: competing }), { code: "github_upstream_owner_conflict" });
+  assert.throws(() => planSync([owner], repo, undefined, { corpus: competing }), { code: "github_import_owner_conflict" });
+  assert.throws(() => buildExportPlan([owner], repo, undefined, undefined, { corpus: competing }), { code: "github_import_owner_conflict" });
 }, false));
 
 test("sync and applied export send writes only to explicit owners", async () => tracker(async root => {
@@ -198,7 +198,7 @@ test("sync and applied export send writes only to explicit owners", async () => 
     assert.equal(server.requests.filter(request => request.method === "POST").length, 1, "explicitly exporting an unlinked item creates its own upstream issue");
     await linked(root);
     const before = server.requests.length;
-    for (const command of ["github sync", "github export"]) await assert.rejects(() => harness.runCommand({ command, options: { repo, ids: owner.id, apply: true }, pmRoot: root, global: { json: true } }), { code: "github_upstream_owner_conflict" });
+    for (const command of ["github sync", "github export"]) await assert.rejects(() => harness.runCommand({ command, options: { repo, ids: owner.id, apply: true }, pmRoot: root, global: { json: true } }), { code: "github_import_owner_conflict" });
     assert.equal(server.requests.length, before, "an unselected competing owner must refuse before any remote request");
   }));
 }, false));
@@ -292,7 +292,7 @@ test("upstream preview and apply agree across generated native fields and link o
       const start = server.requests.length;
       const command = (apply: boolean) => captureStderr(() => harness.runCommand({ command: "github export", options: { ...options, apply }, pmRoot: root, global: { json: true } }));
       if (allowReferenceTags) {
-        for (const apply of [false, true]) await assert.rejects(() => command(apply), { code: "github_upstream_owner_conflict" });
+        for (const apply of [false, true]) await assert.rejects(() => command(apply), { code: "github_import_owner_conflict" });
         assert.equal(server.requests.length, start);
       } else {
         const preview = (await command(false)).result.result as { plan: Array<{ id: string; action: string; payload: { title: string; body: string; labels: string[]; state: string } }> };

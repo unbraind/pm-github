@@ -174,7 +174,7 @@ test("packed npm and native Bun consumers preserve mixed-import bytes in JSON an
       { ...env, PM_PATH: join(packageRoot, ".agents/pm") })) as [{ filename: string }];
     await run(cli, ["--path", pmRoot, "package", "install", join(base, packed[0].filename), "--project"]);
     await run(cli, ["--path", pmRoot, "create", "--title", "Native", "--id", deriveAtomicItemId("fixture/project", 2, "fixture-", normalizeItemId), "--type", "issue", "--tags", "gh:fixture/project#2",
-      "--description", "GH issue #2: https://github.com/fixture/project/issues/2"]);
+      "--author", "pm-github", "--description", "GH issue #2: https://github.com/fixture/project/issues/2"]);
     let payload = [issue(1, labelSets.flat()), issue(2, labelSets.flat())];
     /** Switch source snapshots after the preceding real CLI calls have completed. */
     const selectPayload = (next: GhIssue[]) => { payload = next; };
@@ -205,7 +205,7 @@ test("packed npm and native Bun consumers preserve mixed-import bytes in JSON an
         }
       }
       await run(cli, ["--path", pmRoot, "create", "--title", "Plain native", "--id", deriveAtomicItemId("fixture/project", 4, "fixture-", normalizeItemId), "--type", "issue", "--tags", "gh:fixture/project#4",
-        "--description", "GH issue #4: https://github.com/fixture/project/issues/4"], root, environment);
+        "--author", "pm-github", "--description", "GH issue #4: https://github.com/fixture/project/issues/4"], root, environment);
       payload = [issue(3, labelSets.flat()), issue(4, labelSets.flat())];
       const plainArgs = ["--path", pmRoot, "github", "import", "fixture/project", "--type", "issue"];
       const plain = JSON.parse(await run("npm", ["exec", "--offline", "--", "pm", ...plainArgs, "--json"], root, environment)) as { imported: number; updated: number };
@@ -226,7 +226,7 @@ test("packed npm and native Bun consumers preserve mixed-import bytes in JSON an
       await schemaAddStatus("working", { alias: ["busy-now"], role: ["active"] }, { pmRoot: root, noExtensions: true });
       await schemaAddStatus("verified", { alias: ["settled"], role: ["terminal", "terminal_done"] }, { pmRoot: root, noExtensions: true });
       await run(cli, ["--path", root, "create", "--title", "Nested native", "--id", deriveAtomicItemId("fixture/project", 6, "fixture-", normalizeItemId), "--type", "probe", "--status", "busy-now", "--tags", "gh:fixture/project#6",
-        "--description", "GH issue #6: https://github.com/fixture/project/issues/6"], root, environment);
+        "--author", "pm-github", "--description", "GH issue #6: https://github.com/fixture/project/issues/6"], root, environment);
       payload = [issue(5, labelSets.flat()), issue(6, labelSets.flat())];
       const nestedArgs = ["--path", root, "github", "import", "fixture/project", "--atomic", "--type", "probe"];
       const nestedFirst = JSON.parse(await run("npm", ["exec", "--offline", "--", "pm", ...nestedArgs, "--json"], root, environment)) as { imported: number; updated: number };

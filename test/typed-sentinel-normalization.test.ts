@@ -33,7 +33,7 @@ test("GH-1614 plain create and update preserve literal assignments and repeat wi
   const root = join(cwd, "tracker");
   const client = new PmClient({ cwd, pmRoot: root, author: "fixture", noExtensions: true });
   await client.run("init", { prefix: "fixture", withPackages: false, agentGuidance: "skip" });
-  const owner = (await client.create({ id: deriveAtomicItemId("fixture/project", 1, "fixture-", normalizeItemId), title: "Existing owner", type: "Issue", tags: "gh:fixture/project#1",
+  const owner = (await client.create({ author: "pm-github", id: deriveAtomicItemId("fixture/project", 1, "fixture-", normalizeItemId), title: "Existing owner", type: "Issue", tags: "gh:fixture/project#1",
     description: "GH issue #1: https://github.com/fixture/project/issues/1" })).item;
   const source: GhIssue[] = ["none", "null", "none", "null"].map((login, index) => ({
     number: index + 1, title: `Literal source ${index + 1}`, body: "Source body", state: index < 2 ? "open" : "closed", labels: [],
@@ -73,7 +73,7 @@ test("GH-1614 existing owner restores literal source assignee after update then 
   const root = join(cwd, "tracker");
   const client = new PmClient({ cwd, pmRoot: root, author: "fixture", noExtensions: true });
   await client.run("init", { prefix: "fixture", withPackages: false, agentGuidance: "skip" });
-  const owner = (await client.create({ id: deriveAtomicItemId("fixture/project", 1, "fixture-", normalizeItemId), title: "Existing open owner", type: "Issue", assignee: "previous", tags: "gh:fixture/project#1",
+  const owner = (await client.create({ author: "pm-github", id: deriveAtomicItemId("fixture/project", 1, "fixture-", normalizeItemId), title: "Existing open owner", type: "Issue", assignee: "previous", tags: "gh:fixture/project#1",
     description: "GH issue #1: https://github.com/fixture/project/issues/1" })).item;
   const historyPath = getHistoryPath(root, owner.id);
   const historyBefore = readFileSync(historyPath, "utf8");

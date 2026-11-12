@@ -99,7 +99,7 @@ function freshTracker(): string {
 function createLinkedItem(root: string, title: string, tag: string, status: string, importerOwned = false): string {
   const reference = parseProvenanceTag(tag)!;
   const ownedId = importerOwned ? ["--id", deriveAtomicItemId(reference.repo, reference.number, "test-", normalizeItemId),
-    "--description", `GH issue #${reference.number}: https://github.com/${reference.repo}/issues/${reference.number}`] : [];
+    "--author", "pm-github", "--description", `GH issue #${reference.number}: https://github.com/${reference.repo}/issues/${reference.number}`] : [];
   const createStatus = status === "closed" ? "open" : status;
   const r = spawnSync(
     PM_BIN,
@@ -475,7 +475,7 @@ test("search provider maps remote matches to local imported items and drops the 
         context: searchContext({
           query: "memory leak",
           repo: "a/b",
-          documents: [{ metadata: { id: "pm-1", title: "Linked", tags: ["gh:a/b#5"] }, body: "" }],
+          documents: [{ metadata: { id: "pm-1", title: "Linked", github_url: "https://github.com/a/b/issues/5", tags: ["gh:a/b#5"] }, body: "" }],
         }),
       });
       const list = Array.isArray(hits) ? hits : (hits as { hits?: unknown[] }).hits;

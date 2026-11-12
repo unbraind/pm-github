@@ -22,7 +22,7 @@ test("shared importer conversion covers legacy refresh deltas and every native m
       const repo = "fixture/repo";
       const raw = [" One,TWO ", "ONE", " GH:FIXTURE/REPO#1 "];
       const expected = (await create({ title: "SDK reference", type: "Task", tags: raw.join(","), ...scope }, { pmRoot: root })).item;
-      const createdMatch = (await create({ id: deriveAtomicItemId("fixture/repo", 1, "fixture-", normalizeItemId), title: "Legacy target", type: "Task", tags: "old",
+      const createdMatch = (await create({ id: deriveAtomicItemId("fixture/repo", 1, "fixture-", normalizeItemId), author: "pm-github", title: "Legacy target", type: "Task", tags: "old",
         description: "GH issue #1: https://github.com/fixture/repo/issues/1", ...scope }, { pmRoot: root })).item;
       const settings = await readSettings(root);
       await mutateItem({ pmRoot: root, settings, id: createdMatch.id, author: "fixture", op: "update", mutate: document => {
@@ -90,7 +90,7 @@ test("500 random label sets predict the importer's actual SDK tag changes and ap
   try {
     await withEnv({ PM_PATH: root, PM_AUTHOR: "fixture", GIT_CEILING_DIRECTORIES: dirname(directory), PATH: directory }, async () => {
       await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { pmRoot: root, cwd: directory, noExtensions: true });
-      const native = (await create({ id: deriveAtomicItemId("fixture/repo", 1, "fixture-", normalizeItemId), title: "Import witness", type: "Task", clearDeps: true,
+      const native = (await create({ id: deriveAtomicItemId("fixture/repo", 1, "fixture-", normalizeItemId), author: "pm-github", title: "Import witness", type: "Task", clearDeps: true,
         unset: ["parent", "sprint", "release", "goal", "objective"] }, { pmRoot: root })).item;
       const settings = await readSettings(root);
       const options = parseImportOptions({});
@@ -175,7 +175,7 @@ test("500 native tag arrays keep literal identities and refresh decisions equal 
     await withEnv({ PM_PATH: root, PM_AUTHOR: "fixture", GIT_CEILING_DIRECTORIES: dirname(directory), PATH: directory }, async () => {
       await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { pmRoot: root, cwd: directory, noExtensions: true });
       const scope = { clearDeps: true, unset: ["parent", "sprint", "release", "goal", "objective"] };
-      const target = (await create({ id: deriveAtomicItemId("fixture/repo", 1, "fixture-", normalizeItemId), title: "Native witness", type: "Task",
+      const target = (await create({ id: deriveAtomicItemId("fixture/repo", 1, "fixture-", normalizeItemId), author: "pm-github", title: "Native witness", type: "Task",
         description: "GH issue #1: https://github.com/fixture/repo/issues/1", ...scope }, { pmRoot: root })).item;
       const settings = await readSettings(root);
       const repo = "fixture/repo";

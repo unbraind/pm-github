@@ -7,9 +7,9 @@ status: in_progress
 priority: 2
 tags[1]: "gh:unbraind/pm-github#230"
 created_at: "2026-11-11T10:19:25.073Z"
-updated_at: "2026-11-12T09:15:20.311Z"
+updated_at: "2026-11-12T11:01:34.120Z"
 author: codex-github230-1111
-comments[53]{created_at,author,text}:
+comments[58]{created_at,author,text}:
   "2026-11-11T10:19:28.756Z",codex-github230-1111,"Read issue 230 and all comments. Branch starts from main; PR229 changes workflows and docs separately. Plan: distinguish explicit importer identity from references, preserve curated linked content, retain legacy persisted provenance, and prove behavior with real SDK trackers and behavioral reverts. Task-specific gate budget applies: focused importer/sync/dependent tests, lint and typecheck; full suite only within 45 minutes."
   "2026-11-11T10:24:30.654Z",codex-github230-1111,"Implemented separate durable import identity lookup; shared gh references no longer select owners or collide. Curated links merge provenance/lifecycle while deterministic importer records mirror content. New real SDK regressions pass 9/9, including no-git curated links and byte-identical legacy resync beside shared references. Reviewing existing tests that assumed tag-only ownership; updating mirror fixtures to explicit importer identities."
   "2026-11-11T10:33:45.352Z",codex-github230-1111,"Behavioral revert proof in a disposable package copy: rebuilt after restoring released matchImportedIssue, prepareGithubImport and verifyImportIdempotency plus tag-only identity lookup. node --test --test-concurrency=2 test/reference-import-identity.test.ts: 14 tests, 13 fail, 1 pass. All four required scenarios fail: single curated Chore, shared references, mirror title refresh beside a reference, and byte-identical legacy resync beside a reference. The passing legacy link-marker case is existing supported behavior. Package worktree was never reverted. Fixed regressions are being rerun through pm test; full npm test follows within the task budget."
@@ -63,7 +63,12 @@ comments[53]{created_at,author,text}:
   "2026-11-12T08:59:05.505Z",codex-github230-1111,"Round 9: the 90-case matrix passes. Audited all seven tracker records added or changed by this PR; moved six contextual parent issue/PR tags to docs links, retaining only matching issue-230 and issue-236 identity tags. Creation proof now uses package author or an explicit github_import boolean, never an ID. New creates record pm-github as creator, and locked writes refuse an original mirroring plan if its target loses creation proof. Unknown-origin legacy records keep identity compatibility but preserve curated content. The isolated minimum-SDK job found both the GetResult.item_hash field and PmClient.withExpectedItemRevisions method unavailable at SDK 2026.10.17. Replaced them with native document/hash reads and a locked revision check using APIs available at that floor. The packed consumer now compiles all production/operational sources and declarations, exercises an owned update, and refuses a stale revision at SDK 2026.10.17. No SDK floor or dependency pins were raised. Scoped suite reruns retain the existing diagnostics for curated collisions and missing items."
   "2026-11-12T09:15:18.711Z",codex-github230-1111,"Round 9 revert proof in disposable copies: adding the former PR-233 tag back through the SDK makes the PR tracker audit fail 1/1; removing it restores 1/1. Reverting only importerCreatedItem to its ID-suffix implementation makes all seven Creation proof tests fail: two curated-ID cases, four provenance-backed non-pattern-ID controls, and a stale mirroring-plan refusal. Restoring it passes 7/7. Restoring the previous readGithubImportOwner and mutateGithubOwnedItem makes timeout 1200 npm run test:minimum-sdk fail with TS2339 for both GetResult.item_hash and PmClient.withExpectedItemRevisions at SDK 2026.10.17; restoring the native document/hash and locked revision guard passes the same floor job. Final restored matrix: 90/90. The data revert and restoration used native append-only SDK mutations; no existing history record was rewritten."
   "2026-11-12T09:15:19.533Z",codex-github230-1111,"Round 9 final local gates: ownership-consistency 90/90 on Node and Bun through pm; import-ownership 26/26; import-fidelity 53 passed plus one existing pm-cli#1656 skip; closeout 93/93. Four-file total: 263 reported, 262 passed, one existing skip, no failures or cancellations. timeout 1200 npm run test:minimum-sdk passes 1/1 through pm against exact SDK 2026.10.17, including all authored source/declaration typechecks, a guarded owned update and stale-revision refusal. Current build, test compilation, lint and typecheck pass; docstrings, zero duplication and privacy checks pass. All test commands stayed below 20 minutes with at most two workers. Read 45 complete thread inventory entries and the full three scoped blocking threads with their agent prompts. No thread replies or resolutions were made. All seven PR tracker records were audited; six contextual references became docs links, while the matching issue-230/236 tags remain. The other three findings stay deferred to issue 236. Exact-head release certification remains CI: https://github.com/unbraind/pm-github/pull/233/checks ."
-files[52]:
+  "2026-11-12T10:01:49.068Z",codex-github230-1111,"Round 10 starts from d9d9bc7 with a clean worktree; fetched main is already merged. Read the complete named codex verdict and issue 236. Inventory first: added docs/identity-ownership-inventory.md with every ownership-helper call and direct identity-field access grouped by enclosing function. Confirmed bypasses in upstreamTargets and dependency indexing; the audit also identifies refresh, Projects issue association, search association, diagnostics, blocker self-exclusion, and remote execution rechecks. Route target selectors through shared claims while documenting explicit-source and reference-only operations that do not select owned targets. Tests will use real SDK trackers and HTTP transport, including consistent controls and revert proofs."
+  "2026-11-12T10:16:18.201Z",codex-github230-1111,"Round 10 inventory identified direct selectors in outbound sync/export, dependency indexing, refresh, search, Projects issue association and blocker self-exclusion. Operational selectors now share ownership claims and consistency/uniqueness checks. Dependency endpoints are checked again inside the native source mutation lock; outbound writes re-read current tracker ownership. The initial 47 outbound/dependency SDK and real-HTTP regressions pass. Broad importer-consumer checks are running with two workers and a 20-minute per-file limit."
+  "2026-11-12T10:46:00.601Z",codex-github230-1111,"Round 10 ownership matrix passes 161/161 through pm test (one selected command, source workspace; project policy keeps test-result tracking disabled). The completed source inventory has 83 function groups and 248 helper/field/parser sites, plus five script/workflow text matches reviewed with no independent owner selector. Direct importIdentityKeys consumption is now restricted to the shared claims implementation. Shared URL-kind and direct-provenance facets preserve native declaration lifecycle classification and exclude legacy PR links from issue refresh. Search, Projects issue association, blocker self-exclusion and sync hints also use shared claims; unrelated reference parsing, labels, board IDs and explicit source arguments are documented as non-owning. Real-tracker label-model and literal-assignment compatibility fixtures now declare importer provenance instead of relying on naming. Disposable behavioral reverts and remaining bounded consumer gates are running."
+  "2026-11-12T10:49:29.639Z",codex-github230-1111,"Round 10 behavioral revert proof in a disposable source copy: restoring the complete index.ts from d9d9bc7 makes every selected new case fail: 34/34 ^Outbound ownership, 13/13 ^Dependency ownership, 16/16 ^Ownership routing inventory:, and 2/2 ^Ownership sync hint. Restoring only selectRefreshTargets from that head makes 1/1 ^Refresh ownership kind: fail. Commands use node --test --test-concurrency=1 --test-name-pattern PATTERN test/ownership-consistency.test.ts, each capped at 1200 seconds. Every failure is an assertion/observable diagnostic or missing-refusal failure, with zero import/syntax setup failures and zero cancellations. Restoring all fixed source files makes the combined 66/66 cases pass. The package worktree was never reverted; native tracker storage and the real HTTP transport/server are used. The exact partial github_repo-versus-URL reproduction sends no HTTP writes with the fix."
+  "2026-11-12T11:01:33.165Z",codex-github230-1111,"Round 10 final bounded gate evidence: 52 unique test files, 1439 cases, 1437 pass, 0 fail, 2 existing pm-cli#1656 quarantines, 0 cancellations. All 48 direct consumers of changed modules were read and tested, plus three additional closeout files and the minimum-SDK consumer. Commands are timeout 1200 node --test --test-concurrency=1 TEST_FILE, with at most two total workers. Ownership matrix: 161/161 through pm test. Link-deps: 28/28; import-ownership: 26/26; import-fidelity: 53 pass plus one existing skip; refresh: 34 pass plus one existing skip; closeout core/attribution/revision/selection: 93/12/110/82 passes; Projects: 39/39 and integration 19/19; packed npm/native Bun projection: 6/6. The full import-gate file completed 73 cases within its 20-minute cap; its two old diagnostic assertions were updated and rerun by exact names, yielding 73/73 final case evidence. Fixture corrections retain curated safety and explicitly mark genuine importer mirrors. npm run typecheck, npm run build:test, npm run lint and npm run docstring pass. npm run test:minimum-sdk passes its exact 2026.10.17 packed consumer (all production/operational modules, declarations, owned write and stale revision refusal); no dependency or engine floor changed. Privacy scanned 8749 existing objects with approved identities and no secret/host-path findings. Changelog is regenerated after this final tracker write and claim release. Full npm/Bun release and exact 100-percent coverage remain for CI: https://github.com/unbraind/pm-github/pull/233/checks . The priority external_ref dependency ambiguity in issue 236 is fixed here; other deferred observations remain there. Two supplied codex review findings were read in full; no review threads were replied to or resolved. Releasing only this author claim and leaving the item in_progress."
+files[54]:
   - path: .github/workflows/pm-github-sync.yml
     scope: project
   - path: closeout.ts
@@ -95,6 +100,8 @@ files[52]:
   - path: refresh.ts
     scope: project
   - path: test/atomic.test.ts
+    scope: project
+  - path: test/blockers.test.ts
     scope: project
   - path: test/cited-issue-adoption.test.ts
     scope: project
@@ -154,6 +161,8 @@ files[52]:
   - path: test/ownership-consistency.test.ts
     scope: project
     note: Creator proof and all changed tracker record reference audits
+  - path: test/project-sync.test.ts
+    scope: project
   - path: test/reference-import-identity.test.ts
     scope: project
     note: Contradictory linked references refuse without mutation
@@ -184,7 +193,7 @@ files[52]:
     scope: project
   - path: webhooks.ts
     scope: project
-tests[76]:
+tests[77]:
   - command: node --test --test-concurrency=2 test/reference-import-identity.test.ts test/import-conflict-report.test.ts
     scope: project
     timeout_seconds: 1200
@@ -796,10 +805,20 @@ tests[76]:
       created_at: "2026-11-12T09:05:21.342Z"
       source_kind: local_mutation
       source_ref: fix/reference-tags-are-not-import-identity
-docs[5]:
+  - command: node --test --test-concurrency=1 test/ownership-consistency.test.ts
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-12T10:36:11.532Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+docs[6]:
   - path: docs/cited-issue-adoption-validation.md
     scope: project
   - path: docs/identity-collisions.md
+    scope: project
+  - path: docs/identity-ownership-inventory.md
     scope: project
   - path: "https://github.com/unbraind/pm-github/pull/233"
     scope: project

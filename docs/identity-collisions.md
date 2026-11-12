@@ -29,13 +29,15 @@ A claim comes from `external_ref`, durable importer provenance, `github_url`,
 or a leading `GitHub issue URL` declaration. GitHub URL case and issue/pull URL
 forms normalize to one identity. Other external references remain opaque and
 case-sensitive: this command does not reinterpret Jira or Linear identifiers.
-Free-form `gh:owner/repo#N` tags and URLs elsewhere in prose are `mention` edges and never establish ownership.
+Free-form `gh:owner/repo#N` tags and URLs elsewhere in prose are `mention` edges and never establish ownership. On a provenance-bearing item, reference tags also constrain the shared claims: contradictory references appear as conflicting claim edges.
 A copied example containing a Linear label and an issue URL remains a local
 item with a mention. Structured Linear/Jira/ADO id/key/URL fields record real
 provider evidence. A provider item with `github_link_only: true` retains
 provider ownership; a provider item also claiming native GitHub ownership
 without that marker is `mixed` and requires review. These conservative labels
 are diagnostic evidence, not a provider migration or a duplicate-close policy.
+
+The [ownership routing inventory](identity-ownership-inventory.md) lists every operational selector, raw collector and non-owning reference reader. The explorer uses the same claims function for diagnostics; it can display contradictions that operational selectors refuse.
 
 ## Review and apply one repair
 

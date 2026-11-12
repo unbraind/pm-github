@@ -84,8 +84,8 @@ test("import refuses before mutation after a linked local item disappears", asyn
   await withMockGithub((_req, res) => jsonResponse(res, 200, [issue()]), async () => {
     const { stderr } = await captureStderr(async () => {
       await assert.rejects(runImport("acme/widgets", root, parseImportOptions({}), { resolveToken: () => undefined, readItems: () => snapshot }), error => {
-        assert.equal((error as { code: string }).code, "item_deleted");
-        assert.match(String(error), /history is retained/);
+        assert.equal((error as { code: string }).code, "item_not_found");
+        assert.match(String(error), /intended item and history; restore them before retrying/);
         return true;
       });
     });

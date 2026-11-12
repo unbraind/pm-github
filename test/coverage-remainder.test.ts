@@ -14,7 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { normalizeItemId, create, listAllComplete, certifyCompleteListResult, runWithActiveExtensions, setActiveExtensionHooks } from "@unbrained/pm-cli/sdk";
+import { normalizeItemId, create, mutateItem, readSettings, listAllComplete, certifyCompleteListResult, runWithActiveExtensions, setActiveExtensionHooks } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness, type ExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 
 import extension, {
@@ -661,42 +661,51 @@ test("sync reports a non-retryable PATCH failure and the after-command hook name
       assert.match(patched.stderr.join("\n"), /PATCH failed/);
     });
 
+    const tracker = path.join(root, ".agents/pm");
+    const linked = (await listAllComplete({}, { pmRoot: tracker })).items[0]!;
+    const linkedId = linked.id;
+    await mutateItem({ pmRoot: tracker, settings: await readSettings(tracker), id: linkedId, author: "fixture", op: "update", mutate: document => {
+      document.metadata.github_url = "https://github.com/acme/widgets/issues/5";
+      return { changedFields: ["github_url"] };
+    } });
+
     await withFakePm(`
+      case " $* " in *" list "*) exec "$REAL_PM" "$@" ;; esac
       case "$FAKE_PM_MODE" in
         fail) exit 1 ;;
         badjson) printf '%s\n' 'not-json'; exit 0 ;;
         missingtags) printf '%s\n' '{}'; exit 0 ;;
         notag) printf '%s\n' '{"tags":["local"]}'; exit 0 ;;
-        *) printf '%s\n' '{"tags":["gh:acme/widgets#5"]}'; exit 0 ;;
+        *) printf '%s\n' '{"id":"pm-linked","github_url":"https://github.com/acme/widgets/issues/5","tags":["gh:acme/widgets#5"]}'; exit 0 ;;
       esac
     `, async () => {
       await withEnv({ PM_GITHUB_SYNC: "1" }, async () => {
         const nudged = await captureStderr(() => ext.runHook({
           kind: "after_command",
-          context: { command: "close", args: ["pm-linked"], pm_root: root, ok: true },
+          context: { command: "close", args: [linkedId], pm_root: root, ok: true },
         }));
         assert.match(nudged.stderr.join("\n"), /pm github sync --repo acme\/widgets/);
         process.env.FAKE_PM_MODE = "fail";
         const silent = await captureStderr(() => ext.runHook({
           kind: "after_command",
-          context: { command: "close", args: ["pm-linked"], pm_root: root, ok: true },
+          context: { command: "close", args: [linkedId], pm_root: root, ok: true },
         }));
         assert.equal(silent.stderr.join("\n"), "");
         process.env.FAKE_PM_MODE = "badjson";
-        await ext.runHook({ kind: "after_command", context: { command: "update", args: ["pm-linked"], pm_root: root, ok: true } });
+        await ext.runHook({ kind: "after_command", context: { command: "update", args: [linkedId], pm_root: root, ok: true } });
         process.env.FAKE_PM_MODE = "notag";
-        await ext.runHook({ kind: "after_command", context: { command: "close", args: ["pm-linked"], pm_root: root, ok: true } });
+        await ext.runHook({ kind: "after_command", context: { command: "close", args: [linkedId], pm_root: root, ok: true } });
         process.env.FAKE_PM_MODE = "missingtags";
-        const missingTags = await captureStderr(() => ext.runHook({ kind: "after_command", context: { command: "close", args: ["pm-linked"], pm_root: root, ok: true } }));
-        assert.equal(missingTags.stderr.join("\n"), "");
+        const missingTags = await captureStderr(() => ext.runHook({ kind: "after_command", context: { command: "close", args: [linkedId], pm_root: root, ok: true } }));
+        assert.match(missingTags.stderr.join("\n"), /pm github sync --repo acme\/widgets/);
         delete process.env.FAKE_PM_MODE;
-        await ext.runHook({ kind: "after_command", context: { command: "list", args: ["pm-linked"], pm_root: root, ok: true } });
+        await ext.runHook({ kind: "after_command", context: { command: "list", args: [linkedId], pm_root: root, ok: true } });
         await ext.runHook({ kind: "after_command", context: { command: "close", args: [], pm_root: root, ok: true } });
-        await ext.runHook({ kind: "after_command", context: { command: "close", args: ["pm-linked"], pm_root: "", ok: true } });
-        await ext.runHook({ kind: "after_command", context: { command: "close", args: ["pm-linked"], pm_root: root, ok: false } });
+        await ext.runHook({ kind: "after_command", context: { command: "close", args: [linkedId], pm_root: "", ok: true } });
+        await ext.runHook({ kind: "after_command", context: { command: "close", args: [linkedId], pm_root: root, ok: false } });
       });
       delete process.env.PM_GITHUB_SYNC;
-      await ext.runHook({ kind: "after_command", context: { command: "close", args: ["pm-linked"], pm_root: root, ok: true } });
+      await ext.runHook({ kind: "after_command", context: { command: "close", args: [linkedId], pm_root: root, ok: true } });
     });
   } finally {
     delete process.env.FAKE_PM_MODE;

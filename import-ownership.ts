@@ -6,7 +6,7 @@ import {
   runActiveOnWriteHooks, runActiveOnIndexHooks,
 } from "@unbrained/pm-cli/sdk";
 import { normalizeGithubClaim, normalizeGithubRepository, parseGithubIssueUrl } from "./github-url.ts";
-import { importIdentityKeys, legacyGithubLinkClaims, importerCreatedItem } from "./import-fidelity.ts";
+import { importIdentityKeys, legacyGithubLinkIdentities, explicitGithubIdentities, importerCreatedItem } from "./import-fidelity.ts";
 import { readGithubWorkspace } from "./workspace.ts";
 import type { PmItem } from "./index.ts";
 
@@ -44,17 +44,28 @@ export interface GithubOwnedTarget {
   /** Minimum-SDK revision fencing is evaluated inside the native item lock. */
   expectedHash?: string;
   initialLink?: (item: PmItem) => boolean;
+  /** Dependency endpoints must retain their unique ownership inside the source lock. */
+  related?: readonly GithubOwnedTarget[];
 }
 
 /** Every asserted identity constrains a provenance-bearing item; references alone do not create an owner. */
-export function githubOwnershipClaims(item: PmItem, provisional = false): { owners: string[]; claims: string[]; evidence: boolean } {
-  const owners = new Set([...importIdentityKeys(item, { allowConflicts: true }), ...legacyGithubLinkClaims(item)]);
+export function githubOwnershipClaims(item: PmItem, provisional = false, allowReferenceTags = false): { owners: string[]; claims: string[]; evidence: boolean; kinds: string[]; direct: boolean } {
+  const legacy = legacyGithubLinkIdentities(item);
+  const direct = importIdentityKeys(item, { allowConflicts: true });
+  const owners = new Set([...direct, ...legacy.map(target => target.key)]);
+  const kinds = new Set<string>([...explicitGithubIdentities(item), ...legacy].map(target => target.kind!));
+  const externalTarget = parseGithubIssueUrl(item.external_ref);
+  if (externalTarget && !externalTarget.api) kinds.add(externalTarget.kind!);
   const external = normalizeGithubClaim(item.external_ref);
   if (external) owners.add(external);
+  if (!owners.size && allowReferenceTags) for (const tag of item.tags ?? []) {
+    const key = normalizeGithubClaim(tag); if (key) owners.add(key);
+  }
   const repository = normalizeGithubRepository(item.github_repo);
   const number = Number.isSafeInteger(item.github_number) && Number(item.github_number) > 0 ? Number(item.github_number) : undefined;
   const generated = typeof item.description === "string" ? /^GH (?:issue|PR) #([1-9]\d*): (https?:\/\/\S+)(?: ·|$)/i.exec(item.description) : undefined;
   const source = generated && parseGithubIssueUrl(generated[2]);
+  if (source) kinds.add(source.kind!);
   const evidence = provisional || owners.size > 0 || Boolean(repository) || item.github_number !== undefined || typeof item.github_link_only === "boolean" || Boolean(source);
   const claims = new Set(owners);
   if (evidence) {
@@ -69,22 +80,29 @@ export function githubOwnershipClaims(item: PmItem, provisional = false): { owne
       if (generatedNumber !== undefined) claims.add(`${repo}#${generatedNumber}`);
     }
   }
-  return { owners: [...owners].sort(), claims: [...claims].sort(), evidence };
+  return { owners: [...owners].sort(), claims: [...claims].sort(), evidence, kinds: [...kinds].sort(), direct: direct.length > 0 || Boolean(external) };
 }
 
 /** Refuse contradictory claims and competing owners from the same current metadata snapshot. */
-export function assertGithubOwnershipConsistency(item: PmItem, target?: GithubOwnedTarget, peers: readonly PmItem[] = []): string[] {
-  const state = githubOwnershipClaims(item, Boolean(target?.initialLink));
+export function assertGithubOwnershipConsistency(item: PmItem, target?: GithubOwnedTarget, peers: readonly PmItem[] = [], allowReferenceTags = false): string[] {
+  const state = githubOwnershipClaims(item, Boolean(target?.initialLink), allowReferenceTags);
   const expected = target ? `${target.repo.toLowerCase()}#${target.number}` : state.owners[0] ?? state.claims[0] ?? "one consistent GitHub issue";
   if (state.claims.length > 1 || state.evidence && state.claims.some(key => key !== expected)) {
     throw new GithubImportOwnershipError(item.id ?? target?.id ?? "<unknown>", expected, state.claims);
   }
   const competitors = peers.flatMap(peer => {
-    const claims = githubOwnershipClaims(peer).claims;
+    const claims = githubOwnershipClaims(peer, false, allowReferenceTags).claims;
     return peer.id !== item.id && claims.includes(expected) ? claims.map(key => `${key} claimed by ${peer.id}`) : [];
   });
   if (competitors.length) throw new GithubImportOwnershipError(item.id ?? target?.id ?? "<unknown>", expected, [expected, ...competitors]);
   return state.owners;
+}
+
+/** Select targets only after checking every claim and every peer; repository scoping never hides a contradiction. */
+export function githubOwnedIdentityKeys(item: PmItem, peers: readonly PmItem[] = [], repo?: string, allowReferenceTags = false): string[] {
+  const state = githubOwnershipClaims(item, false, allowReferenceTags);
+  if (repo && !state.claims.some(key => key.slice(0, key.lastIndexOf("#")) === repo.toLowerCase())) return [];
+  return assertGithubOwnershipConsistency(item, undefined, peers, allowReferenceTags);
 }
 
 /** Require one matching owner, consistent claims and unique current authority before every write. */
@@ -142,6 +160,11 @@ export async function withGithubImportOwners<T>(pmRoot: string, targets: readonl
               return { allow: false, code: "item_revision_conflict", message: `GitHub import target ${target.id} changed after its ownership read (expected revision ${target.expectedHash}, current ${hashDocument(context.before)}).`, remediation: "Read the current item and retry against its intended ownership and revision." };
             }
             const peers = await context.sdk.list();
+            for (const related of target.related ?? []) {
+              const item = peers.find(peer => peer.id === related.id);
+              if (!item) throw new GithubImportOwnershipError(related.id, `${related.repo.toLowerCase()}#${related.number}`, ["missing dependency endpoint"]);
+              assertGithubImportOwner(item, related, peers);
+            }
             for (const document of [context.before, context.after]) if (document) {
               assertGithubImportOwner({ ...document.metadata, body: document.body }, target, peers);
             }

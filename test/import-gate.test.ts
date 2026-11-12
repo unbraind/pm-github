@@ -114,7 +114,7 @@ test("recovered journals cannot substitute for a complete persisted provenance c
   assert.equal(verifyImportedProvenance([{ id: "item-a", github_url: "https://github.com/acme/widgets/issues/1", tags: ["gh:acme/widgets#1"] }], prepared, "acme/widgets"), 1);
   assert.throws(() => verifyImportedProvenance([
     { id: "item-a", github_url: "https://github.com/acme/widgets/issues/1", tags: ["gh:acme/widgets#1"] }, { id: "item-b", github_url: "https://github.com/acme/widgets/issues/1", tags: ["gh:acme/widgets#1"] },
-  ], prepared, "acme/widgets"), CommandError);
+  ], prepared, "acme/widgets"), { code: "github_import_owner_conflict" });
 });
 
 test("gated comment imports scan persisted values without importing REST user metadata", async () => {
@@ -392,8 +392,8 @@ test("verifyImportIdempotency fails duplicate provenance, untagged creates, and 
     () =>
       verifyImportIdempotency(existing, [planEntry(2, ["gh:acme/widgets#2"])], "acme/widgets"),
     (err: unknown) => {
-      assert.ok(err instanceof CommandError);
-      assert.match(err.message, /1 duplicate import identity claim\(s\)/);
+      assert.equal((err as { code: string }).code, "github_import_owner_conflict");
+      assert.match(String(err), /multiple existing owners/);
       return true;
     },
   );

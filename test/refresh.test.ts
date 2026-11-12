@@ -613,7 +613,7 @@ test("recovery refuses a different repository even when the selected item overla
   const id = record.entries[0]!.match!.id!;
   const local = (await get(id, {}, { pmRoot })).item;
   await commitImportedItem({ pmRoot, id, itemPath: getItemPath(pmRoot, local.type!, id), settings: await readSettings(pmRoot),
-    document: { metadata: { ...local, title: local.title!, description: local.description ?? "", type: local.type!, status: local.status!, priority: local.priority ?? 2, created_at: local.created_at!, updated_at: local.updated_at!, tags: local.tags ?? [], github_repo: "fixture/other", github_url: "https://github.com/fixture/other/issues/1", github_number: 1 }, body: local.body ?? "" },
+    document: { metadata: { ...local, title: local.title!, description: "GH issue #1: https://github.com/fixture/other/issues/1", type: local.type!, status: local.status!, priority: local.priority ?? 2, created_at: local.created_at!, updated_at: local.updated_at!, tags: (local.tags ?? []).map(tag => tag === "gh:fixture/repo#1" ? "gh:fixture/other#1" : tag), github_repo: "fixture/other", github_url: "https://github.com/fixture/other/issues/1", github_number: 1 }, body: local.body ?? "" },
     author: "fixture", message: "Seed changed explicit repository", conflictWarningPrefix: "fixture" });
   const before = snapshot(pmRoot);
   await assert.rejects(() => runRefresh("fixture/other", pmRoot, {}), new RegExp(`${record.transactionId}.*fixture/repo.*fixture/other`));

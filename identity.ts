@@ -9,7 +9,8 @@ import {
   type BulkItemMutation, type CommitItemMutationsOptions, type ItemMetadata,
 } from "@unbrained/pm-cli/sdk";
 import { readRefreshItems } from "./refresh.ts";
-import { importIdentityKeys, serializeImportTags } from "./import-fidelity.ts";
+import { githubOwnershipClaims } from "./import-ownership.ts";
+import { serializeImportTags } from "./import-fidelity.ts";
 
 /** Full certified metadata plus the explicitly requested body projection. */
 type IdentityItem = ItemMetadata & { body: string };
@@ -54,7 +55,7 @@ function graph(items: readonly IdentityItem[]): { nodes: IdentityNode[]; edges: 
       const value = ownValue(item, source);
       if (typeof value === "string" && value.trim()) claims.push({ item: id, identity: identity(value), source, strength: "claim" });
     }
-    for (const key of importIdentityKeys(item, { allowConflicts: true })) if (!claims.some(edge => edge.identity === `gh:${key}` && edge.strength === "claim")) {
+    for (const key of githubOwnershipClaims(item).claims) if (!claims.some(edge => edge.identity === `gh:${key}` && edge.strength === "claim")) {
       claims.push({ item: id, identity: `gh:${key}`, source: "import-provenance", strength: "claim" });
     }
     const declared = /^GitHub issue(?:\s*:\s+|\s+)(https?:\/\/\S+)/i.exec(item.description);

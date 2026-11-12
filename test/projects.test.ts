@@ -77,7 +77,7 @@ test("push planning reconciles issue links, stale board links, missing metadata,
   const board: ProjectItem[] = [{ id: "issue", content: { typename: "Issue", title: "", repo: "acme/widgets", number: 7 } }];
   const local = [
     null, {}, { id: "default" },
-    { id: "issue", tags: ["unrelated", "gh:acme/widgets#7"] },
+    { id: "issue", github_url: "https://github.com/acme/widgets/issues/7", tags: ["unrelated", "gh:acme/widgets#7"] },
     { id: "stale", tags: [projectItemTag({ owner: "acme", number: 2 }, "foreign"), projectItemTag(REF, "gone")] },
   ];
   const plan = buildProjectPushPlan(local, REF, board, undefined);
@@ -87,12 +87,12 @@ test("push planning reconciles issue links, stale board links, missing metadata,
   assert.equal(plan.entries[1].action, "noop");
   assert.equal(plan.entries[1].reason, "project has no Status field");
   assert.equal(plan.entries[2].action, "add-draft");
-  const unmapped = buildProjectPushPlan([{ id: "linked", status: "blocked", tags: ["gh:acme/widgets#7"] }], REF, board, STATUS_FIELD);
+  const unmapped = buildProjectPushPlan([{ id: "linked", status: "blocked", github_url: "https://github.com/acme/widgets/issues/7", tags: ["gh:acme/widgets#7"] }], REF, board, STATUS_FIELD);
   assert.equal(unmapped.entries[0].reason, 'pm status "blocked" has no matching board option');
 });
 
 test("pull planning uses issue provenance with missing local metadata and leaves absent statuses alone", () => {
-  const local = [{ id: "linked", tags: ["gh:acme/widgets#7"] }];
+  const local = [{ id: "linked", github_url: "https://github.com/acme/widgets/issues/7", tags: ["gh:acme/widgets#7"] }];
   const plan = buildProjectPullPlan(local, REF, [
     { id: "issue", statusName: "Done", content: { typename: "Issue", title: "", repo: "ACME/widgets", number: 7 } },
     { id: "no-status", content: { typename: "Issue", title: "", repo: "acme/widgets", number: 7 } },
@@ -106,7 +106,7 @@ test("import planning recovers untitled and canceled items using issue provenanc
   const plan = buildProjectImportPlan([
     { id: "cancel", content: { typename: "Issue", title: "", repo: "acme/widgets", number: 7, state: "closed", stateReason: "not_planned" } },
     { id: "blank", content: { typename: "DraftIssue", title: "  " } },
-  ], REF, [{ id: "linked", tags: ["gh:acme/widgets#7"] }]);
+  ], REF, [{ id: "linked", github_url: "https://github.com/acme/widgets/issues/7", tags: ["gh:acme/widgets#7"] }]);
   assert.equal(plan[0].action, "update");
   assert.equal(plan[0].pmId, "linked");
   assert.equal(plan[0].status, "canceled");
@@ -193,7 +193,7 @@ test("mapOptionNameToPmStatus classifies option names and skips unknowns", () =>
 
 test("status and provenance helpers tolerate nullable API collection entries", () => {
   assert.equal(resolveOptionForStatus("open", [null, undefined, { id: "todo", name: "Todo" }])?.id, "todo");
-  assert.equal(indexPmByIssue([null, undefined, { id: "pm-1", tags: ["gh:unbraind/pm-cli#1"] }]).size, 1);
+  assert.equal(indexPmByIssue([null, undefined, { id: "pm-1", github_url: "https://github.com/unbraind/pm-cli/issues/1", tags: ["gh:unbraind/pm-cli#1"] }]).size, 1);
   assert.equal(indexPmByProjectItem([null, undefined], REF).size, 0);
   assert.equal(indexProjectItemsByIssue([null, undefined]).size, 0);
 });
@@ -249,7 +249,7 @@ test("buildProjectPushPlan: already-in-sync linked item is a noop", () => {
 });
 
 test("buildProjectPushPlan: issue-linked pm item attaches the existing issue", () => {
-  const pmItems = [{ id: "pm-1", title: "Real issue", status: "open", tags: ["gh:unbraind/pm-cli#42"] }];
+  const pmItems = [{ id: "pm-1", title: "Real issue", status: "open", github_url: "https://github.com/unbraind/pm-cli/issues/42", tags: ["gh:unbraind/pm-cli#42"] }];
   const plan = buildProjectPushPlan(pmItems, REF, [], STATUS_FIELD);
   const e = plan.entries[0];
   assert.equal(e.action, "add-issue");
@@ -345,7 +345,7 @@ test("buildProjectImportPlan: update MERGES new provenance tags with existing ta
       title: "Z",
       status: "open",
       // Pre-existing tags: a label + provenance from a prior `pm github import`.
-      tags: ["bug", "priority/high", "gh:unbraind/pm-cli#3", "github_author:octocat"],
+      github_url: "https://github.com/unbraind/pm-cli/issues/3", tags: ["bug", "priority/high", "gh:unbraind/pm-cli#3", "github_author:octocat"],
     },
   ];
   const plan = buildProjectImportPlan(projectItems, REF, existing);

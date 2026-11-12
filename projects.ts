@@ -1,3 +1,4 @@
+import { githubOwnedIdentityKeys, githubOwnershipClaims, assertGithubOwnershipConsistency } from "./import-ownership.ts";
 import { parseGithubUrl } from "./github-url.ts";
 import { canonicalGithubStatus, githubStatusKind, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
@@ -91,8 +92,9 @@ export interface ProjectItem {
 }
 
 // A minimal pm item shape (mirrors the one in index.ts; duplicated to keep this
-// module dependency-free).
+// module independent of command handlers).
 export interface PmItemLike {
+  [key: string]: unknown;
   id?: string;
   title?: string;
   status?: string;
@@ -371,13 +373,8 @@ export function indexPmByProjectItem(
  */
 export function indexPmByIssue(items: Array<PmItemLike | null | undefined>): Map<string, PmItemLike> {
   const index = new Map<string, PmItemLike>();
-  for (const item of items) {
-    if (!item?.id) continue;
-    for (const tag of item.tags ?? []) {
-      const m = /^gh:([^#\s]+)#(\d+)$/.exec(tag.trim());
-      if (m) index.set(`${m[1].toLowerCase()}#${Number(m[2])}`, item);
-    }
-  }
+  const peers = items.filter((item): item is PmItemLike => Boolean(item));
+  for (const item of peers) if (item.id) for (const key of githubOwnedIdentityKeys(item, peers)) index.set(key, item);
   return index;
 }
 
@@ -495,16 +492,12 @@ export function buildProjectPushPlan(
         break;
       }
     }
-    let issueKey: { repo: string; number: number } | undefined;
-    if (!linked) {
-      for (const tag of item.tags ?? []) {
-        const m = /^gh:([^#\s]+)#(\d+)$/.exec(tag.trim());
-        if (m) {
-          issueKey = { repo: m[1].toLowerCase(), number: Number(m[2]) };
-          linked = byIssue.get(`${issueKey.repo}#${issueKey.number}`);
-          break;
-        }
-      }
+    const keys = githubOwnedIdentityKeys(item, pmItems.filter((peer): peer is PmItemLike => Boolean(peer)));
+    const [repository, number] = keys[0]?.split("#") ?? [];
+    const issueKey = repository && number ? { repo: repository, number: Number(number) } : undefined;
+    if (!linked && issueKey) linked = byIssue.get(`${issueKey.repo}#${issueKey.number}`);
+    if (linked?.content.repo && linked.content.number && githubOwnershipClaims(item).evidence) {
+      assertGithubOwnershipConsistency(item, { id: item.id, repo: linked.content.repo, number: linked.content.number }, pmItems.filter((peer): peer is PmItemLike => Boolean(peer)));
     }
 
     // Resolve the target Status option for this pm status.
@@ -633,6 +626,9 @@ export function buildProjectPullPlan(
       pm = pmByIssue.get(`${pi.content.repo.toLowerCase()}#${pi.content.number}`);
     }
     if (!pm || !pm.id) continue; // unlinked project items are handled by import
+    if (pi.content.repo && pi.content.number && githubOwnershipClaims(pm).evidence) {
+      assertGithubOwnershipConsistency(pm, { id: pm.id, repo: pi.content.repo, number: pi.content.number }, pmItems);
+    }
 
     const toStatus = mapOptionNameToPmStatus(pi.statusName, statusMap, statuses);
     if (!toStatus) {
@@ -709,6 +705,10 @@ export function buildProjectImportPlan(
     let existing = pmByItemId.get(pi.id);
     if (!existing && c.repo && typeof c.number === "number") {
       existing = pmByIssue.get(`${c.repo.toLowerCase()}#${c.number}`);
+    }
+
+    if (existing?.id && c.repo && c.number && githubOwnershipClaims(existing).evidence) {
+      assertGithubOwnershipConsistency(existing, { id: existing.id, repo: c.repo, number: c.number }, pmItems);
     }
 
     // Provenance tags this import adds, MERGED with any tags the existing pm item

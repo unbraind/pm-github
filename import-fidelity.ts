@@ -1,7 +1,7 @@
 import { normalizeGithubRepository, normalizeGithubClaim, parseGithubUrl, parseGithubIssueUrl } from "./github-url.ts";
 import { readGithubWorkspace, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue, setOwnValue } from "./own-record.ts";
-import { assertGithubImportOwner, GithubImportOwnershipError, assertGithubOwnershipConsistency, githubOwnershipClaims, withGithubImportOwners, type GithubOwnedTarget } from "./import-ownership.ts";
+import { githubOwnedIdentityKeys, assertGithubImportOwner, GithubImportOwnershipError, assertGithubOwnershipConsistency, githubOwnershipClaims, withGithubImportOwners, type GithubOwnedTarget } from "./import-ownership.ts";
 /** Source lifecycle, release-window and cross-provider identity rules for issue imports. */
 import { spawnSync } from "node:child_process";
 import { decodeHTML } from "entities";
@@ -233,17 +233,17 @@ export function trimLocatorPunctuation(locator: string, punctuation = "),.;"): s
 }
 
 /** Normalize only complete HTTP issue/provider locators, never substring identities. */
-function locators(value: unknown): string[] {
+function locators(value: unknown, canonicalize = true): string[] {
   const text = typeof value === "string" ? value : JSON.stringify(value) ?? "";
   return [...text.matchAll(/https?:\/\/[^\s<>"'`]+/gi)].map(match => {
     const raw = trimLocatorPunctuation(match[0]!);
-    return parseGithubIssueUrl(raw)?.canonical ?? raw.replace(/\/$/, "").toLowerCase();
+    return canonicalize ? parseGithubIssueUrl(raw)?.canonical ?? raw.replace(/\/$/, "").toLowerCase() : raw;
   });
 }
 
 /** Copied body text and labels cannot transfer an established GitHub import to another owner. */
 function copiedProviderMarkersOwnItem(item: PmItem): boolean {
-  return item.github_link_only !== false && importIdentityKeys(item).length === 0;
+  return item.github_link_only !== false && !githubOwnershipClaims(item).direct;
 }
 
 /** Extract declared provider fields and the description/body markers used by provider exporters. */
@@ -276,7 +276,7 @@ function hasStructuredOwnership(item: PmItem): boolean {
   return Object.entries(item).some(([key, value]) => filled(value) && (/^github/i.test(key) && !/^github_?link_?only$/i.test(key) ||
       /^(?:external_ref|source_owner)$/.test(key) || /^(?:linear|jira|ado)_(?:.*_)?(?:id|key|url|identifier)$/i.test(key))) ||
     item.github_link_only === false || Boolean(providerProvenance(item)) ||
-    importIdentityKeys(item).length > 0 ||
+    githubOwnedIdentityKeys(item).length > 0 ||
     (typeof item.description === "string" && /^GitHub issue(?:\s*:\s+|\s+)https?:\/\//i.test(item.description)) ||
     Object.entries(item).some(([key, value]) => OWNER_LINK_FIELD.test(key) &&
       locators(value).some(url => Boolean(parseGithubIssueUrl(url))));
@@ -301,11 +301,16 @@ export class GithubIdentityConflictError extends Error {
 
 /** Normalize the legacy link fields already accepted by first-link matching. */
 export function legacyGithubLinkClaims(item: PmItem): string[] {
-  const values = Object.entries(item).filter(([field]) => OWNER_LINK_FIELD.test(field)).flatMap(([, value]) => locators(value));
+  return [...new Set(legacyGithubLinkIdentities(item).map(target => target.key))];
+}
+
+/** Preserve URL kind alongside the raw legacy locator claims consumed by shared ownership. */
+export function legacyGithubLinkIdentities(item: PmItem) {
+  const values = Object.entries(item).filter(([field]) => OWNER_LINK_FIELD.test(field)).flatMap(([, value]) => locators(value, false));
   if (typeof item.description === "string") {
-    values.push(...locators(/^GitHub issue(?:\s*:\s+|\s+)(https?:\/\/\S+)/i.exec(item.description)?.[1]));
+    values.push(...locators(/^GitHub issue(?:\s*:\s+|\s+)(https?:\/\/\S+)/i.exec(item.description)?.[1], false));
   }
-  return [...new Set(values.flatMap(value => { const parsed = parseGithubIssueUrl(value); return parsed && !parsed.api ? [parsed.key] : []; }))];
+  return values.flatMap(value => { const parsed = parseGithubIssueUrl(value); return parsed && !parsed.api ? [parsed] : []; });
 }
 
 /** Resolve every supported explicit URL alias once, retaining the shared parser's issue/PR kind. */
@@ -380,7 +385,7 @@ export function importerCreatedItem(item: PmItem, _repo: string, _number: number
 /** Index durable importer identities while allowing arbitrary shared reference tags. */
 export function indexByImportIdentity(items: readonly PmItem[]): Map<string, PmItem> {
   const result = new Map<string, PmItem>();
-  for (const item of items) if (item.id) for (const key of githubOwnershipClaims(item).owners) result.set(key, item);
+  for (const item of items) if (item.id) for (const key of githubOwnedIdentityKeys(item, items)) result.set(key, item);
   return result;
 }
 

@@ -65,7 +65,8 @@ function items(root: string): LocalItem[] {
 
 /** Create a local item and return its generated identity. */
 function create(root: string, title: string, tags: string[] = [], status = "open", extra: string[] = []): string {
-  pm(root, ["create", "task", title, "--status", status, "--tags", JSON.stringify(tags), ...extra]);
+  const reference = tags.flatMap(tag => { const match = /^gh:([^/\s]+\/[^#\s]+)#([1-9]\d*)$/.exec(tag); return match ? [`https://github.com/${match[1]}/issues/${match[2]}`] : []; })[0];
+  pm(root, ["create", "task", title, "--status", status, "--tags", JSON.stringify(tags), ...(reference ? ["--description", `GitHub issue ${reference}`] : []), ...extra]);
   const item = items(root).find(item => item.title === title);
   assert.ok(item);
   return item.id;
@@ -335,14 +336,14 @@ test("project sync previews additions without Status and a linked item without a
   });
 });
 
-test("project sync reports a missing mutation id and malformed linked issue coordinates", async t => {
+test("project sync reports missing mutation IDs without treating a malformed reference as ownership", async t => {
   const root = tracker(t);
   create(root, "Draft with missing remote id");
   create(root, "Malformed issue", ["gh:broken#7"]);
   await withMockGithub(board([], (_req, res) => jsonResponse(res, 200, { data: { addProjectV2DraftIssue: { projectItem: {} } } })), async () => {
     const { stderr } = await captureStderr(() => assert.rejects(sync(root, { push: true, apply: true }), /failed/));
     assert.match(stderr.join("\n"), /returned no item id/);
-    assert.match(stderr.join("\n"), /could not resolve node id for broken#7/);
+    assert.doesNotMatch(stderr.join("\n"), /could not resolve node id for broken#7/);
   });
 });
 
@@ -400,6 +401,7 @@ test("project writers preserve 500 native comma atoms through import and sync wi
   });
   for (const target of [imported, pushed]) await mutateItem({ pmRoot, settings, id: target.id, author: "fixture", op: "update", mutate: document => {
     document.metadata.tags = [...native, ...(target.id === imported.id ? ["gh:acme/widgets#7"] : [])];
+    if (target.id === imported.id) document.metadata.github_url = "https://github.com/acme/widgets/issues/7";
     return { changedFields: ["tags"] };
   } });
   const beforeImport = (await sdkGet(imported.id, {}, { pmRoot })).item;

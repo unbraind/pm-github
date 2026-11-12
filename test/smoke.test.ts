@@ -1397,8 +1397,8 @@ test("searchDocumentToItem skips values matching neither shape", () => {
 });
 
 test("resolveSearchCorpus (the provider's REAL mapping) handles wrapped, raw and junk documents", () => {
-  const wrapped = { id: "pm-1", title: "Wrapped", tags: ["gh:acme/repo#7"] };
-  const raw = { id: "pm-2", title: "Raw", tags: ["gh:acme/repo#8"] };
+  const wrapped = { id: "pm-1", title: "Wrapped", github_url: "https://github.com/acme/repo/issues/7", tags: ["gh:acme/repo#7"] };
+  const raw = { id: "pm-2", title: "Raw", github_url: "https://github.com/acme/repo/issues/8", tags: ["gh:acme/repo#8"] };
   const documents = [{ metadata: wrapped, body: "" }, raw, undefined, null, {}];
 
   // This is the exact function the search provider calls, so reverting the guard

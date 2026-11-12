@@ -101,7 +101,8 @@ for (const git of [true, false]) test(`explicit local link merges lifecycle whil
   assert.equal(actual.completed_at, source.closed_at);
   assert.equal(((result.plan as Array<{ identity: { title_conflict?: boolean } }> | undefined)?.[0]?.identity.title_conflict) ?? !git, true);
   assert.equal((await sync(root, source, true, git)).unchanged, true);
-  assert.equal(selectRefreshTargets([{ ...actual, tags: [tag, "gh:o/r#99"] }], repo)[0]?.number, 7);
+  assert.throws(() => selectRefreshTargets([{ ...actual, tags: [tag, "gh:o/r#99"] }], repo), { code: "github_import_owner_conflict" });
+  assert.equal(selectRefreshTargets([actual], repo)[0]?.number, 7);
 }));
 
 for (const fields of [

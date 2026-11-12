@@ -9,13 +9,18 @@ import {
   init, create, get, docs as nativeDocs, readSettings, mutateItem, getItemPath, getHistoryPath, normalizeItemId,
   listAllComplete, WorkspaceTransactionInterruptedError, runWithActiveExtensions, setActiveExtensionHooks,
 } from "@unbrained/pm-cli/sdk";
-import {
+import extension, {
   runImport, parseImportOptions, deriveAtomicItemId, prepareGithubImport, importGithubAtomic,
   readGithubImportPlan, resumeGithubImport, listUnfinishedGithubImports, fetchJSON, githubApiBase, parseNextLink,
+  linkImportedDependencies, indexByProvenance, collectBlockerReferences, buildExportPlan, applyExportPlan,
+  type PmItem, type BlockerPmItem,
   type GhIssue,
 } from "../index.ts";
+import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import { fetchImportTimeline, matchImportedIssue } from "../import-fidelity.ts";
 import { mutateGithubOwnedItem, assertGithubOwnershipConsistency, githubOwnershipClaims } from "../import-ownership.ts";
+import { selectRefreshTargets } from "../refresh.ts";
+import { indexPmByIssue, buildProjectPushPlan, buildProjectPullPlan, buildProjectImportPlan } from "../projects.ts";
 import { runCloseout } from "../closeout.ts";
 import { withEnv, captureStderr, withMockGithub, jsonResponse } from "./helpers/mock-github-server.ts";
 
@@ -92,6 +97,7 @@ async function interrupt(root: string, id: string) {
 
 interface Shape { name: string; values?: Record<string, unknown>; reset?: boolean; peer?: Record<string, unknown>; claim: string }
 const shapes: Shape[] = [
+  { name: "partial repository versus URL", reset: true, values: { github_repo: "other/project", github_url: source.html_url }, claim: "other/project#7" },
   { name: "repository versus URL", values: { github_repo: "other/project" }, claim: "other/project#7" },
   { name: "number versus URL", values: { github_number: 8 }, claim: "o/r#8" },
   { name: "contradictory URL alias", values: { GitHubURL: "https://github.com/other/project/pull/8" }, claim: "other/project#8" },
@@ -303,3 +309,178 @@ for (const atomic of [false, true]) test(`Creation proof: dedicated importer met
   assert.equal(after.title, source.title); assert.equal(after.body, source.body);
   assert.equal(after.github_import, true);
 }), false, false, false));
+
+
+const extensionHarness = createExtensionTestHarness(extension, { capabilities: ["commands", "importers", "schema", "hooks", "preflight", "search"] });
+
+for (const command of ["sync", "export"] as const) for (const shape of shapes) {
+  test(`Outbound ownership ${command}: refuses ${shape.name} without HTTP writes`, async () => tracker(async (root, id) => {
+    if (shape.peer) {
+      const peer = (await create({ title: "Other upstream claimant", type: "Chore" }, { pmRoot: root })).item;
+      await change(root, peer.id, shape.peer);
+    } else await change(root, id, shape.values!, shape.reset);
+    const before = await bytes(root, id);
+    const writes: string[] = [];
+    await withMockGithub((request, response) => {
+      if (request.method !== "GET") writes.push(`${request.method} ${request.url}`);
+      jsonResponse(response, 200, { ...source, state: "closed" });
+    }, async () => {
+      const harness = await extensionHarness;
+      await assert.rejects(() => harness.runCommand({ command: `github ${command}`, options: { repo, ids: id, apply: true }, pmRoot: root, global: { json: true } }), error => refusal(error, shape));
+    });
+    assert.deepEqual(writes, []);
+    assert.deepEqual(await bytes(root, id), before);
+  }));
+}
+
+for (const command of ["sync", "export"] as const) test(`Outbound ownership ${command}: allows consistent external-ref owner in place`, async () => tracker(async (root, id) => {
+  await change(root, id, { external_ref: "gh:O/R#7" }, true);
+  const writes: string[] = [];
+  await withMockGithub((request, response) => {
+    if (request.method !== "GET") writes.push(`${request.method} ${request.url}`);
+    jsonResponse(response, 200, { ...source, state: "closed" });
+  }, async () => {
+    const harness = await extensionHarness;
+    await harness.runCommand({ command: `github ${command}`, options: { repo, ids: id, apply: true }, pmRoot: root, global: { json: true } });
+  });
+  assert.deepEqual(writes, ["PATCH /repos/o/r/issues/7"]);
+}));
+
+test("Outbound ownership sync: rechecks claims after upstream read before PATCH", async () => tracker(async (root, id) => {
+  const writes: string[] = [];
+  let serverFailure: unknown;
+  await withMockGithub((request, response) => {
+    if (request.method !== "GET") { writes.push(`${request.method} ${request.url}`); jsonResponse(response, 200, source); return; }
+    void change(root, id, { github_repo: "other/project" }).then(() => jsonResponse(response, 200, { ...source, state: "closed" }), error => {
+      serverFailure = error; jsonResponse(response, 500, {});
+    });
+  }, async () => {
+    const harness = await extensionHarness;
+    await assert.rejects(() => harness.runCommand({ command: "github sync", options: { repo, ids: id }, pmRoot: root, global: { json: true } }), error => refusal(error, shapes[0]!));
+  });
+  assert.equal(serverFailure, undefined);
+  assert.deepEqual(writes, []);
+}));
+
+/** Both endpoints and every competing claimant come from a real complete SDK metadata read. */
+async function dependencySource(root: string) {
+  const item = (await create({ author: "pm-github", title: "Dependent issue", type: "Issue" }, { pmRoot: root })).item;
+  await change(root, item.id, { github_url: "https://github.com/o/r/issues/9" });
+  return { id: item.id, issue: { ...source, number: 9, html_url: "https://github.com/o/r/issues/9", body: "Blocked by #7" } };
+}
+
+for (const shape of shapes.filter(shape => !["repository versus URL", "number versus URL", "contradictory URL alias", "competing URL alias"].includes(shape.name))) test(`Dependency ownership: refuses ${shape.name} without an edge`, async () => tracker(async (root, id) => {
+  const dependent = await dependencySource(root);
+  if (shape.peer) {
+    const peer = (await create({ title: "Other dependency owner", type: "Chore" }, { pmRoot: root })).item;
+    await change(root, peer.id, shape.peer);
+  } else await change(root, id, shape.values!, shape.reset);
+  const before = await bytes(root, dependent.id);
+  const result = await linkImportedDependencies(repo, [dependent.issue], root);
+  assert.equal(result.linked, 0);
+  assert.match(result.failures.join("\n"), /ambiguous_github_dependency_owner: o\/r#7/);
+  assert.deepEqual(await bytes(root, dependent.id), before);
+}));
+
+test("Dependency ownership: allows one consistent external-ref owner", async () => tracker(async (root, id) => {
+  const dependent = await dependencySource(root);
+  await change(root, id, { external_ref: "https://www.github.com/O/R/pull/7/?q=1#fragment" }, true);
+  const result = await linkImportedDependencies(repo, [dependent.issue], root);
+  assert.equal(result.linked, 1, JSON.stringify(result));
+  assert.deepEqual(result.failures, []);
+  assert.ok((await get(dependent.id, {}, { pmRoot: root })).item.dependencies!.some(dependency => dependency.id === id));
+}));
+
+test("Dependency ownership: rechecks endpoint uniqueness inside the source mutation lock", async () => tracker(async (root, id) => {
+  const dependent = await dependencySource(root);
+  const peer = (await create({ title: "Late dependency claimant", type: "Chore" }, { pmRoot: root })).item;
+  const before = await bytes(root, dependent.id);
+  let introduced = false;
+  await runWithActiveExtensions({ path: root, noExtensions: true }, async () => {
+    setActiveExtensionHooks({ beforeCommand: [], afterCommand: [], onRead: [], onWrite: [], onIndex: [], beforeMutation: [{ layer: "project", name: "late-dependency-owner", run: async context => {
+      if (!introduced && context.before?.metadata.id === dependent.id) {
+        introduced = true;
+        await change(root, peer.id, { external_ref: "gh:o/r#7" });
+      }
+    } }] });
+    const result = await linkImportedDependencies(repo, [dependent.issue], root);
+    assert.equal(introduced, true);
+    assert.equal(result.linked, 0);
+    assert.match(result.failures.join("\n"), /ambiguous_github_dependency_owner/);
+  });
+  assert.deepEqual(await bytes(root, dependent.id), before);
+}));
+
+
+/** The remaining operational indexes share the exact corpus and claims used by import and export. */
+function selectorChecks(items: PmItem[], id: string) {
+  const item = items.find(item => item.id === id)!;
+  const board = [{ id: "fixture-board-item", statusName: "Done", content: { typename: "Issue" as const, title: "Remote", repo, number: 7 } }];
+  return {
+    refresh: () => selectRefreshTargets(items, repo),
+    search: () => indexByProvenance(items),
+    projects: () => indexPmByIssue(items),
+    "project push": () => buildProjectPushPlan(items, { owner: "o", number: 1 }, board, undefined),
+    "project pull": () => buildProjectPullPlan(items, { owner: "o", number: 1 }, board),
+    "project import": () => buildProjectImportPlan(board, { owner: "o", number: 1 }, items),
+    "blocker self-exclusion": () => collectBlockerReferences({ ...item, dependencies: [], comments: [], blockedReason: "Blocked by #8" } as BlockerPmItem, repo, items),
+  };
+}
+
+for (const shape of shapes) test(`Ownership routing inventory: refuses ${shape.name} in every operational index`, async () => tracker(async (root, id) => {
+  if (shape.peer) {
+    const peer = (await create({ title: "Other index claimant", type: "Chore" }, { pmRoot: root })).item;
+    await change(root, peer.id, shape.peer);
+  } else await change(root, id, shape.values!, shape.reset);
+  const items = (await listAllComplete({ includeBody: true }, { pmRoot: root })).items;
+  for (const [name, run] of Object.entries(selectorChecks(items, id))) {
+    assert.throws(run, error => { try { return refusal(error, shape); } catch (failure) { throw new Error(`${name}: ${String(failure)}`); } }, name);
+  }
+}));
+
+test("Ownership routing inventory: consistent external-ref owner and reference-only items remain distinct", async () => tracker(async (root, id) => {
+  await change(root, id, { external_ref: "gh:O/R#7" }, true);
+  const reference = (await create({ title: "Mention", type: "Chore", tags: "gh:o/r#7" }, { pmRoot: root })).item;
+  const items = (await listAllComplete({ includeBody: true }, { pmRoot: root })).items;
+  assert.equal(selectRefreshTargets(items, repo)[0]!.id, id);
+  assert.equal(indexByProvenance(items).get("o/r#7")!.id, id);
+  assert.equal(indexPmByIssue(items).get("o/r#7")!.id, id);
+  const board = [{ id: "fixture-board-item", statusName: "Done", content: { typename: "Issue" as const, title: "Remote", repo, number: 7 } }];
+  const push = buildProjectPushPlan(items, { owner: "o", number: 1 }, board, undefined).entries;
+  assert.equal(push.find(entry => entry.pmId === id)!.action, "noop");
+  assert.equal(push.find(entry => entry.pmId === reference.id)!.action, "add-draft");
+  assert.equal(buildProjectPullPlan(items, { owner: "o", number: 1 }, board).entries[0]!.pmId, id);
+  assert.equal(buildProjectImportPlan(board, { owner: "o", number: 1 }, items)[0]!.pmId, id);
+}));
+
+test("Outbound ownership export: the public executor revalidates its original ownership context", async () => tracker(async (root, id) => {
+  const items = (await listAllComplete({ includeBody: true }, { pmRoot: root })).items;
+  const plan = buildExportPlan(items, repo);
+  items[0]!.github_repo = "other/project";
+  await withMockGithub((_request, response) => jsonResponse(response, 200, source), async server => {
+    await assert.rejects(() => applyExportPlan(plan, repo, "fixture-token", (method, url, token, body) => fetch(url, { method, headers: { authorization: `Bearer ${token}` }, body })), error => refusal(error, shapes[0]!));
+    assert.deepEqual(server.requests, []);
+  });
+}));
+
+test("Refresh ownership kind: every supported URL owner excludes PRs from issue queries", async () => tracker(async (root, id) => {
+  for (const values of [{ external_ref: "https://github.com/o/r/pull/7" }, { links: ["https://github.com/o/r/pull/7"] }, { GitHubURL: "https://github.com/o/r/pull/7" }]) {
+    await change(root, id, values, true);
+    const items = (await listAllComplete({ includeBody: true }, { pmRoot: root })).items;
+    assert.deepEqual(selectRefreshTargets(items, repo), []);
+    await change(root, id, JSON.parse(JSON.stringify(values).replaceAll("/pull/", "/issues/")) as Record<string, unknown>, true);
+    const issues = (await listAllComplete({ includeBody: true }, { pmRoot: root })).items;
+    assert.equal(selectRefreshTargets(issues, repo)[0]!.id, id);
+  }
+}));
+
+
+for (const conflict of [false, true]) test(`Ownership sync hint uses shared claims (${conflict ? "conflict" : "consistent external-ref"})`, async () => tracker(async (root, id) => {
+  await change(root, id, conflict ? { github_repo: "other/project", github_url: source.html_url } : { external_ref: "gh:o/r#7" }, true);
+  await withEnv({ PM_GITHUB_SYNC: "1" }, async () => {
+    const harness = await extensionHarness;
+    const { stderr } = await captureStderr(() => harness.runHook({ kind: "after_command", context: { command: "update", args: [id], pm_root: root, ok: true } }));
+    assert.match(stderr.join("\n"), conflict ? /github_import_owner_conflict/ : /pm github sync --repo o\/r/);
+    if (conflict) assert.doesNotMatch(stderr.join("\n"), /is linked to/);
+  });
+}));

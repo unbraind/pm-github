@@ -130,7 +130,7 @@ async function linked(root: string, alias: string, number: number, kind: "issues
 
 for (const alias of ["GitHubURL", "githuburl", "GITHUB_URL", "Github_Url", "github_URL"]) test(`Refresh excludes PRs in every explicit URL alias (${alias})`, async () => tracker(async root => {
   const pr = await linked(root, alias, 7, "pull");
-  await linked(root, "github_url", 7, "pull");
+  await linked(root, "github_url", 9, "pull");
   await linked(root, alias, 8, "issues");
   assert.equal(explicitGithubIdentities(pr)[0]!.kind, "pull");
   assert.deepEqual(importIdentityKeys(pr), ["o/r#7"]);
