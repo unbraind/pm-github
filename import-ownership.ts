@@ -244,6 +244,26 @@ export async function withGithubImportOwners<T>(pmRoot: string, targets: readonl
   return withGithubOwnershipLock(pmRoot, () => withGithubImportOwnersUnderLease(pmRoot, targets, run, work));
 }
 
+/** Infer the mutation callback from the public SDK so the declared minimum remains supported. */
+type GithubOwnershipMutationHook = NonNullable<NonNullable<Parameters<typeof setActiveExtensionHooks>[0]>["beforeMutation"]>[number]["run"];
+
+/** Preserve ambient delegates and registrations while installing one native ownership check. */
+async function withGithubOwnershipHooks<T>(pmRoot: string, name: string, delegateName: string, check: GithubOwnershipMutationHook, run: () => Promise<T>): Promise<T> {
+  const prior = AsyncResource.bind(runActiveBeforeMutationHooks);
+  const onRead = AsyncResource.bind(runActiveOnReadHooks), onWrite = AsyncResource.bind(runActiveOnWriteHooks), onIndex = AsyncResource.bind(runActiveOnIndexHooks);
+  const registrations = getActiveExtensionRegistrations();
+  return runWithActiveExtensions({ path: pmRoot, noExtensions: true }, async () => {
+    setActiveExtensionRegistrations(registrations);
+    setActiveExtensionHooks({ beforeCommand: [], afterCommand: [],
+      onRead: [{ layer: "project", name: delegateName, run: async context => { await onRead(context); } }],
+      onWrite: [{ layer: "project", name: delegateName, run: async context => { await onWrite(context); } }],
+      onIndex: [{ layer: "project", name: delegateName, run: async context => { await onIndex(context); } }],
+      beforeMutation: [{ layer: "project", name, run: async context => { await prior(context); return check(context); } }],
+    });
+    return run();
+  });
+}
+
 /** Preserve ambient hooks while adding positive ownership checks inside every target item lock. */
 async function withGithubImportOwnersUnderLease<T>(pmRoot: string, targets: readonly GithubOwnedTarget[], run: () => Promise<T>, work?: GithubOwnershipWork): Promise<T> {
   const active = ownershipScope.getStore();
@@ -259,52 +279,35 @@ async function withGithubImportOwnersUnderLease<T>(pmRoot: string, targets: read
   // Fail the whole selected batch before even creating an SDK journal.
   for (const target of targets) await readGithubImportOwner(pmRoot, target, snapshot);
   const byId = new Map(targets.map(target => [target.id, target]));
-  // Bound delegates retain the outer async-local extension scope, avoiding recursion
-  // and preserving existing guards, policy/schema registrations and write hooks.
-  const prior = AsyncResource.bind(runActiveBeforeMutationHooks);
-  const onRead = AsyncResource.bind(runActiveOnReadHooks);
-  const onWrite = AsyncResource.bind(runActiveOnWriteHooks);
-  const onIndex = AsyncResource.bind(runActiveOnIndexHooks);
-  const registrations = getActiveExtensionRegistrations();
-  return runWithActiveExtensions({ path: pmRoot, noExtensions: true }, async () => {
-    setActiveExtensionRegistrations(registrations);
-    setActiveExtensionHooks({ beforeCommand: [], afterCommand: [],
-      onRead: [{ layer: "project", name: "github-owner-delegate", run: async context => { await onRead(context); } }],
-      onWrite: [{ layer: "project", name: "github-owner-delegate", run: async context => { await onWrite(context); } }],
-      onIndex: [{ layer: "project", name: "github-owner-delegate", run: async context => { await onIndex(context); } }],
-      beforeMutation: [{ layer: "project", name: "github-import-owner", run: async context => {
-        await prior(context);
-        const id = (context.before ?? context.after)?.metadata.id;
-        const target = id && byId.get(id);
-        if (target) {
-          try {
-            if (target.expectedHash && context.before && hashDocument(context.before) !== target.expectedHash) {
-              return { allow: false, code: "item_revision_conflict", message: `GitHub import target ${target.id} changed after its ownership read (expected revision ${target.expectedHash}, current ${hashDocument(context.before)}).`, remediation: "Read the current item and retry against its intended ownership and revision." };
-            }
-            lockedIndex ??= context.sdk.list().then(items => {
-              if (work) work.corpusReads = (work.corpusReads ?? 0) + 1;
-              if (observed && observed !== work) observed.corpusReads = (observed.corpusReads ?? 0) + 1;
-              return buildGithubOwnershipIndex(items, targets.map(target => target.repo));
-            });
-            const peers = await lockedIndex;
-            for (const related of target.related ?? []) {
-              const item = peers.byId.get(related.id);
-              if (!item) throw new GithubImportOwnershipError(related.id, `${related.repo.toLowerCase()}#${related.number}`, ["missing dependency endpoint"]);
-              assertGithubImportOwner(item, related, peers);
-            }
-            for (const document of [context.before, context.after]) if (document) {
-              assertGithubImportOwner({ ...document.metadata, body: document.body }, target, peers);
-            }
-            if (context.after) updateOwnershipIndex(peers, { ...context.after.metadata, body: context.after.body });
-          } catch (error: unknown) {
-            if (!(error instanceof GithubImportOwnershipError)) throw error;
-            return { allow: false, code: error.code, message: error.message, remediation: error.remedy };
-          }
+  return withGithubOwnershipHooks(pmRoot, "github-import-owner", "github-owner-delegate", async context => {
+    const id = (context.before ?? context.after)?.metadata.id;
+    const target = id && byId.get(id);
+    if (target) {
+      try {
+        if (target.expectedHash && context.before && hashDocument(context.before) !== target.expectedHash) {
+          return { allow: false, code: "item_revision_conflict", message: `GitHub import target ${target.id} changed after its ownership read (expected revision ${target.expectedHash}, current ${hashDocument(context.before)}).`, remediation: "Read the current item and retry against its intended ownership and revision." };
         }
-      } }],
-    });
-    return ownershipScope.run({ root, targets }, run);
-  });
+        lockedIndex ??= context.sdk.list().then(items => {
+          if (work) work.corpusReads = (work.corpusReads ?? 0) + 1;
+          if (observed && observed !== work) observed.corpusReads = (observed.corpusReads ?? 0) + 1;
+          return buildGithubOwnershipIndex(items, targets.map(target => target.repo));
+        });
+        const peers = await lockedIndex;
+        for (const related of target.related ?? []) {
+          const item = peers.byId.get(related.id);
+          if (!item) throw new GithubImportOwnershipError(related.id, `${related.repo.toLowerCase()}#${related.number}`, ["missing dependency endpoint"]);
+          assertGithubImportOwner(item, related, peers);
+        }
+        for (const document of [context.before, context.after]) if (document) {
+          assertGithubImportOwner({ ...document.metadata, body: document.body }, target, peers);
+        }
+        if (context.after) updateOwnershipIndex(peers, { ...context.after.metadata, body: context.after.body });
+      } catch (error: unknown) {
+        if (!(error instanceof GithubImportOwnershipError)) throw error;
+        return { allow: false, code: error.code, message: error.message, remediation: error.remedy };
+      }
+    }
+  }, () => ownershipScope.run({ root, targets }, run));
 }
 
 /** Run plain owned writes through native SDK locks, revisions and the same ownership hook as replay. */
@@ -320,27 +323,12 @@ export async function mutateGithubOwnedItem(pmRoot: string, target: GithubOwnedT
 
 /** Guard board-selected native changes against the complete owner corpus while allowing genuinely unowned items. */
 export async function withGithubItemConsistency<T>(pmRoot: string, id: string, expected: readonly string[], run: () => Promise<T>): Promise<T> {
-  return withGithubOwnershipLock(pmRoot, async () => {
-    const prior = AsyncResource.bind(runActiveBeforeMutationHooks);
-    const onRead = AsyncResource.bind(runActiveOnReadHooks), onWrite = AsyncResource.bind(runActiveOnWriteHooks), onIndex = AsyncResource.bind(runActiveOnIndexHooks);
-    const registrations = getActiveExtensionRegistrations();
-    return runWithActiveExtensions({ path: pmRoot, noExtensions: true }, async () => {
-      setActiveExtensionRegistrations(registrations);
-      setActiveExtensionHooks({ beforeCommand: [], afterCommand: [],
-        onRead: [{ layer: "project", name: "github-board-owner-delegate", run: async context => { await onRead(context); } }],
-        onWrite: [{ layer: "project", name: "github-board-owner-delegate", run: async context => { await onWrite(context); } }],
-        onIndex: [{ layer: "project", name: "github-board-owner-delegate", run: async context => { await onIndex(context); } }],
-        beforeMutation: [{ layer: "project", name: "github-board-owner", run: async context => {
-          await prior(context);
-          if ((context.before ?? context.after)?.metadata.id !== id) return;
-          const peers = buildGithubOwnershipIndex(await context.sdk.list(), expected.map(key => key.split("#")[0]!));
-          for (const document of [context.before, context.after]) if (document) {
-            const keys = assertGithubOwnershipConsistency({ ...document.metadata, body: document.body }, undefined, peers);
-            if (JSON.stringify(keys) !== JSON.stringify(expected)) throw new GithubImportOwnershipError(id, expected.join(" versus ") || "original unowned project item", keys);
-          }
-        } }],
-      });
-      return run();
-    });
-  });
+  return withGithubOwnershipLock(pmRoot, () => withGithubOwnershipHooks(pmRoot, "github-board-owner", "github-board-owner-delegate", async context => {
+    if ((context.before ?? context.after)?.metadata.id !== id) return;
+    const peers = buildGithubOwnershipIndex(await context.sdk.list(), expected.map(key => key.split("#")[0]!));
+    for (const document of [context.before, context.after]) if (document) {
+      const keys = assertGithubOwnershipConsistency({ ...document.metadata, body: document.body }, undefined, peers);
+      if (JSON.stringify(keys) !== JSON.stringify(expected)) throw new GithubImportOwnershipError(id, expected.join(" versus ") || "original unowned project item", keys);
+    }
+  }, run));
 }
