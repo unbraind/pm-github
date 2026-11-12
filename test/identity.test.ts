@@ -78,16 +78,16 @@ test("copied prose, structured multi-provider owners, exact refs and bounded gra
   assert.equal(report.scanned, 11);
   assert.equal(report.collisions, 4);
   assert.ok(report.edges.some(edge => edge.item === conflict && edge.identity === "gh:fixture/repo#9" && edge.strength === "claim"));
-  assert.equal(report.mentions, 5);
+  assert.equal(report.mentions, 6);
   assert.equal(report.nodes.find(node => node.id === conflict)?.native_owner, "fixture-provider");
   assert.equal(report.nodes.find(node => node.id === copied)?.ownership, "local");
   assert.equal((await exploreGithubIdentities(root, { identity: "gh:fixture/repo#2" })).nodes.find(node => node.id === provider)?.ownership, "provider");
   assert.equal((await exploreGithubIdentities(root, { identity: "gh:fixture/repo#3" })).nodes.find(node => node.id === mixed)?.ownership, "mixed");
   assert.equal(report.nodes.find(node => node.id === owner)?.ownership, "github");
   const first = await exploreGithubIdentities(root, { limit: 1 });
-  assert.equal(first.total, 6);
+  assert.equal(first.total, 7);
   assert.equal(first.next, 1);
-  assert.equal((await exploreGithubIdentities(root, { limit: 1, offset: 5 })).next, null);
+  assert.equal((await exploreGithubIdentities(root, { limit: 1, offset: 6 })).next, null);
   assert.deepEqual((await exploreGithubIdentities(root, { identity: "absent" })).edges, []);
   assert.deepEqual(snapshot(root), before);
   for (const options of [{ limit: 0 }, { limit: 101 }, { limit: 1.1 }, { offset: -1 }, { offset: NaN }]) await assert.rejects(exploreGithubIdentities(root, options), code("invalid_options"));
@@ -147,7 +147,7 @@ test("refuse contradictory owners, source metadata, opaque providers and changed
 
 for (const fields of [{ github_url: url }, { github_link_only: false }, { github_number: 1 }, { source_owner: "fixture-provider" }]) {
   test(`source-owned duplicates require manual review (${Object.keys(fields).join()})`, async () => tracker(async root => {
-    const owner = await item(root, { description: `GitHub issue ${url}` });
+    const owner = await item(root, { github_link_only: true, description: `GitHub issue ${url}` });
     const detach = await item(root, { tags: [key], ...fields });
     const before = snapshot(root);
     await assert.rejects(planGithubIdentityRepair(root, key, owner, detach), code("ambiguous_identity"));

@@ -109,11 +109,11 @@ for (const referenced of [false, true]) test(`Ownership curated deterministic-ID
 }));
 
 for (const alias of ["number_only", "github_url", "GitHubURL", "external_links"]) for (const atomic of [false, true]) {
-  test(`Ownership selected URL target rechecks its live owner (${alias}, atomic=${atomic})`, async () => tracker(async root => {
+  test(`Ownership selected URL target ${alias === "external_links" ? "ignores reference-only links" : "rechecks its live owner"} (${alias}, atomic=${atomic})`, async () => tracker(async root => {
     const item = (await create({ title: "Curated URL owner", type: "Chore", body: "Curated body" }, { pmRoot: root })).item;
     await relink(root, item.id, repo, 7, alias, alias !== "number_only");
     let before: string[] = [];
-    await assert.rejects(() => captureStderr(() => runImport(repo, root, parseImportOptions({ atomic }), {
+    const importing = () => captureStderr(() => runImport(repo, root, parseImportOptions({ atomic }), {
       resolveToken: () => undefined, fetchIssues: async () => [changed], fetchIssueTimeline: async () => {
         // Keep all explicit URL aliases consistent while transferring authority.
         const current = await relink(root, item.id, "other/project", 8, alias, alias !== "number_only");
@@ -121,7 +121,11 @@ for (const alias of ["number_only", "github_url", "GitHubURL", "external_links"]
         else assert.equal(current[alias], "https://github.com/other/project/issues/8");
         before = await bytes(root, item.id); return [];
       },
-    })), conflict);
+    }));
+    if (alias === "external_links") {
+      await importing();
+      assert.equal((await listAllComplete({}, { pmRoot: root })).items.length, 2);
+    } else await assert.rejects(importing, conflict);
     assert.deepEqual(await bytes(root, item.id), before);
   }));
 }

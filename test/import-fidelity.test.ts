@@ -196,7 +196,7 @@ for (const atomic of [false, true]) {
 
   test(`explicit native GitHub issue declaration reuses its owner without changing local delivery (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
     const issue = recorded("pm-linear-134");
-    const owner = await identityItem(pmRoot, { description: `GitHub issue${atomic ? ":" : ""} ${issue.html_url}. Local delivery evidence.`, release: "2026.10.8" });
+    const owner = await identityItem(pmRoot, { github_link_only: true, description: `GitHub issue${atomic ? ":" : ""} ${issue.html_url}`, release: "2026.10.8" });
     const preview = await importing(pmRoot, issue, atomic, true);
     const plan = (preview.plan as Array<{ action: string; identity: { via: string } }>)[0]!;
     assert.equal(plan.identity.via, "github-declaration");
@@ -261,7 +261,7 @@ test("release fixture: two actual tags place closures before, between and after 
   assert.doesNotMatch(unreleased, /Window [12]/);
 }));
 
-test("identity accepts nested GitHub links, provider back-links, exact URLs and refuses competing owners", () => {
+test("identity keeps nested GitHub links as references, accepts provider back-links and refuses competing owners", () => {
   const issue = recorded("pm-linear-134");
   for (const provider of ["linear", "jira", "ado"]) {
     const value = matchImportedIssue([{ id: "owner", [`${provider}_url`]: "https://linear.app/fixture/issue/ENG-134" }], issue);
@@ -273,9 +273,9 @@ test("identity accepts nested GitHub links, provider back-links, exact URLs and 
   assert.equal(matchImportedIssue([{ id: "owner", description: "[linear] linear_id=fixture linear_url=https://linear.app/fixture/issue/ENG-134" }], issue).item?.id, "owner");
   assert.equal(matchImportedIssue([{ id: "owner", description: "Jira EX-134: https://linear.app/fixture/issue/ENG-134" }], issue).item?.id, "owner");
   assert.equal(matchImportedIssue([{ id: "owner", body: "ado_id=134 ado_url=https://linear.app/fixture/issue/ENG-134" }], issue).item?.id, "owner");
-  assert.equal(matchImportedIssue([{ id: "owner", ado_id: 134, provenance: { url: issue.html_url } }], issue).item?.id, "owner");
+  assert.equal(matchImportedIssue([{ id: "owner", ado_id: 134, provenance: { url: issue.html_url } }], issue).item, undefined);
   assert.equal(matchImportedIssue([{ id: "owner", github_url: `${issue.html_url}?view=all#issuecomment-1` }], issue).item?.id, "owner");
-  assert.equal(matchImportedIssue([{ id: "owner", external_links: [{ url: issue.html_url }] }], issue).item?.id, "owner");
+  assert.equal(matchImportedIssue([{ id: "owner", external_links: [{ url: issue.html_url }] }], issue).item, undefined);
   assert.equal(matchImportedIssue([{ id: "owner", GitHubURL: issue.html_url }], issue).item?.id, "owner");
   assert.equal(matchImportedIssue([{ id: "owner", provenance: { provider: "pm-linear", url: "https://linear.app/fixture/issue/ENG-134" } }], issue).item?.id, "owner");
   assert.equal(matchImportedIssue([{ id: "owner", provider: "pm-jira", external_url: "https://bugs.example.test/EX-1" }], { ...issue, body: "Mirrored from https://bugs.example.test/EX-1" }).item?.id, "owner");
@@ -291,7 +291,7 @@ test("identity accepts nested GitHub links, provider back-links, exact URLs and 
 
 
   assert.equal(matchImportedIssue([{ id: "unrelated", links: `${issue.html_url}0` }], issue).item, undefined);
-  assert.throws(() => matchImportedIssue([{ id: "one", links: issue.html_url }, { id: "two", links: issue.html_url }], issue), /multiple existing owners/);
+  assert.equal(matchImportedIssue([{ id: "one", links: issue.html_url }, { id: "two", links: issue.html_url }], issue).item, undefined);
 });
 
 test("citation opt-out excludes prose while retaining structured identity matching", () => {

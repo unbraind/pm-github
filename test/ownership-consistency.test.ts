@@ -40,7 +40,7 @@ async function tracker(run: (root: string, id: string) => Promise<void>, git = f
     const id = managed ? deriveAtomicItemId(repo, 7, (await readSettings(root)).id_prefix, normalizeItemId) : normalizeItemId("curated", (await readSettings(root)).id_prefix);
     await create({ id, author: createdByImporter ? "pm-github" : "fixture", title: "Original local title", type: !createdByImporter ? "Chore" : "Issue", body: "Original local body", status: "in_progress",
       description: `GH issue #7: ${source.html_url}`, tags: "gh:o/r#7" }, { pmRoot: root });
-    await change(root, id, { github_repo: repo, github_number: 7, github_url: source.html_url });
+    await change(root, id, { github_repo: repo, github_number: 7, github_url: source.html_url, external_links: ["See https://github.com/other/project/issues/8 for context"] });
     await withEnv({ PM_PATH: root, PM_AUTHOR: "fixture", PM_TELEMETRY_SOURCE_CONTEXT: "automation", GITHUB_TOKEN: "fixture-token", GH_TOKEN: undefined,
       PATH: join(import.meta.dirname, "../node_modules/.bin") + delimiter + process.env.PATH }, () => run(root, id));
   } finally { rmSync(directory, { recursive: true, force: true }); }
@@ -103,7 +103,6 @@ const shapes: Shape[] = [
   { name: "repository versus URL", values: { github_repo: "other/project" }, claim: "other/project#7" },
   { name: "number versus URL", values: { github_number: 8 }, claim: "o/r#8" },
   { name: "contradictory URL alias", values: { GitHubURL: "https://github.com/other/project/pull/8" }, claim: "other/project#8" },
-  { name: "contradictory legacy link", values: { external_links: ["https://github.com/other/project/issues/8"] }, claim: "other/project#8" },
   { name: "contradictory native declaration", values: { github_link_only: true, description: "GitHub issue https://github.com/other/project/issues/8" }, claim: "other/project#8" },
   { name: "external-ref repository", values: { external_ref: "gh:other/project#8" }, claim: "other/project#8" },
   { name: "external-ref number", values: { external_ref: "https://github.com/O/R/pull/8/" }, claim: "o/r#8" },
@@ -144,8 +143,8 @@ for (const path of ["match", "plain", "atomic", "closeout", "replay"] as const) 
 }
 
 for (const legacy of [false, true]) test(`Ownership matrix allows consistent ${legacy ? "legacy" : "full"} record and idempotent re-import`, async () => tracker(async (root, id) => github(id, async () => {
-  await change(root, id, legacy ? { github_repo: " O/R/// ", github_link_only: false, tags: ["gh:O/R#7"] }
-    : { github_repo: " O/R/// ", github_number: 7, github_url: "https://www.github.com/O/R/pull/7/?a=1#fragment", external_ref: "gh:o/r#7", tags: ["gh:O/R#7"] }, legacy);
+  await change(root, id, legacy ? { github_repo: " O/R/// ", github_link_only: false, external_links: ["See https://github.com/other/project/issues/8"], tags: ["gh:O/R#7"] }
+    : { github_repo: " O/R/// ", github_number: 7, github_url: "https://www.github.com/O/R/pull/7/?a=1#fragment", external_ref: "gh:o/r#7", external_links: ["See https://github.com/other/project/issues/8"], tags: ["gh:O/R#7"] }, legacy);
   const items = (await listAllComplete({ includeBody: true }, { pmRoot: root })).items;
   assert.equal(matchImportedIssue(items, source).item?.id, id);
   await sync(root, true);
@@ -461,7 +460,7 @@ test("Outbound ownership export: the public executor revalidates its original ow
 }));
 
 test("Refresh ownership kind: every supported URL owner excludes PRs from issue queries", async () => tracker(async (root, id) => {
-  for (const values of [{ external_ref: "https://github.com/o/r/pull/7" }, { links: ["https://github.com/o/r/pull/7"] }, { GitHubURL: "https://github.com/o/r/pull/7" }]) {
+  for (const values of [{ external_ref: "https://github.com/o/r/pull/7" }, { GitHubURL: "https://github.com/o/r/pull/7" }]) {
     await change(root, id, values, true);
     const items = (await listAllComplete({ includeBody: true }, { pmRoot: root })).items;
     assert.deepEqual(selectRefreshTargets(items, repo), []);
@@ -588,7 +587,7 @@ for (const file of ["settings.json", "derived-index.bin"]) test(`Preview complet
 test("Preview complete byte snapshot allows read-only SDK settings", () => withImportPreview(async root => { await readSettings(root); }));
 
 test("API URL mentions group with web references but never become ownership", async () => tracker(async (root, id) => {
-  await change(root, id, { description: "See https://api.github.com/repos/o/r/issues/7", tags: [] }, true);
+  await change(root, id, { description: "See https://api.github.com/repos/o/r/issues/7", external_links: [], tags: [] }, true);
   await create({title:"Web reference",type:"Chore",tags:"gh:o/r#7"},{pmRoot:root});
   const report = await exploreGithubIdentities(root, { identity: "gh:o/r#7" });
   assert.equal(report.identities, 1);

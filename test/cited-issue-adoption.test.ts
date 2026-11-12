@@ -639,7 +639,6 @@ test("citation adoption never overwrites an item that already carries structured
   const owned = [
     { id: "url", description: `Fixes ${repo}#30`, github_url: "https://github.com/acme/widgets/issues/31" },
     { id: "number", description: `Fixes ${repo}#30`, github_number: 31 },
-    { id: "links", description: `Fixes ${repo}#30`, external_links: ["https://github.com/acme/widgets/issues/31"] },
     { id: "ref", description: `Fixes ${repo}#30`, external_ref: "gh:acme/widgets#31" },
     { id: "linear", description: `Fixes ${repo}#30`, external_ref: "linear:ENG-31" },
     { id: "source-owner", description: `Fixes ${repo}#30`, source_owner: "linear", status: "closed" },
@@ -653,6 +652,8 @@ test("citation adoption never overwrites an item that already carries structured
     assert.equal(result.item, undefined, item.id);
     assert.deepEqual(result.citation_candidates, [{ id: item.id, reason: "structured_owner" }], item.id);
   }
+  const linkedReference = { id: "links", description: `Fixes ${repo}#30`, external_links: ["https://github.com/acme/widgets/issues/31"] };
+  assert.equal(matchImportedIssue([linkedReference], issue).item, linkedReference, "generic links do not establish another owner");
   const reference = { id: "upper-tag", title: `${repo}#30`, description: `Fixes ${repo}#30`, tags: ["GH:other/widgets#31"] };
   assert.equal(matchImportedIssue([reference], issue).item, reference, "reference tags do not establish another owner");
   const native = { id: "native", description: "GitHub issue https://github.com/acme/widgets/issues/31", title: `Fix ${repo}#30` };

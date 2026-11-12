@@ -51,15 +51,15 @@ async function importing(root: string, issue = source, atomic = false) {
   }));
 }
 
-for (const field of ["github_url", "links", "provenance", "external_url"]) for (const api of [true, false]) test(`Round12 owner links ${field}: ${api ? "API mention refuses lifecycle ownership" : "web link allows lifecycle"}`, async () => tracker(async root => {
+for (const field of ["github_url", "links", "provenance", "external_url"]) for (const api of [true, false]) test(`Round12 owner links ${field}: ${api || field !== "github_url" ? "reference refuses lifecycle ownership" : "explicit URL allows lifecycle"}`, async () => tracker(async root => {
   const local = (await create({ title: "Curated Chore", type: "Chore", status: "open", tags: "keep,gh:o/r#7" }, { pmRoot: root })).item;
   await change(root, local.id, { [field]: api ? "https://api.github.com/repos/o/r/issues/7" : "https://www.github.com/O/R/issues/7/" });
   const before = await bytes(root, local.id);
   const result = await importing(root, { ...source, state: "closed", updated_at: "2027-01-01T00:00:00Z", closed_at: "2027-01-01T00:00:00Z", state_reason: "completed" });
   const actual = (await get(local.id, {}, { pmRoot: root })).item;
   assert.equal(actual.title, local.title); assert.equal(actual.type, "Chore");
-  assert.ok("imported" in result.result); assert.equal(result.result.imported, api ? 1 : 0);
-  if (api) assert.deepEqual(await bytes(root, local.id), before);
+  assert.ok("imported" in result.result); assert.equal(result.result.imported, api || field !== "github_url" ? 1 : 0);
+  if (api || field !== "github_url") assert.deepEqual(await bytes(root, local.id), before);
   else assert.equal(actual.status, "closed");
 }));
 

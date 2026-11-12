@@ -233,7 +233,7 @@ export function trimLocatorPunctuation(locator: string, punctuation = "),.;"): s
   return locator.slice(0, end);
 }
 
-/** Normalize only complete HTTP issue/provider locators, never substring identities. */
+/** Extract source/reference locators; operational owner claims use complete explicit identity fields. */
 function locators(value: unknown, canonicalize = true): string[] {
   const text = typeof value === "string" ? value : JSON.stringify(value) ?? "";
   return [...text.matchAll(/https?:\/\/[^\s<>"'`]+/gi)].map(match => {
@@ -263,24 +263,15 @@ function providerProvenance(item: PmItem): string {
     .map(([, value]) => typeof value === "string" ? value : JSON.stringify(value)).join("\n");
 }
 
-/** Fields whose GitHub locators name an item's owner; shared by the owner matcher and the adoption guard so they cannot drift. */
+/** Link-bearing fields expose references; only explicit GitHub identity fields establish ownership. */
 const OWNER_LINK_FIELD = /^(?:github_?url|provenance|external_?(?:links?|url)|links?)$/i;
 
-/**
- * True when an item already carries a structured GitHub or provider identity of its own. Mirrors every ownership source
- * identity.ts and the owner matcher recognize: any `github*` field (`github_url`, `githuburl`, ...), durable importer provenance, a core `external_ref`, a native `source_owner`, provider identity fields
- * (`linear_*`/`jira_*`/`ado_*` id, key, url or identifier), provider provenance, a native "GitHub issue <url>"
- * declaration, or a GitHub issue URL in provenance/external links.
- */
+/** Existing explicit provenance and provider declarations prevent opt-in citation adoption from replacing an owner. */
 function hasStructuredOwnership(item: PmItem): boolean {
   const filled = (value: unknown) => value !== undefined && value !== null && value !== false && !(typeof value === "string" && value.trim() === "");
-  return Object.entries(item).some(([key, value]) => filled(value) && (/^github/i.test(key) && !/^github_?link_?only$/i.test(key) ||
+  return Object.entries(item).some(([key, value]) => filled(value) && (/^github/i.test(key) && !/^github_?(?:link_?only|url)$/i.test(key) ||
       /^(?:external_ref|source_owner)$/.test(key) || /^(?:linear|jira|ado)_(?:.*_)?(?:id|key|url|identifier)$/i.test(key))) ||
-    item.github_link_only === false || Boolean(providerProvenance(item)) ||
-    githubOwnedIdentityKeys(item).length > 0 ||
-    (typeof item.description === "string" && /^GitHub issue(?:\s*:\s+|\s+)https?:\/\//i.test(item.description)) ||
-    Object.entries(item).some(([key, value]) => OWNER_LINK_FIELD.test(key) &&
-      locators(value).some(url => Boolean(parseGithubIssueUrl(url))));
+    item.github_link_only === false || Boolean(providerProvenance(item)) || githubOwnedIdentityKeys(item).length > 0;
 }
 
 /** Typed refusal for contradictory authoritative identities; references never enter this decision. */
@@ -305,12 +296,18 @@ export function legacyGithubLinkClaims(item: PmItem): string[] {
   return [...new Set(legacyGithubLinkIdentities(item).map(target => target.key))];
 }
 
-/** Preserve URL kind alongside the raw legacy locator claims consumed by shared ownership. */
-export function legacyGithubLinkIdentities(item: PmItem) {
+/** Extract GitHub references from supported links without promoting their prose to ownership. */
+export function githubLinkReferences(item: PmItem) {
   const values = Object.entries(item).filter(([field]) => OWNER_LINK_FIELD.test(field)).flatMap(([, value]) => locators(value, false));
+  return values.flatMap(value => { const parsed = parseGithubIssueUrl(value); return parsed ? [parsed] : []; });
+}
+
+/** Legacy link-only records require their dedicated marker and one complete native declaration; generic links remain references. */
+export function legacyGithubLinkIdentities(item: PmItem) {
+  const values = explicitGithubIdentities(item).map(target => target.url.href);
   if (item.github_link_only === true && typeof item.description === "string") {
-    const declaration = /^(?:GitHub issue(?:\s*:\s+|\s+)|GH (?:issue|PR) #[1-9]\d*:\s+)(https?:\/\/\S+)/i.exec(item.description);
-    values.push(...locators(declaration?.[1], false));
+    const declaration = /^(?:GitHub issue(?:\s*:\s+|\s+)|GH (?:issue|PR) #[1-9]\d*:\s+)(https?:\/\/\S+)\s*$/i.exec(item.description);
+    if (declaration?.[1]) values.push(declaration[1]);
   }
   return values.flatMap(value => { const parsed = parseGithubIssueUrl(value); return parsed && !parsed.api ? [parsed] : []; });
 }
@@ -370,16 +367,14 @@ export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, _ta
   const issueKey = `${repo}#${issue.number}`;
   const ownership = snapshot ?? buildGithubOwnershipIndex(items, [repo]);
   /** Recognize leading native ownership declarations; later prose cannot transfer ownership. */
-  const declaredOwner = (item: PmItem) => copiedProviderMarkersOwnItem(item) && typeof item.description === "string" &&
-    locators(/^GitHub issue(?:\s*:\s+|\s+)(https?:\/\/\S+)/i.exec(item.description)?.[1]).includes(issueUrl);
+  const declaredOwner = (item: PmItem) => item.github_link_only === true &&
+    legacyGithubLinkIdentities(item).some(target => target.canonical === issueUrl);
   const candidates = items.filter(item => {
     if (!item.id) return false;
     const state = ownership.states.get(item)!;
     if (state.claims.includes(issueKey)) assertGithubOwnershipConsistency(item, { id: item.id, repo, number: issue.number }, ownership);
     if (state.owners.length) return state.owners.includes(issueKey);
-    return declaredOwner(item) ||
-      legacyGithubLinkIdentities(item).some(target => target.canonical === issueUrl) ||
-      locators(providerProvenance(item)).some(url => bodyUrls.has(url));
+    return locators(providerProvenance(item)).some(url => !parseGithubIssueUrl(url) && bodyUrls.has(url));
   });
   if (candidates.length > 1) throw new GithubImportOwnershipError(candidates[0]!.id!, issueKey, candidates.map(candidate => `${issueKey} claimed by ${candidate.id}`));
   let item = candidates[0];
