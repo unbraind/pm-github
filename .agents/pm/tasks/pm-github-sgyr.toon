@@ -1,0 +1,14 @@
+id: pm-github-sgyr
+title: Remove runner-held release-PR landing wait with resumable publication
+description: ""
+type: Task
+status: open
+priority: 2
+tags[3]: ci,follow-up,release
+created_at: "2026-11-10T00:26:14.778Z"
+updated_at: "2026-11-10T00:52:52.980Z"
+author: codex-agent
+acceptance_criteria: A release PR waiting on checks consumes no runner; post-merge continuation resumes exactly once with the verified artifact and all publication safeguards; adversarial/revert tests cover crash and dispatch boundaries.
+files[1]{path,scope}:
+  .github/workflows/release.yml,project
+body: "Found during the #228 reusable-workflow audit. The separate non-reusable .github/workflows/release.yml merge loop waits for its own release PR checks and sleeps 20 seconds between merge attempts. The #228 fix covers reusable sync/closeout; release publication has a distinct continuation/attestation contract and needs a separate reviewed design. Replace the in-job release-PR landing wait with protected auto-merge and a durable post-merge continuation, preserving exact-head release gates, identity/privacy, npm attestation, delayed registry verification, and no publication before merge. Deduplication: runner and release auto-merge searches found only the closed historical wait-budget item pm-github-release-merge-wait, no open continuation item."

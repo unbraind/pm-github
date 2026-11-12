@@ -1096,7 +1096,7 @@ The script must emit the root `CHANGELOG.md` and remain inside the publication s
 | Validation | Strict PM health; explicit item/history scope committed together |
 | Branch and PR | Explicit force-with-lease against the observed bot ref; push only bot branch; owned PR lookup excludes forks |
 | No-op | Zero closes or no tracker diff creates no remote branch or PR; caller-only drift unpublished; stale owned PR closed |
-| CI and landing | Dispatch caller checks after publication and branch refresh; request protected squash auto-merge in App mode; report parked approval-required runs |
+| CI and landing | Dispatch caller checks after publication; request protected squash auto-merge in both token modes; report parked approval-required runs; exit without waiting for caller CI |
 
 `ci-workflows` defaults to `ci.yml codeql.yml`, covering the fleet's CI and
 CodeQL workflows without querying branch protection. An explicit list replaces
@@ -1113,26 +1113,55 @@ even when those checks pass on the head SHA. For unattended landing, configure
 `automation-app-client-id` and the optional `automation_app_private_key` secret.
 After the local gates, the pinned official App-token action mints a token for
 only the caller repository, with contents/pull-requests/actions write and
-checks/statuses read. Publication and refresh use that token, so native
+checks/statuses read. Publication and auto-merge arming use that token, so native
 `pull_request` workflows run without the GITHUB_TOKEN approval prompt and
 provide eligible required checks. Manual head dispatch remains additional
 verification. Empty credentials retain GITHUB_TOKEN and emit a setup notice;
 partial or failed App credentials stop publication. The private key is passed
 only to the token action, after caller scripts have completed.
 
-In App mode, after dispatch the workflow requests `gh pr merge --auto --squash`
-with the expected head SHA. A repository that disallows auto-merge emits a notice.
-Without an App, maintainers approve native PR runs, wait for required checks and
-conversations, and merge with an authorized credential; the workflow does not arm
-auto-merge.
-GitHub enforces required checks and conversation resolution. The same run
-polls once per minute: when the PR is `BEHIND`, it requests a branch update
-against the expected head, then dispatches all selected workflows and, in App
-mode, requests auto-merge again when the new head appears. App mode stops within
-forty minutes, inside its token's one-hour lifetime; legacy mode has a two-hour bound. The
-existing daily schedules and separate sync/closeout concurrency groups remain.
-A base change after the monitor window waits for the next daily rebuild.
-Unresolved conversations continue to block landing.
+In both token modes, after dispatch the workflow requests `gh pr merge --auto --squash`
+with the expected head SHA and exits; required checks decide the merge, and no
+runner is held while they run. A repository that disallows auto-merge — no
+branch protection, or the repository setting disabled — emits a notice naming
+the reason and exits. The step checks the repository setting and protected
+base once before invoking `gh`, because `--auto` can merge immediately when
+nothing blocks the PR. Failed or unverifiable reads use the same fallback.
+The base must require at least one named PR CI status check, through classic
+protection or an applicable ruleset; reviews or conversations alone are
+insufficient. No required check produces `required_checks_unconfigured`, and an
+unreadable branch-rules API produces `required_checks_unverified`. Both notices
+use the scheduled-retry fallback.
+Require branches to be up to date before merging, or configure an applicable
+merge queue. The guard verifies ruleset strictness/merge queue or the matching
+classic GraphQL branch-protection rule before arming. Loose checks produce
+`required_checks_not_strict`; an unreadable classic freshness policy produces
+`branch_freshness_unverified`. Configure every intended CI check as required:
+the presence guard accepts a nonempty required context name and does not match
+that name to caller CI jobs.
+The next scheduled run rebuilds and retries; persistent settings or protection
+problems require maintainer attention before unattended landing can work.
+Without an App, maintainers must approve the native PR runs before required
+checks can pass; the already armed auto-merge then lands the protected PR.
+The `github_token_requires_approval` notice explains this approval step and the
+optional App configuration for unattended checks. A merge performed with
+GITHUB_TOKEN does not trigger default-branch `push` workflows; use the App when
+those follow-up workflows must run automatically. GitHub documents the
+[PR approval exception and suppressed push events](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
+GitHub enforces required checks and conversation resolution. **Never wait in-job
+for caller CI: it takes runners from the same account pool**, so polling here can
+only lengthen the queue it waits on. The dispatch step performs no in-job wait —
+no contract requires one: the parked-run report reads runs GitHub already
+registered for the published head, and landing is owned by armed auto-merge or
+a later scheduled retry. The closeout armed flag records only an observed
+successful arm, so a failed arm stays revocable by the always() cleanup. A base advance after publication, or an unavailable
+auto-merge, waits for the next scheduled rebuild, which force-rebuilds the bot
+branch from the current default branch and re-arms. The existing daily schedules
+and separate sync/closeout concurrency groups remain. Unresolved conversations
+continue to block landing. Every job in the reusable workflows declares an
+explicit `timeout-minutes` (60 for sync, closeout and Dependabot; 10 for
+sync alerts), and each sync/closeout dispatch step has a five-minute hard limit.
+That limit covers API failures or hangs, not a wait for checks.
 
 See [the caller audit and one-time setup](docs/bot-pr-automation.md) for the App
 credential mapping, CodeQL trigger changes and explicit CI overrides. GitHub
@@ -1220,8 +1249,8 @@ run from the repository root. A script that regenerates the changelog must write
 the repository-root `CHANGELOG.md` to stay within the publication allowlist.
 
 Bot-created PRs using GITHUB_TOKEN may have `pull_request` runs parked in
-`action_required`. The optional App token makes publication and branch refresh
-start native eligible PR workflows automatically. Configured manual workflows
+`action_required`. The optional App token makes publication start native
+eligible PR workflows automatically. Configured manual workflows
 are also dispatched on the bot head; these jobs are additional verification,
 because GitHub excludes manual job checks from PR branch-rule evaluation. Each
 manual workflow must support `workflow_dispatch` and produce its intended check
