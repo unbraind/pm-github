@@ -28,6 +28,7 @@ export function parseGithubUrl(value: unknown): GithubUrlParts | undefined {
   if (typeof value !== "string") return undefined;
   try {
     // URL resolves dot segments; reject traversal before normalization can hide it.
+    if (/\\|%5c/i.test(value.split(/[?#]/, 1)[0]!)) return undefined;
     if (/(?:\/|%2f)(?:\.|%2e){1,2}(?=\/|%2f|[?#]|$)/i.test(value)) return undefined;
     const url = new URL(value.trim());
     if (!["https:", "http:"].includes(url.protocol) || url.username || url.password || url.port ||

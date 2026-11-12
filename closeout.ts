@@ -1,7 +1,7 @@
 import { parseGithubUrl, parseGithubIssueUrl, githubUrlTokens } from "./github-url.ts";
 import { readGithubWorkspace, githubStatusIsTerminal } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
-import { importerCreatedItem, importIdentityKeys, normalizeImportValue } from "./import-fidelity.ts";
+import { GithubIdentityConflictError, importerCreatedItem, importIdentityKeys, normalizeImportValue } from "./import-fidelity.ts";
 import { assertGithubImportOwner, GithubImportOwnershipError } from "./import-ownership.ts";
 /** Close delivered tracker items using merged pull requests and head-check evidence. */
 import { close, hashDocument, locateItem, readLocatedItem, runWithActiveExtensions, setActiveExtensionHooks, listAllComplete, certifyCompleteListResult, getHistoryPath, readHistoryEntries, verifyHistoryEntries, PmCliError, EXIT_CODE, type ItemDocument } from "@unbrained/pm-cli/sdk";
@@ -26,7 +26,7 @@ export interface CloseoutRow {
 
 /** Stable decisions used by automation and compact skip counts. */
 export type CloseoutCode = "already_terminal" | "other_repository" | "duplicate_selection" | "explicit_skip"
-  | "github_import_owner_conflict"
+  | "github_import_owner_conflict" | "github_identity_conflict"
   | "needs_review" | "unknown_item" | "epic" | "active_children" | "not_delivery" | "close_failed"
   | "head_checks_passed" | "head_checks_failed" | "head_evidence_unavailable" | "required_checks_unverified" | "not_merged" | "incomplete_merge";
 
@@ -40,6 +40,16 @@ export function assertCloseoutGithubOwner(item: ItemDocument["metadata"], repo: 
   if (owners.length && (owners.length !== 1 || !owners[0]!.startsWith(`${repo.toLowerCase()}#`))) {
     throw new GithubImportOwnershipError(item.id, `${repo.toLowerCase()} (delivery repository)`, owners);
   }
+}
+
+/** Convert malformed ownership into one eligible item's outcome, never a run-wide failure. */
+function closeoutOwnershipConflict(item: ItemDocument["metadata"], repo: string): GithubImportOwnershipError | GithubIdentityConflictError | undefined {
+  try { assertCloseoutGithubOwner(item, repo); }
+  catch (error: unknown) {
+    if (!(error instanceof GithubImportOwnershipError || error instanceof GithubIdentityConflictError)) throw error;
+    return error;
+  }
+  return undefined;
 }
 
 /** Which head-check policy was evaluated for one selected pull request. */
@@ -626,15 +636,12 @@ async function closeoutAttempt(pmPath: string, repo: string | undefined, options
     }
     for (const ref of refs) {
       const role = deliveryRole(ref.declared, items.get(ref.item)?.tags.includes(`delivery-pr:${pr.html_url}`) === true, commitsReadable);
-      let ownershipConflict: GithubImportOwnershipError | undefined;
-      if (items.has(ref.item)) try { assertCloseoutGithubOwner(items.get(ref.item)!, repo); }
-      catch (error: unknown) { if (!(error instanceof GithubImportOwnershipError)) throw error; ownershipConflict = error; }
+      let ownershipConflict: GithubImportOwnershipError | GithubIdentityConflictError | undefined;
       let reason: string;
       let code: CloseoutCode;
       if (ref.repo.toLowerCase() !== repo.toLowerCase()) { code = "other_repository"; reason = "Link points to another repository."; }
       else if (!items.has(ref.item)) { code = "unknown_item"; reason = "Item does not exist in the tracker."; }
       else if (skip.has(ref.item)) { code = "explicit_skip"; reason = "Explicitly excluded by --skip."; }
-      else if (ownershipConflict) { code = "github_import_owner_conflict"; reason = ownershipConflict.message; }
       else if (githubStatusIsTerminal(items.get(ref.item)!.status, workspace.statuses)) { code = "already_terminal"; reason = "Item is already closed or canceled."; }
       else if (pr.merged === false) { code = "not_merged"; reason = "Pull request is confirmed unmerged and cannot deliver this item."; }
       else if (isEpic(items.get(ref.item)!.type)) { code = "epic"; reason = "Epics close when their children are done, not by a pull request."; }
@@ -643,6 +650,7 @@ async function closeoutAttempt(pmPath: string, repo: string | undefined, options
         code = "not_delivery";
         reason = "Mentioned, not delivered. A mention is not delivery. This fully inspected PR has no delivery claim and is context only.";
       }
+      else if ((ownershipConflict = closeoutOwnershipConflict(items.get(ref.item)!, repo))) { code = ownershipConflict.code; reason = ownershipConflict.message; }
       else if (!gate.ok) { code = gate.code; reason = gate.reason; }
       else if (role === "unresolved") { code = "head_evidence_unavailable"; reason = "Commit delivery evidence unavailable or incomplete."; }
       else {

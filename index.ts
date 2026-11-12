@@ -252,7 +252,7 @@ export interface AtomicImportOptions {
   onPlanStaged?: GithubStateWriteOptions["onStaged"];
   /** Refuse unmatched entries and emit updates only, including deterministic imported ids. */
   updateOnly?: boolean;
-  /** Enforce the preflight verdict for a fresh public import too. */
+  /** Require complete side data for gated callers; every atomic import requires passing privacy preflight. */
   gate?: boolean;
   /** Recover issue dependency side effects from the recorded source bodies. */
   linkDeps?: boolean;
@@ -1604,6 +1604,10 @@ export interface GithubImportCommitResult {
   recoveredItems?: number;
   /** Dependency receipts from the original persisted plan. */
   depLink?: DepLinkResult;
+  /** Native annotation failures are best-effort after the item transaction commits. */
+  commentWriteFailures?: number;
+  /** Entries whose annotations this transaction already attempted, including failed attempts. */
+  annotationIssueNumbers?: number[];
   /** Post-commit routing map from GitHub issue number to pm item id. */
   itemIds: Map<number, string>;
 }
@@ -1783,7 +1787,6 @@ async function commitGithubImportTransactionUnchecked(config: {
     for (const entry of entries) if (entry.syncAnnotations) {
       commentFailures += (await syncGithubCommentsToAnnotations(itemIds.get(entry.issueNumber)!, entry.comments, pmRoot, entry.issueNumber)).failed;
     }
-    if (commentFailures) throw new CommandError(`${commentFailures} planned write(s) failed while synchronizing original comments; retry the recorded transaction.`);
     const depLink = opts.linkDeps ? await linkImportedDependencies(config.repo, opts.dependencyIssues ?? entries.map(entry => ({
       number: entry.issueNumber, title: entry.title, body: entry.sourceBody ?? entry.body,
       state: entry.fidelity?.github_state === "closed" ? "closed" : "open", labels: [], assignee: null, milestone: null,
@@ -1797,6 +1800,7 @@ async function commitGithubImportTransactionUnchecked(config: {
     return {
       transactionId,
       recovered,
+      ...(entries.some(entry => entry.syncAnnotations) ? { commentWriteFailures: commentFailures, annotationIssueNumbers: entries.filter(entry => entry.syncAnnotations).map(entry => entry.issueNumber) } : {}),
       ...(depLink ? { depLink } : {}),
       imported: recovered ? 0 : entries.filter((entry) => !entry.match?.id).length,
       updated: recovered ? 0 : entries.filter((entry) => Boolean(entry.match?.id)).length,
@@ -1808,7 +1812,8 @@ async function commitGithubImportTransactionUnchecked(config: {
     const sdkCode = errorContext && typeof errorContext === "object" && "code" in errorContext ? errorContext.code : undefined;
     const reservedIdentity = sdkCode === "item_identity_reserved";
     const mismatchedPlan = sdkCode === "transaction_plan_mismatch";
-    // A committed journal can still need original comments or finalization.
+    // A committed journal can still need source finalization. Annotation failures
+    // are reported separately and never retain a committed item plan for replay.
     // Only known compensation or a failure before journal creation permits cleanup;
     // an unreadable journal cannot establish that recovery has finished.
     if (!committed && !reservedIdentity && !mismatchedPlan) {
@@ -1914,12 +1919,13 @@ export async function importGithubAtomic(
   // Save all producer modes, before any SDK mutation, with their original targets.
   if (opts.updateOnly) for (const entry of entries) validateGithubImportFidelity(entry, repo, `GitHub transaction ${transactionId}`);
   const preflight = scanGithubImportPreflight(pmRoot, entries, mutations);
-  if (opts.gate && preflight.verdict !== "pass") throw new GithubImportRecoveryError("github_import_preflight_failed", "GitHub import privacy preflight failed; no item was written.");
+  if (preflight.verdict !== "pass") throw new GithubImportRecoveryError("github_import_preflight_failed", "GitHub import privacy preflight failed; no item was written.");
   const plan = { transactionId, repo: repo.toLowerCase(), preflight, entries, mutations, updateOnly: Boolean(opts.updateOnly), ...(opts.linkDeps ? { linkDeps: true, dependencyIssues: opts.dependencyIssues } : {}), itemIds: [...itemIds] };
   validateGithubImportPlan(plan);
   await persistGithubImportPlan(pmRoot, plan, opts.onPlanStaged);
   const result = await commitGithubImportTransaction({ pmRoot, repo, entries, mutations, transactionId, itemIds, opts, commit });
   await removeGithubImportPlan(pmRoot, transactionId);
+  failClosedOnPlanDivergence(opts.gate === true, 0, 0, result.commentWriteFailures ?? 0);
   return result;
 }
 
@@ -2019,6 +2025,7 @@ export async function resumeGithubImport(
     transactionId: record.transactionId, itemIds, opts: { ...opts, updateOnly: record.updateOnly !== false, linkDeps: record.linkDeps, dependencyIssues: record.dependencyIssues }, commit,
   });
   await removeGithubImportPlan(pmRoot, record.transactionId);
+  failClosedOnPlanDivergence(opts.gate === true, 0, 0, result.commentWriteFailures ?? 0);
   return result;
 }
 
@@ -3034,16 +3041,27 @@ export function parseDependencyReferences(body: string, sourceRepo: string): Par
   return out;
 }
 
-/** Build a `repo#number` → pm item id index from an item-metadata snapshot. */
+/** Index only unique ownership; expose ambiguous keys without selecting an arbitrary claimant. */
 export function buildProvenanceIndexFromMetadata(
   items: readonly DepLinkSnapshotItem[],
+  ambiguities: Map<string, string[]> = new Map(),
 ): Map<string, string> {
-  const index = new Map<string, string>();
+  const owners = new Map<string, Set<string>>();
+  const invalid = new Set<string>();
   for (const item of items) {
     if (!item.id) continue;
-    for (const key of importIdentityKeys(item)) {
-      if (!index.has(key)) index.set(key, item.id);
+    const keys = importIdentityKeys(item, { allowConflicts: true });
+    for (const key of keys) {
+      const claimants = owners.get(key) ?? new Set<string>();
+      claimants.add(item.id);
+      owners.set(key, claimants);
+      if (keys.length !== 1) invalid.add(key);
     }
+  }
+  const index = new Map<string, string>();
+  for (const [key, claimants] of owners) {
+    if (claimants.size === 1 && !invalid.has(key)) index.set(key, [...claimants][0]!);
+    else ambiguities.set(key, [...claimants].sort());
   }
   return index;
 }
@@ -3196,7 +3214,13 @@ export async function linkImportedDependencies(
     };
   }
 
-  const provenance = buildProvenanceIndexFromMetadata(before);
+  const ambiguities = new Map<string, string[]>();
+  const provenance = buildProvenanceIndexFromMetadata(before, ambiguities);
+  const referenced = new Set(issues.flatMap(issue => [`${repo.toLowerCase()}#${issue.number}`,
+    ...parseDependencyReferences(issue.body ?? "", repo).map(ref => `${ref.repo}#${ref.number}`)]));
+  for (const [key, owners] of ambiguities) if (referenced.has(key)) {
+    failures.push(`ambiguous_github_dependency_owner: ${key} is claimed by ${owners.join(", ")}; no edge may use this key. Correct the explicit provenance before retrying.`);
+  }
   const { edges, unresolved } = planDependencyLinks(repo, issues, provenance);
   if (edges.length === 0) {
     return { linked: 0, unresolved, orderingCycleWarnings: [], failures };
@@ -3590,9 +3614,10 @@ export async function runImport(
     assertGithubImportReplayPreflight(recoveryRoot, record);
   });
   if (recovered) {
+    failClosedOnPlanDivergence(opts.gate, 0, 0, recovered.commentWriteFailures ?? 0);
     if (opts.gate) gateImportWrites(recoveryRoot);
     return { transactionId: recovered.transactionId, recovered: recovered.recovered, recoveredItems: recovered.recoveredItems,
-      imported: recovered.imported, updated: recovered.updated, adopted: 0, skipped: 0, atomic: true, replayedOriginalPlan: true, ...depLinkResultFields(recovered.depLink) };
+      imported: recovered.imported, updated: recovered.updated, adopted: 0, skipped: 0, atomic: true, replayedOriginalPlan: true, ...(recovered.commentWriteFailures ? { commentWriteFailures: recovered.commentWriteFailures } : {}), ...depLinkResultFields(recovered.depLink) };
   }
   const selectedNumbers = opts.issue === undefined ? undefined : parseIssueNumbers(repo, opts.issue);
 
@@ -3838,9 +3863,10 @@ export async function runImport(
     // a refused add, or a committed entry whose created id is missing from the
     // post-commit routing map all leave planned comments unwritten, so they are
     // counted and gated runs fail closed below instead of exiting clean.
-    let commentWriteFailures = 0;
+    let commentWriteFailures = "commentWriteFailures" in result ? result.commentWriteFailures ?? 0 : 0;
+    const synchronized = new Set("annotationIssueNumbers" in result ? result.annotationIssueNumbers : []);
     for (const entry of prepared) {
-      if (!entry.syncAnnotations) continue;
+      if (!entry.syncAnnotations || synchronized.has(entry.issueNumber)) continue;
       const itemId = result.itemIds.get(entry.issueNumber);
       if (itemId) {
         commentWriteFailures += (await syncGithubCommentsToAnnotations(
@@ -3884,6 +3910,7 @@ export async function runImport(
       ...(result.recoveredItems !== undefined ? { recoveredItems: result.recoveredItems } : {}),
       skipped,
       atomic: true,
+      ...(commentWriteFailures ? { commentWriteFailures } : {}),
       ...depLinkResultFields(atomicDepLink),
       ...fetchFields,
       ...planFields,
@@ -4127,7 +4154,7 @@ export async function runImport(
   // pushed; scan the proposed tracker change now and fail closed.
   if (opts.gate) verifyImportedProvenance(await readImportItems(), gatePlan!, repo);
   const gateReceipt = opts.gate ? gateImportWrites(pmRoot) : undefined;
-  return { imported, updated, adopted, skipped, ...fetchFields, ...depLinkResultFields(depLink), ...planFields, ...(gateReceipt ? { gate: gateReceipt } : {}) };
+  return { imported, updated, adopted, skipped, ...(commentWriteFailures ? { commentWriteFailures } : {}), ...fetchFields, ...depLinkResultFields(depLink), ...planFields, ...(gateReceipt ? { gate: gateReceipt } : {}) };
 }
 
 /**

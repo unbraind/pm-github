@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, delimiter, relative } from "node:path";
 import { spawnSync } from "node:child_process";
 import { init, create, get, comments, listAllComplete, commitImportedItem, getItemPath, readSettings, WorkspaceTransactionInterruptedError } from "@unbrained/pm-cli/sdk";
-import { runImport, parseImportOptions, importGithubAtomic, readGithubImportPlan, listUnfinishedGithubImports, planSync, buildExportPlan, parseBlockerReferences, exploreGithubIdentities, prepareGithubImport, type GhIssue } from "../index.ts";
+import { runImport, parseImportOptions, importGithubAtomic, readGithubImportPlan, listUnfinishedGithubImports, planSync, buildExportPlan, parseBlockerReferences, exploreGithubIdentities, prepareGithubImport, scanGithubImportPreflight, type GhIssue } from "../index.ts";
 import { importIdentityKeys, legacyGithubIdentityConflict } from "../import-fidelity.ts";
 import { normalizeGithubRepository, parseGithubIssueUrl, parseGithubUrl } from "../github-url.ts";
 import { selectRefreshTargets, runRefresh } from "../refresh.ts";
@@ -105,14 +105,21 @@ for (const mode of ["failed", "missing", "forged"] as const) test(`recovery pref
     assert.equal(enteredTransaction, false);
     assert.ok(JSON.stringify(snapshot(root)) === JSON.stringify(initial), "Fresh gated refusal must precede transaction and file writes");
   }
-  // A legacy/private attempt can already have a saved plan: gate its recovery too.
-  await assert.rejects(() => importGithubAtomic(root, "fixture/issues", [entry], { onTransition: context => {
+  // Seed a real interrupted clean transaction, then model a previously persisted unsafe plan.
+  const clean = { ...entry, body: source.body ?? "" };
+  await assert.rejects(() => importGithubAtomic(root, "fixture/issues", [clean], { onTransition: context => {
     if (context.transition === "prepared") throw new WorkspaceTransactionInterruptedError("Before the first native mutation");
   } }), /interrupted/);
   const pending = (await listUnfinishedGithubImports(root))[0]!;
   const file = join(root, "transactions/pm-github", `${pending.transactionId}.json`);
   const plan = (await readGithubImportPlan(root, pending.transactionId))!;
-  assert.equal(plan.preflight?.verdict, mode === "missing" ? "pass" : "fail");
+  assert.equal(plan.preflight?.verdict, "pass");
+  if (mode !== "missing") {
+    plan.entries[0]!.body = unsafe.body;
+    for (const mutation of plan.mutations) if (mutation.op === "create" || mutation.op === "update") mutation.options.body = unsafe.body;
+    plan.preflight = scanGithubImportPreflight(root, plan.entries, plan.mutations);
+    assert.equal(plan.preflight.verdict, "fail");
+  }
   if (mode === "missing") delete plan.preflight;
   if (mode === "forged") plan.preflight = { verdict: "pass", scanned_files: 1, findings: 0, allowlisted: 0 };
   writeFileSync(file, JSON.stringify(plan));

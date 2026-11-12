@@ -87,7 +87,7 @@ for (const outcome of ["publish", "failure", "interruption"] as const) test(`con
     if (outcome === "failure") throw Object.assign(new Error("Injected partial state write failure"), { code: "EIO" });
     if (outcome === "interruption") throw new Error("Interrupted before rename");
     await fs.promises.writeFile(staged, JSON.stringify(next));
-    const handle = await fs.promises.open(staged, "r");
+    const handle = await fs.promises.open(staged, "r+");
     try { await handle.sync(); } finally { await handle.close(); }
   } });
   const settled = publishing.then(() => undefined, error => error as Error);

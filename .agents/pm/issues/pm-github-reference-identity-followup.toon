@@ -1,0 +1,26 @@
+id: pm-github-reference-identity-followup
+title: Validate remaining reference-identity review edge cases after PR 233
+description: "Single follow-up for additional review observations after the final fix round. Revalidate remaining identity, recovery, lease and reporting edge cases against the final PR head; do not reopen completed rounds or duplicate covered regressions."
+type: Issue
+status: open
+priority: 2
+tags[3]: "gh:unbraind/pm-github#233","gh:unbraind/pm-github#236",review-followup
+created_at: "2026-11-12T02:00:10.688Z"
+updated_at: "2026-11-12T02:29:56.359Z"
+author: codex-github230-1111
+comments[1]{created_at,author,text}:
+  "2026-11-12T02:01:13.150Z",codex-github230-1111,"Round 7 is the final fix round for #233. This single follow-up consolidates additional review observations, as requested by the orchestrator; it does not assert that every observation reproduces after the round-7 changes. Validate each against the final head, deduplicate covered cases, and retain real SDK must-refuse/must-allow tests plus behavioral revert evidence for any fix.\n\n- [PRRT_kwDOTbN4pM62auBR](https://github.com/unbraind/pm-github/pull/233#discussion_r4544876674): Report import conflicts on the workflow path that produces no tracker diff.\n- [PRRT_kwDOTbN4pM62auBZ](https://github.com/unbraind/pm-github/pull/233#discussion_r4544876686): Validate ambiguous legacy number-only ownership before closeout.\n- [PRRT_kwDOTbN4pM62auBc](https://github.com/unbraind/pm-github/pull/233#discussion_r4544876691): Recover exclusive leases safely when publication succeeds but directory flush fails.\n- [PRRT_kwDOTbN4pM62auBe](https://github.com/unbraind/pm-github/pull/233#discussion_r4544876695): Require an actual matching reference tag before planning tag detachment.\n- [PRRT_kwDOTbN4pM62auBi](https://github.com/unbraind/pm-github/pull/233#discussion_r4544876701): Reconcile contradictory external_ref claims at the import write boundary.\n- [PRRT_kwDOTbN4pM62auBo](https://github.com/unbraind/pm-github/pull/233#discussion_r4544876710): Check partial legacy link markers against an existing repository field.\n- [PRRT_kwDOTbN4pM62auBu](https://github.com/unbraind/pm-github/pull/233#discussion_r4544876718): Avoid retaining an ownership-refused plan when no SDK journal exists.\n- [PRRT_kwDOTbN4pM62auB1](https://github.com/unbraind/pm-github/pull/233#discussion_r4544876728): Scope retained recovery plans to selected refresh IDs without dropping fresh updates.\n- [PRRT_kwDOTbN4pM62auB7](https://github.com/unbraind/pm-github/pull/233#discussion_r4544876736): Handle contradictory identities in blocker self-exclusion; dependency indexing is addressed in round 7.\n- [PRRT_kwDOTbN4pM62auB_](https://github.com/unbraind/pm-github/pull/233#discussion_r4544876746): Use canonical lowercase reference tags in the citation-adoption fixture.\n\nExplicit identity-conflict isolation in closeout and real-tracker dry-run fixtures are already addressed by round 7. Existing curated-reopen, Projects and search follow-ups keep their separate scope. Do not delete append-only tracker evidence or reply to/resolve review threads while implementing this follow-up.\n\nPM: https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-reference-identity-followup.toon"
+files[8]{path,scope}:
+  .github/workflows/pm-github-sync.yml,project
+  closeout.ts,project
+  durable-state.ts,project
+  identity.ts,project
+  import-fidelity.ts,project
+  import-ownership.ts,project
+  index.ts,project
+  test/cited-issue-adoption.test.ts,project
+docs[1]{path,scope}:
+  docs/identity-collisions.md,project
+github_number: 236
+github_url: "https://github.com/unbraind/pm-github/issues/236"
+body: ""

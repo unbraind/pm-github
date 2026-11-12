@@ -163,3 +163,12 @@ for (const alias of ["GitHubURL", "githuburl", "GITHUB_URL", "Github_Url", "gith
     assert.deepEqual(selectRefreshTargets([record], "o/r"), []);
   }
 }));
+
+for (const path of ["8\\..\\7", "8/..\\7", "8\\../7", "8\\7", "8%5c..%5c7"]) test(`GitHub ownership rejects backslash paths before URL normalization (${path})`, () => {
+  for (const prefix of ["https://github.com/o/r/issues/", "https://www.github.com/o/r/pull/", "https://api.github.com/repos/o/r/issues/"]) {
+    assert.equal(parseGithubIssueUrl(prefix + path), undefined);
+  }
+  assert.equal(parseGithubIssueUrl("https://github.com/o/r/issues/7?query=\\example#fragment")?.number, 7);
+  assert.equal(parseGithubIssueUrl("https://github.com/o/r/pull/7/")?.number, 7);
+  assert.equal(parseGithubIssueUrl("https://github.com/o/r/issues/8/../7"), undefined);
+});

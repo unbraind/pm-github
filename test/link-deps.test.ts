@@ -134,12 +134,14 @@ test("indexes items by their explicit import identity", () => {
   assert.strictEqual(index.size, 2);
 });
 
-test("first writer wins on a duplicated explicit import identity", () => {
+test("duplicated explicit import identities remain unresolved", () => {
   const items: DepLinkSnapshotItem[] = [
     { id: "pm-1", github_url: "https://github.com/acme/widgets/issues/1", tags: ["gh:acme/widgets#1"] },
     { id: "pm-dup", github_url: "https://github.com/acme/widgets/issues/1", tags: ["gh:acme/widgets#1"] },
   ];
-  assert.strictEqual(buildProvenanceIndexFromMetadata(items).get("acme/widgets#1"), "pm-1");
+  const ambiguous = new Map<string, string[]>();
+  assert.strictEqual(buildProvenanceIndexFromMetadata(items, ambiguous).has("acme/widgets#1"), false);
+  assert.deepEqual(ambiguous.get("acme/widgets#1"), ["pm-1", "pm-dup"]);
 });
 
 // ---------------------------------------------------------------------------

@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import * as sdk from "@unbrained/pm-cli/sdk";
+import { withImportPreview } from "./helpers/import-preview.ts";
+import { withMockGithub, jsonResponse } from "./helpers/mock-github-server.ts";
 
 import {
   CommandError,
@@ -94,7 +96,7 @@ test("parseImportOptions enables atomic mode without changing the default", () =
   assert.strictEqual(parseImportOptions({ atomic: "1" }).atomic, true);
 });
 
-test("atomic dry-run previews creates and updates without invoking the SDK", async () => {
+test("atomic dry-run reads real ownership without committing tracker writes", async () => withImportPreview(async root => {
   const issue = (number: number, title: string): GhIssue => ({
     number,
     title,
@@ -108,25 +110,13 @@ test("atomic dry-run previews creates and updates without invoking the SDK", asy
     updated_at: "2026-07-21T00:00:00Z",
     html_url: `https://github.com/acme/widgets/issues/${number}`,
   });
-  let sdkCalls = 0;
   const messages: string[] = [];
   const originalError = console.error;
   console.error = (...values: unknown[]) => messages.push(values.join(" "));
   try {
-    const result = await runImport(
-      "acme/widgets",
-      "/unused-dry-run-workspace",
-      parseImportOptions({ atomic: true, dryRun: true }),
-      {
-        resolveToken: () => undefined,
-        fetchIssues: async () => [issue(1, "New"), issue(2, "Existing"), issue(3, "   ")],
-        readItems: () => [{ id: "existing-id", github_url: "https://github.com/acme/widgets/issues/2", tags: ["gh:acme/widgets#2"] }],
-        commitAtomic: async () => {
-          sdkCalls++;
-          throw new Error("atomic dry-run must not call the SDK commit path");
-        },
-      },
-    );
+    const result = await withMockGithub((request, response) => {
+      jsonResponse(response, 200, request.url?.includes("/timeline") ? [] : [issue(1, "New"), issue(2, "Existing"), issue(3, "   ")]);
+    }, () => runImport("acme/widgets", root, parseImportOptions({ atomic: true, dryRun: true }), { resolveToken: () => undefined }));
 
     assert.deepStrictEqual(result, {
       dryRun: true,
@@ -136,12 +126,11 @@ test("atomic dry-run previews creates and updates without invoking the SDK", asy
       wouldSkip: 1,
       atomic: true,
     });
-    assert.strictEqual(sdkCalls, 0);
     assert.ok(messages.some((message) => /Atomic plan would import 1, update 1, skip 1/.test(message)));
   } finally {
     console.error = originalError;
   }
-});
+}));
 
 test("transaction identity is content-sensitive and independent of fetch order", () => {
   const first = entry(1, "First");
