@@ -1525,7 +1525,7 @@ export function buildAtomicImportMutations(
     const mutations: BulkItemMutation[] = [{
       op: "create",
       id: managedItemId,
-      options: { ...sharedOptions, status: createStatus, message: `pm-github import create ${repo.toLowerCase()}#${entry.issueNumber}` },
+      options: { ...sharedOptions, author: "pm-github", status: createStatus, message: `pm-github import create ${repo.toLowerCase()}#${entry.issueNumber}` },
     }, {
       op: "update",
       id: managedItemId,
@@ -1868,7 +1868,7 @@ async function commitGithubImportTransaction(config: Parameters<typeof commitGit
 
 /** Carry a verified first-link decision without letting it override an existing GitHub owner. */
 export function githubImportTarget(repo: string, entry: PreparedGithubImport, id: string, allowCreate = false): GithubOwnedTarget {
-  return { id, repo, number: entry.issueNumber, allowCreate,
+  return { id, repo, number: entry.issueNumber, allowCreate, mirrorContent: !entry.linkOnly && !entry.preserveContent,
     ...(entry.match?.id === id && entry.identity?.via && entry.identity.via !== "new" && importIdentityKeys(entry.match).length === 0 ? {
       initialLink: (item: PmItem) => matchImportedIssue([item], {
         number: entry.issueNumber, html_url: entry.fidelity!.github_url, body: entry.sourceBody ?? entry.body,
@@ -1920,7 +1920,7 @@ export async function importGithubAtomic(
     const target = githubImportTarget(repo, entry, id, !opts.updateOnly && !entry.match?.id);
     await readGithubImportOwner(pmRoot, target);
     if (!entry.linkOnly && !entry.preserveContent) {
-      try { assertGithubImportOwner({ id, description: entry.description, tags: importTagValues(entry) }, target); }
+      try { assertGithubImportOwner({ id, author: "pm-github", description: entry.description, tags: importTagValues(entry) }, target); }
       catch (error: unknown) {
         if (!(error instanceof GithubImportOwnershipError)) throw error;
         throw new GithubImportRecoveryError("github_import_plan_ownership_invalid", `Import plan for ${repo.toLowerCase()}#${entry.issueNumber} does not retain import ownership through its content updates. Build it with prepareGithubImport or retain its generated source description and reference tag. No item was written.`);
@@ -3771,7 +3771,7 @@ export async function runImport(
       const target = githubImportTarget(repo, entry,
         entry.match?.id ?? deriveAtomicItemId(repo, entry.issueNumber, workspace.settings.id_prefix, sdkNormalizeItemId), !entry.match?.id);
       await readGithubImportOwner(pmRoot, target);
-      if (!entry.match?.id) assertGithubImportOwner({ id: target.id, description: entry.description, tags: importTagValues(entry) }, target);
+      if (!entry.match?.id) assertGithubImportOwner({ id: target.id, author: "pm-github", description: entry.description, tags: importTagValues(entry) }, target);
     }
     if (opts.gate) {
       gateCompleteness = verifyImportPlanCompleteness(filtered, planned, skippedNumbers);
@@ -4056,7 +4056,7 @@ export async function runImport(
     const mustClose = canonicalGithubStatus(status, workspace.statuses) === canonicalGithubStatus("closed", workspace.statuses);
     const destination = deriveAtomicItemId(repo, issue.number, workspace.settings.id_prefix, sdkNormalizeItemId);
     const created = await ownedPmRun(destination, "create", {
-      title, type: opts.itemType, status: createStatus, description, body, ...importTagOptions(prepared),
+      title, type: opts.itemType, author: "pm-github", status: createStatus, description, body, ...importTagOptions(prepared),
       message: `Imported from GitHub #${issue.number}`,
       ...(canonicalGithubStatus(status, workspace.statuses) === canonicalGithubStatus("canceled", workspace.statuses) ? { closeReason: prepared.fidelity!.github_close_reason } : {}),
       ...(assignee ? { assignee } : {}), ...(milestone ? { sprint: milestone } : {}),

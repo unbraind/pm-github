@@ -7,9 +7,9 @@ status: in_progress
 priority: 2
 tags[1]: "gh:unbraind/pm-github#230"
 created_at: "2026-11-11T10:19:25.073Z"
-updated_at: "2026-11-12T07:47:11.557Z"
+updated_at: "2026-11-12T09:15:20.311Z"
 author: codex-github230-1111
-comments[49]{created_at,author,text}:
+comments[53]{created_at,author,text}:
   "2026-11-11T10:19:28.756Z",codex-github230-1111,"Read issue 230 and all comments. Branch starts from main; PR229 changes workflows and docs separately. Plan: distinguish explicit importer identity from references, preserve curated linked content, retain legacy persisted provenance, and prove behavior with real SDK trackers and behavioral reverts. Task-specific gate budget applies: focused importer/sync/dependent tests, lint and typecheck; full suite only within 45 minutes."
   "2026-11-11T10:24:30.654Z",codex-github230-1111,"Implemented separate durable import identity lookup; shared gh references no longer select owners or collide. Curated links merge provenance/lifecycle while deterministic importer records mirror content. New real SDK regressions pass 9/9, including no-git curated links and byte-identical legacy resync beside shared references. Reviewing existing tests that assumed tag-only ownership; updating mirror fixtures to explicit importer identities."
   "2026-11-11T10:33:45.352Z",codex-github230-1111,"Behavioral revert proof in a disposable package copy: rebuilt after restoring released matchImportedIssue, prepareGithubImport and verifyImportIdempotency plus tag-only identity lookup. node --test --test-concurrency=2 test/reference-import-identity.test.ts: 14 tests, 13 fail, 1 pass. All four required scenarios fail: single curated Chore, shared references, mirror title refresh beside a reference, and byte-identical legacy resync beside a reference. The passing legacy link-marker case is existing supported behavior. Package worktree was never reverted. Fixed regressions are being rerun through pm test; full npm test follows within the task budget."
@@ -59,7 +59,11 @@ comments[49]{created_at,author,text}:
   "2026-11-12T07:20:14.799Z",codex-github230-1111,"Round 8 compatibility note: the stricter claim rule intentionally changes earlier permissive cases where a provenance-bearing item referenced a different issue or repository. Those records now refuse with github_import_owner_conflict, keep their native item/history bytes and do not create a competing import. Reference-only records remain shareable. Updated the earlier round-two/three and reference regression expectations to match this extended contract. Plain creates and all owned mutations now use guarded native SDK writes; command-failure fixtures use real SDK policy refusals instead of child-CLI interception. The aggregate closeout workflow command reached its 20-minute cap after 49 passing cases and one canceled file wrapper; CI must certify its remaining workflow matrix."
   "2026-11-12T07:43:53.586Z",codex-github230-1111,"Round 8 revert proof, using disposable source copies and real SDK trackers: node --test --test-concurrency=1 --test-name-pattern \"^Ownership matrix (?:match|plain|atomic|closeout|replay): refuses\" test/ownership-consistency.test.ts fails 70/70 when the changed ownership functions are reverted, including matchImportedIssue and the closeout check. Reverting only uniqueness in assertGithubOwnershipConsistency makes all four \"^Ownership matrix locked\" cases fail. Reverting commitGithubImportTransaction plan cleanup makes \"^Ownership preflight removes\" fail 1/1. Reverting removeGithubImportPlan directory flushing makes \"^Recovery-plan deletion flushes\" fail 1/1. Restoring the implementation passes 82/82. The same 82-case matrix passed through pm test --run --only-index 74 --progress --timeout 1200; native policy-failure coverage passes 25/25. Removed the auxiliary PR tag from this issue-owned item so every identity claim agrees on issue 230; PR 233 remains a docs reference. Item/history and native state are never repaired or rewritten."
   "2026-11-12T07:47:10.726Z",codex-github230-1111,"Round 8 final local evidence: 58 selected test files, using at most two total workers and a 1200-second command cap. Effective distinct outcomes after the documented reruns: 1422 reported tests, 1419 passed, zero assertion failures, two existing SDK-related skips, one canceled aggregate closeout-workflow wrapper at its 20-minute cap (49 workflow cases passed before cancellation). CI certifies the remaining workflow decision matrix and full release gates. The 82-case ownership matrix passes through pm on both Node and Bun; 76 refusal/durability assertions fail on their corresponding behavioral reverts (70 ownership shapes, four late claims, plan cleanup, directory flush), and restoration passes 82/82. Native policy-failure coverage passes 25/25. Build, test compilation, lint, typecheck, docstrings and duplication passed; 33 authored modules have zero duplicated lines. All 61 initial scoped command variants are already linked among the 75 item tests. Read the complete 38-thread snapshot, all five scoped threads with agent prompts, and the one scoped outside-diff comment. Deferred findings remain in issue 236; no review replies or resolutions were made. The ownership corpus read can create derived SDK caches, so fresh atomic privacy preflight now runs before that read; the real-tracker fresh/replayed privacy regressions pass 29/29. Existing audit histories remain append-only. Exact-head CI evidence: https://github.com/unbraind/pm-github/pull/233/checks ."
-files[51]:
+  "2026-11-12T08:41:04.182Z",codex-github230-1111,"Round 9 resumes from bd8d52d with a clean worktree. Current main is already merged. Read the three blocking CodeRabbit threads and agent prompts: follow-up reference tag, durable creation proof, and SDK 2026.10.17 compilation. Scope stays limited to those findings; the three non-blocking observations remain in issue 236. Plan: replace stray PR tags with docs references across changed tracker records, separate creation provenance from item naming and issue ownership, and retain revision fencing through a typed minimum-SDK fallback. Run the four scoped real-tracker suites plus current/floor typecheck, lint and changelog checks under 20-minute command limits."
+  "2026-11-12T08:59:05.505Z",codex-github230-1111,"Round 9: the 90-case matrix passes. Audited all seven tracker records added or changed by this PR; moved six contextual parent issue/PR tags to docs links, retaining only matching issue-230 and issue-236 identity tags. Creation proof now uses package author or an explicit github_import boolean, never an ID. New creates record pm-github as creator, and locked writes refuse an original mirroring plan if its target loses creation proof. Unknown-origin legacy records keep identity compatibility but preserve curated content. The isolated minimum-SDK job found both the GetResult.item_hash field and PmClient.withExpectedItemRevisions method unavailable at SDK 2026.10.17. Replaced them with native document/hash reads and a locked revision check using APIs available at that floor. The packed consumer now compiles all production/operational sources and declarations, exercises an owned update, and refuses a stale revision at SDK 2026.10.17. No SDK floor or dependency pins were raised. Scoped suite reruns retain the existing diagnostics for curated collisions and missing items."
+  "2026-11-12T09:15:18.711Z",codex-github230-1111,"Round 9 revert proof in disposable copies: adding the former PR-233 tag back through the SDK makes the PR tracker audit fail 1/1; removing it restores 1/1. Reverting only importerCreatedItem to its ID-suffix implementation makes all seven Creation proof tests fail: two curated-ID cases, four provenance-backed non-pattern-ID controls, and a stale mirroring-plan refusal. Restoring it passes 7/7. Restoring the previous readGithubImportOwner and mutateGithubOwnedItem makes timeout 1200 npm run test:minimum-sdk fail with TS2339 for both GetResult.item_hash and PmClient.withExpectedItemRevisions at SDK 2026.10.17; restoring the native document/hash and locked revision guard passes the same floor job. Final restored matrix: 90/90. The data revert and restoration used native append-only SDK mutations; no existing history record was rewritten."
+  "2026-11-12T09:15:19.533Z",codex-github230-1111,"Round 9 final local gates: ownership-consistency 90/90 on Node and Bun through pm; import-ownership 26/26; import-fidelity 53 passed plus one existing pm-cli#1656 skip; closeout 93/93. Four-file total: 263 reported, 262 passed, one existing skip, no failures or cancellations. timeout 1200 npm run test:minimum-sdk passes 1/1 through pm against exact SDK 2026.10.17, including all authored source/declaration typechecks, a guarded owned update and stale-revision refusal. Current build, test compilation, lint and typecheck pass; docstrings, zero duplication and privacy checks pass. All test commands stayed below 20 minutes with at most two workers. Read 45 complete thread inventory entries and the full three scoped blocking threads with their agent prompts. No thread replies or resolutions were made. All seven PR tracker records were audited; six contextual references became docs links, while the matching issue-230/236 tags remain. The other three findings stay deferred to issue 236. Exact-head release certification remains CI: https://github.com/unbraind/pm-github/pull/233/checks ."
+files[52]:
   - path: .github/workflows/pm-github-sync.yml
     scope: project
   - path: closeout.ts
@@ -77,15 +81,15 @@ files[51]:
     note: Reuse normalized GitHub claim helper
   - path: import-fidelity.ts
     scope: project
-    note: Consistent partial legacy and legacy links
+    note: Durable creator provenance replaces naming-based mirroring
   - path: import-ownership.ts
     scope: project
-    note: Current claims checked under SDK item locks
+    note: Minimum-SDK native document hash and locked revision fence
   - path: import-tags.ts
     scope: project
   - path: index.ts
     scope: project
-    note: Replay provenance and journal-aware durable cleanup
+    note: Persist package creator and bind mirroring permission
   - path: projects.ts
     scope: project
   - path: refresh.ts
@@ -119,6 +123,7 @@ files[51]:
     scope: project
   - path: test/helpers/import-mirror.ts
     scope: project
+    note: Real importer creation provenance in mirror fixtures
   - path: test/helpers/import-preview.ts
     scope: project
   - path: test/identity.test.ts
@@ -143,9 +148,12 @@ files[51]:
     scope: project
   - path: test/link-deps.test.ts
     scope: project
+  - path: test/minimum-sdk-consumer.test.ts
+    scope: project
+    note: Packed SDK floor typecheck and guarded write runtime probe
   - path: test/ownership-consistency.test.ts
     scope: project
-    note: Round 8 native ownership matrix
+    note: Creator proof and all changed tracker record reference audits
   - path: test/reference-import-identity.test.ts
     scope: project
     note: Contradictory linked references refuse without mutation
@@ -176,7 +184,7 @@ files[51]:
     scope: project
   - path: webhooks.ts
     scope: project
-tests[75]:
+tests[76]:
   - command: node --test --test-concurrency=2 test/reference-import-identity.test.ts test/import-conflict-report.test.ts
     scope: project
     timeout_seconds: 1200
@@ -778,6 +786,14 @@ tests[75]:
     provenance:
       author: codex-github230-1111
       created_at: "2026-11-12T07:43:54.484Z"
+      source_kind: local_mutation
+      source_ref: fix/reference-tags-are-not-import-identity
+  - command: "timeout 1200 npm run test:minimum-sdk"
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-github230-1111
+      created_at: "2026-11-12T09:05:21.342Z"
       source_kind: local_mutation
       source_ref: fix/reference-tags-are-not-import-identity
 docs[5]:

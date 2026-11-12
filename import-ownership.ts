@@ -1,12 +1,13 @@
 /** Positive ownership checks at planning and the SDK's locked mutation boundary. */
 import { AsyncResource } from "node:async_hooks";
 import {
-  get, PmClient, listAllItemMetadata, EXIT_CODE, PmCliError, getActiveExtensionRegistrations, runWithActiveExtensions, setActiveExtensionHooks,
+  PmClient, listAllItemMetadata, locateItem, readLocatedItem, hashDocument, EXIT_CODE, PmCliError, getActiveExtensionRegistrations, runWithActiveExtensions, setActiveExtensionHooks,
   setActiveExtensionRegistrations, runActiveBeforeMutationHooks, runActiveOnReadHooks,
   runActiveOnWriteHooks, runActiveOnIndexHooks,
 } from "@unbrained/pm-cli/sdk";
 import { normalizeGithubClaim, normalizeGithubRepository, parseGithubIssueUrl } from "./github-url.ts";
-import { importIdentityKeys, legacyGithubLinkClaims } from "./import-fidelity.ts";
+import { importIdentityKeys, legacyGithubLinkClaims, importerCreatedItem } from "./import-fidelity.ts";
+import { readGithubWorkspace } from "./workspace.ts";
 import type { PmItem } from "./index.ts";
 
 const OWNER_REMEDY = "Restore the intended GitHub provenance only if this item belongs to that issue; otherwise use a different configured ID prefix or tracker. Keep the existing item and history. Reference tags do not grant ownership.";
@@ -38,6 +39,10 @@ export interface GithubOwnedTarget {
   repo: string;
   number: number;
   allowCreate?: boolean;
+  /** Full content updates require durable creation provenance, even on replay. */
+  mirrorContent?: boolean;
+  /** Minimum-SDK revision fencing is evaluated inside the native item lock. */
+  expectedHash?: string;
   initialLink?: (item: PmItem) => boolean;
 }
 
@@ -86,6 +91,9 @@ export function assertGithubOwnershipConsistency(item: PmItem, target?: GithubOw
 export function assertGithubImportOwner(item: PmItem, target: GithubOwnedTarget, peers: readonly PmItem[] = []): void {
   const expected = `${target.repo.toLowerCase()}#${target.number}`;
   const owners = assertGithubOwnershipConsistency(item, target, peers);
+  if (target.mirrorContent && !importerCreatedItem(item, target.repo, target.number)) {
+    throw new GithubImportOwnershipError(target.id, expected, [...owners, "curated/unowned for content mirroring; importer creation provenance missing"]);
+  }
   if (owners.length === 1 && owners[0] === expected) return;
   if (owners.length === 0 && target.initialLink?.(item)) return;
   throw new GithubImportOwnershipError(target.id, expected, owners);
@@ -93,17 +101,17 @@ export function assertGithubImportOwner(item: PmItem, target: GithubOwnedTarget,
 
 /** Read ownership and the revision used to fence a following native write from the same snapshot. */
 export async function readGithubImportOwner(pmRoot: string, target: GithubOwnedTarget): Promise<string | undefined> {
-  let result: Awaited<ReturnType<typeof get>>;
-  try { result = await get(target.id, {}, { pmRoot, noExtensions: true }); }
-  catch (error: unknown) {
-    if (target.allowCreate && error && typeof error === "object" && "exitCode" in error && error.exitCode === EXIT_CODE.NOT_FOUND) {
-      assertGithubOwnershipConsistency({ id: target.id }, target, await listAllItemMetadata(pmRoot));
-      return undefined;
-    }
-    throw error;
+  const { pmRoot: root, settings, types } = await readGithubWorkspace(pmRoot);
+  const located = await locateItem(root, target.id, settings.id_prefix, settings.item_format, types.type_to_folder);
+  if (!located) {
+    if (!target.allowCreate) throw new PmCliError(`Item ${target.id} not found. GitHub import requires its intended item and history; restore them before retrying.`, EXIT_CODE.NOT_FOUND, { code: "item_not_found" });
+    assertGithubOwnershipConsistency({ id: target.id }, target, await listAllItemMetadata(root, settings.item_format, types.type_to_folder, undefined, settings.schema));
+    return undefined;
   }
-  assertGithubImportOwner(result.item, target, await listAllItemMetadata(pmRoot));
-  return result.item_hash;
+  const { document } = await readLocatedItem(located, { schema: settings.schema });
+  assertGithubImportOwner({ ...document.metadata, body: document.body }, target,
+    await listAllItemMetadata(root, settings.item_format, types.type_to_folder, undefined, settings.schema));
+  return hashDocument(document);
 }
 
 /** Preserve ambient hooks while adding positive ownership checks inside every target item lock. */
@@ -130,6 +138,9 @@ export async function withGithubImportOwners<T>(pmRoot: string, targets: readonl
         const target = id && byId.get(id);
         if (target) {
           try {
+            if (target.expectedHash && context.before && hashDocument(context.before) !== target.expectedHash) {
+              return { allow: false, code: "item_revision_conflict", message: `GitHub import target ${target.id} changed after its ownership read (expected revision ${target.expectedHash}, current ${hashDocument(context.before)}).`, remediation: "Read the current item and retry against its intended ownership and revision." };
+            }
             const peers = await context.sdk.list();
             for (const document of [context.before, context.after]) if (document) {
               assertGithubImportOwner({ ...document.metadata, body: document.body }, target, peers);
@@ -148,12 +159,9 @@ export async function withGithubImportOwners<T>(pmRoot: string, targets: readonl
 /** Run plain owned writes through native SDK locks, revisions and the same ownership hook as replay. */
 export async function mutateGithubOwnedItem(pmRoot: string, target: GithubOwnedTarget, action: "create" | "update" | "close", options: Record<string, unknown>, expectedHash?: string): Promise<unknown> {
   const hash = expectedHash ?? await readGithubImportOwner(pmRoot, target);
-  return withGithubImportOwners(pmRoot, [target], async () => {
+  return withGithubImportOwners(pmRoot, [{ ...target, expectedHash: hash }], async () => {
     const client = PmClient.forActiveExtensionHost({ pmRoot, noExtensions: true });
-    const write = () => client.run(action, action === "create"
+    return client.run(action, action === "create"
       ? { options: { ...options, id: target.id } } : { id: target.id, options });
-    if (hash === undefined) return write();
-    const outcome = await client.withExpectedItemRevisions([{ id: target.id, itemHash: hash }], write);
-    return outcome.result;
   });
 }

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, dirname, delimiter } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
-  init, create, get, readSettings, mutateItem, getItemPath, getHistoryPath, normalizeItemId,
+  init, create, get, docs as nativeDocs, readSettings, mutateItem, getItemPath, getHistoryPath, normalizeItemId,
   listAllComplete, WorkspaceTransactionInterruptedError, runWithActiveExtensions, setActiveExtensionHooks,
 } from "@unbrained/pm-cli/sdk";
 import {
@@ -15,7 +15,7 @@ import {
   type GhIssue,
 } from "../index.ts";
 import { fetchImportTimeline, matchImportedIssue } from "../import-fidelity.ts";
-import { mutateGithubOwnedItem } from "../import-ownership.ts";
+import { mutateGithubOwnedItem, assertGithubOwnershipConsistency, githubOwnershipClaims } from "../import-ownership.ts";
 import { runCloseout } from "../closeout.ts";
 import { withEnv, captureStderr, withMockGithub, jsonResponse } from "./helpers/mock-github-server.ts";
 
@@ -24,14 +24,14 @@ const source: GhIssue = { number: 7, title: "Remote updated", body: "Public sour
   assignee: null, milestone: null, created_at: "2025-01-01T00:00:00Z", updated_at: "2025-02-01T00:00:00Z", html_url: "https://github.com/o/r/issues/7" };
 
 /** Native tracker without git, except the two explicit gated-replay fixtures. */
-async function tracker(run: (root: string, id: string) => Promise<void>, git = false, managed = true) {
+async function tracker(run: (root: string, id: string) => Promise<void>, git = false, managed = true, createdByImporter = managed) {
   const directory = mkdtempSync(join(tmpdir(), "github-consistency-"));
   const root = join(directory, "tracker");
   try {
     if (git) assert.equal(spawnSync("git", ["init", "-q"], { cwd: directory }).status, 0);
     await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { pmRoot: root, cwd: directory, noExtensions: true });
     const id = managed ? deriveAtomicItemId(repo, 7, (await readSettings(root)).id_prefix, normalizeItemId) : normalizeItemId("curated", (await readSettings(root)).id_prefix);
-    await create({ id, title: "Original local title", type: "Issue", body: "Original local body", status: "in_progress",
+    await create({ id, author: createdByImporter ? "pm-github" : "fixture", title: "Original local title", type: managed && !createdByImporter ? "Chore" : "Issue", body: "Original local body", status: "in_progress",
       description: `GH issue #7: ${source.html_url}`, tags: "gh:o/r#7" }, { pmRoot: root });
     await change(root, id, { github_repo: repo, github_number: 7, github_url: source.html_url });
     await withEnv({ PM_PATH: root, PM_AUTHOR: "fixture", PM_TELEMETRY_SOURCE_CONTEXT: "automation", GITHUB_TOKEN: "fixture-token", GH_TOKEN: undefined,
@@ -247,3 +247,59 @@ test("Ownership matrix locked plain creation refuses a newly competing owner", a
   await assert.rejects(() => get(destination, {}, { pmRoot: root }), /not found/);
   assert.equal((await listAllComplete({}, { pmRoot: root })).items.length, 2);
 })));
+
+for (const atomic of [false, true]) test(`Creation proof: curated deterministic ID never grants mirroring (atomic=${atomic})`, async () => tracker(async (root, id) => github(id, async () => {
+  await change(root, id, { tags: ["gh:o/r#7", "keep-curated"] });
+  const before = (await get(id, {}, { pmRoot: root })).item;
+  await sync(root, atomic);
+  const after = (await get(id, {}, { pmRoot: root })).item;
+  for (const field of ["title", "description", "type", "body", "created_at", "tags"] as const) assert.deepEqual(after[field], before[field], field);
+  assert.equal(existsSync(getItemPath(root, "Chore", id)), true);
+  assert.equal(after.github_state, "open");
+  assert.equal((await listAllComplete({}, { pmRoot: root })).items.length, 1);
+}), false, true, false));
+
+for (const atomic of [false, true]) test(`Creation proof: importer author mirrors without a naming pattern (atomic=${atomic})`, async () => tracker(async (root, id) => github(id, async () => {
+  assert.doesNotMatch(id, /-github-/);
+  assert.equal((await get(id, {}, { pmRoot: root })).item.author, "pm-github");
+  await sync(root, atomic);
+  const after = (await get(id, {}, { pmRoot: root })).item;
+  assert.equal(after.title, source.title);
+  assert.equal(after.body, source.body);
+  assert.equal(after.author, "pm-github");
+  assert.equal((await listAllComplete({}, { pmRoot: root })).items.length, 1);
+}), false, false, true));
+
+test("Creation proof: an original mirroring plan refuses a late curated linked occupant", async () => tracker(async (root, id) => github(id, async () => {
+  const items = (await listAllComplete({ includeBody: true }, { pmRoot: root })).items;
+  const entry = (await prepareGithubImport(source, repo, parseImportOptions({}), "fixture-token", items[0], undefined, { items, releases: [], timeline: async () => [] }))!;
+  let before: string[] = [];
+  await assert.rejects(() => importGithubAtomic(root, repo, [entry], { onPlanStaged: async () => {
+    await change(root, id, { author: "fixture", title: "Curated after planning" }); before = await bytes(root, id);
+  } }), /importer creation provenance missing/);
+  assert.deepEqual(await bytes(root, id), before);
+})));
+
+test("PR tracker records retain references without contradictory GitHub identity tags", async () => {
+  const ids = ["pm-github-blocker-format-followup", "pm-github-curated-reopen-followup", "pm-github-pr-url-alias-followup",
+    "pm-github-project-reference-followup", "pm-github-reference-identity-followup", "pm-github-reference-identity", "pm-github-search-reference-followup"];
+  const root = join(import.meta.dirname, "../.agents/pm");
+  for (const id of ids) {
+    const { item } = await get(id, {}, { pmRoot: root, noExtensions: true });
+    assert.doesNotThrow(() => assertGithubOwnershipConsistency(item), id);
+    for (const tag of item.tags ?? []) if (tag.startsWith("gh:")) {
+      assert.ok(githubOwnershipClaims(item).owners.includes(tag.slice(3)), `${id}: contextual references belong in docs`);
+    }
+  }
+  const references = await nativeDocs("pm-github-reference-identity-followup", {}, { pmRoot: root, noExtensions: true });
+  assert.ok(references.docs.some(doc => doc.path === "https://github.com/unbraind/pm-github/pull/233"));
+});
+
+for (const atomic of [false, true]) test(`Creation proof: dedicated importer metadata mirrors without a naming pattern (atomic=${atomic})`, async () => tracker(async (root, id) => github(id, async () => {
+  await change(root, id, { github_import: true });
+  assert.equal((await get(id, {}, { pmRoot: root })).item.author, "fixture");
+  await sync(root, atomic);
+  const after = (await get(id, {}, { pmRoot: root })).item;
+  assert.equal(after.title, source.title); assert.equal(after.body, source.body);
+  assert.equal(after.github_import, true);
+}), false, false, false));

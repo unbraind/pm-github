@@ -3,7 +3,6 @@ import { readGithubWorkspace, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue, setOwnValue } from "./own-record.ts";
 import { assertGithubImportOwner, GithubImportOwnershipError, assertGithubOwnershipConsistency, githubOwnershipClaims, withGithubImportOwners, type GithubOwnedTarget } from "./import-ownership.ts";
 /** Source lifecycle, release-window and cross-provider identity rules for issue imports. */
-import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { decodeHTML } from "entities";
 import {
@@ -373,10 +372,9 @@ export function importIdentityKeys(item: PmItem, options: { allowConflicts?: boo
   return [...keys];
 }
 
-/** Only the exact importer-generated external key grants full content mirroring. */
-export function importerCreatedItem(item: PmItem, repo: string, number: number): boolean {
-  const hash = createHash("sha256").update(repo.toLowerCase()).digest("hex").slice(0, 12);
-  return item.id?.endsWith(`-github-${hash}-${number}`) === true;
+/** Creation provenance grants mirroring; source identity and item naming are checked separately. */
+export function importerCreatedItem(item: PmItem, _repo: string, _number: number): boolean {
+  return item.author === "pm-github" || item.github_import === true;
 }
 
 /** Index durable importer identities while allowing arbitrary shared reference tags. */

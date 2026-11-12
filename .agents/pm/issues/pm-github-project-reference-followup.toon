@@ -4,11 +4,15 @@ description: "Static inspection found a separate board-import path: projects.ts 
 type: Issue
 status: open
 priority: 2
-tags[4]: follow-up,"gh:unbraind/pm-github#230",projects,reference-identity
+tags[3]: follow-up,projects,reference-identity
 created_at: "2026-11-11T11:09:25.465Z"
-updated_at: "2026-11-11T11:09:27.552Z"
+updated_at: "2026-11-12T08:53:55.558Z"
 author: codex-github230-1111
+comments[1]{created_at,author,text}:
+  "2026-11-12T08:53:55.558Z",codex-github230-1111,"Round 9 tracker audit: moved the parent issue or PR reference from a gh tag to a docs link. This is reference hygiene only; deferred implementation remains out of scope and this item stays open."
 files[2]{path,scope}:
   index.ts,project
   projects.ts,project
+docs[1]{path,scope,note}:
+  "https://github.com/unbraind/pm-github/issues/230",project,Context reference; this follow-up is not the referenced issue or PR
 body: ""

@@ -4,8 +4,12 @@ description: "Latest CodeRabbit outside-diff review of PR 233, indexByProvenance
 type: Issue
 status: open
 priority: 3
-tags[1]: "gh:unbraind/pm-github#233"
+tags: []
 created_at: "2026-11-11T22:21:15.600Z"
-updated_at: "2026-11-11T22:21:15.600Z"
+updated_at: "2026-11-12T08:53:57.802Z"
 author: codex-github230-1111
+comments[1]{created_at,author,text}:
+  "2026-11-12T08:53:57.802Z",codex-github230-1111,"Round 9 tracker audit: moved the parent issue or PR reference from a gh tag to a docs link. This is reference hygiene only; deferred implementation remains out of scope and this item stays open."
+docs[1]{path,scope,note}:
+  "https://github.com/unbraind/pm-github/pull/233",project,Context reference; this follow-up is not the referenced issue or PR
 body: ""
