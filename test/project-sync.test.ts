@@ -65,19 +65,18 @@ function items(root: string): LocalItem[] {
 
 /** Create a local item and return its generated identity. */
 function create(root: string, title: string, tags: string[] = [], status = "open", extra: string[] = []): string {
-  const reference = tags.flatMap(tag => { const match = /^gh:([^/\s]+\/[^#\s]+)#([1-9]\d*)$/.exec(tag); return match ? [`https://github.com/${match[1]}/issues/${match[2]}`] : []; })[0];
-  pm(root, ["create", "task", title, "--status", status, "--tags", JSON.stringify(tags), ...(reference ? ["--description", `GitHub issue ${reference}`] : []), ...extra]);
+  pm(root, ["create", "task", title, "--status", status, "--tags", JSON.stringify(tags), ...extra]);
   const item = items(root).find(item => item.title === title);
   assert.ok(item);
-  if (reference) nodeScenario(`
-    const { mutateItem, readSettings, resolvePmRoot } = await import("@unbrained/pm-cli/sdk");
-    const pmRoot = resolvePmRoot(process.cwd(), process.env.FIXTURE_PM_ROOT);
-    await mutateItem({ pmRoot, id: process.env.FIXTURE_ITEM_ID, settings: await readSettings(pmRoot), author: "fixture", op: "update", mutate: document => {
-      document.metadata.github_url = process.env.FIXTURE_GITHUB_URL;
-      return { changedFields: ["github_url"] };
-    } });
-  `, { FIXTURE_PM_ROOT: root, FIXTURE_ITEM_ID: item.id, FIXTURE_GITHUB_URL: reference });
   return item.id;
+}
+
+/** Establish ownership explicitly; ordinary fixture creation only stores its reference tags. */
+async function own(root: string, id: string, githubUrl: string): Promise<void> {
+  await mutateItem({ pmRoot: root, id, settings: await readSettings(root), author: "fixture", op: "update", mutate: document => {
+    document.metadata.github_url = githubUrl;
+    return { changedFields: ["github_url"] };
+  } });
 }
 
 /** Serve board discovery and inventory, handing actual mutations to the caller. */
@@ -115,7 +114,8 @@ test("project sync previews both directions without mutation, including unmapped
   const root = tracker(t);
   create(root, "Linked", [projectItemTag(REF, "linked")]);
   create(root, "Draft", [], "in_progress");
-  create(root, "Issue", ["gh:acme/widgets#7"]);
+  const owned = create(root, "Issue", ["gh:acme/widgets#7"]);
+  await own(root, owned, "https://github.com/acme/widgets/issues/7");
   create(root, "Unmapped", [projectItemTag(REF, "unknown")], "blocked");
   const before = items(root);
   await withMockGithub(board([draft("linked"), draft("unknown", "Custom", "custom")]), async server => {
@@ -125,6 +125,23 @@ test("project sync previews both directions without mutation, including unmapped
     assert.match(stderr.join("\n"), /add issue acme\/widgets#7 @ Todo/);
     assert.match(stderr.join("\n"), /maps to no board option/);
     assert.match(stderr.join("\n"), /maps to no pm status/);
+    assert.equal(server.requests.length, 2);
+  });
+  assert.deepEqual(items(root), before);
+});
+
+for (const explicitOwner of [false, true]) test(`project sync keeps a valid reference-only item as a draft (explicit owner: ${explicitOwner})`, async t => {
+  const root = tracker(t);
+  const id = create(root, "Mentioned issue", ["gh:acme/widgets#7"]);
+  if (explicitOwner) await own(root, id, "https://github.com/acme/widgets/issues/7");
+  const stored = (await sdkGet(id, {}, { pmRoot: root })).item;
+  assert.equal(stored.github_url, explicitOwner ? "https://github.com/acme/widgets/issues/7" : undefined);
+  const before = items(root);
+  await withMockGithub(board([]), async server => {
+    const { stderr } = await captureStderr(() => sync(root, { push: true }));
+    const plan = stderr.join("\n");
+    assert.match(plan, explicitOwner ? /add issue acme\/widgets#7/ : /add draft/);
+    assert.doesNotMatch(plan, explicitOwner ? /add draft/ : /add issue/);
     assert.equal(server.requests.length, 2);
   });
   assert.deepEqual(items(root), before);
@@ -148,6 +165,7 @@ test("project sync applies draft and issue additions, status writes, and preserv
   const retained = ["keep", "area,api", '["json"]'];
   const draftId = create(root, "Draft", retained, "in_progress", ["--body", "Local body"]);
   const issueId = create(root, "Issue", ["gh:acme/widgets#7", ...retained]);
+  await own(root, issueId, "https://github.com/acme/widgets/issues/7");
   const linkedId = create(root, "Linked", [projectItemTag(REF, "linked"), ...retained]);
   const calls: GraphqlCall[] = [];
   await withMockGithub(board([draft("linked")], (_req, res, body) => {
@@ -252,6 +270,7 @@ test("project pull preserves canceled lifecycle metadata and reports a failed te
 test("project push continues after remote failures and fails when the entire batch fails", async t => {
   const root = tracker(t);
   const missing = create(root, "Missing issue", ["gh:acme/widgets#99"]);
+  await own(root, missing, "https://github.com/acme/widgets/issues/99");
   create(root, "Rejected draft");
   create(root, "No id draft");
   const ok = create(root, "Good draft");
@@ -275,6 +294,7 @@ test("project push continues after remote failures and fails when the entire bat
 test("project push attaches an issue without a Status field and rejects a missing attachment id", async t => {
   const root = tracker(t);
   const id = create(root, "Issue", ["gh:acme/widgets#7"]);
+  await own(root, id, "https://github.com/acme/widgets/issues/7");
   let omitId = true;
   await withMockGithub(board([], (_req, res, body) => {
     const call = JSON.parse(body) as GraphqlCall;
@@ -334,7 +354,8 @@ test("project sync validates the token and reference before contacting GitHub", 
 test("project sync previews additions without Status and a linked item without an option", async t => {
   const root = tracker(t);
   create(root, "Draft");
-  create(root, "Issue", ["gh:acme/widgets#7"]);
+  const owned = create(root, "Issue", ["gh:acme/widgets#7"]);
+  await own(root, owned, "https://github.com/acme/widgets/issues/7");
   create(root, "Linked", [projectItemTag(REF, "linked")]);
   await withMockGithub(board([{ id: "linked", content: { __typename: "DraftIssue" } }], undefined, false), async () => {
     const { stderr, result } = await captureStderr(() => sync(root, { push: true }));
@@ -377,7 +398,8 @@ test("project push preview names a previously unset Status option", async t => {
 
 test("project push refuses a missing identity from the real attachment response", async t => {
   const root = tracker(t);
-  create(root, "Linked issue", ["gh:acme/widgets#7"]);
+  const owned = create(root, "Linked issue", ["gh:acme/widgets#7"]);
+  await own(root, owned, "https://github.com/acme/widgets/issues/7");
   await withMockGithub(board([{ fieldValueByName: { name: "Done", optionId: "done" }, content: { __typename: "Issue", number: 7, repository: { nameWithOwner: "acme/widgets" } } }], (_req, res, body) => {
     const query = (JSON.parse(body) as GraphqlCall).query;
     jsonResponse(res, 200, { data: query.includes("issueOrPullRequest") ? { repository: { issueOrPullRequest: { id: "issue" } } } : { addProjectV2ItemById: { item: {} } } });

@@ -1,9 +1,8 @@
 import { createHash } from "node:crypto";
-import * as githubOwnershipSdk from "@unbrained/pm-cli/sdk";
 /** Positive ownership checks at planning and the SDK's locked mutation boundary. */
 import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
 import {
-  PmClient, acquireLock, listAllItemMetadata, locateItem, readLocatedItem, hashDocument, EXIT_CODE, PmCliError, getActiveExtensionRegistrations, runWithActiveExtensions, setActiveExtensionHooks,
+  PmClient, acquireLockLease, listAllItemMetadata, locateItem, readLocatedItem, hashDocument, EXIT_CODE, PmCliError, getActiveExtensionRegistrations, runWithActiveExtensions, setActiveExtensionHooks,
   setActiveExtensionRegistrations, runActiveBeforeMutationHooks, runActiveOnReadHooks,
   runActiveOnWriteHooks, runActiveOnIndexHooks,
 } from "@unbrained/pm-cli/sdk";
@@ -224,19 +223,9 @@ export async function withGithubOwnershipLock<T>(pmRoot: string, run: () => Prom
   const { pmRoot: root, settings } = await readGithubWorkspace(pmRoot);
   const active = ownershipLeaseScope.getStore();
   if (active?.has(root)) return run();
-  // The minimum SDK exports acquireLock; newer hosts also expose generation fencing.
-  const sdk = githubOwnershipSdk as typeof githubOwnershipSdk & {
-    acquireLockLease?: (...args: Parameters<typeof acquireLock>) => Promise<{
-      release: () => Promise<void>;
-      fence: <R>(commit: () => Promise<R>) => Promise<R>;
-    }>;
-  };
-  const args: Parameters<typeof acquireLock> = [root, "github-ownership", settings.locks.ttl_seconds, "pm-github:ownership", false, false, settings.locks.wait_ms];
-  const lease = sdk.acquireLockLease ? await sdk.acquireLockLease(...args) : undefined;
-  const release = lease?.release ?? await acquireLock(...args);
-  const invoke = () => ownershipLeaseScope.run(new Set([...(active ?? []), root]), run);
-  try { return lease ? await lease.fence(invoke) : await invoke(); }
-  finally { await release(); }
+  const lease = await acquireLockLease(root, "github-ownership", settings.locks.ttl_seconds, "pm-github:ownership", false, false, settings.locks.wait_ms);
+  try { return await lease.fence(() => ownershipLeaseScope.run(new Set([...(active ?? []), root]), run)); }
+  finally { await lease.release(); }
 }
 
 /** Coordinate all ownership-changing paths before entering their native mutation guards. */

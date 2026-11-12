@@ -2054,8 +2054,8 @@ async function resumePendingGithubImport(pmRoot: string, repo: string, opts: Ato
     const record = await readGithubImportPlan(pmRoot, id);
     if (!record || record.transactionId !== id || typeof record.repo !== "string") throw new GithubImportRecoveryError("github_import_plan_missing", `Transaction ${id} has no readable original plan. Restore its original plan or reconcile its journal before retrying; no new import may start.`);
     if (record.repo.toLowerCase() !== repo.toLowerCase()) continue;
-    if (selectedIds && Array.isArray(record.entries) && record.entries.every(entry => entry?.match?.id && !selectedIds.has(entry.match.id))) continue;
-    validateGithubImportPlan(record);
+    const originalTargets = validateGithubImportPlan(record);
+    if (selectedIds && originalTargets.size && [...originalTargets.values()].every(itemId => !selectedIds.has(itemId))) continue;
     records.push(record);
   }
   if (!records.length) return undefined;

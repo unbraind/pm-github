@@ -58,6 +58,7 @@ test("packed package type-checks and imports against its exact declared minimum 
     };
     const minimum = manifest.pm_min_version;
     assert.match(minimum, /^\d+\.\d+\.\d+$/);
+    assert.equal(minimum, "2026.10.23", "Ownership writes require the first published fenced-lock SDK");
     assert.equal(pkg.peerDependencies[cli], `>=${minimum}`);
     assert.match(pkg.devDependencies[cli]!, /^\d+\.\d+\.\d+$/, "the development pin is independent of the consumer floor");
     const packed = JSON.parse(run("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", scratch], repo, environment)) as { filename: string }[];
@@ -111,10 +112,17 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import extension, { planGithubLabelMigration, validateGithubLabelMigrationReport, buildAtomicImportMutations } from "pm-github";
 import { readGithubImportOwner, mutateGithubOwnedItem } from "pm-github/dist/import-ownership.js";
-import { init, create, update, get, mutateItem, readSettings, encodePmTableRows, normalizeItemId } from "@unbrained/pm-cli/sdk";
+import { init, create, update, get, mutateItem, readSettings, encodePmTableRows, normalizeItemId, acquireLockLease } from "@unbrained/pm-cli/sdk";
 assert.ok(extension);
 const root = join(process.cwd(), "tracker");
 await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { pmRoot: root, cwd: process.cwd(), noExtensions: true });
+const lease = await acquireLockLease(root, "minimum-fence", 30, "fixture", false, false, 0);
+let fenced = 0;
+await lease.fence(async () => { fenced++; });
+assert.equal(fenced, 1);
+await lease.release();
+await assert.rejects(() => lease.fence(async () => { fenced++; }), error => error.code === "lock_lost");
+assert.equal(fenced, 1, "A lost SDK lease must never invoke its write callback");
 const scope = { clearDeps: true, unset: ["parent", "sprint", "release", "goal", "objective"] };
 const item = (await create({ title: "Minimum SDK witness", type: "Task", tags: "bug", ...scope }, { pmRoot: root })).item;
 const assigned = spawnSync(process.execPath, [join(process.cwd(), "node_modules/.bin/pm"), "--path", root, "update", item.id, "--stdin-json"], {

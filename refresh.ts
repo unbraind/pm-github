@@ -161,26 +161,51 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
   let items = state.items;
   const identityConflicts = items.flatMap(item => { const conflict = legacyGithubIdentityConflict(item); return conflict ? [conflict] : []; });
   let all = selectRefreshTargets(items, repo);
-  let targets = bounded(all);
+  const initialTargets = bounded(all);
   const token = resolveGitHubToken();
   // Resume interrupted transactions for the selected targets BEFORE the
   // unchanged filter: a crash after finalization leaves linked items already
   // matching the source, so the pending journal would otherwise hide behind an
   // ordinary no-op report and never commit.
   const pending = (await listUnfinishedGithubImports(pmRoot))
-    .filter(journal => !journal.itemIds.length || journal.itemIds.some(id => targets.some(target => target.id === id)));
+    .filter(journal => !journal.itemIds.length || journal.itemIds.some(id => initialTargets.some(target => target.id === id)));
   // Retained side-data plans can outlive a committed SDK journal. Recover those
   // before polling, so a newly fetched plan is never reported as the old replay.
   const recovery = new Map(pending.map(journal => [journal.transactionId, { transactionId: journal.transactionId, status: String(journal.status) }]));
+  const deferredImports: Array<{ transaction_id: string; code: string; item_ids: string[]; message: string; resume_argv: string[] }> = [];
+  const currentItems = new Map(items.map(item => [item.id, item]));
+  const selectedIds = new Set(initialTargets.map(target => target.id));
+  const selectableKeys = new Set(all.map(target => `${target.number}:${target.id}`));
+  const requestedNumbers = scope && new Set(scope.numbers);
+  const deferredIds = new Set<string>();
   for (const record of await listRetainedGithubImportPlans(pmRoot)) {
-    const ids = record.itemIds?.map(pair => pair[1]) ?? record.entries?.flatMap(entry => entry.match?.id ? [entry.match.id] : []) ?? [];
+    const pairs = record.itemIds ?? record.entries.flatMap(entry => entry.match?.id ? [[entry.issueNumber, entry.match.id] as [number, string]] : []);
+    const ids = pairs.map(([, id]) => id);
     if (record.repo.toLowerCase() === repo) {
-      const selectable = new Set(all.map(target => target.id));
-      const orphaned = ids.filter(id => !selectable.has(id));
+      // A recorded source number scopes recovery diagnostics; it never grants ownership.
+      const selected = pairs.filter(([number, id]) => (!requestedNumbers || requestedNumbers.has(number)) &&
+        (opts.limit === undefined || selectedIds.has(id)));
+      const creates = new Set(record.mutations.filter(mutation => mutation.op === "create").map(mutation => mutation.id));
+      const matchedIds = new Set(record.entries.flatMap(entry => entry.match?.id ? [entry.match.id] : []));
+      const pendingCreates = new Set(ids.filter(id => !currentItems.has(id) && creates.has(id) && !matchedIds.has(id)));
+      const selectedRecordIds = new Set(selected.map(([, id]) => id));
+      const orphaned = selected.filter(([number, id]) => !pendingCreates.has(id) && !selectableKeys.has(`${number}:${id}`)).map(([, id]) => id);
       if (orphaned.length) throw new GithubImportOwnershipError(orphaned.join(", "), `${repo} (retained transaction ${record.transactionId})`, ["recorded target is no longer selectable; restore its intended explicit ownership before retrying recovery"]);
+      // A refresh cannot create items or partially replay an atomic import outside its scope.
+      if (pendingCreates.size || selected.length !== pairs.length) {
+        recovery.delete(record.transactionId);
+        for (const id of ids) deferredIds.add(id);
+        deferredImports.push({ transaction_id: record.transactionId,
+          code: pendingCreates.size ? "github_import_pending_creates" : "github_import_outside_refresh_scope",
+          item_ids: pendingCreates.size ? [...pendingCreates] : ids.filter(id => !selectedRecordIds.has(id)),
+          message: "Retained atomic import is deferred; resume the original import before refreshing those targets.",
+          resume_argv: ["pm", "github", "import", repo, "--atomic"] });
+        continue;
+      }
     }
-    if (ids.some(id => targets.some(target => target.id === id))) recovery.set(record.transactionId, { transactionId: record.transactionId, status: "retained" });
+    if (ids.some(id => selectedIds.has(id))) recovery.set(record.transactionId, { transactionId: record.transactionId, status: "retained" });
   }
+  let targets = initialTargets.filter(target => !deferredIds.has(target.id));
   let resumed = 0;
   if (recovery.size) {
     if (opts.dryRun) {
@@ -216,7 +241,7 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
     // compares the committed state instead of the pre-replay snapshot.
     items = await readRefreshItems(pmRoot);
     all = selectRefreshTargets(items, repo);
-    targets = bounded(all);
+    targets = bounded(all).filter(target => !deferredIds.has(target.id));
   }
   const plan: RefreshEntry[] = [];
   const prepared: PreparedGithubImport[] = [];
@@ -246,6 +271,6 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
     if (opts.atomic) await importGithubAtomic(pmRoot, repo, prepared, { updateOnly: true });
     else for (const entry of prepared) await importGithubAtomic(pmRoot, repo, [entry], { updateOnly: true });
   }
-  return { ...(identityConflicts.length ? { identity_conflicts: identityConflicts } : {}), repo, dryRun: opts.dryRun, atomic: opts.atomic, selected: targets.length, filtered,
+  return { ...(deferredImports.length ? { deferred_imports: deferredImports } : {}), ...(identityConflicts.length ? { identity_conflicts: identityConflicts } : {}), repo, dryRun: opts.dryRun, atomic: opts.atomic, selected: targets.length, filtered,
     unchanged, updated: prepared.length, missing, created: 0, resumed, plan };
 }

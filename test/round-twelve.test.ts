@@ -214,7 +214,7 @@ for (const selectedConflicts of [false, true]) test(`Round12 scoped project pull
   }
   const corpus = (await listAllComplete({ includeBody: true }, { pmRoot: root })).items;
   const scoped = corpus.filter(item => item.id === selected.id);
-  const board = [{ id: "board", statusName: "In Progress", content: { typename: "Issue", title: "Board", repo, number: 7 } }];
+  const board = [{ id: "board", statusName: "In Progress", content: { typename: "Issue" as const, title: "Board", repo, number: 7 } }];
   if (selectedConflicts) {
     // Must refuse: an unselected peer claiming the selected item's own issue still stops the scoped pull.
     assert.throws(() => buildProjectPullPlan(scoped, { owner: "o", number: 1 }, board, undefined, undefined, corpus), /claimed by|conflict/i);

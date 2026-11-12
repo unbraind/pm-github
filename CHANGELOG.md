@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Keep GitHub reference tags separate from import identity (BREAKING: PM CLI 2026.10.23 minimum) ([pm-github-reference-identity](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-reference-identity.toon))
+
 ## 2026.11.11 - 2026-11-11
 
 ### Fixed

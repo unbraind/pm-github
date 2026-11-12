@@ -6,11 +6,11 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, mkdirSync, cpSync, copy
 import { tmpdir } from "node:os";
 import { join, delimiter } from "node:path";
 import { spawnSync } from "node:child_process";
-import { WorkspaceTransactionInterruptedError, create, update, get, comments, listAllComplete, readHistorySnapshot, getHistoryPath, deleteItem, readSettings, normalizeItemId, commitImportedItem, getItemPath, toImportTags } from "@unbrained/pm-cli/sdk";
+import { WorkspaceTransactionInterruptedError, create, update, get, comments, listAllComplete, readHistorySnapshot, getHistoryPath, deleteItem, readSettings, normalizeItemId, commitImportedItem, getItemPath, toImportTags, mutateItem } from "@unbrained/pm-cli/sdk";
 import extension, {
   buildAtomicImportMutations, deriveAtomicItemId, importGithubAtomic, listUnfinishedGithubImports,
   parseImportOptions, prepareGithubImport, readGithubImportPlan, resumeGithubImport,
-  validateGithubImportPlan, type GithubImportPlanRecord,
+  validateGithubImportPlan, type GithubImportPlanRecord, type GhIssue,
 } from "../index.ts";
 import { fetchImportTimeline } from "../import-fidelity.ts";
 import { runRefresh, selectRefreshTargets, refreshChanges } from "../refresh.ts";
@@ -727,3 +727,77 @@ for (const failure of ["interrupted", "inspection", "cleanup", "finalize"]) {
     } else assert.ok(existsSync(join(planFile, "held")), "cleanup failure must not mask the transaction error");
   }));
 }
+
+for (const dryRun of [true, false]) for (const journalPresent of [true, false]) test(`pending import creates are reported while unrelated refresh proceeds (preview: ${dryRun}, journal: ${journalPresent})`, async () => tracker(async (directory, originalRoot) => {
+  const linked = (await createImportMirror({ title: "Stale unrelated owner", tags: "gh:fixture/repo#2" }, { pmRoot: originalRoot })).item;
+  const restored = join(directory, "restored-tracker");
+  cpSync(originalRoot, restored, { recursive: true });
+  const pendingSource = { number: 1, title: "Pending issue", body: "Pending body", state: "open", labels: [], user: null,
+    assignee: null, milestone: null, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-02-03T00:00:00Z", html_url: "https://github.com/fixture/repo/issues/1" } satisfies GhIssue;
+  const entry = (await prepareGithubImport(pendingSource, "fixture/repo", parseImportOptions({ atomic: true }), undefined, undefined, undefined,
+    { items: [], releases: [], timeline: async () => [] }))!;
+  await assert.rejects(() => importGithubAtomic(originalRoot, "fixture/repo", [entry], { onTransition: context => {
+    if (context.transition === "prepared") throw new WorkspaceTransactionInterruptedError("Before pending create");
+  } }), /interrupted/);
+  const record = (await listUnfinishedGithubImports(originalRoot))[0]!;
+  const saved = (await readGithubImportPlan(originalRoot, record.transactionId))!;
+  const pendingId = saved.itemIds![0]![1];
+  const pmRoot = journalPresent ? originalRoot : restored;
+  if (!journalPresent) {
+    // Restore the real producer plan with its native pre-transaction tracker snapshot.
+    // The producer file can survive independently of an SDK journal.
+    mkdirSync(join(restored, "transactions/pm-github"), { recursive: true });
+    copyFileSync(join(originalRoot, "transactions/pm-github", `${record.transactionId}.json`), join(restored, "transactions/pm-github", `${record.transactionId}.json`));
+  }
+  assert.equal((await listAllComplete({}, { pmRoot })).items.some(item => item.id === pendingId), false);
+  const planBytes = readFileSync(join(pmRoot, "transactions/pm-github", `${record.transactionId}.json`));
+  const itemBefore = readFileSync(getItemPath(pmRoot, linked.type!, linked.id));
+  const historyBefore = readFileSync(getHistoryPath(pmRoot, linked.id));
+  await withMockGithub(transport({ i2: node(2) }), async () => {
+    const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "importers", "schema", "hooks", "preflight", "search"] });
+    const result = await harness.runCommand({ command: "github refresh", args: ["fixture/repo"], options: { "dry-run": dryRun, limit: "1" }, pmRoot, global: { json: true } });
+    const receipt = result.result as Awaited<ReturnType<typeof runRefresh>>;
+    assert.equal(receipt.selected, 1); assert.equal(receipt.resumed, 0); assert.equal(receipt.updated, 1);
+    assert.equal(receipt.deferred_imports![0]!.code, "github_import_pending_creates");
+    assert.deepEqual(receipt.deferred_imports![0]!.item_ids, [pendingId]);
+    assert.deepEqual(receipt.deferred_imports![0]!.resume_argv, ["pm", "github", "import", "fixture/repo", "--atomic"]);
+  });
+  assert.ok(existsSync(join(pmRoot, "transactions/pm-github", `${record.transactionId}.json`)), "Unrelated refresh must retain the pending-create plan");
+  assert.deepEqual(readFileSync(join(pmRoot, "transactions/pm-github", `${record.transactionId}.json`)), planBytes);
+  assert.equal((await listAllComplete({}, { pmRoot })).items.some(item => item.id === pendingId), false);
+  if (dryRun) {
+    assert.deepEqual(readFileSync(getItemPath(pmRoot, linked.type!, linked.id)), itemBefore);
+    assert.deepEqual(readFileSync(getHistoryPath(pmRoot, linked.id)), historyBefore);
+  } else assert.equal((await get(linked.id, {}, { pmRoot })).item.title, "Upstream 2");
+}));
+
+for (const selected of [false, true]) test(`retained existing ownership loss respects refresh scope (${selected})`, async () => tracker(async (_directory, pmRoot) => {
+  const original = (await create({ title: "Curated owner", type: "Chore" }, { pmRoot })).item;
+  const settings = await readSettings(pmRoot);
+  await mutateItem({ pmRoot, id: original.id, settings, author: "fixture", op: "update", mutate: document => {
+    document.metadata.github_url = "https://github.com/fixture/repo/issues/1"; return { changedFields: ["github_url"] };
+  } });
+  const stored = (await get(original.id, {}, { pmRoot })).item;
+  const source = { number: 1, title: "Source", body: "Public", state: "open", labels: [], user: null, assignee: null, milestone: null,
+    created_at: "2026-01-01T00:00:00Z", updated_at: "2026-02-03T00:00:00Z", html_url: "https://github.com/fixture/repo/issues/1" } satisfies GhIssue;
+  const entry = (await prepareGithubImport(source, "fixture/repo", parseImportOptions({}), undefined, stored, undefined,
+    { items: [stored], releases: [], timeline: async () => [] }))!;
+  await assert.rejects(() => importGithubAtomic(pmRoot, "fixture/repo", [entry], { updateOnly: true, onTransition: context => {
+    if (context.transition === "committed") throw new WorkspaceTransactionInterruptedError("Retain committed plan");
+  } }), /committed journal/);
+  await mutateItem({ pmRoot, id: original.id, settings, author: "fixture", op: "update", mutate: document => {
+    for (const key of Object.keys(document.metadata)) if (/^github/i.test(key)) delete document.metadata[key];
+    return { changedFields: ["github_url"] };
+  } });
+  await createImportMirror({ title: "Other linked owner", tags: "gh:fixture/repo#2" }, { pmRoot });
+  const before = [readFileSync(getItemPath(pmRoot, original.type!, original.id)), readFileSync(getHistoryPath(pmRoot, original.id))];
+  await withMockGithub(transport({ i2: node(2) }), async () => {
+    if (selected) await assert.rejects(() => runRefresh("fixture/repo", pmRoot, {}, { numbers: [1] }), { code: "github_import_owner_conflict" });
+    else {
+      const receipt = await runRefresh("fixture/repo", pmRoot, {}, { numbers: [2] });
+      assert.equal(receipt.updated, 1); assert.equal(receipt.resumed, 0);
+      assert.equal(receipt.deferred_imports![0]!.code, "github_import_outside_refresh_scope");
+    }
+  });
+  assert.deepEqual([readFileSync(getItemPath(pmRoot, original.type!, original.id)), readFileSync(getHistoryPath(pmRoot, original.id))], before);
+}));
