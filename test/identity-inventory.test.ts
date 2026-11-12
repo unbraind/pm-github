@@ -11,6 +11,11 @@ const root = join(import.meta.dirname, ".."), path = "docs/identity-ownership-in
 test("ownership inventory matches every current syntax and auxiliary anchor", () => {
   const current = readFileSync(join(root, path), "utf8");
   assert.equal(renderIdentityInventory(root, current), current);
+  const legacyRule = "A leading native GitHub issue or GH issue/PR declaration retains legacy ownership without a link-only marker or whole-description match; direct provenance still protects against copied provider markers.";
+  assert.ok(current.includes(legacyRule));
+  const staleRule = current.replace(legacyRule, "A dedicated legacy github_link_only marker retains its complete native declaration.");
+  assert.notEqual(staleRule, current);
+  assert.equal(renderIdentityInventory(root, staleRule), current);
   for (const name of ["buildProjectPullPlan", "buildProjectImportPlan"]) {
     const row = current.split("\n").find(line => line.startsWith(`| \`projects.ts\` / \`${name}\` |`))!;
     assert.match(row, /indexSelectedByIssue\(\)/);

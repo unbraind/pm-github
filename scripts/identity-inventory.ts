@@ -9,6 +9,7 @@ interface Group { file: string; name: string; sites: Site[] }
 const document = "docs/identity-ownership-inventory.md";
 const fields = new Set(["github_url", "github_repo", "github_number", "external_ref"]);
 const additional = new Map([
+  ["import-fidelity.ts/legacyGithubDescriptionIdentity", "Legacy native declaration identity: anchored at description start, first complete issue/PR URL, with trailing punctuation removed. No link-only marker or whole-description match is required."],
   ["import-fidelity.ts/githubLinkReferences", "Reference extraction only: supported link fields expose prose and API URL mentions, never owner claims or an import target."],
   ["projects.ts/indexSelectedByIssue", "Build one complete ownership index, then look up selected items only; conflicts between unselected items do not abort a scoped pull."],
 ]);
@@ -56,7 +57,7 @@ function collect(root: string, helpers: ReadonlySet<string>): Group[] {
 
 /** Render every root anchor and non-root audit anchor from the current files; ledger prose is not used as a source location. */
 export function renderIdentityInventory(root: string, ledger = readFileSync(join(root, document), "utf8")): string {
-  const explanations = new Map<string, string>(), helpers = new Set<string>(["githubLinkReferences", "indexSelectedByIssue"]);
+  const explanations = new Map<string, string>(), helpers = new Set<string>(["githubLinkReferences", "indexSelectedByIssue", "legacyGithubDescriptionIdentity"]);
   for (const row of ledger.matchAll(/^\| `([^`]+)` \/ `([^`]+)` \| (.*?) \| (.*?) \|$/gm)) {
     explanations.set(`${row[1]}/${row[2]}`, row[4]!);
     for (const call of row[3]!.matchAll(/\b([A-Za-z_$][\w$]*)\(\)/g)) helpers.add(call[1]!);
@@ -67,7 +68,7 @@ export function renderIdentityInventory(root: string, ledger = readFileSync(join
   if (start < 0 || end < start || groups.length < 80) throw new Error("Ownership inventory template or source corpus is incomplete.");
   let intro = ledger.slice(0, start).replace(/Initial inventory:[^\n]+/, "Initial inventory: reviewed head `d9d9bc7`. Anchors are regenerated from the merged source with `node scripts/identity-inventory.ts --write` and checked by the same command with `--check`.")
     .replace(/\d+ function groups; \d+ helper-call\/field\/parser sites\./, `${groups.length} function groups; ${total} helper-call/field/parser sites.`);
-  intro = intro.replace(/Only the raw-collector implementation[^\n]+/, "Owner claims come from whole-value explicit identity fields, external_ref, or a proven importer ID. A dedicated legacy github_link_only marker retains its complete native declaration. Generic link fields and their prose produce references only. Operational selectors consume the shared ownership index; provider backlinks and explicit opt-in citation adoption keep their separate first-link authorization.");
+  intro = intro.replace(/(?:Only the raw-collector implementation|Owner claims come from)[^\n]+/, "Owner claims come from whole-value explicit identity fields, external_ref, or a proven importer ID. A leading native GitHub issue or GH issue/PR declaration retains legacy ownership without a link-only marker or whole-description match; direct provenance still protects against copied provider markers. Generic link fields and their prose produce references only. Operational selectors consume the shared ownership index; provider backlinks and explicit opt-in citation adoption keep their separate first-link authorization.");
   const missing = groups.filter(group => !explanations.has(`${group.file}/${group.name}`));
   if (missing.length) throw new Error(`Classify ownership groups: ${missing.map(group => `${group.file}/${group.name}`).join(", ")}`);
   const rows = groups.map(group => {

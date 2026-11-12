@@ -140,15 +140,17 @@ function ownershipIndex(peers: readonly PmItem[] | GithubOwnershipIndex, reposit
 /** Every asserted identity constrains a provenance-bearing item; references alone do not create an owner. */
 export function githubOwnershipClaims(item: PmItem, provisional = false, _allowReferenceTags = false, repositories: readonly string[] = []): { owners: string[]; claims: string[]; evidence: boolean; kinds: string[]; direct: boolean } {
   const work = ownershipWork.getStore(); if (work) work.claimParses = (work.claimParses ?? 0) + 1;
-  const legacy = legacyGithubLinkIdentities(item);
   const direct = importIdentityKeys(item, { allowConflicts: true });
+  const external = normalizeGithubClaim(item.external_ref);
+  const imported = githubImporterIdentity(item, repositories);
+  // Explicit/link-only ownership and verified imports retain precedence over copied description markers.
+  const hasDirect = direct.length > 0 || Boolean(external) || Boolean(imported);
+  const legacy = legacyGithubLinkIdentities(item).filter(target => !target.declaration || item.github_link_only === true || !hasDirect);
   const owners = new Set([...direct, ...legacy.map(target => target.key)]);
   const kinds = new Set<string>([...explicitGithubIdentities(item), ...legacy].map(target => target.kind!));
   const externalTarget = parseGithubIssueUrl(item.external_ref);
   if (externalTarget && !externalTarget.api) kinds.add(externalTarget.kind!);
-  const external = normalizeGithubClaim(item.external_ref);
   if (external) owners.add(external);
-  const imported = githubImporterIdentity(item, repositories);
   if (imported) {
     owners.add(imported);
     const generated = typeof item.description === "string" && /^GH (?:issue|PR) #[1-9]\d*: (https?:\/\/\S+)(?: ·|$)/i.exec(item.description);

@@ -11,7 +11,7 @@ const url = "https://github.com/fixture/project/issues/42";
 const issue: GhIssue = { number: 42, title: "Fixture", body: "", state: "open", labels: [],
   assignee: null, milestone: null, created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:00:00Z", html_url: url };
 
-test("marked ownership declarations require a complete value: colon, whitespace and missing URL", () => {
+test("legacy ownership declarations retain first-URL parsing: colon, whitespace and missing URL", () => {
   const rows: ReadonlyArray<readonly [string, boolean]> = [
     [`GitHub issue ${url}`, true], [`GitHub issue   ${url}`, true],
     [`GitHub issue\t${url}`, true], [`GitHub issue: ${url}`, true],
@@ -19,20 +19,20 @@ test("marked ownership declarations require a complete value: colon, whitespace 
     [`GitHub issue:${url}`, false], [`GitHub issue :${url}`, false],
     [`GitHub issue${url}`, false], ["GitHub issue   ", false],
     ["GitHub issue: \t", false], ["GitHub issue: not a URL", false],
-    [`GitHub issue ${url}\tmore prose`, false],
+    [`GitHub issue ${url}\tmore prose`, true],
   ];
   for (const [description, expected] of rows) {
-    const old = /^GitHub issue\s*:?\s+(https?:\/\/[^\s]+)\s*$/i.exec(description)?.[1];
+    const old = /^GitHub issue\s*:?\s+(https?:\/\/[^\s]+)\s*/i.exec(description)?.[1];
     assert.equal(old === url, expected, description);
-    assert.equal(matchImportedIssue([{ id: "owner", github_link_only: true, description }], issue, undefined, false).via,
+    assert.equal(matchImportedIssue([{ id: "owner", description }], issue, undefined, false).via,
       expected ? "github-declaration" : "new", description);
   }
   // Enumerate separators on both sides of the optional colon, including all JS whitespace.
   const whitespace = ["", " ", "\t", "\n", "\r", "\v", "\f", "\u00a0", "\u1680", "\u2000", "\u2028", "\u2029", "\u202f", "\u205f", "\u3000", "\ufeff", " \t  "];
   for (const before of whitespace) for (const colon of ["", ":"]) for (const after of whitespace) {
     const description = `GitHub issue${before}${colon}${after}${url}`;
-    const old = /^GitHub issue\s*:?\s+(https?:\/\/[^\s]+)\s*$/i.exec(description)?.[1];
-    assert.equal(matchImportedIssue([{ id: "owner", github_link_only: true, description }], issue, undefined, false).via,
+    const old = /^GitHub issue\s*:?\s+(https?:\/\/[^\s]+)\s*/i.exec(description)?.[1];
+    assert.equal(matchImportedIssue([{ id: "owner", description }], issue, undefined, false).via,
       old === url ? "github-declaration" : "new", JSON.stringify(description));
   }
   const citing = matchImportedIssue([{ id: "citing", description: `GitHub issue:${url}` }], issue);

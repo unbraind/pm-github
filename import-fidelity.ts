@@ -302,14 +302,19 @@ export function githubLinkReferences(item: PmItem) {
   return values.flatMap(value => { const parsed = parseGithubIssueUrl(value); return parsed ? [parsed] : []; });
 }
 
-/** Legacy link-only records require their dedicated marker and one complete native declaration; generic links remain references. */
+/** Read only a leading native declaration; later prose is not ownership evidence. */
+export function legacyGithubDescriptionIdentity(item: PmItem) {
+  if (typeof item.description !== "string") return undefined;
+  const declaration = /^(?:GitHub issue(?:\s*:\s+|\s+)|GH (?:issue|PR) #[1-9]\d*:\s+)(https?:\/\/[^\s<>"'`]+)/i.exec(item.description);
+  const parsed = declaration?.[1] && parseGithubIssueUrl(trimLocatorPunctuation(declaration[1], "),.;:·"));
+  return parsed && !parsed.api ? parsed : undefined;
+}
+
+/** Collect complete URL fields and legacy native declarations; generic links remain references. */
 export function legacyGithubLinkIdentities(item: PmItem) {
-  const values = explicitGithubIdentities(item).map(target => target.url.href);
-  if (item.github_link_only === true && typeof item.description === "string") {
-    const declaration = /^(?:GitHub issue(?:\s*:\s+|\s+)|GH (?:issue|PR) #[1-9]\d*:\s+)(https?:\/\/\S+)\s*$/i.exec(item.description);
-    if (declaration?.[1]) values.push(declaration[1]);
-  }
-  return values.flatMap(value => { const parsed = parseGithubIssueUrl(value); return parsed && !parsed.api ? [parsed] : []; });
+  const explicit = explicitGithubIdentities(item).map(target => ({ ...target, declaration: false }));
+  const description = legacyGithubDescriptionIdentity(item);
+  return [...explicit, ...(description ? [{ ...description, declaration: true }] : [])];
 }
 
 /** Resolve every supported explicit URL alias once, retaining the shared parser's issue/PR kind. */
@@ -367,8 +372,8 @@ export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, _ta
   const issueKey = `${repo}#${issue.number}`;
   const ownership = snapshot ?? buildGithubOwnershipIndex(items, [repo]);
   /** Recognize leading native ownership declarations; later prose cannot transfer ownership. */
-  const declaredOwner = (item: PmItem) => item.github_link_only === true &&
-    legacyGithubLinkIdentities(item).some(target => target.canonical === issueUrl);
+  const declaredOwner = (item: PmItem) => copiedProviderMarkersOwnItem(item) &&
+    legacyGithubDescriptionIdentity(item)?.canonical === issueUrl;
   const candidates = items.filter(item => {
     if (!item.id) return false;
     const state = ownership.states.get(item)!;

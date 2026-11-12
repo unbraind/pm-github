@@ -94,10 +94,10 @@ for (const explicitOwner of [false, true]) test(`Reference prose does not bar ex
   if (explicitOwner) assert.deepEqual(bytes(root, id), before);
 }, "Closes o/r#7"));
 
-for (const marker of [false, true]) for (const trailing of [false, true]) test(`Native link declaration requires the explicit legacy marker (${marker}, trailing: ${trailing})`, async () => tracker({ description: `GitHub issue ${url}${trailing ? " followed by prose" : ""}`, ...(marker ? { github_link_only: true } : {}) }, async (root, id) => {
+for (const marker of [false, true]) for (const trailing of [false, true]) test(`Native link declaration remains compatible without a marker (${marker}, trailing: ${trailing})`, async () => tracker({ description: `GitHub issue ${url}${trailing ? " followed by prose" : ""}`, ...(marker ? { github_link_only: true } : {}) }, async (root, id) => {
   const item = (await get(id, {}, { pmRoot: root })).item;
-  assert.deepEqual(githubOwnershipClaims(item).owners, marker && !trailing ? ["o/r#7"] : []);
-  assert.equal(matchImportedIssue([item], source).item?.id, marker && !trailing ? id : undefined);
+  assert.deepEqual(githubOwnershipClaims(item).owners, ["o/r#7"]);
+  assert.equal(matchImportedIssue([item], source).item?.id, id);
 }));
 
 for (const external of [false, true]) test(`Provider backlink ignores GitHub references (external provider: ${external})`, async () => {
@@ -113,7 +113,7 @@ for (const external of [false, true]) test(`Provider backlink ignores GitHub ref
   });
 });
 
-for (const marker of [false, true]) test(`Identity graph derives native declaration claims from the shared marker (${marker})`, async () => tracker({ description: `GitHub issue ${url}`, ...(marker ? { github_link_only: true } : {}) }, async root => {
+for (const marker of [false, true]) test(`Identity graph retains legacy native declaration claims (${marker})`, async () => tracker({ description: `GitHub issue ${url}`, ...(marker ? { github_link_only: true } : {}) }, async root => {
   const graph = await exploreGithubIdentities(root, { identity: "gh:o/r#7" });
-  assert.equal(graph.edges.some(edge => edge.strength === "claim"), marker);
+  assert.equal(graph.edges.some(edge => edge.strength === "claim"), true);
 }));
