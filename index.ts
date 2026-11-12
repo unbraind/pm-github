@@ -1921,7 +1921,7 @@ export async function importGithubAtomic(
   if (opts.updateOnly) for (const entry of entries) validateGithubImportFidelity(entry, repo, `GitHub transaction ${transactionId}`);
   const payload = { transactionId, repo: repo.toLowerCase(), entries, mutations, updateOnly: Boolean(opts.updateOnly), ...(opts.linkDeps ? { linkDeps: true, dependencyIssues: opts.dependencyIssues } : {}), itemIds: [...itemIds] };
   const preflight = scanGithubImportPreflight(pmRoot, entries, mutations, payload);
-  if (preflight.verdict !== "pass") throw new GithubImportRecoveryError("github_import_preflight_failed", "GitHub import privacy preflight failed; no item or recovery plan was written.");
+  if (preflight.verdict !== "pass") throw new GithubImportRecoveryError("github_import_preflight_failed", `GitHub import privacy preflight failed: FAIL before write (${preflight.rules?.join(", ") ?? "privacy finding"}); no item or recovery plan was written.`);
   const plan = { ...payload, preflight };
   validateGithubImportPlan(plan);
   await persistGithubImportPlan(pmRoot, plan, opts.onPlanStaged);
@@ -3498,6 +3498,8 @@ export function verifyImportedProvenance(existing: PmItem[], prepared: readonly 
 export interface ImportGateReceipt {
   /** The gate verdict for the proposed tracker change. */
   verdict: GateVerdict;
+  /** Enumerated privacy rule names, retained only for a failed preflight diagnostic. */
+  rules?: string[];
   /** Number of files whose added lines were scanned. */
   scanned_files: number;
   /** Number of findings that survived the allowlist (0 on pass). */
@@ -3568,7 +3570,7 @@ export function scanGithubImportPreflight(pmRoot: string, entries: readonly Prep
     { itemId: "github-recovery-plan", fields: { recovery_plan: persisted } },
     ...mutations.map(mutation => ({ itemId: mutation.id, fields: mutation.op === "create" || mutation.op === "update" ? mutation.options : { ...mutation } })),
   ] });
-  return { verdict: report.verdict, scanned_files: report.scanned_files, findings: report.findings.length, allowlisted: report.allowlisted };
+  return { verdict: report.verdict, scanned_files: report.scanned_files, findings: report.findings.length, allowlisted: report.allowlisted, ...(report.findings.length ? { rules: [...new Set(report.findings.map(finding => finding.rule))].sort() } : {}) };
 }
 
 /** A saved passing verdict and a fresh passing scan are both required before any replay mutation. */
@@ -3783,7 +3785,7 @@ export async function runImport(
     skipped = skippedNumbers.length;
     if (opts.atomic) {
       const preflight = scanGithubImportPreflight(pmRoot, planned, [], { entries: planned, ...(opts.linkDeps ? { dependencyIssues: filtered } : {}) });
-      if (preflight.verdict !== "pass") throw new GithubImportRecoveryError("github_import_preflight_failed", "GitHub import privacy preflight failed; no item or recovery plan was written.");
+      if (preflight.verdict !== "pass") throw new GithubImportRecoveryError("github_import_preflight_failed", `GitHub import privacy preflight failed: FAIL before write (${preflight.rules?.join(", ") ?? "privacy finding"}); no item or recovery plan was written.`);
     }
     if (opts.gate) {
       const preview = runCommandTrackerGate({ pmRoot, planOnly: opts.dryRun, plannedItems: importGatePlannedItems(planned) });

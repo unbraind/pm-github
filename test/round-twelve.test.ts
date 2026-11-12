@@ -100,13 +100,13 @@ for (const field of ["sourceBody", "dependencyIssues", "match", "comments"]) tes
   const entry = (await prepareGithubImport(source, repo, parseImportOptions({}), undefined, undefined, undefined, { items: [], releases: [], timeline: async () => [] }))!;
   const secret = "ghp_" + "A".repeat(36);
   if (field === "sourceBody") entry.sourceBody = secret;
-  if (field === "match") { const local = (await create({ title: "Curated", type: "Chore" }, { pmRoot: root })).item; await change(root, local.id, { github_url: source.html_url }); entry.match = { ...local, github_url: source.html_url, description: secret }; entry.preserveContent = true; }
+  if (field === "match") { const local = (await create({ title: "Curated", type: "Chore" }, { pmRoot: root })).item; await change(root, local.id, { github_url: source.html_url }); entry.match = { ...local, github_url: source.html_url, extra_source: secret }; entry.preserveContent = true; }
   if (field === "comments") { entry.syncAnnotations = false; entry.comments = [{ id: 1, body: secret, created_at: source.updated_at, user: null }]; }
   const opts = field === "dependencyIssues" ? { linkDeps: true, dependencyIssues: [{ ...source, body: secret }] } : {};
   let stages = 0;
   await assert.rejects(() => importGithubAtomic(root, repo, [entry], { ...opts, onPlanStaged: () => { stages++; } }), { code: "github_import_preflight_failed" });
   assert.equal(stages, 0); assert.equal(existsSync(join(root, "transactions")), false);
-  const clean = { ...entry, sourceBody: source.body!, comments: [], ...(entry.match ? { match: { ...entry.match, description: "Public" } } : {}) };
+  const clean = { ...entry, sourceBody: source.body!, comments: [], ...(entry.match ? { match: { ...entry.match, extra_source: "Public" } } : {}) };
   await importGithubAtomic(root, repo, [clean], { ...opts, dependencyIssues: [source], onPlanStaged: () => { stages++; } });
   assert.equal(stages, 1);
 }));

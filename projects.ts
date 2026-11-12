@@ -608,6 +608,7 @@ const projectPullOwners = new WeakMap<object, readonly string[]>();
 /** Preserve the planning snapshot's owner decision without adding content to public plan rows. */
 export function getProjectPullOwners(entry: object): readonly string[] | undefined { return projectPullOwners.get(entry); }
 
+/** Board-to-tracker status changes and board options that require an explicit mapping. */
 export interface PullPlan {
   entries: PullPlanEntry[];
   /** project items whose Status option name maps to no known pm status. */
