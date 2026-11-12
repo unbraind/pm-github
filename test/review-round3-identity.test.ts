@@ -102,7 +102,7 @@ for (const mode of ["failed", "missing", "forged"] as const) test(`recovery pref
     assert.ok(JSON.stringify(snapshot(root)) === JSON.stringify(initial), "Fresh gated refusal must precede transaction and file writes");
   }
   // Seed a real interrupted clean transaction, then model a previously persisted unsafe plan.
-  const clean = { ...entry, body: source.body ?? "" };
+  const clean = { ...entry, body: source.body ?? "", sourceBody: source.body ?? "" };
   await assert.rejects(() => importGithubAtomic(root, "fixture/issues", [clean], { onTransition: context => {
     if (context.transition === "prepared") throw new WorkspaceTransactionInterruptedError("Before the first native mutation");
   } }), /interrupted/);

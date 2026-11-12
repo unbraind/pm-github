@@ -217,3 +217,23 @@ test("Round twelve README post-write gate allows shared reference tags", () => {
   assert.match(readme, /Any number of items may share its reference tag/);
   assert.doesNotMatch(readme, /exactly one provenance tag/);
 });
+
+test("Round12 preflight refuses with structured redacted evidence and allows clean data", async () => tracker(async root => {
+  const entry = (await prepareGithubImport(source, repo, parseImportOptions({}), undefined, undefined, undefined, { items: [], releases: [], timeline: async () => [] }))!;
+  const secret = "ghp_" + "B".repeat(36);
+  entry.sourceBody = secret;
+  let staged = 0;
+  await assert.rejects(() => importGithubAtomic(root, repo, [entry], { onPlanStaged: () => { staged++; } }), error => {
+    assert.equal((error as { code: string }).code, "github_import_preflight_failed");
+    const message = (error as Error).message;
+    assert.equal(message[0], "{", "typed preflight errors retain the gate JSON envelope");
+    const report = JSON.parse(message) as { findings: Array<{ rule: string; field: string; excerpt: string }> };
+    assert.ok(Array.isArray(report.findings));
+    assert.ok(report.findings.some(hit => hit.rule === "github-token-classic" && hit.field === "sourceBody"));
+    assert.equal(message.includes(secret), false);
+    return true;
+  });
+  assert.equal(staged, 0);
+  await importGithubAtomic(root, repo, [{ ...entry, sourceBody: source.body! }], { onPlanStaged: () => { staged++; } });
+  assert.equal(staged, 1);
+}));

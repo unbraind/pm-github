@@ -501,19 +501,14 @@ test("adversarial: token in a body, token in a comment, email, and host path pre
     await withMockGithub(githubHandler(malicious, comments), async () => {
       const ext = await harnessPromise;
 
-      // Workflow step: dry-run plan (no gate failures yet — nothing is written).
-      const plan = await ext.runImporter({
-        importer: "github",
-        args: ["acme/widgets"],
-        options: { atomic: true, dryRun: true, "with-comments": true },
-        pmRoot: root,
-      });
-      const planResult = plan.result as Record<string, unknown>;
-      assert.strictEqual(planResult.dryRun, true);
-      assert.strictEqual(planResult.wouldImport, 4);
+      // Atomic previews inspect the entire future recovery payload, even without --gate.
+      await assert.rejects(ext.runImporter({
+        importer: "github", args: ["acme/widgets"],
+        options: { atomic: true, dryRun: true, "with-comments": true }, pmRoot: root,
+      }), { code: "github_import_preflight_failed" });
+      assert.equal(git(["status", "--porcelain", "--", ".agents/pm"]).stdout.trim(), "");
 
-      // Workflow step: the gated import. It verifies the plan, writes, scans the
-      // proposed tracker change, and MUST exit non-zero on the findings.
+      // The gated import refuses before staging or SDK writes and cannot publish.
       await assert.rejects(
         ext.runImporter({
           importer: "github",
