@@ -1,10 +1,15 @@
 # Changelog
 
-## 2026.11.11 - 2026-11-11
+## Unreleased
 
 ### Fixed
 
 - The gated sync holds a runner for up to two hours while it waits for caller CI it competes with for the same pool ([pm-github-fxhd](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-fxhd.toon))
+
+## 2026.11.11 - 2026-11-11
+
+### Fixed
+
 - Explain scheduled install mismatches and preserve redacted command failure diagnostics ([pm-github-o9r7](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-o9r7.toon))
 - Packed projection fixture cleanup can mask its own test outcome ([pm-github-mes8](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-mes8.toon))
 
