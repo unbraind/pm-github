@@ -1,4 +1,4 @@
-import { buildGithubOwnershipIndex, githubOwnedIdentityKeys } from "./import-ownership.ts";
+import { buildGithubOwnershipIndex, githubOwnedIdentityKeys, GithubImportOwnershipError } from "./import-ownership.ts";
 import { parseGithubIssueUrl } from "./github-url.ts";
 import { readGithubWorkspace, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
@@ -174,6 +174,11 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
   const recovery = new Map(pending.map(journal => [journal.transactionId, { transactionId: journal.transactionId, status: String(journal.status) }]));
   for (const record of await listRetainedGithubImportPlans(pmRoot)) {
     const ids = record.itemIds?.map(pair => pair[1]) ?? record.entries?.flatMap(entry => entry.match?.id ? [entry.match.id] : []) ?? [];
+    if (record.repo.toLowerCase() === repo) {
+      const selectable = new Set(all.map(target => target.id));
+      const orphaned = ids.filter(id => !selectable.has(id));
+      if (orphaned.length) throw new GithubImportOwnershipError(orphaned.join(", "), `${repo} (retained transaction ${record.transactionId})`, ["recorded target is no longer selectable; restore its intended explicit ownership before retrying recovery"]);
+    }
     if (ids.some(id => targets.some(target => target.id === id))) recovery.set(record.transactionId, { transactionId: record.transactionId, status: "retained" });
   }
   let resumed = 0;

@@ -2,7 +2,7 @@ import { parseGithubUrl, parseGithubIssueUrl, githubUrlTokens } from "./github-u
 import { readGithubWorkspace, githubStatusIsTerminal } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
 import { GithubIdentityConflictError, normalizeImportValue } from "./import-fidelity.ts";
-import { buildGithubOwnershipIndex, type GithubOwnershipIndex, assertGithubOwnershipConsistency, githubOwnershipClaims, GithubImportOwnershipError } from "./import-ownership.ts";
+import { buildGithubOwnershipIndex, type GithubOwnershipIndex, withGithubOwnershipLock, assertGithubOwnershipConsistency, githubOwnershipClaims, GithubImportOwnershipError } from "./import-ownership.ts";
 /** Close delivered tracker items using merged pull requests and head-check evidence. */
 import { close, hashDocument, locateItem, readLocatedItem, runWithActiveExtensions, setActiveExtensionHooks, listAllComplete, certifyCompleteListResult, getHistoryPath, readHistoryEntries, verifyHistoryEntries, PmCliError, EXIT_CODE, type ItemDocument } from "@unbrained/pm-cli/sdk";
 
@@ -747,7 +747,7 @@ async function closeoutAttempt(pmPath: string, repo: string | undefined, options
         await observer?.("before_close");
         // The pinned SDK has no public close(expectedRevision). Its transactional hook runs
         // inside the same per-item lock as lifecycle validation, persistence and history.
-        await runWithActiveExtensions({ path: pmRoot, noExtensions: true }, async () => {
+        await withGithubOwnershipLock(pmRoot, () => runWithActiveExtensions({ path: pmRoot, noExtensions: true }, async () => {
           setActiveExtensionHooks({ beforeCommand: [], afterCommand: [], onRead: [], onWrite: [], onIndex: [],
             beforeMutation: [{ layer: "project", name: "closeout-revision", run: async context => {
               await observer?.("locked");
@@ -764,7 +764,7 @@ async function closeoutAttempt(pmPath: string, repo: string | undefined, options
           await close(entry.row.item, entry.reason, { author: "pm-github", completedAt: entry.at,
             resolution: entry.resolution, expectedResult: entry.expectedResult, actualResult: entry.actualResult,
           }, { pmRoot, noExtensions: true });
-        });
+        }));
         closed++;
         handled.add(entry.row.item);
       } catch (error: unknown) {

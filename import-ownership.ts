@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 /** Positive ownership checks at planning and the SDK's locked mutation boundary. */
 import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
 import {
-  PmClient, listAllItemMetadata, locateItem, readLocatedItem, hashDocument, EXIT_CODE, PmCliError, getActiveExtensionRegistrations, runWithActiveExtensions, setActiveExtensionHooks,
+  PmClient, acquireLockLease, listAllItemMetadata, locateItem, readLocatedItem, hashDocument, EXIT_CODE, PmCliError, getActiveExtensionRegistrations, runWithActiveExtensions, setActiveExtensionHooks,
   setActiveExtensionRegistrations, runActiveBeforeMutationHooks, runActiveOnReadHooks,
   runActiveOnWriteHooks, runActiveOnIndexHooks,
 } from "@unbrained/pm-cli/sdk";
@@ -146,7 +146,12 @@ export function githubOwnershipClaims(item: PmItem, provisional = false, _allowR
   const external = normalizeGithubClaim(item.external_ref);
   if (external) owners.add(external);
   const imported = githubImporterIdentity(item, repositories);
-  if (imported) owners.add(imported);
+  if (imported) {
+    owners.add(imported);
+    const generated = typeof item.description === "string" && /^GH (?:issue|PR) #[1-9]\d*: (https?:\/\/\S+)(?: ·|$)/i.exec(item.description);
+    const source = generated && parseGithubIssueUrl(generated[1]);
+    if (source && !source.api && source.key === imported) kinds.add(source.kind!);
+  }
   const repository = normalizeGithubRepository(item.github_repo);
   const number = Number.isSafeInteger(item.github_number) && Number(item.github_number) > 0 ? Number(item.github_number) : undefined;
   const evidence = provisional || owners.size > 0;
@@ -211,8 +216,25 @@ export async function readGithubImportOwner(pmRoot: string, target: GithubOwnedT
   return hashDocument(document);
 }
 
-/** Preserve ambient hooks while adding positive ownership checks inside every target item lock. */
+const ownershipLeaseScope = new AsyncLocalStorage<ReadonlySet<string>>();
+
+/** Serialize the tracker ownership namespace before SDK workspace/item locks; nested writes reuse the lease. */
+export async function withGithubOwnershipLock<T>(pmRoot: string, run: () => Promise<T>): Promise<T> {
+  const { pmRoot: root, settings } = await readGithubWorkspace(pmRoot);
+  const active = ownershipLeaseScope.getStore();
+  if (active?.has(root)) return run();
+  const lease = await acquireLockLease(root, "github-ownership", settings.locks.ttl_seconds, "pm-github:ownership", false, false, settings.locks.wait_ms);
+  try { return await lease.fence(() => ownershipLeaseScope.run(new Set([...(active ?? []), root]), run)); }
+  finally { await lease.release(); }
+}
+
+/** Coordinate all ownership-changing paths before entering their native mutation guards. */
 export async function withGithubImportOwners<T>(pmRoot: string, targets: readonly GithubOwnedTarget[], run: () => Promise<T>, work?: GithubOwnershipWork): Promise<T> {
+  return withGithubOwnershipLock(pmRoot, () => withGithubImportOwnersUnderLease(pmRoot, targets, run, work));
+}
+
+/** Preserve ambient hooks while adding positive ownership checks inside every target item lock. */
+async function withGithubImportOwnersUnderLease<T>(pmRoot: string, targets: readonly GithubOwnedTarget[], run: () => Promise<T>, work?: GithubOwnershipWork): Promise<T> {
   const active = ownershipScope.getStore();
   if (active?.root === pmRoot && targets.every(target => active.targets.some(outer => outer.id === target.id &&
     outer.repo.toLowerCase() === target.repo.toLowerCase() && outer.number === target.number &&
@@ -281,5 +303,33 @@ export async function mutateGithubOwnedItem(pmRoot: string, target: GithubOwnedT
     const client = PmClient.forActiveExtensionHost({ pmRoot, noExtensions: true });
     return client.run(action, action === "create"
       ? { options: { ...options, id: target.id } } : { id: target.id, options });
+  });
+}
+
+
+/** Guard board-selected native changes against the complete owner corpus while allowing genuinely unowned items. */
+export async function withGithubItemConsistency<T>(pmRoot: string, id: string, expected: readonly string[], run: () => Promise<T>): Promise<T> {
+  return withGithubOwnershipLock(pmRoot, async () => {
+    const prior = AsyncResource.bind(runActiveBeforeMutationHooks);
+    const onRead = AsyncResource.bind(runActiveOnReadHooks), onWrite = AsyncResource.bind(runActiveOnWriteHooks), onIndex = AsyncResource.bind(runActiveOnIndexHooks);
+    const registrations = getActiveExtensionRegistrations();
+    return runWithActiveExtensions({ path: pmRoot, noExtensions: true }, async () => {
+      setActiveExtensionRegistrations(registrations);
+      setActiveExtensionHooks({ beforeCommand: [], afterCommand: [],
+        onRead: [{ layer: "project", name: "github-board-owner-delegate", run: async context => { await onRead(context); } }],
+        onWrite: [{ layer: "project", name: "github-board-owner-delegate", run: async context => { await onWrite(context); } }],
+        onIndex: [{ layer: "project", name: "github-board-owner-delegate", run: async context => { await onIndex(context); } }],
+        beforeMutation: [{ layer: "project", name: "github-board-owner", run: async context => {
+          await prior(context);
+          if ((context.before ?? context.after)?.metadata.id !== id) return;
+          const peers = buildGithubOwnershipIndex(await context.sdk.list(), expected.map(key => key.split("#")[0]!));
+          for (const document of [context.before, context.after]) if (document) {
+            const keys = assertGithubOwnershipConsistency({ ...document.metadata, body: document.body }, undefined, peers);
+            if (JSON.stringify(keys) !== JSON.stringify(expected)) throw new GithubImportOwnershipError(id, expected.join(" versus ") || "original unowned project item", keys);
+          }
+        } }],
+      });
+      return run();
+    });
   });
 }

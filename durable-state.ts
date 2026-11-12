@@ -34,33 +34,33 @@ export async function syncGithubStatePath(target: string, directory: boolean, pl
 
 /** Publish only complete fsynced bytes; atomic link preserves exclusive-create semantics. */
 export async function writeGithubStateAtomic(file: string, contents: string, options: GithubStateWriteOptions = {}): Promise<void> {
+  const platform = (options.platform ?? (() => process.platform))();
   const directory = dirname(file);
   const created = await mkdir(directory, { recursive: true });
-  if (options.exclusive) {
-    // Match O_EXCL even when an existing owner's directory is read-only.
-    // This is an early contention hint; link() remains the race-safe authority.
-    const exists = await lstat(file).then(() => true, (error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return false;
-      throw error;
-    });
-    if (exists) throw Object.assign(new Error("Durable state already exists"), { code: "EEXIST" });
-  }
   const staged = join(directory, `.${basename(file)}.${randomUUID()}.stage`);
   try {
+    if (options.exclusive) {
+      // Match O_EXCL even when an existing owner's directory is read-only.
+      // This is an early contention hint; link() remains the race-safe authority.
+      const exists = await lstat(file).then(() => true, (error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return false;
+        throw error;
+      });
+      if (exists) throw Object.assign(new Error("Durable state already exists"), { code: "EEXIST" });
+    }
     await writeFileAtomic(staged, contents, { createParentDirectories: false });
-    const platform = (options.platform ?? (() => process.platform))();
     await syncGithubStatePath(staged, false, platform);
     await options.onStaged?.({ file, staged });
     if (options.exclusive) await link(staged, file);
     else await rename(staged, file);
+  } finally {
+    // A crash can leave an invisible stage; readers never enumerate it as state.
+    await unlink(staged).catch(() => undefined);
     // A newly created directory also needs its parent entry made durable.
     const last = created ? dirname(created) : directory;
     for (let current = directory; ; current = dirname(current)) {
       await syncGithubStatePath(current, true, platform);
       if (current === last || current === dirname(current)) break;
     }
-  } finally {
-    // A crash can leave an invisible stage; readers never enumerate it as state.
-    await unlink(staged).catch(() => undefined);
   }
 }

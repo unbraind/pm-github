@@ -183,6 +183,10 @@ for (const gate of [false, true]) test(`Round7 failed atomic preflight never sta
   assert.equal((await listAllComplete({}, { pmRoot: root })).items.length, 0);
   assert.equal(existsSync(join(root, "transactions")), false);
   entry.body = "Public body";
+  await assert.rejects(() => importGithubAtomic(root, repo, [entry], { gate }),
+    (error: unknown) => (error as { code: string }).code === "github_import_preflight_failed");
+  assert.equal(existsSync(join(root, "transactions")), false);
+  entry.sourceBody = "Public body";
   let interrupted = false;
   await assert.rejects(() => importGithubAtomic(root, repo, [entry], { gate, onTransition: context => {
     if (!interrupted && context.transition === "prepared") { interrupted = true; throw new WorkspaceTransactionInterruptedError("Fixture interruption"); }

@@ -781,7 +781,7 @@ pm github project sync unbraind/5 --push --apply --no-add-missing # only reconci
 
 ### `github` search provider
 
-Registers a `github` search provider so `pm search ... --semantic` can reach GitHub. It asks GitHub which issues in the target repo match your query, then returns hits for the **pm items you've already imported** from those issues (matched by the `gh:owner/repo#N` provenance tag).
+Registers a `github` search provider so `pm search ... --semantic` can reach GitHub. It asks GitHub which issues in the target repo match your query, then returns hits for the **pm items you've already imported** from those issues (matched by consistent explicit provenance or a verified importer ID; reference tags alone do not establish ownership).
 
 ```bash
 pm config project set ...                      # set search.provider = "github" in .agents/pm/settings.json
@@ -841,7 +841,7 @@ Unreadable input, malformed or truncated diffs, binary input, invalid UTF-8, Git
 4. **write** — the ordinary (atomic or per-item) import;
 5. **gate** — the proposed tracker change is scanned; a finding exits non-zero, so the caller never commits or pushes.
 
-Rendered values are also scanned in memory before mutation, so a known finding cannot be written to disk. After mutation, the importer verifies that every planned provenance tag exists exactly once, then scans the tracker diff. A completed SDK journal cannot substitute for missing item files.
+Every field persisted in the recovery plan, including source bodies and dependency inputs, is scanned in memory before staging, so a known finding cannot be written to disk. After mutation, the importer verifies that each planned issue has exactly one consistent importer owner at the intended item, then scans the tracker diff. Any number of items may share its reference tag. A completed SDK journal cannot substitute for missing item files.
 
 The `gate` receipt reports the verdict, scanned file count, findings, and allowlisted count. Each finding includes `match_offset` (the starting character offset of the hashed match within the scanned field value, or the serialized added line for tracker text) and `excerpt`. Host-path excerpts show only the root initial, such as `/h***/…`; other matches use `[redacted]`. Human-readable workflow diagnostics include the same evidence. Full paths and secrets never appear. Recognizable bare-root JavaScript regex literals immediately used with `.test()` or `.exec()` are distinguished from paths; quoted host paths and slash-separated host paths remain refused, including inside code and regex source. Ambiguous quote contexts remain refused. Whole JSON-serialized fields retain the same distinction after decoding; TOON wrappers are recognized only in tracker text.
 

@@ -1,5 +1,5 @@
 import { writeGithubStateAtomic, syncGithubStatePath, type GithubStateWriteOptions } from "./durable-state.ts";
-import { buildGithubOwnershipIndex, readGithubOwnershipSnapshot, githubRepositoryHash, githubOwnershipClaims, githubOwnedIdentityKeys, assertGithubOwnershipConsistency, assertGithubImportOwner, GithubImportOwnershipError, readGithubImportOwner, withGithubImportOwners, mutateGithubOwnedItem, type GithubOwnershipIndex, type GithubOwnedTarget } from "./import-ownership.ts";
+import { buildGithubOwnershipIndex, withGithubItemConsistency, readGithubOwnershipSnapshot, githubRepositoryHash, githubOwnershipClaims, githubOwnedIdentityKeys, assertGithubOwnershipConsistency, assertGithubImportOwner, GithubImportOwnershipError, readGithubImportOwner, withGithubImportOwners, mutateGithubOwnedItem, type GithubOwnershipIndex, type GithubOwnedTarget } from "./import-ownership.ts";
 import { parseGithubIssueUrl, githubUrlTokens } from "./github-url.ts";
 import { readGithubWorkspace, canonicalGithubStatus, githubStatusKind, githubStatusIsTerminal, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
@@ -63,7 +63,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 
 import {
-  createPmCliExpectedError,
+  PmClient, createPmCliExpectedError,
   comments as pmCommentsFn,
   commitItemMutations as sdkCommitItemMutations,
   isExternalDependencyReference,
@@ -99,7 +99,7 @@ import {
 
 export { resolvePmDataDir } from "./gate.ts";
 
-import {
+import { getProjectPullOwners,
   type ProjectItem,
   type ProjectItemContent,
   type ProjectMeta,
@@ -1776,7 +1776,7 @@ async function commitGithubImportTransactionUnchecked(config: {
     await finalize();
     let commentFailures = 0;
     for (const entry of entries) if (entry.syncAnnotations) {
-      commentFailures += (await syncGithubCommentsToAnnotations(itemIds.get(entry.issueNumber)!, entry.comments, pmRoot, entry.issueNumber)).failed;
+      commentFailures += (await syncGithubCommentsToAnnotations(itemIds.get(entry.issueNumber)!, entry.comments, pmRoot, entry.issueNumber, githubImportTarget(config.repo, entry, itemIds.get(entry.issueNumber)!))).failed;
     }
     const depLink = opts.linkDeps ? await linkImportedDependencies(config.repo, opts.dependencyIssues ?? entries.map(entry => ({
       number: entry.issueNumber, title: entry.title, body: entry.sourceBody ?? entry.body,
@@ -1905,8 +1905,6 @@ export async function importGithubAtomic(
     itemIds.set(entry.issueNumber, planned.itemId);
     mutations.push(...planned.mutations);
   }
-  const preflight = scanGithubImportPreflight(pmRoot, entries, mutations);
-  if (preflight.verdict !== "pass") throw new GithubImportRecoveryError("github_import_preflight_failed", "GitHub import privacy preflight failed; no item was written.");
   for (const entry of entries) {
     const id = itemIds.get(entry.issueNumber)!;
     const target = githubImportTarget(repo, entry, id, !opts.updateOnly && !entry.match?.id);
@@ -1921,7 +1919,10 @@ export async function importGithubAtomic(
   const transactionId = deriveAtomicTransactionId(repo, entries, mutations, await importContextVersions(pmRoot, entries, workspace.statuses));
   // Save all producer modes, before any SDK mutation, with their original targets.
   if (opts.updateOnly) for (const entry of entries) validateGithubImportFidelity(entry, repo, `GitHub transaction ${transactionId}`);
-  const plan = { transactionId, repo: repo.toLowerCase(), preflight, entries, mutations, updateOnly: Boolean(opts.updateOnly), ...(opts.linkDeps ? { linkDeps: true, dependencyIssues: opts.dependencyIssues } : {}), itemIds: [...itemIds] };
+  const payload = { transactionId, repo: repo.toLowerCase(), entries, mutations, updateOnly: Boolean(opts.updateOnly), ...(opts.linkDeps ? { linkDeps: true, dependencyIssues: opts.dependencyIssues } : {}), itemIds: [...itemIds] };
+  const preflight = scanGithubImportPreflight(pmRoot, entries, mutations, payload);
+  if (preflight.verdict !== "pass") throw new GithubImportRecoveryError("github_import_preflight_failed", "GitHub import privacy preflight failed; no item or recovery plan was written.");
+  const plan = { ...payload, preflight };
   validateGithubImportPlan(plan);
   await persistGithubImportPlan(pmRoot, plan, opts.onPlanStaged);
   const result = await commitGithubImportTransaction({ pmRoot, repo, entries, mutations, transactionId, itemIds, opts, commit });
@@ -3561,9 +3562,10 @@ function importGatePlannedItems(planned: readonly PreparedGithubImport[]): Track
 }
 
 /** Scan both the content projection and exact SDK write payload with the shared privacy gate. */
-export function scanGithubImportPreflight(pmRoot: string, entries: readonly PreparedGithubImport[], mutations: readonly BulkItemMutation[] = []): ImportGateReceipt {
+export function scanGithubImportPreflight(pmRoot: string, entries: readonly PreparedGithubImport[], mutations: readonly BulkItemMutation[] = [], persisted: unknown = { entries, mutations }): ImportGateReceipt {
   const report = runCommandTrackerGate({ pmRoot, planOnly: true, plannedItems: [
     ...importGatePlannedItems(entries)!,
+    { itemId: "github-recovery-plan", fields: { recovery_plan: persisted } },
     ...mutations.map(mutation => ({ itemId: mutation.id, fields: mutation.op === "create" || mutation.op === "update" ? mutation.options : { ...mutation } })),
   ] });
   return { verdict: report.verdict, scanned_files: report.scanned_files, findings: report.findings.length, allowlisted: report.allowlisted };
@@ -3572,7 +3574,7 @@ export function scanGithubImportPreflight(pmRoot: string, entries: readonly Prep
 /** A saved passing verdict and a fresh passing scan are both required before any replay mutation. */
 export function assertGithubImportReplayPreflight(pmRoot: string, record: GithubImportPlanRecord): void {
   if (record.preflight?.verdict !== "pass") throw new GithubImportRecoveryError("github_import_preflight_failed", `Transaction ${record.transactionId} has a failed or missing saved privacy preflight. Review the original plan and establish a passing preflight before explicit recovery; no item was written.`);
-  const current = scanGithubImportPreflight(pmRoot, record.entries, record.mutations);
+  const current = scanGithubImportPreflight(pmRoot, record.entries, record.mutations, record);
   if (current.verdict !== "pass") throw new GithubImportRecoveryError("github_import_preflight_failed", `Transaction ${record.transactionId} failed its replay privacy preflight; no item was written.`);
 }
 
@@ -3779,6 +3781,10 @@ export async function runImport(
     gatePlan = planned;
     gatePlanByNumber = new Map(planned.map((entry) => [entry.issueNumber, entry]));
     skipped = skippedNumbers.length;
+    if (opts.atomic) {
+      const preflight = scanGithubImportPreflight(pmRoot, planned, [], { entries: planned, ...(opts.linkDeps ? { dependencyIssues: filtered } : {}) });
+      if (preflight.verdict !== "pass") throw new GithubImportRecoveryError("github_import_preflight_failed", "GitHub import privacy preflight failed; no item or recovery plan was written.");
+    }
     if (opts.gate) {
       const preview = runCommandTrackerGate({ pmRoot, planOnly: opts.dryRun, plannedItems: importGatePlannedItems(planned) });
       if (preview.verdict === "fail") throw new CommandError(JSON.stringify({ ...preview, error: "pm github gate: FAIL before write" }));
@@ -6751,9 +6757,19 @@ export function buildPullEntryArgs(entry: PullPlanEntryLike, pmRoot: string, sta
 // (records closed_at + close_reason); `canceled` keeps its distinct terminal
 // state via `pm update` while recording `--close-reason`; everything else is a
 // plain `pm update --status`.
-function applyPullEntry(entry: PullPlanEntryLike, pmRoot: string, statuses?: GithubStatusRegistry): { changed: boolean; error?: string } {
-  const res = pmRun(buildPullEntryArgs(entry, pmRoot, statuses));
-  return res.ok ? { changed: true } : { changed: false, error: res.stderr };
+/** Apply a project status only after its original ownership decision passes the native locked guard. @internal */
+export async function applyPullEntry(entry: PullPlanEntryLike, pmRoot: string, statuses?: GithubStatusRegistry): Promise<{ changed: boolean; error?: string }> {
+  try {
+    const expected = getProjectPullOwners(entry) ?? [];
+    const reason = `GitHub project status → ${entry.toStatus}`;
+    const closed = canonicalGithubStatus(entry.toStatus, statuses) === (statuses?.close_status ?? "closed");
+    await withGithubItemConsistency(pmRoot, entry.pmId, expected, () => PmClient.forActiveExtensionHost({ pmRoot, noExtensions: true }).run(
+      closed ? "close" : "update", { id: entry.pmId, options: closed ? { reason } : {
+        status: canonicalGithubStatus(entry.toStatus, statuses), message: reason,
+        ...(githubStatusIsTerminal(entry.toStatus, statuses) ? { closeReason: reason } : {}),
+      } }));
+    return { changed: true };
+  } catch (error: unknown) { return { changed: false, error: errorMessage(error) }; }
 }
 
 interface PullPlanEntryLike {
@@ -6819,10 +6835,10 @@ async function runProjectSync(ctx: CommandHandlerContext) {
 
   const workspace = await readGithubWorkspace(ctx.pm_root);
   const pushPlan = doPush
-    ? buildProjectPushPlan(scoped.selected, ref, projectItems, meta.statusField, { addMissing, statusMap, statuses: workspace.statuses })
+    ? buildProjectPushPlan(scoped.selected, ref, projectItems, meta.statusField, { addMissing, statusMap, statuses: workspace.statuses, corpus: allPm })
     : undefined;
   const pullPlan = doPull
-    ? buildProjectPullPlan(scoped.selected, ref, projectItems, statusMap, workspace.statuses)
+    ? buildProjectPullPlan(scoped.selected, ref, projectItems, statusMap, workspace.statuses, allPm)
     : undefined;
 
   // Conflict resolution when applying BOTH directions: a linked item can appear
@@ -6886,7 +6902,7 @@ async function runProjectSync(ctx: CommandHandlerContext) {
   if (applyPull && pullPlan) {
     for (const e of pullActionable) {
       if (prefer === "pm" && pushItemIds.has(e.itemId)) continue; // push wins
-      const r = applyPullEntry(e, ctx.pm_root, workspace.statuses);
+      const r = await applyPullEntry(e, ctx.pm_root, workspace.statuses);
       if (!r.changed) { console.error(`  pull ${e.pmId} "${e.title}": ${r.error}`); pullFailed++; continue; }
       pulled++;
     }

@@ -457,6 +457,8 @@ export interface PushPlanOptions {
   addMissing?: boolean;
   statusMap?: Map<string, string>;
   statuses?: GithubStatusRegistry;
+  /** Complete peer corpus when the command scopes selected items. */
+  corpus?: PmItemLike[];
 }
 
 // Build the pm → project plan. Pure and side-effect free so it is unit-testable
@@ -470,7 +472,7 @@ export function buildProjectPushPlan(
 ): PushPlan {
   const addMissing = opts.addMissing !== false;
   const options = statusField?.options ?? [];
-  const ownership = buildGithubOwnershipIndex(pmItems.filter((item): item is PmItemLike => Boolean(item)), projectItems.flatMap(item => item.content.repo ? [item.content.repo] : []));
+  const ownership = buildGithubOwnershipIndex((opts.corpus ?? pmItems).filter((item): item is PmItemLike => Boolean(item)), projectItems.flatMap(item => item.content.repo ? [item.content.repo] : []));
   const byProjectItem = indexProjectItemMap(projectItems);
   const byIssue = indexProjectItemsByIssue(projectItems);
 
@@ -601,6 +603,11 @@ export interface PullPlanEntry {
   toStatus: string;
 }
 
+const projectPullOwners = new WeakMap<object, readonly string[]>();
+
+/** Preserve the planning snapshot's owner decision without adding content to public plan rows. */
+export function getProjectPullOwners(entry: object): readonly string[] | undefined { return projectPullOwners.get(entry); }
+
 export interface PullPlan {
   entries: PullPlanEntry[];
   /** project items whose Status option name maps to no known pm status. */
@@ -616,10 +623,11 @@ export function buildProjectPullPlan(
   projectItems: ProjectItem[],
   statusMap?: Map<string, string>,
   statuses?: GithubStatusRegistry,
+  corpus: PmItemLike[] = pmItems,
 ): PullPlan {
   const pmByItemId = indexPmByProjectItem(pmItems, ref);
-  const ownership = buildGithubOwnershipIndex(pmItems.filter((item): item is PmItemLike => Boolean(item)), projectItems.flatMap(item => item.content.repo ? [item.content.repo] : []));
-  const pmByIssue = indexPmByIssue(pmItems, ownership);
+  const ownership = buildGithubOwnershipIndex(corpus.filter((item): item is PmItemLike => Boolean(item)), projectItems.flatMap(item => item.content.repo ? [item.content.repo] : []));
+  const pmByIssue = indexPmByIssue(corpus, ownership);
   const entries: PullPlanEntry[] = [];
   const statusSkipped: PullPlan["statusSkipped"] = [];
 
@@ -628,7 +636,7 @@ export function buildProjectPullPlan(
     if (!pm && pi.content.repo && typeof pi.content.number === "number") {
       pm = pmByIssue.get(`${pi.content.repo.toLowerCase()}#${pi.content.number}`);
     }
-    if (!pm || !pm.id) continue; // unlinked project items are handled by import
+    if (!pm || !pm.id || !pmItems.some(selected => selected.id === pm!.id)) continue; // unlinked project items are handled by import
     if (pi.content.repo && pi.content.number && ownership.states.get(pm)?.evidence) {
       assertGithubOwnershipConsistency(pm, { id: pm.id, repo: pi.content.repo, number: pi.content.number }, ownership);
     }
@@ -640,7 +648,9 @@ export function buildProjectPullPlan(
     }
     const fromStatus = canonicalGithubStatus(pm.status ?? "open", statuses);
     if (fromStatus === toStatus) continue;
-    entries.push({ itemId: pi.id, pmId: pm.id, title: pm.title ?? "(untitled)", fromStatus, toStatus });
+    const entry = { itemId: pi.id, pmId: pm.id, title: pm.title ?? "(untitled)", fromStatus, toStatus };
+    projectPullOwners.set(entry, githubOwnedIdentityKeys(pm, ownership));
+    entries.push(entry);
   }
 
   return { entries, statusSkipped };

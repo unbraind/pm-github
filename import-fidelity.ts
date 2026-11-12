@@ -377,7 +377,7 @@ export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, _ta
     if (state.claims.includes(issueKey)) assertGithubOwnershipConsistency(item, { id: item.id, repo, number: issue.number }, ownership);
     if (state.owners.length) return state.owners.includes(issueKey);
     return declaredOwner(item) ||
-      Object.entries(item).some(([key, value]) => OWNER_LINK_FIELD.test(key) && locators(value).includes(issueUrl)) ||
+      legacyGithubLinkIdentities(item).some(target => target.canonical === issueUrl) ||
       locators(providerProvenance(item)).some(url => bodyUrls.has(url));
   });
   if (candidates.length > 1) throw new GithubImportOwnershipError(candidates[0]!.id!, issueKey, candidates.map(candidate => `${issueKey} claimed by ${candidate.id}`));
