@@ -6,11 +6,15 @@ status: open
 priority: 2
 tags[3]: ci,fixtures,follow-up
 created_at: "2026-11-06T12:54:44.193Z"
-updated_at: "2026-11-06T13:59:53.519Z"
+updated_at: "2026-11-10T03:10:37.977Z"
 author: codex-astra
 acceptance_criteria: Reproduce and isolate package-install cost with synthetic packed consumers; retain the existing deadlines and assertions; document comparison with the hosted matrix.
-comments[1]{created_at,author,text}:
+comments[2]{created_at,author,text}:
   "2026-11-06T13:59:53.518Z",codex-astra,"A later full focused rerun completed successfully through pm test: import-projection 6/6, including the packed npm/native Bun consumer, with unchanged 45-second child and 600-second test deadlines. No installation or timeout implementation was changed to obtain this pass. Earlier baseline and repaired timeouts remain valid evidence of an intermittent shared-host validation limit; no definitive resource/registry root cause is claimed."
-files[1]{path,scope}:
+  "2026-11-10T03:10:33.766Z",codex-agent,"Additional unchanged-code packed-fixture evidence from PR #229: npm run release:check passed all 1800 executed tests, including the built-package selector CLI case. The sequential bun run release:check test phase reported 1799 passed, 1 failed, 2 existing SDK skips. Its sole failure was test/import-selection.test.ts:250 package-install setup: spawnSync returned null rather than 0 under the existing 45000 ms child limit (47799 ms for the whole test). The current assertion does not retain an error code or signal, so a definitive timeout/resource/registry cause is not claimed. An isolated recheck with temporary NODE_V8_COVERAGE and isolated Git identity passed 1/1 in 37276 ms using node --test --test-concurrency=1 --test-name-pattern=\"built package dispatch advertises and honors selectors and limits through the real CLI\" test/import-selection.test.ts. No deadline, assertion, fixture installer or production selector code was changed. Reusing this existing intermittent packed-installation follow-up instead of creating another item."
+files[2]{path,scope}:
   test/import-projection.test.ts,project
+  test/import-selection.test.ts,project
+tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  "node --test --test-concurrency=1 --test-name-pattern=\"built package dispatch advertises and honors selectors and limits through the real CLI\" test/import-selection.test.ts",project,600,codex-agent,"2026-11-10T03:10:37.862Z",local_mutation,fix/sync-does-not-hold-runners
 body: ""

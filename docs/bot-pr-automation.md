@@ -34,9 +34,9 @@ bot-PR action_required runs without an App. GitHub documents write access for
 the PR approval UI and Actions write permission for fine-grained tokens on the
 [approval endpoint](https://docs.github.com/en/rest/actions/workflow-runs#approve-a-workflow-run-for-a-fork-pull-request).
 Use the maintainer's authorized credential; this reusable workflow does not
-approve itself. Wait for the native PR checks to pass and required conversations
-to be resolved, then merge through the protected PR using the maintainer
-credential. The fallback does not arm auto-merge. A new bot head may require
+approve itself. The workflow arms native auto-merge, which waits for the approved PR checks
+to pass and required conversations to be resolved. A maintainer can also merge
+through the protected PR using an authorized credential. A new bot head may require
 approval again. Manually dispatched checks remain extra head validation.
 
 ### App path: unattended native PR runs
@@ -64,11 +64,15 @@ The official create-github-app-token action is pinned by immutable commit in
 both workflows, and Dependabot maintains that pin. Its token is restricted to the current
 caller and the listed permissions, and is automatically revoked at job end.
 The private key is supplied only to that action after local gates and caller
-scripts finish. App-enabled monitoring has forty polls and a forty-minute
-absolute deadline recorded immediately after token creation, so publication
-time also counts toward the budget. This stays inside the one-hour token lifetime. Legacy
-GITHUB_TOKEN monitoring retains the two-hour bound and does not arm auto-merge;
-a maintainer must approve eligible runs and merge the protected PR. Required checks and conversations stay enforced by GitHub.
+scripts finish. After dispatch, the workflow arms `gh pr merge --auto --squash`
+on the expected head SHA and exits: it performs no in-job wait for caller CI,
+which takes runners from the same account pool, so polling could only lengthen
+the queue it waits on. GITHUB_TOKEN mode also arms auto-merge;
+a maintainer must approve eligible native PR runs first. Its typed
+`github_token_requires_approval` notice explains approval and App configuration.
+A GITHUB_TOKEN merge still does not trigger default-branch push workflows. A base
+advance after publication, or an unavailable auto-merge, waits for the next
+scheduled run. Required checks and conversations stay enforced by GitHub.
 
 Sources: [GitHub token event behavior](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow),
 [required-check eligibility](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks),
@@ -151,16 +155,49 @@ code cannot safely infer unknown required context names from workflow filenames.
 
 ## Freshness and protected merging
 
-The proposal is rebuilt on the default branch each daily run. After publication,
-a bounded monitor retries failed PR-state and ancestry reads, and handles a base advance (including the daily release) by
-checking compare-API ancestry even when the merge label is BLOCKED or UNKNOWN,
-requesting update-branch with expected_head_sha, then redispatching every
-selected workflow for the new head. In App mode it requests squash auto-merge with a matching
-head SHA; GitHub still enforces required checks and conversation resolution.
-Disallowed auto-merge is a notice, failed check dispatch is an error. No bypass
-or thread resolution is attempted. Successful ancestry responses must still contain a nonnegative integer; invalid
-values fail closed. App mode stops within forty minutes and legacy mode within two hours. A base
-change outside that window is handled by the next daily run, so permanent freshness is not claimed.
+The proposal is rebuilt on the default branch each daily run. After publication the
+dispatch step arms squash auto-merge (in either token mode) with a matching head SHA and
+exits; GitHub still enforces required checks and conversation resolution. No
+runner is held while caller CI queues: it takes runners from the same account
+pool, so an in-job wait could only lengthen the queue it waits on. Disallowed
+auto-merge is a notice naming the reason; failed check dispatch is an error.
+The guard checks the repository auto-merge setting and that the base is protected.
+It reads classic `GET /repos/{owner}/{repo}/branches/{branch}` metadata and every
+page of `GET /repos/{owner}/{repo}/rules/branches/{branch}` before arming.
+A required check is present when classic `required_status_checks.contexts` or
+`checks[].context` (unless enforcement is `off`), or an active applicable
+`required_status_checks` rule's `parameters.required_status_checks[].context`,
+contains any nonempty string. Names are not trimmed or matched to caller workflow
+jobs: the guard does not establish that a named check belongs to caller CI.
+Maintainers must configure every intended CI check as required; auto-merge does
+not wait for unrequired checks, including additional manual head validation.
+Reviews and conversations alone do not count. Missing checks, unreadable APIs
+(including permissions, 404s and rate limits), or metadata that cannot verify a
+required name refuse arming and report the scheduled-retry fallback.
+
+Freshness is also required: an active applicable `merge_queue` rule, or a
+required-status-check ruleset with `strict_required_status_checks_policy: true`
+and a nonempty required context, supplies native freshness. Otherwise the guard
+reads the matching branch's GraphQL `branchProtectionRule` and requires both
+`requiresStatusChecks` and `requiresStrictStatusChecks` to be true. This extra
+read is necessary because the REST branch summary omits classic strictness.
+Loose or unverifiable policies never arm auto-merge. The notice titles are
+`required_checks_unconfigured` for absent check names,
+`required_checks_unverified` for unreadable branch rules,
+`required_checks_not_strict` for absent strict protection or merge queue, and
+`branch_freshness_unverified` for unreadable classic freshness policy.
+A later run retries; persistent configuration problems need maintainer attention.
+No bypass or thread resolution is attempted. Under strict checks, a base advance
+blocks landing until the next scheduled run rebuilds the proposal from the current
+default branch and its new required checks pass. With a merge queue, GitHub tests
+the queued merge against the latest base; configure caller checks for merge-group
+validation when selecting that policy. An unavailable auto-merge also waits for
+the next scheduled retry. See GitHub's
+[strict checks and merge queue rules](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches). Sync and closeout jobs have 60-minute timeouts;
+their dispatch steps have five-minute timeouts and no polling. Sync alerts use
+10 minutes. The Dependabot reusable job already had a 60-minute timeout;
+its bounded API retries do not wait for caller runs. The non-reusable release
+workflow is outside this caller-workflow change.
 
 The existing daily schedules and per-kind concurrency groups are retained. No
 push trigger is added: concurrency permits one active run per kind, not one
@@ -173,12 +210,22 @@ and enabled auto-merge do not resolve that conversation.
 
 ## Regression evidence
 
-`test/bot-pr-workflow.test.ts` executes each workflow's actual maintenance shell
-against a real local Git remote. It advances the base with a release commit,
-performs a real branch merge, and verifies that both workflows are dispatched
-again on the changed head. Receipt-only GitHub commands keep caller repositories
-untouched. Cases also cover explicit overrides, no dispatchable workflow,
-CodeQL without a dispatch trigger, dispatch-denial diagnostics, App credential
-pairing, token scope/bindings, token-lifetime bounds, disallowed auto-merge and a blocked PR reaching
-the monitor bound. Existing end-to-end import and closeout suites retain the
-privacy, scope, ownership, lease and no-op boundaries.
+`test/bot-pr-workflow.test.ts` executes each workflow's actual dispatch shell
+against a real local Git remote with receipt-only GitHub commands. It advances
+the base with a release commit and verifies one dispatch round, one head-guarded
+auto-merge request and a parked-run report, with no PR/ancestry polling or branch
+update. Cases cover classic contexts/checks, ruleset-only requirements, protected
+bases without required checks, unreadable rules APIs, disabled auto-merge, absent
+protection, failed/malformed metadata, explicit overrides, no dispatchable
+workflow, CodeQL without a dispatch trigger, dispatch denial, App credential
+pairing and scoped token bindings.
+The timeout contract discovers every reusable workflow and checks every job;
+the dispatch-step contract checks the five-minute cap. Existing end-to-end import
+and closeout suites retain privacy, scope, ownership, lease, no-op and attribution
+revocation boundaries.
+
+The approval-required run listing is informational. Both dispatch steps query it
+once after auto-merge preparation; if the lookup fails, they print a notice to
+inspect the bot PR and exit successfully without retrying or revoking auto-merge.
+Successful lookups still report each parked run URL. Dispatch failures continue
+to fail the job before auto-merge can be armed.
