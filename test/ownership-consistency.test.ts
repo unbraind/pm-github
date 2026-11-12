@@ -1,12 +1,12 @@
 /** Contradictions and competing claims are refused against native SDK trackers on every write path. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, rmSync, readFileSync, chmodSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, chmodSync, existsSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, delimiter } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
-  init, create, get, docs as nativeDocs, readSettings, mutateItem, getItemPath, getHistoryPath, normalizeItemId,
+  init, create, get, commitItemMutations, docs as nativeDocs, readSettings, mutateItem, getItemPath, getHistoryPath, normalizeItemId,
   listAllComplete, WorkspaceTransactionInterruptedError, runWithActiveExtensions, setActiveExtensionHooks,
 } from "@unbrained/pm-cli/sdk";
 import extension, {
@@ -18,7 +18,9 @@ import extension, {
 } from "../index.ts";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import { fetchImportTimeline, matchImportedIssue } from "../import-fidelity.ts";
-import { mutateGithubOwnedItem, assertGithubOwnershipConsistency, githubOwnershipClaims } from "../import-ownership.ts";
+import { mutateGithubOwnedItem, assertGithubOwnershipConsistency, githubOwnershipClaims, withGithubImportOwners, withGithubOwnershipWork, type GithubOwnershipWork } from "../import-ownership.ts";
+import { withImportPreview } from "./helpers/import-preview.ts";
+import { exploreGithubIdentities } from "../identity.ts";
 import { selectRefreshTargets } from "../refresh.ts";
 import { indexPmByIssue, buildProjectPushPlan, buildProjectPullPlan, buildProjectImportPlan } from "../projects.ts";
 import { runCloseout } from "../closeout.ts";
@@ -36,7 +38,7 @@ async function tracker(run: (root: string, id: string) => Promise<void>, git = f
     if (git) assert.equal(spawnSync("git", ["init", "-q"], { cwd: directory }).status, 0);
     await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { pmRoot: root, cwd: directory, noExtensions: true });
     const id = managed ? deriveAtomicItemId(repo, 7, (await readSettings(root)).id_prefix, normalizeItemId) : normalizeItemId("curated", (await readSettings(root)).id_prefix);
-    await create({ id, author: createdByImporter ? "pm-github" : "fixture", title: "Original local title", type: managed && !createdByImporter ? "Chore" : "Issue", body: "Original local body", status: "in_progress",
+    await create({ id, author: createdByImporter ? "pm-github" : "fixture", title: "Original local title", type: !createdByImporter ? "Chore" : "Issue", body: "Original local body", status: "in_progress",
       description: `GH issue #7: ${source.html_url}`, tags: "gh:o/r#7" }, { pmRoot: root });
     await change(root, id, { github_repo: repo, github_number: 7, github_url: source.html_url });
     await withEnv({ PM_PATH: root, PM_AUTHOR: "fixture", PM_TELEMETRY_SOURCE_CONTEXT: "automation", GITHUB_TOKEN: "fixture-token", GH_TOKEN: undefined,
@@ -102,14 +104,10 @@ const shapes: Shape[] = [
   { name: "number versus URL", values: { github_number: 8 }, claim: "o/r#8" },
   { name: "contradictory URL alias", values: { GitHubURL: "https://github.com/other/project/pull/8" }, claim: "other/project#8" },
   { name: "contradictory legacy link", values: { external_links: ["https://github.com/other/project/issues/8"] }, claim: "other/project#8" },
-  { name: "contradictory native declaration", values: { description: "GitHub issue https://github.com/other/project/issues/8" }, claim: "other/project#8" },
+  { name: "contradictory native declaration", values: { github_link_only: true, description: "GitHub issue https://github.com/other/project/issues/8" }, claim: "other/project#8" },
   { name: "external-ref repository", values: { external_ref: "gh:other/project#8" }, claim: "other/project#8" },
   { name: "external-ref number", values: { external_ref: "https://github.com/O/R/pull/8/" }, claim: "o/r#8" },
-  { name: "number-only multi-repository legacy", reset: true, values: { github_number: 7, tags: ["gh:o/r#7", "gh:other/project#7"] }, claim: "other/project#7" },
-  { name: "number-only mismatched reference", reset: true, values: { github_number: 7, tags: ["gh:o/r#8"] }, claim: "o/r#8" },
-  { name: "partial repository contradicts reference", reset: true, values: { github_repo: "other/project", github_link_only: false, tags: ["gh:o/r#7"] }, claim: "other/project#7" },
-  { name: "full owner contradicts reference", values: { tags: ["gh:o/r#7", "gh:other/project#8"] }, claim: "other/project#8" },
-  { name: "generated legacy number contradicts URL", reset: true, values: { description: `GH issue #8: ${source.html_url}`, tags: ["gh:o/r#7"] }, claim: "o/r#8" },
+  { name: "generated legacy number contradicts URL", reset: true, values: { github_number: 8, github_url: source.html_url, description: `GH issue #8: ${source.html_url}`, tags: ["gh:o/r#7"] }, claim: "o/r#8" },
   { name: "competing URL alias", peer: { GitHubURL: "https://www.github.com/O/R/pull/7/" }, claim: "claimed by" },
   { name: "competing external-ref", peer: { external_ref: "gh:O/R#7" }, claim: "claimed by" },
 ];
@@ -208,11 +206,11 @@ test("Recovery-plan deletion flushes its directory through the durable-state pol
 })));
 
 for (const legacy of [false, true]) test(`Ownership matrix closeout allows consistent ${legacy ? "legacy" : "full"} owner`, async () => tracker(async (root, id) => github(id, async () => {
-  if (legacy) await change(root, id, { github_number: 7, tags: ["gh:o/r#7"] }, true);
+  if (legacy) await change(root, id, { tags: ["gh:o/r#7"] }, true);
   const result = await runCloseout(root, repo, { pr: "1", apply: true }, { base: githubApiBase(), next: parseNextLink, get: url => fetchJSON(url, "fixture-token") });
   assert.equal(result.closed, 1);
   assert.equal(result.plan[0]!.action, "close");
-}), false, false));
+}), false, legacy, legacy));
 
 test("Ownership matrix locked closeout refuses a newly competing owner", async () => tracker(async (root, id) => github(id, async () => {
   const peer = (await create({ title: "Initially unowned peer", type: "Chore" }, { pmRoot: root })).item;
@@ -286,16 +284,15 @@ test("Creation proof: an original mirroring plan refuses a late curated linked o
   assert.deepEqual(await bytes(root, id), before);
 })));
 
-test("PR tracker records retain references without contradictory GitHub identity tags", async () => {
+test("PR tracker records permit arbitrary reference tags without ownership claims", async () => {
   const ids = ["pm-github-blocker-format-followup", "pm-github-curated-reopen-followup", "pm-github-pr-url-alias-followup",
     "pm-github-project-reference-followup", "pm-github-reference-identity-followup", "pm-github-reference-identity", "pm-github-search-reference-followup"];
   const root = join(import.meta.dirname, "../.agents/pm");
   for (const id of ids) {
     const { item } = await get(id, {}, { pmRoot: root, noExtensions: true });
     assert.doesNotThrow(() => assertGithubOwnershipConsistency(item), id);
-    for (const tag of item.tags ?? []) if (tag.startsWith("gh:")) {
-      assert.ok(githubOwnershipClaims(item).owners.includes(tag.slice(3)), `${id}: contextual references belong in docs`);
-    }
+    assert.deepEqual(githubOwnershipClaims({ ...item, tags: [...item.tags ?? [], "gh:unrelated/project#99"] }).claims,
+      githubOwnershipClaims(item).claims, `${id}: reference tags never constrain ownership`);
   }
   const references = await nativeDocs("pm-github-reference-identity-followup", {}, { pmRoot: root, noExtensions: true });
   assert.ok(references.docs.some(doc => doc.path === "https://github.com/unbraind/pm-github/pull/233"));
@@ -484,3 +481,141 @@ for (const conflict of [false, true]) test(`Ownership sync hint uses shared clai
     if (conflict) assert.doesNotMatch(stderr.join("\n"), /is linked to/);
   });
 }));
+
+
+for (const atomic of [false, true]) test(`Reference contract curated Chore mentions another issue (${atomic})`, async () => tracker(async (root, id) => {
+  await change(root, id, { github_url: "https://github.com/o/r/issues/30", github_number: 30, github_repo: repo, github_link_only: true, tags: ["keep", "gh:o/r#7"] }, true);
+  const before = await bytes(root, id);
+  const original = (await get(id, {}, { pmRoot: root })).item;
+  await github(id, () => sync(root, atomic));
+  const actual = (await get(id, {}, { pmRoot: root })).item;
+  assert.deepEqual(await bytes(root, id), before);
+  for (const key of ["title", "type", "tags", "created_at"] as const) assert.deepEqual(actual[key], original[key]);
+  assert.equal(actual.type, "Chore");
+  assert.equal((await listAllComplete({}, { pmRoot: root })).items.length, 2);
+}, false, false));
+
+test("Reference contract two linked items share the incoming reference without a duplicate", async () => tracker(async (root, id) => {
+  await change(root, id, { github_url: "https://github.com/o/r/issues/30", github_link_only: true, tags: ["gh:o/r#7"] }, true);
+  const peer = (await create({ title: "Second curated Chore", type: "Chore", tags: "gh:o/r#7" }, { pmRoot: root })).item;
+  await change(root, peer.id, { github_url: "https://github.com/o/r/issues/31", github_link_only: true });
+  const before = await bytes(root, id), other = await bytes(root, peer.id);
+  await github(id, () => sync(root, true));
+  assert.deepEqual(await bytes(root, id), before); assert.deepEqual(await bytes(root, peer.id), other);
+  const items = (await listAllComplete({}, { pmRoot: root })).items;
+  assert.equal(items.length, 3); assert.equal(items.filter(item => item.github_number === 7).length, 1);
+}, false, false));
+
+test("Reference contract importer mirror keeps mirroring beside unrelated reference tags", async () => tracker(async (root, id) => {
+  await change(root, id, { tags: ["gh:o/r#30", "gh:other/project#31"] });
+  await github(id, () => sync(root, true));
+  assert.equal((await get(id, {}, { pmRoot: root })).item.title, source.title);
+  assert.equal((await listAllComplete({}, { pmRoot: root })).items.length, 1);
+}));
+
+test("Reference contract legacy importer ID without source number resyncs idempotently", async () => tracker(async (root, id) => {
+  await change(root, id, { tags: ["gh:o/r#7"] }, true);
+  assert.equal((await get(id, {}, { pmRoot: root })).item.github_number, undefined);
+  await github(id, () => sync(root, true));
+  const before = await bytes(root, id);
+  await github(id, () => sync(root, true));
+  assert.deepEqual(await bytes(root, id), before);
+  assert.equal((await listAllComplete({}, { pmRoot: root })).items.length, 1);
+  await change(root, id, { tags: ["gh:o/r#99"] }, true);
+  await github(id, () => sync(root, true));
+  assert.equal((await listAllComplete({}, { pmRoot: root })).items.length, 1, "The ID supplies the source number, never the reference tag");
+}));
+
+for (const fields of [
+  { github_number: 7, tags: ["gh:o/r#7", "gh:other/project#7"] },
+  { github_number: 7, tags: ["gh:o/r#8"] },
+  { github_repo: "other/project", github_link_only: false, tags: ["gh:o/r#7"] },
+  { github_repo: repo, github_number: 7, tags: ["gh:other/project#8"] },
+]) test(`Reference contract reference tags do not contradict partial or full fields (${JSON.stringify(fields)})`, async () => tracker(async (root, id) => {
+  await change(root, id, fields, true);
+  const items = (await listAllComplete({ includeBody: true }, { pmRoot: root })).items;
+  assert.doesNotThrow(() => assertGithubOwnershipConsistency(items[0]!, undefined, items));
+  const outcome = await github(id, () => sync(root, true));
+  assert.equal("identity_conflicts" in outcome.result, false, "References do not cause conflict receipts either");
+}, false, false));
+
+/** Forty native items and an actual SDK transaction measure work without replacing persistence APIs. */
+test("Ownership cost native batch N=40 reads two corpora and parses linearly", async t => tracker(async (root, initial) => {
+  const targets: Array<{id:string;repo:string;number:number}> = [];
+  for (let number = 1; number <= 40; number++) {
+    const id = deriveAtomicItemId(repo, number, (await readSettings(root)).id_prefix, normalizeItemId);
+    if (id !== initial) await create({ id, author: "pm-github", title: `Source ${number}`, type: "Issue", tags: `gh:o/r#${number}` }, { pmRoot: root });
+    targets.push({ id, repo, number });
+  }
+  const work: GithubOwnershipWork = {};
+  await withGithubOwnershipWork(work, () => withGithubImportOwners(root, targets, () => commitItemMutations({
+    pmRoot: root, author: "pm-github", transactionId: "ownership-cost-40", mutations: targets.map(target => ({ op: "update" as const, id: target.id, options: { title: "Native SDK update" } })),
+    onTransition: async context => {
+      if (context.transition === "committing") for (const target of targets) await withGithubImportOwners(root, [target], async () => mutateItem({
+        pmRoot: root, settings: await readSettings(root), id: target.id, author: "pm-github", op: "import", mutate: document => {
+          document.metadata.github_updated_at = source.updated_at;
+          return { changedFields: ["github_updated_at"] };
+        },
+      }));
+    },
+  })));
+  assert.ok(work.claimParses! <= 40 * 12, JSON.stringify(work));
+  assert.equal(work.corpusReads, 2);
+  t.diagnostic(JSON.stringify(work));
+}));
+
+test("Ownership cost outbound N=40 remains quadratic with fresh target checks", async t => tracker(async (root, initial) => {
+  for (let number = 1; number <= 40; number++) {
+    const id = deriveAtomicItemId(repo, number, (await readSettings(root)).id_prefix, normalizeItemId);
+    if (id !== initial) await create({ id, author: "pm-github", title: `Source ${number}`, type: "Issue", tags: `gh:o/r#${number}` }, { pmRoot: root });
+  }
+  const work: GithubOwnershipWork = {};
+  await withMockGithub((request, response) => jsonResponse(response, 200, { ...source, state: "closed" }), async server => {
+    const harness = await extensionHarness;
+    await withGithubOwnershipWork(work, () => harness.runCommand({ command: "github sync", options: { repo }, pmRoot: root, global: { json: true } }));
+    assert.equal(server.requests.filter(request => request.method === "PATCH").length, 40);
+  });
+  assert.ok(work.claimParses! <= 40 * 40 + 40 * 3, JSON.stringify(work));
+  t.diagnostic(JSON.stringify(work));
+}));
+
+for (const file of ["settings.json", "derived-index.bin"]) test(`Preview complete byte snapshot rejects ${file} changes`, async () => {
+  await assert.rejects(() => withImportPreview(async root => {
+    const target = join(root, file);
+    writeFileSync(target, file === "settings.json" ? Buffer.concat([readFileSync(target), Buffer.from("\n")]) : Buffer.from([0, 255, 128]));
+  }), /Preview changed/);
+});
+test("Preview complete byte snapshot allows read-only SDK settings", () => withImportPreview(async root => { await readSettings(root); }));
+
+test("API URL mentions group with web references but never become ownership", async () => tracker(async (root, id) => {
+  await change(root, id, { description: "See https://api.github.com/repos/o/r/issues/7", tags: [] }, true);
+  await create({title:"Web reference",type:"Chore",tags:"gh:o/r#7"},{pmRoot:root});
+  const report = await exploreGithubIdentities(root, { identity: "gh:o/r#7" });
+  assert.equal(report.identities, 1);
+  assert.ok(report.edges.some(edge => edge.item === id && edge.source === "prose" && edge.identity === "gh:o/r#7" && edge.strength === "mention"));
+  assert.ok(report.edges.every(edge => edge.strength === "mention"));
+  await change(root, id, { description: "See https://api.github.com/repos/o/r/issues/7/extra" }, true);
+  assert.equal((await exploreGithubIdentities(root, { identity: "gh:o/r#7" })).edges.some(edge=>edge.item===id), false);
+}, false, false));
+
+
+test("Reference contract link-only owner 30 mentioning 31 stays untouched while 31 imports", async () => tracker(async (root, id) => {
+  await change(root, id, { github_repo: repo, github_number: 30, github_link_only: true, tags: ["gh:o/r#31"] }, true);
+  const before = await bytes(root, id);
+  const issue = { ...source, number: 31, html_url: "https://github.com/o/r/issues/31" };
+  await withMockGithub((request, response) => jsonResponse(response, 200, request.url!.includes("/issues?") ? [issue] : []), () => sync(root, true));
+  assert.deepEqual(await bytes(root, id), before);
+  assert.equal((await listAllComplete({}, { pmRoot: root })).items.length, 2);
+}, false, false));
+
+
+test("Reference contract closeout ignores an unrelated repository hash in an importer naming pattern", async () => tracker(async (root, initial) => {
+  await change(root, initial, {}, true);
+  const id = deriveAtomicItemId("other/project", 8, (await readSettings(root)).id_prefix, normalizeItemId);
+  await create({ id, title: "Explicit owner with an unrelated ID", type: "Issue", author: "pm-github", tags: "gh:o/r#31" }, { pmRoot: root });
+  await change(root, id, { github_url: source.html_url, github_repo: repo, github_number: 7 });
+  await github(id, async () => {
+    const result = await runCloseout(root, repo, { pr: "1", apply: true }, { base: githubApiBase(), next: parseNextLink, get: url => fetchJSON(url, "fixture-token") });
+    assert.equal(result.closed, 1);
+  });
+}, false, false));

@@ -648,6 +648,13 @@ test("sync reports a non-retryable PATCH failure and the after-command hook name
       assert.ok(id);
       assert.equal(spawnSync(REAL_PM, ["--path", root, "close", id, "--reason", "fixture closed"], { encoding: "utf8" }).status, 0);
     }
+    const tracker = path.join(root, ".agents/pm");
+    const linked = (await listAllComplete({}, { pmRoot: tracker })).items[0]!;
+    const linkedId = linked.id;
+    await mutateItem({ pmRoot: tracker, settings: await readSettings(tracker), id: linkedId, author: "fixture", op: "update", mutate: document => {
+      document.metadata.github_url = "https://github.com/acme/widgets/issues/5";
+      return { changedFields: ["github_url"] };
+    } });
     await withEnv({ GITHUB_TOKEN: "tok", GH_TOKEN: undefined }, async () => {
       const patched = await captureStderr(() => withMockGithub((req, res) => {
         if (req.method === "PATCH") jsonResponse(res, 422, { message: "no" });
@@ -660,14 +667,6 @@ test("sync reports a non-retryable PATCH failure and the after-command hook name
       })));
       assert.match(patched.stderr.join("\n"), /PATCH failed/);
     });
-
-    const tracker = path.join(root, ".agents/pm");
-    const linked = (await listAllComplete({}, { pmRoot: tracker })).items[0]!;
-    const linkedId = linked.id;
-    await mutateItem({ pmRoot: tracker, settings: await readSettings(tracker), id: linkedId, author: "fixture", op: "update", mutate: document => {
-      document.metadata.github_url = "https://github.com/acme/widgets/issues/5";
-      return { changedFields: ["github_url"] };
-    } });
 
     await withFakePm(`
       case " $* " in *" list "*) exec "$REAL_PM" "$@" ;; esac

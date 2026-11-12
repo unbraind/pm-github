@@ -68,30 +68,24 @@ test("URL helper rejects non-GitHub and incomplete identities while preserving A
   assert.equal(parseGithubUrl("https://github.com/issues/pull/commit/abcd")!.kind, "commit");
 });
 
-for (const mode of ["ambiguous", "single", "explicit"] as const) test(`number-only legacy provenance is bounded (${mode})`, async () => tracker(async root => {
+for (const mode of ["ambiguous", "single", "explicit"] as const) test(`number-only metadata and reference tags never promote or contradict an owner (${mode})`, async () => tracker(async root => {
   const tags = mode === "single" ? ["keep", "gh:original/project#7"] : ["keep", "gh:original/project#7", "gh:unrelated/project#7"];
   const item = await local(root, { github_number: 7, tags, ...(mode === "explicit" ? { github_repo: "original/project" } : {}) });
   const before = snapshot(root);
   const repo = mode === "single" ? "original/project" : "unrelated/project";
   const incoming = { ...issue(repo), state: "closed" as const, closed_at: "2027-01-01T00:00:00Z", updated_at: "2027-01-01T00:00:00Z", state_reason: "completed" as const };
   const run = () => captureStderr(() => runImport(repo, root, parseImportOptions({}), { resolveToken: () => undefined, fetchIssues: async () => [incoming], fetchIssueTimeline: async () => [] }));
-  if (mode === "single") await run();
-  else await assert.rejects(run, error => {
-    assert.equal((error as { code: string }).code, "github_import_owner_conflict");
-    assert.match(String(error), /original\/project#7/); assert.match(String(error), /unrelated\/project#7/);
-    return true;
-  });
+  const result = await run();
+  assert.equal("identity_conflicts" in result.result, false);
   const current = (await get(item.id, {}, { pmRoot: root })).item;
   assert.equal(current.title, item.title);
-  if (mode === "single") assert.equal(current.status, "closed");
-  else {
-    assert.equal(current.status, item.status);
-    assert.equal(current.github_url, undefined);
-    for (const [path, value] of Object.entries(before)) if (path.endsWith(".toon") || path.startsWith("history/")) assert.equal(snapshot(root)[path], value);
-    assert.equal((await listAllComplete({}, { pmRoot: root })).items.length, 1);
-  }
-  assert.deepEqual(importIdentityKeys(current), mode === "ambiguous" ? [] : ["original/project#7"]);
-  assert.equal(Boolean(legacyGithubIdentityConflict(current)), mode === "ambiguous");
+  assert.equal(current.status, item.status);
+  assert.equal(current.github_url, undefined);
+  for (const [path, value] of Object.entries(before)) if (path.endsWith(`${item.id}.toon`) || path === `history/${item.id}.jsonl`) assert.equal(snapshot(root)[path], value);
+  assert.equal((await listAllComplete({}, { pmRoot: root })).items.length, 2, "Only explicit provenance or a proven importer ID owns the incoming issue");
+  assert.deepEqual(importIdentityKeys(current), mode === "explicit" ? ["original/project#7"] : []);
+  assert.equal(legacyGithubIdentityConflict(current), undefined);
+
 }));
 
 for (const mode of ["failed", "missing", "forged"] as const) test(`recovery preflight refuses before any write (${mode})`, async () => tracker(async root => {

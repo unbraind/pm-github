@@ -125,6 +125,10 @@ test("sync scoped empty plans and export preview shapes use real local items", a
 test("scoped sync and labelled export apply preserve receipts after partial remote failure", async t => {
   const root = tracker(t);
   const first = await sdk.create({ title: "Linked", type: "Task", status: "open", tags: "gh:acme/widgets#1" }, { pmRoot: root });
+  await sdk.mutateItem({ pmRoot: root, id: first.item.id, settings: await sdk.readSettings(root), author: "fixture", op: "update", mutate: document => {
+    document.metadata.github_url = "https://github.com/acme/widgets/issues/1";
+    return { changedFields: ["github_url"] };
+  } });
   const second = await sdk.create({ title: "New", type: "Task", tags: "bug" }, { pmRoot: root });
   await withEnv({ GITHUB_TOKEN: "fixture-token", GH_TOKEN: undefined }, async () => {
     await withMockGithub((req, res) => {

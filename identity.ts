@@ -64,8 +64,9 @@ function graph(items: readonly IdentityItem[]): { nodes: IdentityNode[]; edges: 
     nodes.push({ id, providers, native_owner: typeof item.source_owner === "string" ? item.source_owner : null, ownership: providers.length ? (github && item.github_link_only !== true ? "mixed" : "provider") : github ? "github" : "local" });
     edges.push(...claims);
     for (const match of githubUrlTokens(`${item.description}\n${item.body}`)) {
-      if (!parseGithubIssueUrl(match.raw)) continue;
-      const key = identity(match.raw);
+      const parsed = parseGithubIssueUrl(match.raw);
+      if (!parsed) continue;
+      const key = `gh:${parsed.key}`;
       if (!claims.some(edge => edge.identity === key) && !edges.some(edge => edge.item === id && edge.identity === key && edge.strength === "mention")) edges.push({ item: id, identity: key, source: "prose", strength: "mention" });
     }
   }

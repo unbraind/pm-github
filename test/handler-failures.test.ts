@@ -239,7 +239,7 @@ test("runSync --dry-run previews a divergence (pm open, GitHub closed → would 
   const ext = await harnessPromise;
   const root = freshTracker();
   try {
-    createLinkedItem(root, "Linked", "gh:a/b#5", "open");
+    createLinkedItem(root, "Linked", "gh:a/b#5", "open", true);
     await withEnv({ GITHUB_TOKEN: "tok", GH_TOKEN: undefined }, async () => {
       await withMockGithub((_req, res) => {
         // Upstream issue is closed; pm item is open → desired "open" diverges.
@@ -266,7 +266,7 @@ test("runSync --apply PATCHes GitHub to match pm status", async () => {
   const ext = await harnessPromise;
   const root = freshTracker();
   try {
-    createLinkedItem(root, "Linked", "gh:a/b#6", "closed");
+    createLinkedItem(root, "Linked", "gh:a/b#6", "closed", true);
     await withEnv({ GITHUB_TOKEN: "tok", GH_TOKEN: undefined }, async () => {
       await withMockGithub((req, res) => {
         if (req.method === "GET") {
@@ -297,7 +297,7 @@ test("runSync skips an issue already in the desired state", async () => {
   const ext = await harnessPromise;
   const root = freshTracker();
   try {
-    createLinkedItem(root, "Linked", "gh:a/b#7", "open");
+    createLinkedItem(root, "Linked", "gh:a/b#7", "open", true);
     await withEnv({ GITHUB_TOKEN: "tok", GH_TOKEN: undefined }, async () => {
       await withMockGithub((_req, res) => {
         jsonResponse(res, 200, { number: 7, state: "open" }); // already matches
@@ -323,7 +323,7 @@ test("runSync tolerates a 404 reading upstream state (skipped, not aborted)", as
   const ext = await harnessPromise;
   const root = freshTracker();
   try {
-    createLinkedItem(root, "Linked", "gh:a/b#8", "open");
+    createLinkedItem(root, "Linked", "gh:a/b#8", "open", true);
     await withEnv({ GITHUB_TOKEN: "tok", GH_TOKEN: undefined }, async () => {
       await withMockGithub((_req, res) => {
         // The linked issue was deleted upstream.
@@ -713,7 +713,7 @@ test("runSync rejects --ids naming an unknown pm item", async () => {
   const ext = await harnessPromise;
   const root = freshTracker();
   try {
-    createLinkedItem(root, "Linked", "gh:a/b#5", "open");
+    createLinkedItem(root, "Linked", "gh:a/b#5", "open", true);
     await withEnv({ GITHUB_TOKEN: "tok", GH_TOKEN: undefined }, async () => {
       await assert.rejects(
         ext.runCommand({

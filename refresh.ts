@@ -1,4 +1,4 @@
-import { githubOwnedIdentityKeys, githubOwnershipClaims } from "./import-ownership.ts";
+import { buildGithubOwnershipIndex, githubOwnedIdentityKeys } from "./import-ownership.ts";
 import { parseGithubIssueUrl } from "./github-url.ts";
 import { readGithubWorkspace, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
@@ -31,11 +31,12 @@ export interface RefreshEntry {
 /** Select only explicit provenance, refusing conflicting links and duplicate local owners. */
 export function selectRefreshTargets(items: readonly PmItem[], repo: string): RefreshTarget[] {
   const targets = new Map<number, RefreshTarget>();
+  const ownership = buildGithubOwnershipIndex(items, [repo]);
   for (const item of items) {
     if (!item.id) continue;
-    const identities = githubOwnedIdentityKeys(item, items, repo);
+    const identities = githubOwnedIdentityKeys(item, ownership, repo);
     // The refresh GraphQL path queries issue(), so PR owners are excluded.
-    if (githubOwnershipClaims(item).kinds.includes("pull")) continue;
+    if (ownership.states.get(item)!.kinds.includes("pull")) continue;
     if (typeof item.github_repo === "string" && item.github_repo.toLowerCase() === repo && typeof item.github_number === "number" && (!Number.isSafeInteger(item.github_number) || item.github_number < 1)) throw new CommandError(`Refresh found an invalid issue number for ${item.id}.`);
     const numbers = new Set<number>();
     for (const key of identities) {

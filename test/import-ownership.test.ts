@@ -140,11 +140,12 @@ test("Ownership locked atomic upsert refuses an occupant arriving after prefligh
   assert.deepEqual(await bytes(root, id), before);
 }));
 
-test("Ownership malformed creation plan refuses before publishing an unowned record", async () => tracker(async root => {
+test("Ownership importer ID retains ownership without a generated source description", async () => tracker(async root => {
   const entry = (await prepareGithubImport(changed, repo, parseImportOptions({}), undefined, undefined, undefined,
     { items: [], releases: [], timeline: async () => [] }))!;
-  await assert.rejects(() => importGithubAtomic(root, repo, [{ ...entry, description: "A curated description without a source marker" }]), { code: "github_import_plan_ownership_invalid" });
-  assert.equal((await listAllComplete({}, { pmRoot: root })).items.length, 0);
+  const result = await importGithubAtomic(root, repo, [{ ...entry, description: "Description is content, not identity" }]);
+  assert.equal((await listAllComplete({}, { pmRoot: root })).items.length, 1);
+  assert.equal((await get(result.itemIds.get(7)!, {}, { pmRoot: root })).item.github_url, changed.html_url);
   assert.deepEqual(await listUnfinishedGithubImports(root), []);
 }));
 
@@ -264,7 +265,7 @@ for (const atomic of [false, true]) test(`Ownership matching-owner control stays
 
 test("Ownership matching-owner legacy control retains its generated-source marker", async () => tracker(async root => {
   const id = deriveAtomicItemId(repo, 7, (await readSettings(root)).id_prefix, normalizeItemId);
-  await create({ id, title: issue.title, type: "Issue", body: issue.body!, description: `GH issue #7: ${issue.html_url}`, tags: "gh:o/r#7" }, { pmRoot: root });
+  await create({ id, author: "pm-github", title: issue.title, type: "Issue", body: issue.body!, description: `GH issue #7: ${issue.html_url}`, tags: "gh:o/r#7" }, { pmRoot: root });
   await sync(root, issue, { atomic: true });
   assert.equal((await listAllComplete({}, { pmRoot: root })).items.length, 1);
   assert.equal((await get(id, {}, { pmRoot: root })).item.github_number, 7);

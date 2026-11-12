@@ -101,16 +101,16 @@ for (const git of [true, false]) test(`explicit local link merges lifecycle whil
   assert.equal(actual.completed_at, source.closed_at);
   assert.equal(((result.plan as Array<{ identity: { title_conflict?: boolean } }> | undefined)?.[0]?.identity.title_conflict) ?? !git, true);
   assert.equal((await sync(root, source, true, git)).unchanged, true);
-  assert.throws(() => selectRefreshTargets([{ ...actual, tags: [tag, "gh:o/r#99"] }], repo), { code: "github_import_owner_conflict" });
+  assert.equal(selectRefreshTargets([{ ...actual, tags: [tag, "gh:o/r#99"] }], repo)[0]?.number, 7);
   assert.equal(selectRefreshTargets([actual], repo)[0]?.number, 7);
 }));
 
 for (const fields of [
   { github_repo: "O/R", github_number: 7 },
-  { github_number: 7 },
-  { github_link_only: true },
-  { description: `GH issue #7: ${issue.html_url}` },
-  { description: "GH issue #7: https://github.com/O/R/issues/7" },
+  { github_repo: repo, github_number: 7 },
+  { github_link_only: true, github_url: issue.html_url },
+  { github_link_only: true, description: `GH issue #7: ${issue.html_url}` },
+  { github_link_only: true, description: "GH issue #7: https://github.com/O/R/issues/7" },
 ]) test(`legacy explicit provenance resolves its original item: ${Object.keys(fields).join(",")}`, async () => tracker(true, async root => {
   const local = (await create({ title: "Legacy curated owner", type: "Chore", tags: tag }, { pmRoot: root })).item;
   await commitImportedItem({ pmRoot: root, id: local.id, itemPath: getItemPath(root, "Chore", local.id), settings: await readSettings(root),
@@ -125,17 +125,17 @@ for (const fields of [
   assert.equal((await sync(root)).unchanged, true);
 }));
 
-test("contradictory references on an already linked owner refuse without rebinding", async () => tracker(true, async root => {
+test("references on an already linked owner permit another import without rebinding", async () => tracker(true, async root => {
   const local = (await create({ title: "Owner", type: "Chore", tags: `${tag},gh:o/r#99` }, { pmRoot: root })).item;
   await commitImportedItem({ pmRoot: root, id: local.id, itemPath: getItemPath(root, "Chore", local.id), settings: await readSettings(root),
     document: { metadata: { ...local, github_url: issue.html_url, github_number: 7, github_link_only: false }, body: "Local" }, author: "fixture", message: "Linked owner with references", conflictWarningPrefix: "fixture" });
   const source = { ...issue, number: 99, html_url: "https://github.com/o/r/issues/99" };
   const before = await get(local.id, {}, { pmRoot: root });
   const history = readFileSync(getHistoryPath(root, local.id), "utf8");
-  await assert.rejects(() => sync(root, source), { code: "github_import_owner_conflict" });
+  await sync(root, source);
   assert.equal((await get(local.id, {}, { pmRoot: root })).item_hash, before.item_hash);
   assert.equal(readFileSync(getHistoryPath(root, local.id), "utf8"), history);
-  assert.equal((await listAllComplete({}, { pmRoot: root })).items.length, 1);
+  assert.equal((await listAllComplete({}, { pmRoot: root })).items.length, 2);
 }));
 
 test("dependency references resolve importer identities beside related local references", async () => tracker(true, async root => {

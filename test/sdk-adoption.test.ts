@@ -1,3 +1,4 @@
+import { createImportMirror as create } from "./helpers/import-mirror.ts";
 /** Lifecycle finalization uses real SDK guards and hooks in a tracker without git. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -6,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
-  create, getHistoryPath, getItemPath, readHistorySnapshot,
+  getHistoryPath, getItemPath, readHistorySnapshot,
   setActiveExtensionHooks, type ExtensionHookRegistry,
 } from "@unbrained/pm-cli/sdk";
 import { buildImportFidelity, persistImportFidelity } from "../import-fidelity.ts";

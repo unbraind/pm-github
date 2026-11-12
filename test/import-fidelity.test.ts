@@ -686,7 +686,8 @@ for (const atomic of [false, true]) {
       await importing(pmRoot, issue, atomic);
       const actual = (await get(owner.id, {}, { pmRoot })).item;
       for (const key of ["title", "status", "created_at", "release"] as const) assert.equal(actual[key], owner[key]);
-      assert.equal(actual.github_link_only, true);
+      assert.equal(actual.github_link_only, false);
+      assert.equal((await listItems(pmRoot)).length, 2, "A reference tag never links its external owner");
     }));
   }
 }

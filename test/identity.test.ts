@@ -71,7 +71,7 @@ test("copied prose, structured multi-provider owners, exact refs and bounded gra
   await item(root, { description: `GitHub issue: ${url.replace("/1", "/5")}` });
   await item(root, { description: "See https://github.com/fixture/repo/pull/6" });
   await item(root, { description: "GitHub issue https://example.invalid/issue/1" });
-  const conflict = await item(root, { github_url: "https://github.com/fixture/repo/issues/8", tags: ["gh:fixture/repo#9"], source_owner: "fixture-provider" });
+  const conflict = await item(root, { github_url: "https://github.com/fixture/repo/issues/8", external_ref: "gh:fixture/repo#9", tags: ["gh:fixture/repo#9"], source_owner: "fixture-provider" });
   for (const entry of readdirSync(root, { recursive: true, withFileTypes: true }).filter(entry => entry.isFile())) chmodSync(join(entry.parentPath, entry.name), 0o444);
   const before = snapshot(root);
   const report = await exploreGithubIdentities(root);

@@ -1,4 +1,4 @@
-import { githubOwnedIdentityKeys, githubOwnershipClaims, assertGithubOwnershipConsistency } from "./import-ownership.ts";
+import { type GithubOwnershipIndex, buildGithubOwnershipIndex, githubOwnedIdentityKeys, assertGithubOwnershipConsistency } from "./import-ownership.ts";
 import { parseGithubUrl } from "./github-url.ts";
 import { canonicalGithubStatus, githubStatusKind, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
@@ -362,7 +362,7 @@ export function indexPmByProjectItem(
 }
 
 /**
- * Index pm items by their `owner/repo#number` issue-provenance tag.
+ * Index pm items by consistent unique GitHub issue ownership.
  *
  * Lets a push attach an already-imported pm item to the existing issue's project
  * item (via {@link indexProjectItemsByIssue}) rather than creating a duplicate
@@ -371,10 +371,11 @@ export function indexPmByProjectItem(
  * @param items - The pm items to index (nullish entries are ignored).
  * @returns A map keyed `owner/repo#number` (lowercased owner) to the pm item.
  */
-export function indexPmByIssue(items: Array<PmItemLike | null | undefined>): Map<string, PmItemLike> {
+export function indexPmByIssue(items: Array<PmItemLike | null | undefined>, snapshot?: GithubOwnershipIndex): Map<string, PmItemLike> {
   const index = new Map<string, PmItemLike>();
   const peers = items.filter((item): item is PmItemLike => Boolean(item));
-  for (const item of peers) if (item.id) for (const key of githubOwnedIdentityKeys(item, peers)) index.set(key, item);
+  const ownership = snapshot ?? buildGithubOwnershipIndex(peers);
+  for (const item of peers) if (item.id) for (const key of githubOwnedIdentityKeys(item, ownership)) index.set(key, item);
   return index;
 }
 
@@ -469,6 +470,7 @@ export function buildProjectPushPlan(
 ): PushPlan {
   const addMissing = opts.addMissing !== false;
   const options = statusField?.options ?? [];
+  const ownership = buildGithubOwnershipIndex(pmItems.filter((item): item is PmItemLike => Boolean(item)), projectItems.flatMap(item => item.content.repo ? [item.content.repo] : []));
   const byProjectItem = indexProjectItemMap(projectItems);
   const byIssue = indexProjectItemsByIssue(projectItems);
 
@@ -492,12 +494,12 @@ export function buildProjectPushPlan(
         break;
       }
     }
-    const keys = githubOwnedIdentityKeys(item, pmItems.filter((peer): peer is PmItemLike => Boolean(peer)));
+    const keys = githubOwnedIdentityKeys(item, ownership);
     const [repository, number] = keys[0]?.split("#") ?? [];
     const issueKey = repository && number ? { repo: repository, number: Number(number) } : undefined;
     if (!linked && issueKey) linked = byIssue.get(`${issueKey.repo}#${issueKey.number}`);
-    if (linked?.content.repo && linked.content.number && githubOwnershipClaims(item).evidence) {
-      assertGithubOwnershipConsistency(item, { id: item.id, repo: linked.content.repo, number: linked.content.number }, pmItems.filter((peer): peer is PmItemLike => Boolean(peer)));
+    if (linked?.content.repo && linked.content.number && ownership.states.get(item)?.evidence) {
+      assertGithubOwnershipConsistency(item, { id: item.id, repo: linked.content.repo, number: linked.content.number }, ownership);
     }
 
     // Resolve the target Status option for this pm status.
@@ -616,7 +618,8 @@ export function buildProjectPullPlan(
   statuses?: GithubStatusRegistry,
 ): PullPlan {
   const pmByItemId = indexPmByProjectItem(pmItems, ref);
-  const pmByIssue = indexPmByIssue(pmItems);
+  const ownership = buildGithubOwnershipIndex(pmItems.filter((item): item is PmItemLike => Boolean(item)), projectItems.flatMap(item => item.content.repo ? [item.content.repo] : []));
+  const pmByIssue = indexPmByIssue(pmItems, ownership);
   const entries: PullPlanEntry[] = [];
   const statusSkipped: PullPlan["statusSkipped"] = [];
 
@@ -626,8 +629,8 @@ export function buildProjectPullPlan(
       pm = pmByIssue.get(`${pi.content.repo.toLowerCase()}#${pi.content.number}`);
     }
     if (!pm || !pm.id) continue; // unlinked project items are handled by import
-    if (pi.content.repo && pi.content.number && githubOwnershipClaims(pm).evidence) {
-      assertGithubOwnershipConsistency(pm, { id: pm.id, repo: pi.content.repo, number: pi.content.number }, pmItems);
+    if (pi.content.repo && pi.content.number && ownership.states.get(pm)?.evidence) {
+      assertGithubOwnershipConsistency(pm, { id: pm.id, repo: pi.content.repo, number: pi.content.number }, ownership);
     }
 
     const toStatus = mapOptionNameToPmStatus(pi.statusName, statusMap, statuses);
@@ -680,7 +683,8 @@ export function buildProjectImportPlan(
   statuses?: GithubStatusRegistry,
 ): ImportPlanEntry[] {
   const pmByItemId = indexPmByProjectItem(pmItems, ref);
-  const pmByIssue = indexPmByIssue(pmItems);
+  const ownership = buildGithubOwnershipIndex(pmItems.filter((item): item is PmItemLike => Boolean(item)), projectItems.flatMap(item => item.content.repo ? [item.content.repo] : []));
+  const pmByIssue = indexPmByIssue(pmItems, ownership);
   const plan: ImportPlanEntry[] = [];
 
   for (const pi of projectItems) {
@@ -707,8 +711,8 @@ export function buildProjectImportPlan(
       existing = pmByIssue.get(`${c.repo.toLowerCase()}#${c.number}`);
     }
 
-    if (existing?.id && c.repo && c.number && githubOwnershipClaims(existing).evidence) {
-      assertGithubOwnershipConsistency(existing, { id: existing.id, repo: c.repo, number: c.number }, pmItems);
+    if (existing?.id && c.repo && c.number && ownership.states.get(existing)?.evidence) {
+      assertGithubOwnershipConsistency(existing, { id: existing.id, repo: c.repo, number: c.number }, ownership);
     }
 
     // Provenance tags this import adds, MERGED with any tags the existing pm item

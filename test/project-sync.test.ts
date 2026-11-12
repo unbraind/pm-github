@@ -69,6 +69,14 @@ function create(root: string, title: string, tags: string[] = [], status = "open
   pm(root, ["create", "task", title, "--status", status, "--tags", JSON.stringify(tags), ...(reference ? ["--description", `GitHub issue ${reference}`] : []), ...extra]);
   const item = items(root).find(item => item.title === title);
   assert.ok(item);
+  if (reference) nodeScenario(`
+    const { mutateItem, readSettings, resolvePmRoot } = await import("@unbrained/pm-cli/sdk");
+    const pmRoot = resolvePmRoot(process.cwd(), process.env.FIXTURE_PM_ROOT);
+    await mutateItem({ pmRoot, id: process.env.FIXTURE_ITEM_ID, settings: await readSettings(pmRoot), author: "fixture", op: "update", mutate: document => {
+      document.metadata.github_url = process.env.FIXTURE_GITHUB_URL;
+      return { changedFields: ["github_url"] };
+    } });
+  `, { FIXTURE_PM_ROOT: root, FIXTURE_ITEM_ID: item.id, FIXTURE_GITHUB_URL: reference });
   return item.id;
 }
 

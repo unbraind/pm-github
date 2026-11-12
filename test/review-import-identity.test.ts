@@ -74,7 +74,7 @@ for (const git of [false, true]) for (const atomic of [false, true]) {
     const refusal = (error: unknown) => {
       assert.equal((error as { code: string }).code, "github_identity_conflict");
       assert.match(String(error), /fixture\/review#7.*versus.*fixture\/review#8/);
-      assert.match(String(error), /Correct github_url and github_repo\/github_number/);
+      assert.match(String(error), /Correct the explicit GitHub provenance/);
       return true;
     };
     assert.throws(() => importIdentityKeys(owner), refusal);
@@ -171,9 +171,9 @@ test("upstream plans ignore shared references and reject competing explicit owne
   assert.deepEqual(planSync(corpus, repo).map(entry => entry.id), [owner.id]);
   assert.deepEqual(buildExportPlan([reference], repo).map(entry => entry.action), ["create"]);
   assert.deepEqual(buildExportPlan([owner], repo).map(entry => [entry.action, entry.number]), [["update", 7]]);
-  assert.deepEqual(planSync([reference], repo, undefined, { allowReferenceTags: true }).map(entry => entry.number), [7]);
-  assert.equal(buildExportPlan([reference], repo, undefined, undefined, { allowReferenceTags: true })[0]!.action, "update");
-  assert.throws(() => planSync([reference], repo, undefined, { allowReferenceTags: true, corpus }), { code: "github_import_owner_conflict" });
+  assert.deepEqual(planSync([reference], repo, undefined, { allowReferenceTags: true }).map(entry => entry.number), []);
+  assert.equal(buildExportPlan([reference], repo, undefined, undefined, { allowReferenceTags: true })[0]!.action, "create");
+  assert.deepEqual(planSync([reference], repo, undefined, { allowReferenceTags: true, corpus }), []);
   await linked(root);
   const competing = (await listAllComplete({ includeBody: true }, { pmRoot: root })).items;
   assert.throws(() => planSync([owner], repo, undefined, { corpus: competing }), { code: "github_import_owner_conflict" });
@@ -277,7 +277,7 @@ for (const corruption of ["missing", "unreadable", "mismatched"] as const) {
   }, false));
 }
 
-test("upstream preview and apply agree across generated native fields and link opt-ins", async () => tracker(async root => {
+test("upstream preview and apply agree across native fields while legacy tag opt-in remains a no-op", async () => tracker(async root => {
   const owner = await linked(root);
   const references = await Promise.all(["First", "Second"].map(title => create({ title, type: "Chore", tags: `gh:${repo}#7` }, { pmRoot: root })));
   const harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "importers", "schema", "hooks", "preflight", "search"] });
@@ -291,20 +291,15 @@ test("upstream preview and apply agree across generated native fields and link o
       const options = { repo, "allow-reference-tags": allowReferenceTags };
       const start = server.requests.length;
       const command = (apply: boolean) => captureStderr(() => harness.runCommand({ command: "github export", options: { ...options, apply }, pmRoot: root, global: { json: true } }));
-      if (allowReferenceTags) {
-        for (const apply of [false, true]) await assert.rejects(() => command(apply), { code: "github_import_owner_conflict" });
-        assert.equal(server.requests.length, start);
-      } else {
-        const preview = (await command(false)).result.result as { plan: Array<{ id: string; action: string; payload: { title: string; body: string; labels: string[]; state: string } }> };
-        assert.deepEqual(preview.plan.filter(entry => entry.action === "update").map(entry => entry.id), [owner.id]);
-        await command(true);
-        const writes = server.requests.slice(start);
-        assert.equal(writes.length, 3);
-        for (const [index, entry] of preview.plan.entries()) {
-          const write = writes[index]!;
-          assert.equal(write.method, entry.id === owner.id ? "PATCH" : "POST");
-          assert.deepEqual(JSON.parse(write.body), entry.id === owner.id ? entry.payload : { title: entry.payload.title, body: entry.payload.body, labels: entry.payload.labels });
-        }
+      const preview = (await command(false)).result.result as { plan: Array<{ id: string; action: string; payload: { title: string; body: string; labels: string[]; state: string } }> };
+      assert.deepEqual(preview.plan.filter(entry => entry.action === "update").map(entry => entry.id), [owner.id]);
+      await command(true);
+      const writes = server.requests.slice(start);
+      assert.equal(writes.length, 3);
+      for (const [index, entry] of preview.plan.entries()) {
+        const write = writes[index]!;
+        assert.equal(write.method, entry.id === owner.id ? "PATCH" : "POST");
+        assert.deepEqual(JSON.parse(write.body), entry.id === owner.id ? entry.payload : { title: entry.payload.title, body: entry.payload.body, labels: entry.payload.labels });
       }
     }
   }));

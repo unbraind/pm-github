@@ -244,6 +244,10 @@ test("packed npm and native Bun consumers preserve mixed-import bytes in JSON an
       }
       const custom = await create({ title: "Terminal custom", type: "probe", status: "busy-now", tags: "gh:fixture/project#7" }, { pmRoot: root, noExtensions: true });
       await run(cli, ["--path", root, "update", custom.item.id, "--status", "settled", "--close-reason", "Fixture verification"], root, environment);
+      await mutateItem({ pmRoot, id: custom.item.id, settings: await readSettings(pmRoot), author: "fixture", op: "update", mutate: document => {
+        document.metadata.github_url = "https://github.com/fixture/project/issues/7";
+        return { changedFields: ["github_url"] };
+      } });
       const providerBefore = durable(pmRoot);
       for (const bin of ["npm", "bun"]) for (const json of [true, false]) for (const command of ["sync", "export"]) {
         const args = ["--path", root, "github", command, "--repo", "fixture/project", "--ids", custom.item.id, "--allow-reference-tags", "--dry-run", ...(json ? ["--json"] : [])];
