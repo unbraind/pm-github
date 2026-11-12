@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.11.12 - 2026-11-12
+
+### Dependencies
+
+- Bump jscpd ([#232](https://github.com/unbraind/pm-github/pull/232))
+
 ## 2026.11.11 - 2026-11-11
 
 ### Fixed
