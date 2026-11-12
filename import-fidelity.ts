@@ -145,9 +145,9 @@ function hasOtherGithubUrl(text: string, repo: string, number: number): boolean 
 }
 
 /** Read the immediately preceding repository without making every character a regex start position. */
-function citationRepositoryBefore(text: string, index: number, hash: boolean): string | undefined {
+function citationRepositoryBefore(text: string, index: number, hash: boolean, lowered: string): string | undefined {
   if (!hash) {
-    const start = text.toLowerCase().lastIndexOf("github.com/", index);
+    const start = lowered.lastIndexOf("github.com/", index);
     if (start < 0) return undefined;
     const token = /^[^\s<>"'`]+/.exec(text.slice(start))?.[0];
     return token ? parseGithubIssueUrl(`https://${trimLocatorPunctuation(token)}`)?.repo : undefined;
@@ -179,8 +179,9 @@ function inspectCitationReferences(texts: readonly string[], repo: string, numbe
         const suffix = raw.search(/[?#]/);
         return suffix < 0 ? " ".repeat(raw.length) : " ".repeat(suffix) + raw.slice(suffix);
       });
+      const loweredNonPath = nonPath.toLowerCase();
       for (const reference of nonPath.matchAll(/(?:issues[\s/:]*|pull[\s/:]*|#)([0-9]+)/gi)) {
-        const sourceRepo = citationRepositoryBefore(nonPath, reference.index, reference[0].startsWith("#"));
+        const sourceRepo = citationRepositoryBefore(nonPath, reference.index, reference[0].startsWith("#"), loweredNonPath);
         const sourceNumber = reference[1];
         if (sourceNumber === String(number) && (sourceRepo === repo || sourceRepo === undefined)) mentioned = true;
         if (sourceRepo !== repo || sourceNumber !== String(number)) unsafe = true;

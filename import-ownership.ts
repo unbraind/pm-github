@@ -86,7 +86,10 @@ export interface GithubOwnershipWork { corpusReads?: number; claimParses?: numbe
 
 const ownershipWork = new AsyncLocalStorage<GithubOwnershipWork>();
 // Nested fidelity writes inside one SDK transaction inherit its already installed guard.
-const ownershipScope = new AsyncLocalStorage<{ root: string; targets: readonly GithubOwnedTarget[] }>();
+// Each store carries a mutable `active` flag that is cleared when its scope ends. AsyncLocalStorage also
+// propagates the store into detached work that outlives the scope, and that work must not reuse a released
+// lease or the closed owner hooks.
+const ownershipScope = new AsyncLocalStorage<{ root: string; targets: readonly GithubOwnedTarget[]; active: boolean }>();
 
 /** Count actual claim parses and corpus reads without substituting SDK persistence. */
 export function withGithubOwnershipWork<T>(work: GithubOwnershipWork, run: () => T): T {
@@ -216,16 +219,19 @@ export async function readGithubImportOwner(pmRoot: string, target: GithubOwnedT
   return hashDocument(document);
 }
 
-const ownershipLeaseScope = new AsyncLocalStorage<ReadonlySet<string>>();
+const ownershipLeaseScope = new AsyncLocalStorage<ReadonlyMap<string, { active: boolean }>>();
 
-/** Serialize the tracker ownership namespace before SDK workspace/item locks; nested writes reuse the lease. */
+/** Serialize the tracker ownership namespace before SDK workspace/item locks; nested writes reuse the lease while it is held. */
 export async function withGithubOwnershipLock<T>(pmRoot: string, run: () => Promise<T>): Promise<T> {
   const { pmRoot: root, settings } = await readGithubWorkspace(pmRoot);
   const active = ownershipLeaseScope.getStore();
-  if (active?.has(root)) return run();
+  if (active?.get(root)?.active) return run();
   const lease = await acquireLockLease(root, "github-ownership", settings.locks.ttl_seconds, "pm-github:ownership", false, false, settings.locks.wait_ms);
-  try { return await lease.fence(() => ownershipLeaseScope.run(new Set([...(active ?? []), root]), run)); }
-  finally { await lease.release(); }
+  const held = { active: true };
+  const scope = new Map([...(active ?? [])].filter(([, marker]) => marker.active));
+  scope.set(root, held);
+  try { return await lease.fence(() => ownershipLeaseScope.run(scope, run)); }
+  finally { held.active = false; await lease.release(); }
 }
 
 /** Coordinate all ownership-changing paths before entering their native mutation guards. */
@@ -256,7 +262,7 @@ async function withGithubOwnershipHooks<T>(pmRoot: string, name: string, delegat
 /** Preserve ambient hooks while adding positive ownership checks inside every target item lock. */
 async function withGithubImportOwnersUnderLease<T>(pmRoot: string, targets: readonly GithubOwnedTarget[], run: () => Promise<T>, work?: GithubOwnershipWork): Promise<T> {
   const active = ownershipScope.getStore();
-  if (active?.root === pmRoot && targets.every(target => active.targets.some(outer => outer.id === target.id &&
+  if (active?.active && active.root === pmRoot && targets.every(target => active.targets.some(outer => outer.id === target.id &&
     outer.repo.toLowerCase() === target.repo.toLowerCase() && outer.number === target.number &&
     (!target.mirrorContent || outer.mirrorContent) && (!target.expectedHash || target.expectedHash === outer.expectedHash) && !target.related?.length))) return run();
   const { pmRoot: root, settings, types } = await readGithubWorkspace(pmRoot);
@@ -268,6 +274,7 @@ async function withGithubImportOwnersUnderLease<T>(pmRoot: string, targets: read
   // Fail the whole selected batch before even creating an SDK journal.
   for (const target of targets) await readGithubImportOwner(pmRoot, target, snapshot);
   const byId = new Map(targets.map(target => [target.id, target]));
+  const scope = { root, targets, active: true };
   return withGithubOwnershipHooks(pmRoot, "github-import-owner", "github-owner-delegate", async context => {
     const id = (context.before ?? context.after)?.metadata.id;
     const target = id && byId.get(id);
@@ -296,7 +303,7 @@ async function withGithubImportOwnersUnderLease<T>(pmRoot: string, targets: read
         return { allow: false, code: error.code, message: error.message, remediation: error.remedy };
       }
     }
-  }, () => ownershipScope.run({ root, targets }, run));
+  }, () => ownershipScope.run(scope, async () => { try { return await run(); } finally { scope.active = false; } }));
 }
 
 /** Run plain owned writes through native SDK locks, revisions and the same ownership hook as replay. */

@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 import {
   init, create, get, readSettings, mutateItem, getItemPath, getHistoryPath, normalizeItemId,
   listAllComplete, listAllItemMetadata, WorkspaceTransactionInterruptedError, runWithActiveExtensions, setActiveExtensionHooks,
-  readHistoryEntries, verifyHistoryEntries,
+  readHistoryEntries, verifyHistoryEntries, acquireLockLease, PmCliError,
 } from "@unbrained/pm-cli/sdk";
 import {
   runImport, parseImportOptions, deriveAtomicItemId, prepareGithubImport, importGithubAtomic,
@@ -16,7 +16,7 @@ import {
   linkImportedDependencies, type GhIssue, type PmItem,
 } from "../index.ts";
 import { persistImportFidelity, buildImportFidelity } from "../import-fidelity.ts";
-import { mutateGithubOwnedItem } from "../import-ownership.ts";
+import { mutateGithubOwnedItem, withGithubOwnershipLock, withGithubImportOwners, withGithubOwnershipWork } from "../import-ownership.ts";
 import { runRefresh } from "../refresh.ts";
 import { runCloseout, type CloseoutApi } from "../closeout.ts";
 import { withEnv, captureStderr, withMockGithub, jsonResponse } from "./helpers/mock-github-server.ts";
@@ -284,4 +284,49 @@ test("Ownership guard preserves ambient mutation guards", async () => tracker(as
     await assert.rejects(() => importGithubAtomic(root, repo, [entry]), /fixture_denied|fixture-policy/);
   });
   assert.deepEqual(await bytes(root, item.id), before);
+}));
+
+/** Detached work keeps the AsyncLocalStorage stores of a finished scope; it must take a fresh lease and a fresh owner check. */
+async function leaseHeld(root: string): Promise<boolean> {
+  try {
+    const probe = await acquireLockLease(root, "github-ownership", 60, "pm-github:test-probe", false, false, 0);
+    await probe.release();
+    return false;
+  } catch (error: unknown) {
+    if (error instanceof PmCliError) return true;
+    throw error;
+  }
+}
+
+test("Ownership lease: detached work after the scope ends takes a fresh lease instead of the released one", async () => tracker(async root => {
+  let resume!: () => void;
+  const gate = new Promise<void>(resolve => { resume = resolve; });
+  let detached!: Promise<boolean>;
+  let nestedHeld: boolean | undefined;
+  await withGithubOwnershipLock(root, async () => {
+    // Must allow: nested work inside the live scope reuses the held lease.
+    nestedHeld = await withGithubOwnershipLock(root, () => leaseHeld(root));
+    detached = gate.then(() => withGithubOwnershipLock(root, () => leaseHeld(root)));
+  });
+  assert.equal(nestedHeld, true, "nested work inside the live scope runs under the held lease");
+  assert.equal(await leaseHeld(root), false, "the outer lease is released when its scope ends");
+  resume();
+  assert.equal(await detached, true, "detached work acquires its own lease instead of reusing the released one");
+}));
+
+test("Ownership owners: detached work after the scope ends reads current ownership again", async () => tracker(async root => {
+  const target = { id: "pm-detached1", repo, number: 41, allowCreate: true };
+  const work: { corpusReads?: number } = {};
+  let resume!: () => void;
+  const gate = new Promise<void>(resolve => { resume = resolve; });
+  let detached!: Promise<void>;
+  await withGithubOwnershipWork(work, () => withGithubImportOwners(root, [target], async () => {
+    // Must allow: a nested write for the same target inside the live scope reuses the installed guard.
+    await withGithubImportOwners(root, [target], async () => {});
+    detached = gate.then(() => withGithubImportOwners(root, [target], async () => {}));
+  }));
+  assert.equal(work.corpusReads, 1, "the nested write inside the live scope reuses the outer ownership read");
+  resume();
+  await detached;
+  assert.equal(work.corpusReads, 2, "detached work re-reads ownership instead of reusing the closed scope");
 }));
