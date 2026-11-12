@@ -124,14 +124,17 @@ for (const fields of [
   assert.equal((await sync(root)).unchanged, true);
 }));
 
-test("a reference to another issue never adds a second identity to a linked owner", async () => tracker(true, async root => {
+test("contradictory references on an already linked owner refuse without rebinding", async () => tracker(true, async root => {
   const local = (await create({ title: "Owner", type: "Chore", tags: `${tag},gh:o/r#99` }, { pmRoot: root })).item;
   await commitImportedItem({ pmRoot: root, id: local.id, itemPath: getItemPath(root, "Chore", local.id), settings: await readSettings(root),
     document: { metadata: { ...local, github_url: issue.html_url, github_number: 7, github_link_only: false }, body: "Local" }, author: "fixture", message: "Linked owner with references", conflictWarningPrefix: "fixture" });
   const source = { ...issue, number: 99, html_url: "https://github.com/o/r/issues/99" };
-  assert.equal((await sync(root, source)).imported, 1);
-  assert.equal((await get(local.id, {}, { pmRoot: root })).item.github_number, 7);
-  assert.deepEqual(selectRefreshTargets((await listAllComplete({}, { pmRoot: root })).items, repo).map(item => item.number), [7, 99]);
+  const before = await get(local.id, {}, { pmRoot: root });
+  const history = readFileSync(getHistoryPath(root, local.id), "utf8");
+  await assert.rejects(() => sync(root, source), { code: "github_import_owner_conflict" });
+  assert.equal((await get(local.id, {}, { pmRoot: root })).item_hash, before.item_hash);
+  assert.equal(readFileSync(getHistoryPath(root, local.id), "utf8"), history);
+  assert.equal((await listAllComplete({}, { pmRoot: root })).items.length, 1);
 }));
 
 test("dependency references resolve importer identities beside related local references", async () => tracker(true, async root => {

@@ -30,7 +30,7 @@ import extension, {
   runImport,
   syncGithubCommentsToAnnotations,
   type GhIssue,
-  type ImportOptions,
+  type ImportOptions, type PmItem,
 } from "../index.ts";
 import { nodeScenario } from "./helpers/node-scenario.ts";
 import { withReadOnlyDirectory } from "./helpers/read-only-directory.ts";
@@ -101,6 +101,16 @@ async function primeSourceTask(root: string): Promise<string> {
   const result = await listAllComplete({}, { pmRoot: tracker, noExtensions: true });
   certifyCompleteListResult(result);
   return result.items[0]!.id;
+}
+
+/** Exercise a real SDK policy refusal at its locked mutation boundary. */
+async function withNativeRefusal(root: string, refuses: (before: PmItem | undefined, after: PmItem | undefined) => boolean, run: () => Promise<void>) {
+  await runWithActiveExtensions({ path: path.join(root, ".agents/pm"), noExtensions: true }, async () => {
+    setActiveExtensionHooks({ beforeCommand: [], afterCommand: [], onRead: [], onWrite: [], onIndex: [], beforeMutation: [{ layer: "project", name: "fixture-native-refusal", run: context => {
+      if (refuses(context.before?.metadata, context.after?.metadata)) return { allow: false, code: "fixture_refused", remediation: "Fixture policy refusal" };
+    } }] });
+    await run();
+  });
 }
 
 async function withFakePm(body: string, fn: () => Promise<void>): Promise<void> {
@@ -295,12 +305,7 @@ test("a gated non-atomic import fails closed when a planned write fails", async 
   try {
     const existing = await seedGithubItem(root, 8);
     const clean = await seedGithubItem(root, 9);
-    await withFakePm(`
-      for arg in "$@"; do
-        if [ "$arg" = "close" ]; then echo close-refused >&2; exit 1; fi
-      done
-      exec "$REAL_PM" "$@"
-    `, async () => {
+    await withNativeRefusal(root, (_before, after) => after?.id === existing.id && after.status === "closed", async () => {
       await captureStderr(() => assert.rejects(runImport("acme/widgets", root, opts({ gate: true }), {
         resolveToken: () => "tok",
         readItems: () => [existing, clean],
@@ -328,13 +333,9 @@ for (const linking of [false, true]) {
       const owner = (await (linking ? create : createImportMirror)({ title: "Existing owner", type: "Task",
         description: linking ? "[linear] linear_id=fixture linear_url=https://linear.app/fixture/issue/ENG-85" : "Existing GitHub owner",
         tags: linking ? "linear:fixture" : "gh:unbraind/pm-beads#85" }, { pmRoot: tracker })).item;
-      const refused = linking ? "--add-tags" : "canceled";
-      await withFakePm(`
-        for arg in "$@"; do
-          if [ "$arg" = "${refused}" ]; then echo fixture-refused >&2; exit 1; fi
-        done
-        exec "$REAL_PM" "$@"
-      `, async () => {
+      await withNativeRefusal(root, (before, after) => after?.id === owner.id && (linking
+        ? !before?.tags?.includes("gh:unbraind/pm-beads#85") && Boolean(after.tags?.includes("gh:unbraind/pm-beads#85"))
+        : after.status === "canceled"), async () => {
         await withMockGithub((request, response) => {
           jsonResponse(response, 200, request.url?.includes("/timeline") ? [] : [source]);
         }, async () => {
@@ -401,28 +402,18 @@ test("a gated import fails closed when a per-comment add fails mid-sync", nonRoo
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("a gated import fails closed when a created id cannot be parsed with annotations sync on", async () => {
-  const root = gitTracker("pm-github-gated-unparsed-");
+test("native creation returns its planned identity and synchronizes annotations without CLI output parsing", async () => {
+  const root = gitTracker("pm-github-native-create-");
   try {
-    await withFakePm(`
-      json=0
-      for arg in "$@"; do
-        if [ "$arg" = "--json" ]; then json=1; fi
-      done
-      if [ "$json" = "1" ]; then printf '%s\\n' 'not-json'; exit 0; fi
-      exit 0
-    `, async () => {
-      const gated = await captureStderr(() => assert.rejects(runImport("acme/widgets", root, opts({ gate: true, "comments-mode": "annotations" }), {
-        resolveToken: () => "tok",
-        readItems: () => [],
-        fetchIssues: async () => [issue({ comments: 1 })],
-        fetchIssueComments: async () => [{ id: 31, user: { login: "octo" }, created_at: "2026-01-01T00:00:00Z", body: "note" }],
-      }), /Could not finalize.*created id missing/));
-      assert.match(gated.stderr.join("\n"), /could not parse created item id — comments not synced/);
-    });
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+    const { result } = await captureStderr(() => runImport("acme/widgets", root, opts({ gate: true, "comments-mode": "annotations" }), {
+      resolveToken: () => "tok", fetchIssues: async () => [issue({ comments: 1 })],
+      fetchIssueComments: async () => [{ id: 31, user: { login: "octo" }, created_at: "2026-01-01T00:00:00Z", body: "note" }],
+    }));
+    assert.equal("imported" in result && result.imported, 1);
+    const item = certifyCompleteListResult(await listAllComplete({ includeBody: true }, { pmRoot: path.join(root, ".agents/pm") })).items[0]!;
+    assert.equal(item.id, mirrorId(7));
+    assert.equal(item.comments?.length, 1);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test("a gated atomic import fails closed when committed items lack their planned comments", async () => {
@@ -485,76 +476,26 @@ test("the same comment-sync failures without --gate still import with a warning"
   }
 });
 
-test("non-atomic import reports update, close, reopen, and unparsed-id failures", async () => {
+test("non-atomic import reports native update, close, reopen and create policy failures", async () => {
   const root = gitTracker("pm-github-import-fail-");
-  const listed = spawnSync(REAL_PM, ["--pm-path", root, "--json", "list", "--full"], { encoding: "utf8" });
-  assert.equal(listed.status, 0, listed.stderr);
   try {
     const existing7 = await seedGithubItem(root, 7);
     const existing8 = await seedGithubItem(root, 8);
-    const existing9 = await seedGithubItem(root, 9);
-    await withFakePm(`
-      for arg in "$@"; do
-        if [ "$arg" = "update" ]; then echo update-refused >&2; exit 1; fi
-      done
-      exit 0
-    `, async () => {
+    await captureStderr(() => runImport("acme/widgets", root, opts({ atomic: true }), { resolveToken: () => undefined,
+      fetchIssues: async () => [issue({ number: 9, state: "closed", state_reason: "completed", closed_at: "2026-02-01T00:00:00Z" })], fetchIssueTimeline: async () => [] }));
+    const cases = [
+      { source: issue({ assignee: { login: "octo" }, milestone: { title: "Now" } }), id: existing7.id, message: /update failed/, refuses: (before: PmItem | undefined, after: PmItem | undefined) => before?.title !== after?.title },
+      { source: issue({ number: 8, state: "closed", state_reason: "completed", closed_at: "2026-02-01T00:00:00Z" }), id: existing8.id, message: /close reconciliation failed/, refuses: (_before: PmItem | undefined, after: PmItem | undefined) => after?.status === "closed" },
+      { source: issue({ number: 9 }), id: mirrorId(9), message: /reopen reconciliation failed/, refuses: (before: PmItem | undefined, after: PmItem | undefined) => before?.status === "closed" && after?.status === "open" },
+      { source: issue({ number: 10 }), id: mirrorId(10), message: /create failed/, refuses: (before: PmItem | undefined) => !before },
+    ];
+    for (const entry of cases) await withNativeRefusal(root, (before, after) => after?.id === entry.id && entry.refuses(before, after), async () => {
       const { stderr } = await captureStderr(() => assert.rejects(runImport("acme/widgets", root, opts(), {
-        resolveToken: () => "tok",
-        readItems: () => [{ ...existing7, status: "open" }],
-        fetchIssues: async () => [issue({ assignee: { login: "octo" }, milestone: { title: "Now" } })],
+        resolveToken: () => "tok", fetchIssues: async () => [entry.source], fetchIssueTimeline: async () => [],
       }), /Imported 0 issue/));
-
-      assert.match(stderr.join("\n"), /update failed/);
+      assert.match(stderr.join("\n"), entry.message);
     });
-
-    await withFakePm(`
-      for arg in "$@"; do
-        if [ "$arg" = "close" ]; then echo close-refused >&2; exit 1; fi
-      done
-      exit 0
-    `, async () => {
-      const closed = await captureStderr(() => assert.rejects(runImport("acme/widgets", root, opts(), {
-        resolveToken: () => "tok",
-        readItems: () => [{ ...existing8, status: "open" }],
-        fetchIssues: async () => [issue({ number: 8, state: "closed", state_reason: "completed", closed_at: "2026-02-01T00:00:00Z" })],
-      }), /Imported 0 issue/));
-      assert.match(closed.stderr.join("\n"), /close reconciliation failed|close after import failed/);
-    });
-
-    await withFakePm(`
-      for arg in "$@"; do
-        if [ "$arg" = "open" ]; then echo reopen-refused >&2; exit 1; fi
-      done
-      exit 0
-    `, async () => {
-      const reopened = await captureStderr(() => assert.rejects(runImport("acme/widgets", root, opts(), {
-        resolveToken: () => "tok",
-        readItems: () => [{ ...existing9, status: "closed" }],
-        fetchIssues: async () => [issue({ number: 9, state: "open" })],
-      }), /Imported 0 issue/));
-      assert.match(reopened.stderr.join("\n"), /reopen reconciliation failed/);
-    });
-
-    await withFakePm(`
-      json=0
-      for arg in "$@"; do
-        if [ "$arg" = "--json" ]; then json=1; fi
-      done
-      if [ "$json" = "1" ]; then printf '%s\\n' 'not-json'; exit 0; fi
-      exit 0
-    `, async () => {
-      const parsed = await captureStderr(() => assert.rejects(runImport("acme/widgets", root, opts({ "comments-mode": "annotations" }), {
-        resolveToken: () => "tok",
-        readItems: () => [],
-        fetchIssues: async () => [issue({ number: 10, state: "closed", comments: 1 })],
-        fetchIssueComments: async () => [{ id: 1, user: { login: "octo" }, created_at: "2026-01-01T00:00:00Z", body: "note" }],
-      }), /Imported 0 issue/));
-      assert.match(parsed.stderr.join("\n"), /could not parse created item id/);
-    });
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test("comment sync skips a contended lock and reports a per-comment write failure", nonRootOnly, async () => {
@@ -781,21 +722,21 @@ test("plain imports preserve assigned metadata and synchronize existing annotati
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("plain create close failures and unreadable annotation identities report incomplete imports", async () => {
+test("plain create and close policy failures report incomplete imports", async () => {
   const root = gitTracker("pm-github-create-boundary-");
   const tracker = path.join(root, ".agents/pm");
   try {
-    await withFakePm(`for arg in "$@"; do if [ "$arg" = "close" ]; then echo close-refused >&2; exit 1; fi; done\nexec "$REAL_PM" "$@"`, async () => {
+    await withNativeRefusal(root, (_before, after) => after?.id === mirrorId(7) && after.status === "closed", async () => {
       const { stderr } = await captureStderr(() => assert.rejects(runImport("acme/widgets", tracker, opts(), {
         resolveToken: () => undefined, fetchIssues: async () => [issue({ state: "closed", closed_at: null })],
       }), /Imported 0 issue/));
       assert.match(stderr.join("\n"), /close after import failed/);
     });
-    await withFakePm(`for arg in "$@"; do if [ "$arg" = "create" ]; then printf 'not-json'; exit 0; fi; done\nexec "$REAL_PM" "$@"`, async () => {
+    await withNativeRefusal(root, (before, after) => !before && after?.id === mirrorId(2), async () => {
       const { stderr } = await captureStderr(() => assert.rejects(runImport("acme/widgets", tracker, opts({ "comments-mode": "annotations" }), {
         resolveToken: () => undefined, fetchIssues: async () => [issue({ number: 2 })], fetchIssueComments: async () => [],
-      }), /Could not finalize.*created id missing/));
-      assert.match(stderr.join("\n"), /comments not synced/);
+      }), /Imported 0 issue/));
+      assert.match(stderr.join("\n"), /create failed/);
     });
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

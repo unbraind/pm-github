@@ -1,8 +1,8 @@
 import { parseGithubUrl, parseGithubIssueUrl, githubUrlTokens } from "./github-url.ts";
 import { readGithubWorkspace, githubStatusIsTerminal } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
-import { GithubIdentityConflictError, importerCreatedItem, importIdentityKeys, normalizeImportValue } from "./import-fidelity.ts";
-import { assertGithubImportOwner, GithubImportOwnershipError } from "./import-ownership.ts";
+import { GithubIdentityConflictError, importerCreatedItem, normalizeImportValue } from "./import-fidelity.ts";
+import { assertGithubImportOwner, assertGithubOwnershipConsistency, githubOwnershipClaims, GithubImportOwnershipError } from "./import-ownership.ts";
 /** Close delivered tracker items using merged pull requests and head-check evidence. */
 import { close, hashDocument, locateItem, readLocatedItem, runWithActiveExtensions, setActiveExtensionHooks, listAllComplete, certifyCompleteListResult, getHistoryPath, readHistoryEntries, verifyHistoryEntries, PmCliError, EXIT_CODE, type ItemDocument } from "@unbrained/pm-cli/sdk";
 
@@ -31,20 +31,22 @@ export type CloseoutCode = "already_terminal" | "other_repository" | "duplicate_
   | "head_checks_passed" | "head_checks_failed" | "head_evidence_unavailable" | "required_checks_unverified" | "not_merged" | "incomplete_merge";
 
 /** Explicit delivery may close local items, but never an issue owned by a different repository. */
-export function assertCloseoutGithubOwner(item: ItemDocument["metadata"], repo: string): void {
+export function assertCloseoutGithubOwner(item: ItemDocument["metadata"], repo: string, peers: readonly ItemDocument["metadata"][] = []): void {
+  const state = githubOwnershipClaims(item);
+  const owners = assertGithubOwnershipConsistency(item, undefined, peers);
+  if (state.evidence && owners.length !== 1) throw new GithubImportOwnershipError(item.id, `${repo.toLowerCase()} (delivery repository)`, state.claims);
   const reservedNumber = /-github-[a-f0-9]{12}-([1-9]\d*)$/.exec(item.id)?.[1];
   if (reservedNumber && importerCreatedItem(item, repo, Number(reservedNumber))) {
-    assertGithubImportOwner(item, { id: item.id, repo, number: Number(reservedNumber) });
+    assertGithubImportOwner(item, { id: item.id, repo, number: Number(reservedNumber) }, peers);
   }
-  const owners = importIdentityKeys(item);
   if (owners.length && (owners.length !== 1 || !owners[0]!.startsWith(`${repo.toLowerCase()}#`))) {
     throw new GithubImportOwnershipError(item.id, `${repo.toLowerCase()} (delivery repository)`, owners);
   }
 }
 
 /** Convert malformed ownership into one eligible item's outcome, never a run-wide failure. */
-function closeoutOwnershipConflict(item: ItemDocument["metadata"], repo: string): GithubImportOwnershipError | GithubIdentityConflictError | undefined {
-  try { assertCloseoutGithubOwner(item, repo); }
+function closeoutOwnershipConflict(item: ItemDocument["metadata"], repo: string, peers: readonly ItemDocument["metadata"][]): GithubImportOwnershipError | GithubIdentityConflictError | undefined {
+  try { assertCloseoutGithubOwner(item, repo, peers); }
   catch (error: unknown) {
     if (!(error instanceof GithubImportOwnershipError || error instanceof GithubIdentityConflictError)) throw error;
     return error;
@@ -650,7 +652,7 @@ async function closeoutAttempt(pmPath: string, repo: string | undefined, options
         code = "not_delivery";
         reason = "Mentioned, not delivered. A mention is not delivery. This fully inspected PR has no delivery claim and is context only.";
       }
-      else if ((ownershipConflict = closeoutOwnershipConflict(items.get(ref.item)!, repo))) { code = ownershipConflict.code; reason = ownershipConflict.message; }
+      else if ((ownershipConflict = closeoutOwnershipConflict(items.get(ref.item)!, repo, [...items.values()]))) { code = ownershipConflict.code; reason = ownershipConflict.message; }
       else if (!gate.ok) { code = gate.code; reason = gate.reason; }
       else if (role === "unresolved") { code = "head_evidence_unavailable"; reason = "Commit delivery evidence unavailable or incomplete."; }
       else {
@@ -753,7 +755,7 @@ async function closeoutAttempt(pmPath: string, repo: string | undefined, options
               await observer?.("locked");
               // SDK close may also auto-unblock dependents. Every resulting write needs its own snapshot.
               const before = context.before!;
-              assertCloseoutGithubOwner(before.metadata, repo);
+              assertCloseoutGithubOwner(before.metadata, repo, await context.sdk.list());
               const id = before.metadata.id;
               if (hashDocument(before) !== snapshots.get(id)) {
                 if (id !== entry.row.item) dependentConflicts.set(id, entry.row.pr);
@@ -768,6 +770,10 @@ async function closeoutAttempt(pmPath: string, repo: string | undefined, options
         closed++;
         handled.add(entry.row.item);
       } catch (error: unknown) {
+        if (error instanceof GithubImportOwnershipError || error instanceof GithubIdentityConflictError) {
+          entry.row.action = "skip"; entry.row.code = error.code; entry.row.reason = error.message;
+          handled.add(entry.row.item); continue;
+        }
         if (error instanceof PmCliError && (error.code === "closeout_revision_changed"
           || (error.code === undefined && error.exitCode === EXIT_CODE.CONFLICT))) {
           if (retry) {

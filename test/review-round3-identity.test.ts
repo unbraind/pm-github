@@ -74,7 +74,13 @@ for (const mode of ["ambiguous", "single", "explicit"] as const) test(`number-on
   const before = snapshot(root);
   const repo = mode === "single" ? "original/project" : "unrelated/project";
   const incoming = { ...issue(repo), state: "closed" as const, closed_at: "2027-01-01T00:00:00Z", updated_at: "2027-01-01T00:00:00Z", state_reason: "completed" as const };
-  const { result } = await captureStderr(() => runImport(repo, root, parseImportOptions({}), { resolveToken: () => undefined, fetchIssues: async () => [incoming], fetchIssueTimeline: async () => [] }));
+  const run = () => captureStderr(() => runImport(repo, root, parseImportOptions({}), { resolveToken: () => undefined, fetchIssues: async () => [incoming], fetchIssueTimeline: async () => [] }));
+  if (mode === "single") await run();
+  else await assert.rejects(run, error => {
+    assert.equal((error as { code: string }).code, "github_import_owner_conflict");
+    assert.match(String(error), /original\/project#7/); assert.match(String(error), /unrelated\/project#7/);
+    return true;
+  });
   const current = (await get(item.id, {}, { pmRoot: root })).item;
   assert.equal(current.title, item.title);
   if (mode === "single") assert.equal(current.status, "closed");
@@ -82,14 +88,10 @@ for (const mode of ["ambiguous", "single", "explicit"] as const) test(`number-on
     assert.equal(current.status, item.status);
     assert.equal(current.github_url, undefined);
     for (const [path, value] of Object.entries(before)) if (path.endsWith(".toon") || path.startsWith("history/")) assert.equal(snapshot(root)[path], value);
-    assert.equal((await listAllComplete({}, { pmRoot: root })).items.length, 2);
+    assert.equal((await listAllComplete({}, { pmRoot: root })).items.length, 1);
   }
   assert.deepEqual(importIdentityKeys(current), mode === "ambiguous" ? [] : ["original/project#7"]);
   assert.equal(Boolean(legacyGithubIdentityConflict(current)), mode === "ambiguous");
-  if (mode === "ambiguous") {
-    assert.ok("identity_conflicts" in result);
-    assert.equal(result.identity_conflicts![0]!.code, "ambiguous_legacy_github_identity");
-  }
 }));
 
 for (const mode of ["failed", "missing", "forged"] as const) test(`recovery preflight refuses before any write (${mode})`, async () => tracker(async root => {

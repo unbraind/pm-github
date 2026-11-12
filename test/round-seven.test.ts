@@ -218,5 +218,5 @@ for (const mode of ["eligible", "skip", "context", "foreign", "terminal", "epic"
   assert.equal(result.closed, 1);
   assert.equal((await get(good.id, {}, { pmRoot: root })).item.status, "closed");
   assert.deepEqual(await bytes(root, bad.id), before);
-  assert.equal(result.plan.find(row => row.item === bad.id)?.code, mode === "skip" ? "explicit_skip" : mode === "context" ? "not_delivery" : mode === "foreign" ? "other_repository" : mode === "terminal" ? "already_terminal" : mode === "epic" ? "epic" : "github_identity_conflict");
+  assert.equal(result.plan.find(row => row.item === bad.id)?.code, mode === "skip" ? "explicit_skip" : mode === "context" ? "not_delivery" : mode === "foreign" ? "other_repository" : mode === "terminal" ? "already_terminal" : mode === "epic" ? "epic" : "github_import_owner_conflict");
 }));

@@ -1,11 +1,10 @@
 /** Every importer write path uses real SDK storage, including relinks between planning and commit. */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, rmSync, readFileSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, delimiter } from "node:path";
 import { spawnSync } from "node:child_process";
-import { pathToFileURL } from "node:url";
 import {
   init, create, get, readSettings, mutateItem, getItemPath, getHistoryPath, normalizeItemId,
   listAllComplete, listAllItemMetadata, WorkspaceTransactionInterruptedError, runWithActiveExtensions, setActiveExtensionHooks,
@@ -17,6 +16,7 @@ import {
   linkImportedDependencies, type GhIssue, type PmItem,
 } from "../index.ts";
 import { persistImportFidelity, buildImportFidelity } from "../import-fidelity.ts";
+import { mutateGithubOwnedItem } from "../import-ownership.ts";
 import { runRefresh } from "../refresh.ts";
 import { runCloseout, type CloseoutApi } from "../closeout.ts";
 import { withEnv, captureStderr, withMockGithub, jsonResponse } from "./helpers/mock-github-server.ts";
@@ -133,7 +133,7 @@ test("Ownership locked atomic upsert refuses an occupant arriving after prefligh
   let before: string[] = [];
   await assert.rejects(() => importGithubAtomic(root, repo, [entry], { onTransition: async context => {
     if (context.transition === "prepared") {
-      await create({ id, title: "Peer Chore", type: "Chore", body: "Peer body" }, { pmRoot: root });
+      await runWithActiveExtensions({ path: root, noExtensions: true }, () => create({ id, title: "Peer Chore", type: "Chore", body: "Peer body" }, { pmRoot: root }));
       await relink(root, id); before = await bytes(root, id);
     }
   } }), conflict);
@@ -148,18 +148,15 @@ test("Ownership malformed creation plan refuses before publishing an unowned rec
   assert.deepEqual(await listUnfinishedGithubImports(root), []);
 }));
 
-test("Ownership plain CLI revision fence refuses a peer relink after the owner read", async () => tracker(async root => {
+test("Ownership native SDK revision fence refuses a peer edit after the owner read", async () => tracker(async root => {
   await sync(root, issue, { atomic: true });
   const item = (await listAllComplete({}, { pmRoot: root })).items[0]!;
-  const bin = join(root, "peer-bin"); mkdirSync(bin);
-  const receipt = join(bin, "receipt.json");
-  const plan = join(bin, "plan.json");
-  writeFileSync(plan, JSON.stringify({ root, id: item.id, receipt, realPm: join(import.meta.dirname, "../node_modules/.bin/pm") }));
-  const wrapper = join(bin, "pm");
-  writeFileSync(wrapper, `#!/usr/bin/env node\nimport { runOwnershipPeer } from ${JSON.stringify(pathToFileURL(join(import.meta.dirname, "fixtures/ownership-peer.ts")).href)};\nawait runOwnershipPeer(${JSON.stringify(plan)});\n`);
-  chmodSync(wrapper, 0o755);
-  await assert.rejects(() => withEnv({ PATH: bin + delimiter + process.env.PATH }, () => sync(root, changed)), conflict);
-  assert.deepEqual(await bytes(root, item.id), JSON.parse(readFileSync(receipt, "utf8")));
+  const original = await get(item.id, {}, { pmRoot: root });
+  await mutateItem({ pmRoot: root, id: item.id, settings: await readSettings(root), author: "fixture", op: "update", message: "Peer content edit",
+    mutate: document => { document.metadata.title = "Peer title"; return { changedFields: ["title"] }; } });
+  const before = await bytes(root, item.id);
+  await assert.rejects(() => mutateGithubOwnedItem(root, { id: item.id, repo, number: 7 }, "update", { title: changed.title }, original.item_hash), /revision|hash|changed/i);
+  assert.deepEqual(await bytes(root, item.id), before);
 }));
 
 test("Ownership refresh refuses a target relinked during its GitHub read", async () => tracker(async root => {

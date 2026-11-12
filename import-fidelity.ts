@@ -1,7 +1,7 @@
-import { normalizeGithubRepository, parseGithubUrl, parseGithubIssueUrl } from "./github-url.ts";
+import { normalizeGithubRepository, normalizeGithubClaim, parseGithubUrl, parseGithubIssueUrl } from "./github-url.ts";
 import { readGithubWorkspace, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue, setOwnValue } from "./own-record.ts";
-import { assertGithubImportOwner, type GithubOwnedTarget } from "./import-ownership.ts";
+import { assertGithubImportOwner, GithubImportOwnershipError, assertGithubOwnershipConsistency, githubOwnershipClaims, withGithubImportOwners, type GithubOwnedTarget } from "./import-ownership.ts";
 /** Source lifecycle, release-window and cross-provider identity rules for issue imports. */
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -300,6 +300,15 @@ export class GithubIdentityConflictError extends Error {
   }
 }
 
+/** Normalize the legacy link fields already accepted by first-link matching. */
+export function legacyGithubLinkClaims(item: PmItem): string[] {
+  const values = Object.entries(item).filter(([field]) => OWNER_LINK_FIELD.test(field)).flatMap(([, value]) => locators(value));
+  if (typeof item.description === "string") {
+    values.push(...locators(/^GitHub issue(?:\s*:\s+|\s+)(https?:\/\/\S+)/i.exec(item.description)?.[1]));
+  }
+  return [...new Set(values.flatMap(value => { const parsed = parseGithubIssueUrl(value); return parsed && !parsed.api ? [parsed.key] : []; }))];
+}
+
 /** Resolve every supported explicit URL alias once, retaining the shared parser's issue/PR kind. */
 export function explicitGithubIdentities(item: PmItem) {
   return Object.entries(item).flatMap(([field, value]) => {
@@ -341,8 +350,11 @@ export function importIdentityKeys(item: PmItem, options: { allowConflicts?: boo
   if (repository && Number.isSafeInteger(item.github_number) && Number(item.github_number) > 0) keys.add(`${repository}#${item.github_number}`);
   if (keys.size > 1 && !options.allowConflicts) throw new GithubIdentityConflictError(item.id, [...keys].sort());
   const references = (item.tags ?? []).flatMap(tag => {
-    const parsed = parseProvenanceTag(tag);
-    return parsed ? [parsed] : [];
+    const key = normalizeGithubClaim(tag);
+    if (!key) return [];
+    const [repo, value] = key.split("#");
+    const number = Number(value);
+    return Number.isSafeInteger(number) ? [{ repo: repo!, number }] : [];
   });
   if (legacyGithubIdentityConflict(item)) return [];
   const impliedRepositories = new Set(references.map(reference => reference.repo));
@@ -353,7 +365,7 @@ export function importIdentityKeys(item: PmItem, options: { allowConflicts?: boo
     const { repo, number } = reference;
     // Released links with no URL retain their source number and tagged repository.
     const legacyNumber = !hasRepository && impliedRepositories.size === 1 && item.github_number === number;
-    const legacyLink = !hasRepository && item.github_number === undefined && typeof item.github_link_only === "boolean" && references.length === 1;
+    const legacyLink = !hasRepository && item.github_number === undefined && typeof item.github_link_only === "boolean" && references.length === 1 && (!repository || repository === repo);
     // Pre-fidelity releases wrote this exact generated description plus the reference tag.
     const legacyDescription = Number(generated?.[1]) === number && legacyLocators.includes(`https://github.com/${repo}/issues/${number}`);
     if (!hasRepository && (legacyNumber || legacyLink || legacyDescription)) keys.add(`${repo}#${number}`);
@@ -370,7 +382,7 @@ export function importerCreatedItem(item: PmItem, repo: string, number: number):
 /** Index durable importer identities while allowing arbitrary shared reference tags. */
 export function indexByImportIdentity(items: readonly PmItem[]): Map<string, PmItem> {
   const result = new Map<string, PmItem>();
-  for (const item of items) if (item.id) for (const key of importIdentityKeys(item)) result.set(key, item);
+  for (const item of items) if (item.id) for (const key of githubOwnershipClaims(item).owners) result.set(key, item);
   return result;
 }
 
@@ -384,14 +396,15 @@ export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, _ta
   const declaredOwner = (item: PmItem) => copiedProviderMarkersOwnItem(item) && typeof item.description === "string" &&
     locators(/^GitHub issue(?:\s*:\s+|\s+)(https?:\/\/\S+)/i.exec(item.description)?.[1]).includes(issueUrl);
   const candidates = items.filter(item => {
-    const keys = importIdentityKeys(item);
-    if (!item.id || legacyGithubIdentityConflict(item)) return false;
-    if (keys.length) return keys.includes(issueKey);
+    if (!item.id) return false;
+    const state = githubOwnershipClaims(item);
+    if (state.claims.includes(issueKey)) assertGithubOwnershipConsistency(item, { id: item.id, repo, number: issue.number }, items);
+    if (state.owners.length) return state.owners.includes(issueKey);
     return declaredOwner(item) ||
       Object.entries(item).some(([key, value]) => OWNER_LINK_FIELD.test(key) && locators(value).includes(issueUrl)) ||
       locators(providerProvenance(item)).some(url => bodyUrls.has(url));
   });
-  if (candidates.length > 1) throw new CommandError(`GitHub issue #${issue.number} has multiple existing owners; import plan is not idempotent. No item was written for this issue.`);
+  if (candidates.length > 1) throw new GithubImportOwnershipError(candidates[0]!.id!, issueKey, candidates.map(candidate => `${issueKey} claimed by ${candidate.id}`));
   let item = candidates[0];
   let cited = false;
   const incidental: CitationCandidate[] = [];
@@ -607,7 +620,9 @@ export async function persistImportFidelity(pmPath: string, id: string, fidelity
   const pmRoot = workspace.pmRoot;
   const { settings } = workspace;
   id = normalizeItemId(id, settings.id_prefix);
-  await mutateItem({ pmRoot, settings, id, author: "pm-github", op: "import", skipNoop: true,
+  const source = parseGithubIssueUrl(fidelity.github_url)!;
+  const target = { ...ownership, id, repo: source.repo, number: fidelity.github_number };
+  await withGithubImportOwners(pmRoot, [target], () => mutateItem({ pmRoot, settings, id, author: "pm-github", op: "import", skipNoop: true,
     message: `Preserve GitHub source lifecycle for issue #${fidelity.github_number}`,
     mutate: document => {
       const source = parseGithubIssueUrl(fidelity.github_url)!;
@@ -637,5 +652,5 @@ export async function persistImportFidelity(pmPath: string, id: string, fidelity
         },
       };
     },
-  });
+  }));
 }

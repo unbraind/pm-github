@@ -1,4 +1,4 @@
-import { parseGithubIssueUrl, githubUrlTokens } from "./github-url.ts";
+import { normalizeGithubClaim, parseGithubIssueUrl, githubUrlTokens } from "./github-url.ts";
 import { ownValue } from "./own-record.ts";
 /** Offline identity diagnosis and explicitly approved, single-item provenance repairs. */
 import { createHash } from "node:crypto";
@@ -38,10 +38,8 @@ export interface IdentityRepairPlan {
 }
 /** Canonicalize exact GitHub locators; opaque external references retain provider semantics. */
 function identity(value: string): string {
-  const url = parseGithubIssueUrl(value);
-  if (url && !url.api) return `gh:${url.key}`;
-  const tag = /^gh:([^/\s]+\/[^#\s]+)#([1-9]\d*)$/i.exec(value);
-  return tag ? `gh:${tag[1]!.toLowerCase()}#${BigInt(tag[2]!).toString()}` : value;
+  const key = normalizeGithubClaim(value);
+  return key ? `gh:${key}` : value;
 }
 /** Build edges from structured identity fields; prose URLs are explicitly weaker evidence. */
 function graph(items: readonly IdentityItem[]): { nodes: IdentityNode[]; edges: IdentityEdge[] } {

@@ -81,7 +81,12 @@ for (const git of [false, true]) for (const atomic of [false, true]) {
     assert.throws(() => selectRefreshTargets([owner], repo), refusal);
     await assert.rejects(() => captureStderr(() => runImport(repo, root, parseImportOptions({ atomic, gate: true }), {
       resolveToken: () => undefined, fetchIssues: async () => [issue], fetchIssueTimeline: async () => [],
-    })), refusal);
+    })), error => {
+      assert.equal((error as { code: string }).code, "github_import_owner_conflict");
+      assert.match(String(error), /fixture\/review#7.*versus.*fixture\/review#8/);
+      assert.match(String(error), /Restore the intended GitHub provenance/);
+      return true;
+    });
     assert.deepEqual(await bytes(root, owner.id), before);
     assert.deepEqual(await listUnfinishedGithubImports(root), []);
   }, git));
@@ -105,7 +110,7 @@ test("two URL fields cannot disagree even without a number field", async () => t
   const before = await bytes(root, owner.id);
   await assert.rejects(() => captureStderr(() => runImport(repo, root, parseImportOptions({ gate: true }), {
     resolveToken: () => undefined, fetchIssues: async () => [issue], fetchIssueTimeline: async () => [],
-  })), { code: "github_identity_conflict" });
+  })), { code: "github_import_owner_conflict" });
   assert.deepEqual(await bytes(root, owner.id), before);
 }));
 

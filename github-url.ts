@@ -83,3 +83,12 @@ export function githubUrlTokens(text: string): Array<{ raw: string; index: numbe
   }
   return tokens;
 }
+
+/** Canonical GitHub claim key shared by external references and identity diagnostics. */
+export function normalizeGithubClaim(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const url = parseGithubIssueUrl(value);
+  if (url && !url.api) return url.key;
+  const tag = /^gh:([^/\s]+\/[^#\s]+)#([1-9]\d*)$/i.exec(value);
+  return tag ? `${tag[1]!.toLowerCase()}#${BigInt(tag[2]!).toString()}` : undefined;
+}

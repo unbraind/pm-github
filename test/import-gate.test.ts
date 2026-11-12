@@ -19,7 +19,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { create, get } from "@unbrained/pm-cli/sdk";
+import { init, create, get, mutateItem, readSettings } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness, type ExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 
 import extension, {
@@ -309,14 +309,17 @@ test("parseImportOptions reads the gate flag without changing defaults", () => {
 });
 
 test("gated previews refuse and redact unsafe issue titles and labels in both import modes", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-preview-"));
+  const root = path.join(directory, "tracker");
+  await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { pmRoot: root, cwd: directory, noExtensions: true });
   const original = console.error;
   const messages: string[] = [];
   console.error = (...values: unknown[]) => { messages.push(values.join(" ")); };
   try {
     for (const atomic of [false, true]) {
       const malicious = { ...issue(1, GH_TOKEN, "Public body"), labels: [{ name: GH_TOKEN }] };
-      await assert.rejects(runImport("acme/widgets", "unused-preview", parseImportOptions({ gate: true, dryRun: true, atomic }), {
-        resolveToken: () => undefined, fetchIssues: async () => [malicious], readItems: () => [],
+      await assert.rejects(runImport("acme/widgets", root, parseImportOptions({ gate: true, dryRun: true, atomic }), {
+        resolveToken: () => undefined, fetchIssues: async () => [malicious],
       }), (error: unknown) => {
         assert.match((error as Error).message, /github-token-classic/);
         assert.ok(!(error as Error).message.includes(GH_TOKEN));
@@ -326,6 +329,7 @@ test("gated previews refuse and redact unsafe issue titles and labels in both im
     assert.ok(!messages.join("\n").includes(GH_TOKEN));
   } finally {
     console.error = original;
+    fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 
@@ -436,23 +440,33 @@ test("verifyImportIdempotency fails duplicate provenance, untagged creates, and 
 });
 
 test("a gated import refuses to write when the corpus cannot yield an idempotent plan", async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-duplicate-preview-"));
+  const root = path.join(directory, "tracker");
+  await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { pmRoot: root, cwd: directory, noExtensions: true });
+  const ids: string[] = [];
+  for (const title of ["Duplicate A", "Duplicate B"]) {
+    const item = (await create({ title, type: "Task", tags: "gh:acme/widgets#1" }, { pmRoot: root })).item;
+    ids.push(item.id);
+    await mutateItem({ pmRoot: root, id: item.id, settings: await readSettings(root), author: "fixture", op: "update", mutate: document => {
+      document.metadata.github_url = "https://github.com/acme/widgets/issues/1";
+      return { changedFields: ["github_url"] };
+    } });
+  }
+  const before = await Promise.all(ids.map(id => get(id, {}, { pmRoot: root })));
   const issues = [issue(1, "One", "b1"), issue(2, "Two", "b2")];
   const messages: string[] = [];
   const originalError = console.error;
   console.error = (...values: unknown[]) => messages.push(values.join(" "));
   try {
     await assert.rejects(
-      runImport("acme/widgets", "/unused-gated-workspace", parseImportOptions({ gate: true, dryRun: true }), {
+      runImport("acme/widgets", root, parseImportOptions({ gate: true, dryRun: true }), {
         resolveToken: () => undefined,
         fetchIssues: async () => issues,
-        readItems: () => [
-          { id: "dup-a", github_url: "https://github.com/acme/widgets/issues/1", tags: ["gh:acme/widgets#1"] },
-          { id: "dup-b", github_url: "https://github.com/acme/widgets/issues/1", tags: ["gh:acme/widgets#1"] },
-        ],
       }),
       (err: unknown) => {
-        assert.ok(err instanceof CommandError);
-        assert.match(err.message, /import plan is not idempotent/);
+        assert.equal((err as { code: string }).code, "github_import_owner_conflict");
+        assert.match(String(err), /import plan is not idempotent/);
+        for (const id of ids) assert.ok(String(err).includes(id));
         return true;
       },
     );
@@ -460,8 +474,10 @@ test("a gated import refuses to write when the corpus cannot yield an idempotent
       !messages.some((message) => /pm github gate: plan verified/.test(message)),
       "the idempotency refusal happens before the plan is reported as verified",
     );
+    assert.deepEqual((await Promise.all(ids.map(id => get(id, {}, { pmRoot: root })))).map(result => result.item_hash), before.map(result => result.item_hash));
   } finally {
     console.error = originalError;
+    fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 
