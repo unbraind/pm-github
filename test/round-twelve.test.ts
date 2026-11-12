@@ -204,6 +204,26 @@ for (const conflicting of [true, false]) test(`Round12 project pull rechecks pee
   else assert.equal((await get(local.id, {}, { pmRoot: root })).item.status, "in_progress");
 }));
 
+for (const selectedConflicts of [false, true]) test(`Round12 scoped project pull ignores conflicts confined to unselected items (selected conflicts: ${selectedConflicts})`, async () => tracker(async root => {
+  const selected = (await create({ title: "Selected board owner", type: "Chore", status: "open" }, { pmRoot: root })).item;
+  await change(root, selected.id, { github_url: source.html_url });
+  // Two unselected items claim another issue, which is not on the board.
+  for (const title of ["Unselected owner A", "Unselected owner B"]) {
+    const peer = (await create({ title, type: "Chore" }, { pmRoot: root })).item;
+    await change(root, peer.id, { github_url: selectedConflicts ? source.html_url : "https://github.com/o/r/issues/9" });
+  }
+  const corpus = (await listAllComplete({ includeBody: true }, { pmRoot: root })).items;
+  const scoped = corpus.filter(item => item.id === selected.id);
+  const board = [{ id: "board", statusName: "In Progress", content: { typename: "Issue", title: "Board", repo, number: 7 } }];
+  if (selectedConflicts) {
+    // Must refuse: an unselected peer claiming the selected item's own issue still stops the scoped pull.
+    assert.throws(() => buildProjectPullPlan(scoped, { owner: "o", number: 1 }, board, undefined, undefined, corpus), /claimed by|conflict/i);
+  } else {
+    const plan = buildProjectPullPlan(scoped, { owner: "o", number: 1 }, board, undefined, undefined, corpus);
+    assert.deepEqual(plan.entries.map(entry => entry.pmId), [selected.id]);
+  }
+}));
+
 // Documentation is part of the public identity contract, including these deliberate limits.
 test("Round twelve docs distinguish consistency from positive ownership and revisions", () => {
   const inventory = readFileSync(new URL("../docs/identity-ownership-inventory.md", import.meta.url), "utf8");

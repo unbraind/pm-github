@@ -628,7 +628,9 @@ export function buildProjectPullPlan(
 ): PullPlan {
   const pmByItemId = indexPmByProjectItem(pmItems, ref);
   const ownership = buildGithubOwnershipIndex(corpus.filter((item): item is PmItemLike => Boolean(item)), projectItems.flatMap(item => item.content.repo ? [item.content.repo] : []));
-  const pmByIssue = indexPmByIssue(corpus, ownership);
+  // Claims are checked against the complete owner corpus, but only selected items are looked up: a conflict
+  // between two unselected items that the scoped pull never touches must not abort it.
+  const pmByIssue = indexPmByIssue(pmItems, ownership);
   const entries: PullPlanEntry[] = [];
   const statusSkipped: PullPlan["statusSkipped"] = [];
 
