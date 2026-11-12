@@ -603,6 +603,17 @@ export interface PullPlanEntry {
   toStatus: string;
 }
 
+/**
+ * Index the selected items by the issue each one owns, checking their claims against the complete owner
+ * corpus for the board's repositories. Only selected items are looked up, so a conflict between two
+ * unselected items that the plan never touches cannot abort it, while a selected item that conflicts with
+ * an unselected peer still refuses.
+ */
+function indexSelectedByIssue(selected: PmItemLike[], corpus: PmItemLike[], projectItems: ProjectItem[]): { ownership: GithubOwnershipIndex; pmByIssue: Map<string, PmItemLike> } {
+  const ownership = buildGithubOwnershipIndex(corpus.filter((item): item is PmItemLike => Boolean(item)), projectItems.flatMap(item => item.content.repo ? [item.content.repo] : []));
+  return { ownership, pmByIssue: indexPmByIssue(selected, ownership) };
+}
+
 const projectPullOwners = new WeakMap<object, readonly string[]>();
 
 /** Preserve the planning snapshot's owner decision without adding content to public plan rows. */
@@ -627,10 +638,7 @@ export function buildProjectPullPlan(
   corpus: PmItemLike[] = pmItems,
 ): PullPlan {
   const pmByItemId = indexPmByProjectItem(pmItems, ref);
-  const ownership = buildGithubOwnershipIndex(corpus.filter((item): item is PmItemLike => Boolean(item)), projectItems.flatMap(item => item.content.repo ? [item.content.repo] : []));
-  // Claims are checked against the complete owner corpus, but only selected items are looked up: a conflict
-  // between two unselected items that the scoped pull never touches must not abort it.
-  const pmByIssue = indexPmByIssue(pmItems, ownership);
+  const { ownership, pmByIssue } = indexSelectedByIssue(pmItems, corpus, projectItems);
   const entries: PullPlanEntry[] = [];
   const statusSkipped: PullPlan["statusSkipped"] = [];
 
@@ -696,8 +704,7 @@ export function buildProjectImportPlan(
   statuses?: GithubStatusRegistry,
 ): ImportPlanEntry[] {
   const pmByItemId = indexPmByProjectItem(pmItems, ref);
-  const ownership = buildGithubOwnershipIndex(pmItems.filter((item): item is PmItemLike => Boolean(item)), projectItems.flatMap(item => item.content.repo ? [item.content.repo] : []));
-  const pmByIssue = indexPmByIssue(pmItems, ownership);
+  const { ownership, pmByIssue } = indexSelectedByIssue(pmItems, pmItems, projectItems);
   const plan: ImportPlanEntry[] = [];
 
   for (const pi of projectItems) {
