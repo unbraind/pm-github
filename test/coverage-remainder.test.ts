@@ -14,7 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { normalizeItemId, create, mutateItem, readSettings, listAllComplete, certifyCompleteListResult, runWithActiveExtensions, setActiveExtensionHooks } from "@unbrained/pm-cli/sdk";
+import { init, normalizeItemId, create, mutateItem, readSettings, listAllComplete, certifyCompleteListResult, runWithActiveExtensions, setActiveExtensionHooks } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness, type ExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 
 import extension, {
@@ -146,6 +146,7 @@ test("client filters and issue URL query keep optional import constraints", () =
 test("atomic import falls back when settings are unreadable and reports interruption", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-atomic-settings-"));
   try {
+    await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { cwd: root, pmRoot: root, noExtensions: true });
     const entry = {
       issueNumber: 7,
       title: "Widget",
@@ -239,6 +240,7 @@ test("dependency linking reports a non-Error snapshot failure and a detector fai
 test("ungated import skips a blank title, reports comment-fetch failure, and previews link-deps", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-import-preview-"));
   try {
+    await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { cwd: root, pmRoot: root, noExtensions: true });
     const { stderr, result } = await captureStderr(() => runImport("acme/widgets", root, opts({ "link-deps": true, dryRun: true, "with-comments": true }), {
       resolveToken: () => "tok",
       readItems: () => [],

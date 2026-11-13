@@ -1801,7 +1801,6 @@ async function commitGithubImportTransactionUnchecked(config: {
       itemIds,
     };
   } catch (err: unknown) {
-    if (err && typeof err === "object" && "code" in err && ["github_import_owner_conflict", "github_identity_conflict"].includes(String(err.code))) throw err;
     const errorContext = err && typeof err === "object" && "context" in err ? err.context : undefined;
     const sdkCode = errorContext && typeof errorContext === "object" && "code" in errorContext ? errorContext.code : undefined;
     const reservedIdentity = sdkCode === "item_identity_reserved";
@@ -1820,6 +1819,7 @@ async function commitGithubImportTransactionUnchecked(config: {
       }
     }
     const msg = errorMessage(err);
+    if (err && typeof err === "object" && "code" in err && ["github_import_owner_conflict", "github_identity_conflict"].includes(String(err.code))) throw err;
     const label = `${opts.updateOnly ? "Refresh" : "Atomic GitHub import"} transaction ${transactionId}`;
     if (mismatchedPlan) throw new GithubImportRecoveryError("github_import_plan_drift", `${label} has recorded mutations that no longer match its SDK journal. Restore its original recorded plan before retrying; changed input was not applied.`);
     if (reservedIdentity) throw new GithubImportRecoveryError("github_import_plan_drift", `${label} cannot recreate original target(s) ${mutations.filter(mutation => mutation.op === "create").map(mutation => mutation.id).join(", ")}: compensation retained their history. Inspect pm history and explicitly restore their original live versions with pm restore before retrying this same transaction. Keep its recorded plan and history; changed GitHub input was not applied.`);
@@ -3440,13 +3440,23 @@ export function verifyImportIdempotency(
   ownership = buildGithubOwnershipIndex(existing, [repo]),
 ): ImportIdempotencyReceipts {
   const identityOwners = new Map<string, string>();
+  const duplicateIdentities = new Set<string>();
   const targets = new Set(prepared.map(entry => `${repo.toLowerCase()}#${entry.issueNumber}`));
-  for (const item of existing) {
-    if (!item.id || !ownership.states.get(item)?.claims.some(key => targets.has(key))) continue;
-    for (const key of githubOwnedIdentityKeys(item, ownership)) {
-      identityOwners.set(key, item.id);
-    }
+  const selected = existing.filter(item => item.id && ownership.states.get(item)?.claims.some(key => targets.has(key)));
+  // Record competing claims before the shared resolver refuses them, preserving
+  // the duplicate-identity gate as an independently exercised batch boundary.
+  for (const item of selected) for (const key of ownership.states.get(item)!.claims) {
+    if (!targets.has(key)) continue;
+    const prior = identityOwners.get(key);
+    if (prior && prior !== item.id) duplicateIdentities.add(key);
+    else identityOwners.set(key, item.id!);
   }
+  if (duplicateIdentities.size > 0) {
+    const key = [...duplicateIdentities][0]!;
+    const owners = [...ownership.claimants.get(key)!.keys()];
+    throw new GithubImportOwnershipError(owners[0]!, key, owners.map(id => `${key} claimed by ${id}`));
+  }
+  for (const item of selected) githubOwnedIdentityKeys(item, ownership);
   const matchedIds: string[] = [];
   let untaggedNewEntries = 0;
   for (const entry of prepared) {
@@ -3460,7 +3470,7 @@ export function verifyImportIdempotency(
   const conflictingTargets = matchedIds.length - new Set(matchedIds).size;
   if (untaggedNewEntries > 0 || conflictingTargets > 0) {
     throw new CommandError(
-      `pm github gate: import plan is not idempotent — 0 duplicate import identity claim(s) ` +
+      `pm github gate: import plan is not idempotent — ${duplicateIdentities.size} duplicate import identity claim(s) ` +
         `in the existing corpus, ${untaggedNewEntries} new entr(y/ies) without a provenance tag, ` +
         `${conflictingTargets} conflicting target(s). No item was written.`,
       EXIT_CODE.GENERIC_FAILURE,
@@ -4055,7 +4065,8 @@ export async function runImport(
         commentWriteFailures += (await syncGithubCommentsToAnnotations(match.id, comments, pmRoot, issue.number, githubImportTarget(repo, prepared, match.id))).failed;
       }
       await persistImportFidelity(pmRoot, match.id, prepared.fidelity!, false, false, assignee);
-      updated++;
+      if (prepared.identity?.via === "citation") adopted++;
+      else updated++;
       continue;
     }
 
@@ -6666,11 +6677,16 @@ export async function applyPushEntry(
       const corpus = readPmItems(pmRoot);
       const current = corpus.find(item => item.id === entry.pmId);
       if (!current) throw new GithubImportOwnershipError(entry.pmId, "project association", ["missing tracker item"]);
-      githubOwnedIdentityKeys(current, corpus);
       const content = projectItems.find(item => item.id === entry.itemId)?.content;
       const repo = entry.issueRepo ?? content?.repo;
       const number = entry.issueNumber ?? content?.number;
-      if (repo && number && githubOwnershipClaims(current).evidence) assertGithubOwnershipConsistency(current, { id: current.id!, repo, number }, corpus);
+      const ownership = buildGithubOwnershipIndex(corpus, repo ? [repo] : []);
+      const keys = githubOwnedIdentityKeys(current, ownership);
+      if (entry.action === "add-issue") {
+        assertGithubImportOwner(current, { id: current.id!, repo: entry.issueRepo!, number: entry.issueNumber! }, ownership);
+      } else if (keys.length === 0 && entry.action !== "add-draft" && !current.tags?.includes(projectItemTag(ref, entry.itemId!))) {
+        throw new GithubImportOwnershipError(entry.pmId, "project association", ["missing current board tag or draft authorization"]);
+      } else if (repo && number && keys.length) assertGithubOwnershipConsistency(current, { id: current.id!, repo, number }, ownership);
     };
     validate();
     let itemId = entry.itemId;

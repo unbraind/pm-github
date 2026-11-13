@@ -539,7 +539,7 @@ for (const fields of [
 }, false, false));
 
 /** Forty native items and an actual SDK transaction measure work without replacing persistence APIs. */
-test("Ownership cost native batch N=40 reads two corpora and parses linearly", async t => tracker(async (root, initial) => {
+test("Ownership cost native batch N=40 reads fresh peers at each separately locked write", async t => tracker(async (root, initial) => {
   const targets: Array<{id:string;repo:string;number:number}> = [];
   for (let number = 1; number <= 40; number++) {
     const id = deriveAtomicItemId(repo, number, (await readSettings(root)).id_prefix, normalizeItemId);
@@ -558,8 +558,8 @@ test("Ownership cost native batch N=40 reads two corpora and parses linearly", a
       }));
     },
   })));
-  assert.ok(work.claimParses! <= 40 * 12, JSON.stringify(work));
-  assert.equal(work.corpusReads, 2);
+  assert.ok(work.claimParses! <= 40 * (2 * 40 + 12), JSON.stringify(work));
+  assert.equal(work.corpusReads, 1 + 2 * 40);
   t.diagnostic(JSON.stringify(work));
 }));
 

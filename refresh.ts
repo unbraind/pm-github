@@ -37,15 +37,20 @@ export function selectRefreshTargets(items: readonly PmItem[], repo: string, num
   warnGithubOwnershipScope(ownership, selected);
   for (const item of selected) {
     if (!item.id) continue;
-    const identities = githubOwnedIdentityKeys(item, ownership, repo);
-    // The refresh GraphQL path queries issue(), so PR owners are excluded.
-    if (ownership.states.get(item)!.kinds.includes("pull")) continue;
-    if (typeof item.github_repo === "string" && item.github_repo.toLowerCase() === repo && typeof item.github_number === "number" && (!Number.isSafeInteger(item.github_number) || item.github_number < 1)) throw new CommandError(`Refresh found an invalid issue number for ${item.id}.`);
+    const state = ownership.states.get(item)!;
+    // PRs are excluded only after checking their complete ownership claims.
+    if (state.kinds.includes("pull")) { githubOwnedIdentityKeys(item, ownership, repo); continue; }
     const numbers = new Set<number>();
-    for (const key of identities) {
+    for (const key of state.claims) {
       const [repository, number] = key.split("#");
       if (repository === repo) numbers.add(Number(number));
     }
+    // Invalid explicit numbers remain a refusal even when they cannot form a
+    // valid ownership key. Neither this validation nor tags create ownership.
+    if (typeof item.github_repo === "string" && item.github_repo.toLowerCase() === repo && typeof item.github_number === "number") numbers.add(item.github_number);
+    for (const number of numbers) if (!Number.isSafeInteger(number) || number < 1) throw new CommandError(`Refresh found an invalid issue number for ${item.id}.`);
+    if (numbers.size > 1) throw new GithubImportOwnershipError(item.id, `Refresh found conflicting GitHub identities in ${repo}`, state.claims);
+    githubOwnedIdentityKeys(item, ownership, repo);
     for (const number of numbers) {
       if (targets.has(number)) throw new CommandError(`Refresh found multiple existing owners for issue #${number}.`);
       targets.set(number, { id: item.id, number, item });

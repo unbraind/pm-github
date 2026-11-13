@@ -57,11 +57,11 @@ for (const end of ['"', ">", ".", "<", "'", "`", ")".repeat(20_000)]) test(`shar
 }));
 
 test("shared declaration diagnostics retain mismatches and keep API links reference-only", async () => tracker(async root => {
-  for (const description of [`GH issue #8: ${url}>`, "GitHub issue https://api.github.com/repos/o/r/issues/7", "GH issue #7: https://github.com/o/r/issues/nope"]) {
+  for (const description of [`GH issue #8: ${url}>`, "GitHub issue https://api.github.com/repos/o/r/issues/7", "GH issue #7: https://github.com/o/r/issues/nope", "GH issue #7: https://api.github.com.example/repos/o/r/issues/7", "GH issue #7: https://github.com/o/r/issues/api.github.com"]) {
     const item = await native(root, { description });
     assert.equal(legacyGithubDescriptionIdentity(item), undefined); assert.deepEqual(githubOwnershipClaims(item).owners, []);
     const result = await captureStderr(async () => warnGithubOwnershipScope(buildGithubOwnershipIndex([item]), [item]));
-    assert.equal(result.stderr.length, description.includes("api.github.com") ? 0 : 1);
+    assert.equal(result.stderr.length, parseLegacyGithubDescription(item)?.target?.url.host === "api.github.com" ? 0 : 1);
     if (result.stderr.length) assert.equal(JSON.parse(result.stderr[0]!).code, "invalid_github_identity_number");
   }
   const anonymous = {};
@@ -455,11 +455,11 @@ test("nested revision guards share only equivalent scopes and preserve unexpecte
   Object.defineProperty(broken, "related", { get: () => { throw new Error("caller endpoint inspection failed"); } });
   await assert.rejects(() => withGithubImportOwners(root, [broken], () => update(item.id!, { title: "Must not apply" }, { pmRoot: root })), /Extension mutation guard github-import-owner failed/);
   assert.deepEqual(bytes(root, item), before);
-  const unowned = await native(root), settings = await readSettings(root);
-  await withGithubImportOwners(root, [{ id: unowned.id!, repo, number: 9, initialLink: () => true }], () => mutateItem({ pmRoot: root, id: unowned.id!, settings, author: "fixture", op: "update", mutate: document => {
+  const unowned = await native(root), settings = await readSettings(root), unchanged = bytes(root, unowned);
+  await assert.rejects(() => withGithubImportOwners(root, [{ id: unowned.id!, repo, number: 9, initialLink: () => true }], () => mutateItem({ pmRoot: root, id: unowned.id!, settings, author: "fixture", op: "update", mutate: document => {
     delete (document.metadata as Record<string, unknown>).id; return { changedFields: ["id"] };
-  } }));
-  await assert.rejects(() => listAllComplete({}, { pmRoot: root }), error => (error as { code?: string }).code === "list_source_incomplete");
+  } })), /changed or removed the target id/);
+  assert.deepEqual(bytes(root, unowned), unchanged);
 }));
 
 

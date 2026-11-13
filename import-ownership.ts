@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 /** Positive ownership checks at planning and the SDK's locked mutation boundary. */
 import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
 import {
-  PmClient, acquireLockLease, listAllItemMetadata, locateItem, readLocatedItem, hashDocument, EXIT_CODE, PmCliError, getActiveExtensionRegistrations, runWithActiveExtensions, setActiveExtensionHooks,
+  PmClient, acquireLockLease, listAllComplete, certifyCompleteListResult, locateItem, readLocatedItem, hashDocument, EXIT_CODE, PmCliError, getActiveExtensionRegistrations, runWithActiveExtensions, setActiveExtensionHooks,
   setActiveExtensionRegistrations, runActiveBeforeMutationHooks, runActiveOnReadHooks,
   runActiveOnWriteHooks, runActiveOnIndexHooks,
 } from "@unbrained/pm-cli/sdk";
@@ -96,24 +96,18 @@ export function withGithubOwnershipWork<T>(work: GithubOwnershipWork, run: () =>
   return ownershipWork.run(work, run);
 }
 
-/** Read one complete native metadata snapshot for a batch or a fresh write check. */
-export async function readGithubOwnershipSnapshot(pmRoot: string, repositories: readonly string[] = []): Promise<GithubOwnershipIndex> {
-  const { pmRoot: root, settings, types } = await readGithubWorkspace(pmRoot);
-  const work = ownershipWork.getStore(); if (work) work.corpusReads = (work.corpusReads ?? 0) + 1;
-  return buildGithubOwnershipIndex(await listAllItemMetadata(root, settings.item_format, types.type_to_folder, undefined, settings.schema), repositories);
+/** Certify the complete native corpus before any owner index can authorize a write. */
+async function readGithubOwnerItems(pmRoot: string): Promise<PmItem[]> {
+  const listed = await listAllComplete({ includeBody: true }, { pmRoot, noExtensions: true });
+  certifyCompleteListResult(listed);
+  return listed.items;
 }
 
-/** Replace one committed/proposed item in a locked snapshot without rereading its peers. */
-function updateOwnershipIndex(index: GithubOwnershipIndex, item: PmItem): void {
-  if (!item.id) return;
-  const old = index.byId.get(item.id);
-  for (const key of old ? index.states.get(old)!.claims : []) index.claimants.get(key)!.delete(item.id);
-  const state = githubOwnershipClaims(item, false, false, index.repositories);
-  index.states.set(item, state); index.byId.set(item.id, item);
-  for (const key of state.claims) {
-    const peers = index.claimants.get(key) ?? new Map<string, string[]>();
-    peers.set(item.id, state.claims); index.claimants.set(key, peers);
-  }
+/** Read one complete native metadata snapshot for a batch or a fresh write check. */
+export async function readGithubOwnershipSnapshot(pmRoot: string, repositories: readonly string[] = []): Promise<GithubOwnershipIndex> {
+  const { pmRoot: root } = await readGithubWorkspace(pmRoot);
+  const work = ownershipWork.getStore(); if (work) work.corpusReads = (work.corpusReads ?? 0) + 1;
+  return buildGithubOwnershipIndex(await readGithubOwnerItems(root), repositories);
 }
 
 /** Parse each item once and index peer claims in linear snapshot work. */
@@ -228,7 +222,7 @@ export function assertGithubImportOwner(item: PmItem, target: GithubOwnedTarget,
 /** Read ownership and the revision used to fence a following native write from the same snapshot. */
 export async function readGithubImportOwner(pmRoot: string, target: GithubOwnedTarget, snapshot?: GithubOwnershipIndex): Promise<string | undefined> {
   const { pmRoot: root, settings, types } = await readGithubWorkspace(pmRoot);
-  const peers = snapshot ?? buildGithubOwnershipIndex(await listAllItemMetadata(root, settings.item_format, types.type_to_folder, undefined, settings.schema), [target.repo]);
+  const peers = snapshot ?? buildGithubOwnershipIndex(await readGithubOwnerItems(root), [target.repo]);
   const located = await locateItem(root, target.id, settings.id_prefix, settings.item_format, types.type_to_folder);
   if (!located) {
     if (!target.allowCreate) throw new PmCliError(`Item ${target.id} not found. GitHub import requires its intended item and history; restore them before retrying.`, EXIT_CODE.NOT_FOUND, { code: "item_not_found" });
@@ -287,12 +281,11 @@ async function withGithubImportOwnersUnderLease<T>(pmRoot: string, targets: read
   if (active?.active && active.root === pmRoot && targets.every(target => active.targets.some(outer => outer.id === target.id &&
     outer.repo.toLowerCase() === target.repo.toLowerCase() && outer.number === target.number &&
     (!target.mirrorContent || outer.mirrorContent) && (!target.expectedHash || target.expectedHash === outer.expectedHash) && !target.related?.length))) return run();
-  const { pmRoot: root, settings, types } = await readGithubWorkspace(pmRoot);
-  const corpus = await listAllItemMetadata(root, settings.item_format, types.type_to_folder, undefined, settings.schema);
+  const { pmRoot: root } = await readGithubWorkspace(pmRoot);
+  const corpus = await readGithubOwnerItems(root);
   const observed = ownershipWork.getStore(); if (observed && observed !== work) observed.corpusReads = (observed.corpusReads ?? 0) + 1;
   if (work) work.corpusReads = (work.corpusReads ?? 0) + 1;
   const snapshot = buildGithubOwnershipIndex(corpus, targets.map(target => target.repo));
-  let lockedIndex: Promise<GithubOwnershipIndex> | undefined;
   // Fail the whole selected batch before even creating an SDK journal.
   for (const target of targets) await readGithubImportOwner(pmRoot, target, snapshot);
   const byId = new Map(targets.map(target => [target.id, target]));
@@ -305,12 +298,12 @@ async function withGithubImportOwnersUnderLease<T>(pmRoot: string, targets: read
         if (target.expectedHash && context.before && hashDocument(context.before) !== target.expectedHash) {
           return { allow: false, code: "item_revision_conflict", message: `GitHub import target ${target.id} changed after its ownership read (expected revision ${target.expectedHash}, current ${hashDocument(context.before)}).`, remediation: "Read the current item and retry against its intended ownership and revision." };
         }
-        lockedIndex ??= context.sdk.list().then(items => {
+        if (context.after && context.after.metadata.id !== target.id) throw new GithubImportOwnershipError(target.id, `${target.repo.toLowerCase()}#${target.number}`, ["mutation changed or removed the target id"]);
+        const peers = await readGithubOwnerItems(root).then(items => {
           if (work) work.corpusReads = (work.corpusReads ?? 0) + 1;
           if (observed && observed !== work) observed.corpusReads = (observed.corpusReads ?? 0) + 1;
           return buildGithubOwnershipIndex(items, targets.map(target => target.repo));
         });
-        const peers = await lockedIndex;
         for (const related of target.related ?? []) {
           const item = peers.byId.get(related.id);
           if (!item) throw new GithubImportOwnershipError(related.id, `${related.repo.toLowerCase()}#${related.number}`, ["missing dependency endpoint"]);
@@ -319,7 +312,6 @@ async function withGithubImportOwnersUnderLease<T>(pmRoot: string, targets: read
         for (const document of [context.before, context.after]) if (document) {
           assertGithubImportOwner({ ...document.metadata, body: document.body }, target, peers);
         }
-        if (context.after) updateOwnershipIndex(peers, { ...context.after.metadata, body: context.after.body });
       } catch (error: unknown) {
         if (!(error instanceof GithubImportOwnershipError)) throw error;
         return { allow: false, code: error.code, message: error.message, remediation: error.remedy };
