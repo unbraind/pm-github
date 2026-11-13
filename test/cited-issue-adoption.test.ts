@@ -8,6 +8,7 @@ import test from "node:test";
 import { create, get, listAllComplete, certifyCompleteListResult } from "@unbrained/pm-cli/sdk";
 import { parseImportOptions, prepareGithubImport, runImport, verifyImportIdempotency, type GhIssue, type PreparedGithubImport } from "../index.ts";
 import { AmbiguousCitationError, matchImportedIssue as resolveImportedIssue } from "../import-fidelity.ts";
+import { githubRepositoryHash } from "../import-ownership.ts";
 import { captureStderr, withEnv } from "./helpers/mock-github-server.ts";
 
 /** Existing adoption regressions opt in explicitly; default-off cases call the production matcher directly. */
@@ -201,6 +202,17 @@ for (const atomic of [false, true]) {
   }));
 
 }
+
+test("an unrelated item with contradictory GitHub aliases does not abort citation matching", () => {
+  // Structured-ownership checks only ask whether owners exist; conflicts outside the target warn instead of refusing.
+  // The conflicted item cites the imported issue, so it is an eligible citation candidate whose ownership is checked.
+  // An importer-created id (claims #41) and github_url (claims #42) disagree; the prose cites only the imported #30,
+  // so the item is an eligible candidate and no other explicit field short-circuits the structured-owner check.
+  const conflicted = { id: `fixture-github-${githubRepositoryHash(repo)}-41`, author: "pm-github", title: "Elsewhere", github_url: `https://github.com/${repo}/issues/42`, description: `Fixes ${repo}#30` };
+  let result: ReturnType<typeof matchImportedIssue> | undefined;
+  assert.doesNotThrow(() => { result = matchImportedIssue([conflicted], issue); });
+  assert.equal(result!.via, "new", "an item that already has owners is never adopted by citation");
+});
 
 test("raw exclusion rejects Markdown-wrapped second numbers across every prose field", () => {
   const wrappers = [["**", "**"], ["*", "*"], ["_", "_"], ["`", "`"], ["```text\n", "\n```"], ["<", ">"], ["[reference](", ")"], ["![reference](", ")"]];

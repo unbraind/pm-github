@@ -271,7 +271,8 @@ function hasStructuredOwnership(item: PmItem): boolean {
   const filled = (value: unknown) => value !== undefined && value !== null && value !== false && !(typeof value === "string" && value.trim() === "");
   return Object.entries(item).some(([key, value]) => filled(value) && (/^github/i.test(key) && !/^github_?(?:link_?only|url)$/i.test(key) ||
       /^(?:external_ref|source_owner)$/.test(key) || /^(?:linear|jira|ado)_(?:.*_)?(?:id|key|url|identifier)$/i.test(key))) ||
-    item.github_link_only === false || Boolean(providerProvenance(item)) || githubOwnedIdentityKeys(item).length > 0;
+    // Existence only: an unrelated item with contradictory aliases must warn elsewhere, never abort citation matching.
+    item.github_link_only === false || Boolean(providerProvenance(item)) || githubOwnershipClaims(item).owners.length > 0;
 }
 
 /** Typed refusal for contradictory authoritative identities; references never enter this decision. */

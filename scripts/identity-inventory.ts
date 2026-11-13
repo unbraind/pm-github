@@ -60,7 +60,7 @@ function collect(root: string, helpers: ReadonlySet<string>): Group[] {
 
 /** Render every root anchor and non-root audit anchor from the current files; ledger prose is not used as a source location. */
 export function renderIdentityInventory(root: string, ledger = readFileSync(join(root, document), "utf8")): string {
-  const explanations = new Map<string, string>(), helpers = new Set<string>(["githubLinkReferences", "indexSelectedByIssue", "legacyGithubDescriptionIdentity", "parseLegacyGithubDescription", "warnGithubOwnershipScope"]);
+  const explanations = new Map<string, string>(), helpers = new Set<string>(["ownershipStateOf", "githubLinkReferences", "indexSelectedByIssue", "legacyGithubDescriptionIdentity", "parseLegacyGithubDescription", "warnGithubOwnershipScope"]);
   for (const row of ledger.matchAll(/^\| `([^`]+)` \/ `([^`]+)` \| (.*?) \| (.*?) \|$/gm)) {
     explanations.set(`${row[1]}/${row[2]}`, row[4]!);
     for (const call of row[3]!.matchAll(/\b([A-Za-z_$][\w$]*)\(\)/g)) helpers.add(call[1]!);
