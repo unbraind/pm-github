@@ -302,13 +302,21 @@ export function githubLinkReferences(item: PmItem) {
   return values.flatMap(value => { const parsed = parseGithubIssueUrl(value); return parsed ? [parsed] : []; });
 }
 
-/** Read only a leading native declaration; later prose is not ownership evidence. */
-export function legacyGithubDescriptionIdentity(item: PmItem) {
+/** Parse native declarations once so ownership and diagnostics share URL boundaries and number validation. */
+export function parseLegacyGithubDescription(item: PmItem) {
   if (typeof item.description !== "string") return undefined;
   const declaration = /^(?:GitHub issue(?:\s*:\s+|\s+)|GH (?:issue|PR) #(-?\d+):\s+)(https?:\/\/[^\s<>"'`]+)/i.exec(item.description);
-  const parsed = declaration?.[2] && parseGithubIssueUrl(trimLocatorPunctuation(declaration[2], "),.;:·"));
-  const stated = declaration?.[1] === undefined ? undefined : Number(declaration[1]);
-  return parsed && !parsed.api && (stated === undefined || Number.isSafeInteger(stated) && stated > 0 && stated === parsed.number) ? parsed : undefined;
+  if (!declaration) return undefined;
+  const target = parseGithubIssueUrl(trimLocatorPunctuation(declaration[2]!, "),.;:·"));
+  const stated = declaration[1] === undefined ? undefined : Number(declaration[1]);
+  const invalidNumber = !target || stated !== undefined && (!Number.isSafeInteger(stated) || stated <= 0 || stated !== target.number);
+  const identity = !invalidNumber && !target!.api ? target : undefined;
+  return { declared: declaration[1], target, identity, invalidNumber };
+}
+
+/** Read only a leading native declaration; later prose is not ownership evidence. */
+export function legacyGithubDescriptionIdentity(item: PmItem) {
+  return parseLegacyGithubDescription(item)?.identity;
 }
 
 /** Collect complete URL fields and legacy native declarations; generic links remain references. */

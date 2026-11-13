@@ -130,13 +130,14 @@ for (const atomic of [false, true]) test(`additive provider links preserve liter
     const original = ["gh:fixture/project#1", "area,api", '["json"]'];
     const local = (await create({ title: "Provider owner", type: "Task", tags: JSON.stringify(original), body: "Provider context" }, { pmRoot: root, noExtensions: true })).item;
     await commitImportedItem({ pmRoot: root, id: local.id, itemPath: getItemPath(root, "Task", local.id), settings: await readSettings(root),
-      document: { metadata: { ...local, github_link_only: true }, body: "Provider context" }, author: "fixture", message: "Seed existing provider link", conflictWarningPrefix: "fixture" });
+      document: { metadata: { ...local, github_url: "https://github.com/fixture/project/issues/1", github_link_only: true }, body: "Provider context" }, author: "fixture", message: "Seed existing provider link", conflictWarningPrefix: "fixture" });
     const labels = ["source,extra", '["array"]'];
     await withMockGithub((request, response) => jsonResponse(response, 200, request.url === "/graphql"
       ? { data: { repository: { issue: { timelineItems: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } } }
       : request.url!.includes("/issues?") ? [issue(1, labels)] : []), async () => {
       const options = parseImportOptions({ atomic, type: "issue" });
       await runImport("fixture/project", root, options);
+      assert.deepEqual((await listAllComplete({}, { pmRoot: root, noExtensions: true })).items.map(item => item.id), [local.id], "The curated-owner update must not create another item");
       const written = (await get(local.id, {}, { pmRoot: root, noExtensions: true })).item;
       assert.deepEqual(written.tags, toImportTags(original), "curated owners retain tags without importing source labels");
       for (const atom of local.tags!) assert.ok(written.tags!.includes(atom), "Native tag atoms must survive provider CSV conversion unchanged.");

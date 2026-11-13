@@ -9,6 +9,7 @@ interface Group { file: string; name: string; sites: Site[] }
 const document = "docs/identity-ownership-inventory.md";
 const fields = new Set(["github_url", "github_repo", "github_number", "external_ref"]);
 const additional = new Map([
+  ["import-fidelity.ts/parseLegacyGithubDescription", "Shared native declaration parser: ownership and diagnostics use the same URL boundaries and matching positive safe issue numbers."],
   ["import-fidelity.ts/legacyGithubDescriptionIdentity", "Legacy native declaration identity: anchored at description start, first complete issue/PR URL, with trailing punctuation removed. No link-only marker or whole-description match is required."],
   ["import-fidelity.ts/githubLinkReferences", "Reference extraction only: supported link fields expose prose and API URL mentions, never owner claims or an import target."],
   ["projects.ts/indexSelectedByIssue", "Build one complete ownership index, then validate only selected tracker items matched by current board issue keys or project-item IDs. Off-board conflicts warn; a peer claiming a board candidate still refuses."],
@@ -58,7 +59,7 @@ function collect(root: string, helpers: ReadonlySet<string>): Group[] {
 
 /** Render every root anchor and non-root audit anchor from the current files; ledger prose is not used as a source location. */
 export function renderIdentityInventory(root: string, ledger = readFileSync(join(root, document), "utf8")): string {
-  const explanations = new Map<string, string>(), helpers = new Set<string>(["githubLinkReferences", "indexSelectedByIssue", "legacyGithubDescriptionIdentity", "warnGithubOwnershipScope"]);
+  const explanations = new Map<string, string>(), helpers = new Set<string>(["githubLinkReferences", "indexSelectedByIssue", "legacyGithubDescriptionIdentity", "parseLegacyGithubDescription", "warnGithubOwnershipScope"]);
   for (const row of ledger.matchAll(/^\| `([^`]+)` \/ `([^`]+)` \| (.*?) \| (.*?) \|$/gm)) {
     explanations.set(`${row[1]}/${row[2]}`, row[4]!);
     for (const call of row[3]!.matchAll(/\b([A-Za-z_$][\w$]*)\(\)/g)) helpers.add(call[1]!);

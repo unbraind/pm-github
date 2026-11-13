@@ -183,9 +183,11 @@ export async function reconcileGithubWebhooks(pmRoot: string, repoArg: string, l
       if (row.changes.length) proposals.push({ id: row.id, number: row.number, fields: row.changes.map(change => change.field),
         lifecycle: row.changes.filter(change => ["status", "github_state", "github_updated_at", "closed_at", "completed_at"].includes(change.field)) });
     }
+    const deferred = new Set(preview?.deferred_imports?.flatMap(entry => entry.issue_numbers) ?? []);
     let reconciled = 0;
     let unlinked = 0;
     for (const record of records) {
+      if (deferred.has(record.number)) continue;
       const row = preview!.plan.find(entry => entry.number === record.number);
       if (row?.reason) continue;
       if (!row) unlinked++;

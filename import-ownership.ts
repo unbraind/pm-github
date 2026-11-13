@@ -7,7 +7,7 @@ import {
   runActiveOnWriteHooks, runActiveOnIndexHooks,
 } from "@unbrained/pm-cli/sdk";
 import { normalizeGithubClaim, normalizeGithubRepository, parseGithubIssueUrl } from "./github-url.ts";
-import { importIdentityKeys, legacyGithubLinkIdentities, explicitGithubIdentities, importerCreatedItem } from "./import-fidelity.ts";
+import { importIdentityKeys, parseLegacyGithubDescription, legacyGithubLinkIdentities, explicitGithubIdentities, importerCreatedItem } from "./import-fidelity.ts";
 import { readGithubWorkspace } from "./workspace.ts";
 import type { PmItem } from "./index.ts";
 
@@ -107,7 +107,7 @@ export async function readGithubOwnershipSnapshot(pmRoot: string, repositories: 
 function updateOwnershipIndex(index: GithubOwnershipIndex, item: PmItem): void {
   if (!item.id) return;
   const old = index.byId.get(item.id);
-  for (const key of old ? index.states.get(old)?.claims ?? [] : []) index.claimants.get(key)?.delete(item.id);
+  for (const key of old ? index.states.get(old)!.claims : []) index.claimants.get(key)!.delete(item.id);
   const state = githubOwnershipClaims(item, false, false, index.repositories);
   index.states.set(item, state); index.byId.set(item.id, item);
   for (const key of state.claims) {
@@ -141,13 +141,12 @@ function ownershipIndex(peers: readonly PmItem[] | GithubOwnershipIndex, reposit
 export function warnGithubOwnershipScope(index: GithubOwnershipIndex, selected: readonly PmItem[]): void {
   const scope = new Set(selected.map(item => item.id));
   for (const item of index.items) {
-    const declaration = typeof item.description === "string" ? /^(?:GitHub issue(?:\s*:\s+|\s+)|GH (?:issue|PR) #(-?\d+):\s+)(https?:\/\/\S+)/i.exec(item.description) : null;
-    const declared = declaration?.[1] === undefined ? undefined : Number(declaration[1]);
-    const source = declaration && parseGithubIssueUrl(declaration[2]!.replace(/[),.;:·]+$/, ""));
+    const declaration = parseLegacyGithubDescription(item);
+    const source = declaration?.target;
     const external = typeof item.external_ref === "string" ? /^gh:[^/\s]+\/[^#\s]+#(\d+)$/i.exec(item.external_ref) : null;
     const suffix = typeof item.id === "string" ? /(?:^|-)github-[a-f0-9]{12}-(\d+)$/.exec(item.id) : null;
-    if (declaration && (!source || declared !== undefined && (!Number.isSafeInteger(declared) || declared <= 0 || declared !== source.number)) || suffix && (!Number.isSafeInteger(Number(suffix[1])) || Number(suffix[1]) < 1) || external && (!Number.isSafeInteger(Number(external[1])) || Number(external[1]) < 1)) {
-      console.error(JSON.stringify({ code: "invalid_github_identity_number", item: item.id, declared: declaration?.[1], url: source ? source.key : undefined, suffix: suffix?.[1], external_number: external?.[1], remedy: "Make every declared issue number a matching positive safe integer; invalid declarations do not establish ownership." }));
+    if (declaration?.invalidNumber || suffix && (!Number.isSafeInteger(Number(suffix[1])) || Number(suffix[1]) < 1) || external && (!Number.isSafeInteger(Number(external[1])) || Number(external[1]) < 1)) {
+      console.error(JSON.stringify({ code: "invalid_github_identity_number", item: item.id, declared: declaration?.declared, url: source ? source.key : undefined, suffix: suffix?.[1], external_number: external?.[1], remedy: "Make every declared issue number a matching positive safe integer; invalid declarations do not establish ownership." }));
     }
     const state = index.states.get(item)!;
     if (!scope.has(item.id) && state.claims.length > 1) console.error(JSON.stringify({ code: "out_of_scope_github_owner_conflict", items: [item.id], claims: state.claims }));

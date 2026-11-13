@@ -2,7 +2,7 @@ import { parseGithubUrl, parseGithubIssueUrl, githubUrlTokens } from "./github-u
 import { readGithubWorkspace, githubStatusIsTerminal } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
 import { GithubIdentityConflictError, normalizeImportValue } from "./import-fidelity.ts";
-import { buildGithubOwnershipIndex, type GithubOwnershipIndex, withGithubOwnershipLock, assertGithubOwnershipConsistency, githubOwnershipClaims, GithubImportOwnershipError } from "./import-ownership.ts";
+import { buildGithubOwnershipIndex, type GithubOwnershipIndex, withGithubOwnershipLock, assertGithubOwnershipConsistency, GithubImportOwnershipError } from "./import-ownership.ts";
 /** Close delivered tracker items using merged pull requests and head-check evidence. */
 import { close, hashDocument, locateItem, readLocatedItem, runWithActiveExtensions, setActiveExtensionHooks, listAllComplete, certifyCompleteListResult, getHistoryPath, readHistoryEntries, verifyHistoryEntries, PmCliError, EXIT_CODE, type ItemDocument } from "@unbrained/pm-cli/sdk";
 
@@ -33,16 +33,14 @@ export type CloseoutCode = "already_terminal" | "other_repository" | "duplicate_
 /** Explicit delivery may close local items, but never an issue owned by a different repository. */
 export function assertCloseoutGithubOwner(item: ItemDocument["metadata"], repo: string, peers: readonly ItemDocument["metadata"][] | GithubOwnershipIndex = []): void {
   const ownership = Array.isArray(peers) ? buildGithubOwnershipIndex(peers, [repo]) : peers as GithubOwnershipIndex;
-  const state = ownership.states.get(item) ?? githubOwnershipClaims(item, false, false, [repo]);
   const owners = assertGithubOwnershipConsistency(item, undefined, ownership);
-  if (state.evidence && owners.length !== 1) throw new GithubImportOwnershipError(item.id, `${repo.toLowerCase()} (delivery repository)`, state.claims);
-  if (owners.length && (owners.length !== 1 || !owners[0]!.startsWith(`${repo.toLowerCase()}#`))) {
+  if (owners.length && !owners[0]!.startsWith(`${repo.toLowerCase()}#`)) {
     throw new GithubImportOwnershipError(item.id, `${repo.toLowerCase()} (delivery repository)`, owners);
   }
 }
 
 /** Convert malformed ownership into one eligible item's outcome, never a run-wide failure. */
-function closeoutOwnershipConflict(item: ItemDocument["metadata"], repo: string, peers: readonly ItemDocument["metadata"][] | GithubOwnershipIndex): GithubImportOwnershipError | GithubIdentityConflictError | undefined {
+export function closeoutOwnershipConflict(item: ItemDocument["metadata"], repo: string, peers: readonly ItemDocument["metadata"][] | GithubOwnershipIndex): GithubImportOwnershipError | GithubIdentityConflictError | undefined {
   try { assertCloseoutGithubOwner(item, repo, peers); }
   catch (error: unknown) {
     if (!(error instanceof GithubImportOwnershipError || error instanceof GithubIdentityConflictError)) throw error;

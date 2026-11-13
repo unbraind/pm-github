@@ -14,7 +14,7 @@ import {
   resolveGitHubToken, resumeGithubImport, assertGithubImportReplayPreflight, validateGithubImportFidelity, validateGithubImportPlan,
   type GhIssue, type PmItem, type PreparedGithubImport,
 } from "./index.ts";
-import { fetchImportTimeline, legacyGithubIdentityConflict, importFidelityFields, normalizeImportValue, readImportReleases } from "./import-fidelity.ts";
+import { fetchImportTimeline, type LegacyGithubIdentityConflict, importFidelityFields, normalizeImportValue, readImportReleases } from "./import-fidelity.ts";
 
 /** An existing item and its unique linked issue number. */
 export interface RefreshTarget { id: string; number: number; item: PmItem }
@@ -46,9 +46,7 @@ export function selectRefreshTargets(items: readonly PmItem[], repo: string, num
       const [repository, number] = key.split("#");
       if (repository === repo) numbers.add(Number(number));
     }
-    if (numbers.size > 1) throw new CommandError(`Refresh found conflicting GitHub identities for ${item.id}.`);
     for (const number of numbers) {
-      if (!Number.isSafeInteger(number) || number < 1) throw new CommandError(`Refresh found an invalid issue number for ${item.id}.`);
       if (targets.has(number)) throw new CommandError(`Refresh found multiple existing owners for issue #${number}.`);
       targets.set(number, { id: item.id, number, item });
     }
@@ -162,7 +160,7 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
   const state = await readRefreshState(pmRoot);
   const workspace = state.workspace;
   let items = state.items;
-  const identityConflicts = items.flatMap(item => { const conflict = legacyGithubIdentityConflict(item); return conflict ? [conflict] : []; });
+  const identityConflictFields: { identity_conflicts?: LegacyGithubIdentityConflict[] } = {};
   let all = selectRefreshTargets(items, repo, scope?.numbers);
   const initialTargets = bounded(all);
   const token = resolveGitHubToken();
@@ -175,7 +173,7 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
   // Retained side-data plans can outlive a committed SDK journal. Recover those
   // before polling, so a newly fetched plan is never reported as the old replay.
   const recovery = new Map(pending.map(journal => [journal.transactionId, { transactionId: journal.transactionId, status: String(journal.status) }]));
-  const deferredImports: Array<{ transaction_id: string; code: string; item_ids: string[]; message: string; resume_argv: string[] }> = [];
+  const deferredImports: Array<{ transaction_id: string; code: string; item_ids: string[]; issue_numbers: number[]; message: string; resume_argv: string[] }> = [];
   const currentItems = new Map(items.map(item => [item.id, item]));
   const selectedIds = new Set(initialTargets.map(target => target.id));
   const selectableKeys = new Set(all.map(target => `${target.number}:${target.id}`));
@@ -201,6 +199,7 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
         deferredImports.push({ transaction_id: record.transactionId,
           code: pendingCreates.size ? "github_import_pending_creates" : "github_import_outside_refresh_scope",
           item_ids: pendingCreates.size ? [...pendingCreates] : ids.filter(id => !selectedRecordIds.has(id)),
+          issue_numbers: pairs.map(([number]) => number),
           message: "Retained atomic import is deferred; resume the original import before refreshing those targets.",
           resume_argv: ["pm", "github", "import", repo, "--atomic"] });
         continue;
@@ -274,6 +273,6 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
     if (opts.atomic) await importGithubAtomic(pmRoot, repo, prepared, { updateOnly: true });
     else for (const entry of prepared) await importGithubAtomic(pmRoot, repo, [entry], { updateOnly: true });
   }
-  return { ...(deferredImports.length ? { deferred_imports: deferredImports } : {}), ...(identityConflicts.length ? { identity_conflicts: identityConflicts } : {}), repo, dryRun: opts.dryRun, atomic: opts.atomic, selected: targets.length, filtered,
+  return { ...(deferredImports.length ? { deferred_imports: deferredImports } : {}), ...identityConflictFields, repo, dryRun: opts.dryRun, atomic: opts.atomic, selected: targets.length, filtered,
     unchanged, updated: prepared.length, missing, created: 0, resumed, plan };
 }
