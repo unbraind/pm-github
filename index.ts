@@ -1,5 +1,5 @@
 import { writeGithubStateAtomic, syncGithubStatePath, type GithubStateWriteOptions } from "./durable-state.ts";
-import { buildGithubOwnershipIndex, withGithubItemConsistency, readGithubOwnershipSnapshot, githubRepositoryHash, githubOwnershipClaims, githubOwnedIdentityKeys, assertGithubOwnershipConsistency, assertGithubImportOwner, GithubImportOwnershipError, readGithubImportOwner, withGithubImportOwners, mutateGithubOwnedItem, type GithubOwnershipIndex, type GithubOwnedTarget } from "./import-ownership.ts";
+import { buildGithubOwnershipIndex, warnGithubOwnershipScope, withGithubItemConsistency, readGithubOwnershipSnapshot, githubRepositoryHash, githubOwnershipClaims, githubOwnedIdentityKeys, assertGithubOwnershipConsistency, assertGithubImportOwner, GithubImportOwnershipError, readGithubImportOwner, withGithubImportOwners, mutateGithubOwnedItem, type GithubOwnershipIndex, type GithubOwnedTarget } from "./import-ownership.ts";
 import { parseGithubIssueUrl, githubUrlTokens } from "./github-url.ts";
 import { readGithubWorkspace, canonicalGithubStatus, githubStatusKind, githubStatusIsTerminal, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
@@ -1284,10 +1284,12 @@ export function resolveSearchCorpus(documents: unknown, pmRootValue: unknown): P
  * @param items - Complete runtime-validated pm item corpus.
  * @returns Map keyed by lowercase `owner/repo#N` provenance.
  */
-export function indexByProvenance(items: PmItem[]): Map<string, PmItem> {
+export function indexByProvenance(items: PmItem[], targets?: ReadonlySet<string>): Map<string, PmItem> {
   const index = new Map<string, PmItem>();
   const claims = buildGithubOwnershipIndex(items);
-  for (const item of items) if (item.id) for (const key of githubOwnedIdentityKeys(item, claims)) index.set(key, item);
+  const selected = items.filter(item => !targets || claims.states.get(item)?.claims.some(key => targets.has(key)));
+  warnGithubOwnershipScope(claims, selected);
+  for (const item of selected) if (item.id) for (const key of githubOwnedIdentityKeys(item, claims)) if (!targets || targets.has(key)) index.set(key, item);
   return index;
 }
 
@@ -3440,9 +3442,11 @@ export function verifyImportIdempotency(
 ): ImportIdempotencyReceipts {
   const identityOwners = new Map<string, string>();
   const duplicateIdentities = new Set<string>();
+  const targets = new Set(prepared.map(entry => `${repo.toLowerCase()}#${entry.issueNumber}`));
   for (const item of existing) {
-    if (!item.id) continue;
+    if (!item.id || !ownership.states.get(item)?.claims.some(key => targets.has(key))) continue;
     for (const key of githubOwnedIdentityKeys(item, ownership)) {
+      if (!targets.has(key)) continue;
       const prior = identityOwners.get(key);
       if (prior && prior !== item.id) duplicateIdentities.add(key);
       else identityOwners.set(key, item.id);
@@ -3487,7 +3491,7 @@ export function verifyImportIdempotency(
  * @returns Number of durable issue identities verified.
  */
 export function verifyImportedProvenance(existing: PmItem[], prepared: readonly PreparedGithubImport[], repo: string): number {
-  const index = indexByImportIdentity(existing);
+  const index = indexByImportIdentity(existing, buildGithubOwnershipIndex(existing, [repo]), new Set(prepared.map(entry => `${repo.toLowerCase()}#${entry.issueNumber}`)));
   const persisted = prepared.map(entry => ({ ...entry, match: index.get(`${repo.toLowerCase()}#${entry.issueNumber}`) }));
   if (persisted.some(entry => !entry.match?.id)) throw new CommandError("pm github gate: persisted corpus does not account for the complete import plan. Nothing may be pushed.");
   verifyImportIdempotency(existing, persisted, repo);
@@ -3714,7 +3718,9 @@ export async function runImport(
   const identityConflictFields = identityConflicts.length ? { identity_conflicts: identityConflicts } : {};
   for (const conflict of identityConflicts) console.error(JSON.stringify(conflict));
   const ownership = buildGithubOwnershipIndex(existingItems, [repo]);
-  const existing = indexByImportIdentity(existingItems, ownership);
+  const importTargets = new Set(filtered.map(issue => `${repo.toLowerCase()}#${issue.number}`));
+  warnGithubOwnershipScope(ownership, existingItems.filter(item => ownership.states.get(item)?.claims.some(key => importTargets.has(key))));
+  const existing = indexByImportIdentity(existingItems, ownership, importTargets);
   const fidelityContext = { statuses: workspace.statuses, items: existingItems, ownership, releases: readImportReleases(pmRoot),
     timeline: dependencies.fetchIssueTimeline ?? (dependencies.fetchIssues ? async () => [] : fetchImportTimeline) };
 
@@ -4277,7 +4283,8 @@ function assertCurrentUpstreamTarget(pmRoot: string, repo: string, entry: { id?:
 export function planSync(items: PmItem[], repo: string, statuses?: GithubStatusRegistry, options: UpstreamIdentityOptions = {}): SyncPlanEntry[] {
   const ownership = buildGithubOwnershipIndex(options.corpus ?? items, repo ? [repo] : []);
   for (const item of items) githubOwnedIdentityKeys(item, ownership);
-  const targets = upstreamTargets(options.corpus ?? items, repo, ownership);
+  warnGithubOwnershipScope(ownership, items);
+  const targets = upstreamTargets(items, repo, ownership);
   return items.flatMap(item => {
     const number = item.id ? targets.get(item.id) : undefined;
     if (number === undefined) return [];
@@ -4437,10 +4444,8 @@ export interface ExportPlanEntry {
   payload: GithubExportPayload;
 }
 
-// Build the create/update plan. `repo` (lowercased) decides which provenance
-// tags count as an "already exported to THIS repo" link → update; everything
-// else is a create. Pure + side-effect free so it can be unit-tested and
-// printed verbatim in --dry-run.
+// Build create/update entries only for selected items, retaining the complete
+// ownership snapshot to refuse competing peers before each upstream write.
 export function buildExportPlan(
   items: PmItem[],
   repo: string | undefined,
@@ -4451,7 +4456,8 @@ export function buildExportPlan(
   const repoLc = repo?.toLowerCase();
   const ownership = buildGithubOwnershipIndex(options.corpus ?? items, repo ? [repo] : []);
   for (const item of items) githubOwnedIdentityKeys(item, ownership);
-  const targets = repoLc ? upstreamTargets(options.corpus ?? items, repoLc, ownership) : new Map<string, number>();
+  warnGithubOwnershipScope(ownership, items);
+  const targets = repoLc ? upstreamTargets(items, repoLc, ownership) : new Map<string, number>();
   const plan: ExportPlanEntry[] = [];
   for (const item of items) {
     const payload = itemToGithubPayload(item, labelMap, statuses);
@@ -7222,7 +7228,7 @@ export default defineExtension({
           // the runtime-provided documents (already the current corpus); fall
           // back to a fresh read if absent.
           const docs = resolveSearchCorpus(qctx.documents, qctx.pm_root);
-          const index = indexByProvenance(docs);
+          const index = indexByProvenance(docs, new Set(matchedNumbers.map(number => `${repo.toLowerCase()}#${number}`)));
           return mapSearchHits(matchedNumbers, repo, index);
         },
       });

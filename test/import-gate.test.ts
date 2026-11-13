@@ -390,13 +390,16 @@ test("verifyImportIdempotency fails duplicate provenance, untagged creates, and 
   ];
   assert.throws(
     () =>
-      verifyImportIdempotency(existing, [planEntry(2, ["gh:acme/widgets#2"])], "acme/widgets"),
+      verifyImportIdempotency(existing, [planEntry(1, ["gh:acme/widgets#1"])], "acme/widgets"),
     (err: unknown) => {
       assert.equal((err as { code: string }).code, "github_import_owner_conflict");
       assert.match(String(err), /multiple existing owners/);
       return true;
     },
   );
+
+  // Unrelated conflicts are outside this receipt's incoming issue scope.
+  assert.equal(verifyImportIdempotency(existing, [planEntry(2, ["gh:acme/widgets#2"])], "acme/widgets").new_entries, 1);
 
   // A new entry that would be born without its provenance tag.
   assert.throws(

@@ -1,4 +1,4 @@
-import { type GithubOwnershipIndex, buildGithubOwnershipIndex, githubOwnedIdentityKeys, assertGithubOwnershipConsistency } from "./import-ownership.ts";
+import { type GithubOwnershipIndex, buildGithubOwnershipIndex, warnGithubOwnershipScope, githubOwnedIdentityKeys, githubOwnershipClaims, assertGithubOwnershipConsistency } from "./import-ownership.ts";
 import { parseGithubUrl } from "./github-url.ts";
 import { canonicalGithubStatus, githubStatusKind, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
@@ -473,6 +473,7 @@ export function buildProjectPushPlan(
   const addMissing = opts.addMissing !== false;
   const options = statusField?.options ?? [];
   const ownership = buildGithubOwnershipIndex((opts.corpus ?? pmItems).filter((item): item is PmItemLike => Boolean(item)), projectItems.flatMap(item => item.content.repo ? [item.content.repo] : []));
+  warnGithubOwnershipScope(ownership, pmItems.filter((item): item is PmItemLike => Boolean(item)));
   const byProjectItem = indexProjectItemMap(projectItems);
   const byIssue = indexProjectItemsByIssue(projectItems);
 
@@ -609,9 +610,16 @@ export interface PullPlanEntry {
  * unselected items that the plan never touches cannot abort it, while a selected item that conflicts with
  * an unselected peer still refuses.
  */
-function indexSelectedByIssue(selected: PmItemLike[], corpus: PmItemLike[], projectItems: ProjectItem[]): { ownership: GithubOwnershipIndex; pmByIssue: Map<string, PmItemLike> } {
+function indexSelectedByIssue(selected: PmItemLike[], corpus: PmItemLike[], projectItems: ProjectItem[], ref: ProjectRef): { ownership: GithubOwnershipIndex; pmByIssue: Map<string, PmItemLike>; pmByItemId: Map<string, PmItemLike> } {
   const ownership = buildGithubOwnershipIndex(corpus.filter((item): item is PmItemLike => Boolean(item)), projectItems.flatMap(item => item.content.repo ? [item.content.repo] : []));
-  return { ownership, pmByIssue: indexPmByIssue(selected, ownership) };
+  const issues = new Set(projectItems.flatMap(item => item.content.repo && item.content.number ? [`${item.content.repo.toLowerCase()}#${item.content.number}`] : []));
+  const nodes = new Set(projectItems.map(item => item.id));
+  const candidates = selected.filter(item => (ownership.states.get(item) ?? githubOwnershipClaims(item, false, false, ownership.repositories)).claims.some(key => issues.has(key)) || (item.tags ?? []).some(tag => {
+    const parsed = parseProjectItemTag(tag);
+    return parsed && parsed.owner === ref.owner.toLowerCase() && parsed.number === ref.number && nodes.has(parsed.itemId);
+  }));
+  warnGithubOwnershipScope(ownership, candidates);
+  return { ownership, pmByIssue: indexPmByIssue(candidates, ownership), pmByItemId: indexPmByProjectItem(candidates, ref) };
 }
 
 const projectPullOwners = new WeakMap<object, readonly string[]>();
@@ -637,8 +645,7 @@ export function buildProjectPullPlan(
   statuses?: GithubStatusRegistry,
   corpus: PmItemLike[] = pmItems,
 ): PullPlan {
-  const pmByItemId = indexPmByProjectItem(pmItems, ref);
-  const { ownership, pmByIssue } = indexSelectedByIssue(pmItems, corpus, projectItems);
+  const { ownership, pmByIssue, pmByItemId } = indexSelectedByIssue(pmItems, corpus, projectItems, ref);
   const entries: PullPlanEntry[] = [];
   const statusSkipped: PullPlan["statusSkipped"] = [];
 
@@ -703,8 +710,7 @@ export function buildProjectImportPlan(
   statusMap?: Map<string, string>,
   statuses?: GithubStatusRegistry,
 ): ImportPlanEntry[] {
-  const pmByItemId = indexPmByProjectItem(pmItems, ref);
-  const { ownership, pmByIssue } = indexSelectedByIssue(pmItems, pmItems, projectItems);
+  const { ownership, pmByIssue, pmByItemId } = indexSelectedByIssue(pmItems, pmItems, projectItems.filter(item => item.content.typename !== "Unknown"), ref);
   const plan: ImportPlanEntry[] = [];
 
   for (const pi of projectItems) {

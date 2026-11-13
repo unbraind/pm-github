@@ -57,7 +57,7 @@ export function githubRepositoryHash(repo: string): string {
 /** Reverse only a proven importer ID. Tags provide repository candidates, never claims or issue numbers. */
 export function githubImporterIdentity(item: PmItem, repositories: readonly string[] = []): string | undefined {
   const id = typeof item.id === "string" && /(?:^|-)github-([a-f0-9]{12})-([1-9]\d*)$/.exec(item.id);
-  if (!id || !importerCreatedItem(item, "", Number(id[2]))) return undefined;
+  if (!id || !Number.isSafeInteger(Number(id[2])) || !importerCreatedItem(item, "", Number(id[2]))) return undefined;
   const candidates = new Set(repositories.map(repo => repo.toLowerCase()));
   const repo = normalizeGithubRepository(item.github_repo); if (repo) candidates.add(repo);
   for (const target of [...explicitGithubIdentities(item), ...legacyGithubLinkIdentities(item)]) candidates.add(target.repo);
@@ -135,6 +135,27 @@ export function buildGithubOwnershipIndex(items: readonly PmItem[], repositories
 /** Preserve array-based callers while letting batch paths share one already parsed index. */
 function ownershipIndex(peers: readonly PmItem[] | GithubOwnershipIndex, repositories: readonly string[] = []): GithubOwnershipIndex {
   return Array.isArray(peers) ? buildGithubOwnershipIndex(peers, repositories) : peers as GithubOwnershipIndex;
+}
+
+/** Diagnose malformed native numbers and conflicts outside the operation without selecting those items. */
+export function warnGithubOwnershipScope(index: GithubOwnershipIndex, selected: readonly PmItem[]): void {
+  const scope = new Set(selected.map(item => item.id));
+  for (const item of index.items) {
+    const declaration = typeof item.description === "string" ? /^(?:GitHub issue(?:\s*:\s+|\s+)|GH (?:issue|PR) #(-?\d+):\s+)(https?:\/\/\S+)/i.exec(item.description) : null;
+    const declared = declaration?.[1] === undefined ? undefined : Number(declaration[1]);
+    const source = declaration && parseGithubIssueUrl(declaration[2]!.replace(/[),.;:·]+$/, ""));
+    const external = typeof item.external_ref === "string" ? /^gh:[^/\s]+\/[^#\s]+#(\d+)$/i.exec(item.external_ref) : null;
+    const suffix = typeof item.id === "string" ? /(?:^|-)github-[a-f0-9]{12}-(\d+)$/.exec(item.id) : null;
+    if (declaration && (!source || declared !== undefined && (!Number.isSafeInteger(declared) || declared <= 0 || declared !== source.number)) || suffix && (!Number.isSafeInteger(Number(suffix[1])) || Number(suffix[1]) < 1) || external && (!Number.isSafeInteger(Number(external[1])) || Number(external[1]) < 1)) {
+      console.error(JSON.stringify({ code: "invalid_github_identity_number", item: item.id, declared: declaration?.[1], url: source ? source.key : undefined, suffix: suffix?.[1], external_number: external?.[1], remedy: "Make every declared issue number a matching positive safe integer; invalid declarations do not establish ownership." }));
+    }
+    const state = index.states.get(item)!;
+    if (!scope.has(item.id) && state.claims.length > 1) console.error(JSON.stringify({ code: "out_of_scope_github_owner_conflict", items: [item.id], claims: state.claims }));
+  }
+  for (const [key, claimants] of index.claimants) {
+    const ids = [...claimants.keys()].sort();
+    if (ids.length > 1 && ids.every(id => !scope.has(id))) console.error(JSON.stringify({ code: "out_of_scope_github_owner_conflict", items: ids, identity: key }));
+  }
 }
 
 /** Every asserted identity constrains a provenance-bearing item; references alone do not create an owner. */

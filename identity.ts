@@ -10,7 +10,7 @@ import {
 } from "@unbrained/pm-cli/sdk";
 import { readRefreshItems } from "./refresh.ts";
 import { githubOwnershipClaims } from "./import-ownership.ts";
-import { serializeImportTags, githubLinkReferences } from "./import-fidelity.ts";
+import { serializeImportTags, githubLinkReferences, legacyGithubDescriptionIdentity } from "./import-fidelity.ts";
 
 /** Full certified metadata plus the explicitly requested body projection. */
 type IdentityItem = ItemMetadata & { body: string };
@@ -62,7 +62,7 @@ function graph(items: readonly IdentityItem[]): { nodes: IdentityNode[]; edges: 
       }
     }
     for (const key of ownership.claims) if (!claims.some(edge => edge.identity === `gh:${key}` && edge.strength === "claim")) {
-      claims.push({ item: id, identity: `gh:${key}`, source: !ownership.direct && item.github_link_only === true ? "declaration" : "import-provenance", strength: "claim" });
+      claims.push({ item: id, identity: `gh:${key}`, source: !ownership.direct && legacyGithubDescriptionIdentity(item)?.key === key ? "declaration" : "import-provenance", strength: "claim" });
     }
     const github = claims.some(edge => edge.strength === "claim" && edge.identity.startsWith("gh:"));
     nodes.push({ id, providers, native_owner: typeof item.source_owner === "string" ? item.source_owner : null, ownership: providers.length ? (github && item.github_link_only !== true ? "mixed" : "provider") : github ? "github" : "local" });

@@ -1,4 +1,4 @@
-import { buildGithubOwnershipIndex, githubOwnedIdentityKeys, GithubImportOwnershipError } from "./import-ownership.ts";
+import { buildGithubOwnershipIndex, warnGithubOwnershipScope, githubOwnedIdentityKeys, GithubImportOwnershipError } from "./import-ownership.ts";
 import { parseGithubIssueUrl } from "./github-url.ts";
 import { readGithubWorkspace, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
@@ -29,10 +29,13 @@ export interface RefreshEntry {
 }
 
 /** Select only explicit provenance, refusing conflicting links and duplicate local owners. */
-export function selectRefreshTargets(items: readonly PmItem[], repo: string): RefreshTarget[] {
+export function selectRefreshTargets(items: readonly PmItem[], repo: string, numbers?: readonly number[]): RefreshTarget[] {
   const targets = new Map<number, RefreshTarget>();
   const ownership = buildGithubOwnershipIndex(items, [repo]);
-  for (const item of items) {
+  const requested = numbers && new Set(numbers.map(number => `${repo.toLowerCase()}#${number}`));
+  const selected = items.filter(item => !requested || ownership.states.get(item)?.claims.some(key => requested.has(key)));
+  warnGithubOwnershipScope(ownership, selected);
+  for (const item of selected) {
     if (!item.id) continue;
     const identities = githubOwnedIdentityKeys(item, ownership, repo);
     // The refresh GraphQL path queries issue(), so PR owners are excluded.
@@ -160,7 +163,7 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
   const workspace = state.workspace;
   let items = state.items;
   const identityConflicts = items.flatMap(item => { const conflict = legacyGithubIdentityConflict(item); return conflict ? [conflict] : []; });
-  let all = selectRefreshTargets(items, repo);
+  let all = selectRefreshTargets(items, repo, scope?.numbers);
   const initialTargets = bounded(all);
   const token = resolveGitHubToken();
   // Resume interrupted transactions for the selected targets BEFORE the
@@ -240,7 +243,7 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
     // The replay finalized the interrupted targets; re-read so this run
     // compares the committed state instead of the pre-replay snapshot.
     items = await readRefreshItems(pmRoot);
-    all = selectRefreshTargets(items, repo);
+    all = selectRefreshTargets(items, repo, scope?.numbers);
     targets = bounded(all).filter(target => !deferredIds.has(target.id));
   }
   const plan: RefreshEntry[] = [];

@@ -90,5 +90,5 @@ export function normalizeGithubClaim(value: unknown): string | undefined {
   const url = parseGithubIssueUrl(value);
   if (url && !url.api) return url.key;
   const tag = /^gh:([^/\s]+\/[^#\s]+)#([1-9]\d*)$/i.exec(value);
-  return tag ? `${tag[1]!.toLowerCase()}#${BigInt(tag[2]!).toString()}` : undefined;
+  return tag && Number.isSafeInteger(Number(tag[2])) ? `${tag[1]!.toLowerCase()}#${BigInt(tag[2]!).toString()}` : undefined;
 }

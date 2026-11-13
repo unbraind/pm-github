@@ -305,9 +305,10 @@ export function githubLinkReferences(item: PmItem) {
 /** Read only a leading native declaration; later prose is not ownership evidence. */
 export function legacyGithubDescriptionIdentity(item: PmItem) {
   if (typeof item.description !== "string") return undefined;
-  const declaration = /^(?:GitHub issue(?:\s*:\s+|\s+)|GH (?:issue|PR) #[1-9]\d*:\s+)(https?:\/\/[^\s<>"'`]+)/i.exec(item.description);
-  const parsed = declaration?.[1] && parseGithubIssueUrl(trimLocatorPunctuation(declaration[1], "),.;:·"));
-  return parsed && !parsed.api ? parsed : undefined;
+  const declaration = /^(?:GitHub issue(?:\s*:\s+|\s+)|GH (?:issue|PR) #(-?\d+):\s+)(https?:\/\/[^\s<>"'`]+)/i.exec(item.description);
+  const parsed = declaration?.[2] && parseGithubIssueUrl(trimLocatorPunctuation(declaration[2], "),.;:·"));
+  const stated = declaration?.[1] === undefined ? undefined : Number(declaration[1]);
+  return parsed && !parsed.api && (stated === undefined || Number.isSafeInteger(stated) && stated > 0 && stated === parsed.number) ? parsed : undefined;
 }
 
 /** Collect complete URL fields and legacy native declarations; generic links remain references. */
@@ -358,9 +359,9 @@ export function importerCreatedItem(item: PmItem, _repo: string, _number: number
 }
 
 /** Index durable importer identities while allowing arbitrary shared reference tags. */
-export function indexByImportIdentity(items: readonly PmItem[], ownership = buildGithubOwnershipIndex(items)): Map<string, PmItem> {
+export function indexByImportIdentity(items: readonly PmItem[], ownership = buildGithubOwnershipIndex(items), targets?: ReadonlySet<string>): Map<string, PmItem> {
   const result = new Map<string, PmItem>();
-  for (const item of items) if (item.id) for (const key of githubOwnedIdentityKeys(item, ownership)) result.set(key, item);
+  for (const item of items) if (item.id && (!targets || ownership.states.get(item)?.claims.some(key => targets.has(key)))) for (const key of githubOwnedIdentityKeys(item, ownership)) if (!targets || targets.has(key)) result.set(key, item);
   return result;
 }
 

@@ -240,6 +240,8 @@ test("collectBlockerReferences ignores shared tags but refuses contradictory exp
   assert.deepEqual(github.collectBlockerReferences(item, "other/repo").map(ref => ref.key),
     ["unbraind/pm-cli#854", "unbraind/pm-web#2", "unbraind/pm-web#854"]);
   assert.deepEqual(github.collectBlockerReferences({ ...item, github_url: undefined, tags: ["ordinary"] }, "unbraind/pm-cli")
+    .map(ref => ref.key), ["unbraind/pm-cli#854", "unbraind/pm-web#2", "unbraind/pm-web#854"]);
+  assert.deepEqual(github.collectBlockerReferences({ ...item, github_url: undefined, description: `Context. ${item.description}`, tags: ["ordinary"] }, "unbraind/pm-cli")
     .map(ref => ref.key), ["unbraind/pm-cli#1", "unbraind/pm-cli#854", "unbraind/pm-web#2", "unbraind/pm-web#854"]);
 });
 

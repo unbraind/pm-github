@@ -7,7 +7,7 @@ import type { ServerResponse } from "node:http";
 import { mkdtemp, rm, readdir, readFile, writeFile, mkdir, cp, symlink, open, chmod } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
-import { init, get, acquireLock } from "@unbrained/pm-cli/sdk";
+import { init, get, create, acquireLock } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension, { acceptGithubWebhook, reconcileGithubWebhooks, WebhookRefusal, type GithubWebhookDelivery } from "../index.ts";
 import { runRefresh } from "../refresh.ts";
@@ -106,6 +106,8 @@ test("signed unsupported, malformed and cross-repository payloads are refused wi
 test("old reopened events cannot regress lifecycle; proposals read current state and polling recovers", async () => fixture(async root => {
   const local = (await createImportMirror({ title: "Local stale title", tags: "gh:fixture/repo#1" }, { cwd: root, pmRoot: root })).item;
   await createImportMirror({ title: "Unrelated linked issue", tags: "gh:fixture/repo#2" }, { cwd: root, pmRoot: root });
+  const reference = (await create({ title: "Reference only", type: "Task", tags: "gh:fixture/repo#1" }, { cwd: root, pmRoot: root })).item;
+  const referenceBefore = await snapshot(root);
   for (const [id, action] of [["new", "closed"], ["old", "reopened"], ["missing-link", "opened"]]) await acceptGithubWebhook(root, delivery(id, id === "missing-link" ? 99 : 1, action));
   let state = "CLOSED";
   await withMockGithub((request, response, body) => {
@@ -120,6 +122,7 @@ test("old reopened events cannot regress lifecycle; proposals read current state
     assert.equal(receipt.reconciled, 3);
     assert.equal(receipt.unlinked, 1);
     assert.equal(receipt.proposals.length, 1);
+    assert.ok(receipt.proposals.every(proposal => proposal.id !== reference.id));
     assert.deepEqual(receipt.proposals[0]!.lifecycle.find(change => change.field === "status"), { field: "status", old: "open", new: "closed" });
     const after = await snapshot(root);
     for (const [file, bytes] of Object.entries(before)) assert.equal(after[file], bytes, file);
@@ -130,6 +133,10 @@ test("old reopened events cannot regress lifecycle; proposals read current state
     assert.equal(empty.proposals.length, 0);
     await runRefresh("fixture/repo", root, { atomic: true }, { numbers: [1] });
     assert.equal((await get(local.id, {}, { pmRoot: root, cwd: root })).item.status, "closed");
+    const referenceAfter = await snapshot(root);
+    const referenceFiles = Object.entries(referenceBefore).filter(([file]) => file.includes(reference.id));
+    assert.ok(referenceFiles.length >= 2, "Both item and history must be observed");
+    for (const [file, bytes] of referenceFiles) assert.equal(referenceAfter[file], bytes, file);
     await acceptGithubWebhook(root, delivery("older-again", 1, "reopened"));
     assert.equal((await reconcileGithubWebhooks(root, "fixture/repo")).proposals.length, 0);
     state = "OPEN";
