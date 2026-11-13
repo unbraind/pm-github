@@ -22,7 +22,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { comments as readComments } from "@unbrained/pm-cli/sdk";
+import { comments as readComments, mutateItem, readSettings } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 // Decode TOON CLI output with the same public TOON parser the pm CLI itself uses
 // (@toon-format/toon 4.1.1, the version pm-cli's decoder delegates to). The SDK
@@ -194,7 +194,7 @@ test("parseBlockerReferences masks foreign locators and unwraps the github: sche
 test("parseBlockerReferences rejects lookalikes", () => {
   assert.deepEqual(
     github.parseBlockerReferences("issue/854 #854abc ###12 https://example.com/x#4 GH-12345678901"),
-    [],
+    [{ form: "unparsed_url", raw: "https://example.com/x#4" }],
   );
   // A markdown heading with a number is not a reference, and a long digit run
   // cannot partially match.
@@ -226,9 +226,9 @@ test("resolveBlockerReferences leaves hint-dependent forms unresolved without a 
 
 // Candidate selection ----------------------------------------------------------
 
-test("collectBlockerReferences excludes every own provenance key from all text sources", () => {
+test("collectBlockerReferences ignores shared tags but refuses contradictory explicit ownership", () => {
   const item: github.BlockerPmItem = {
-    id: "fixture-imported", title: "Imported issue", status: "blocked",
+    id: "fixture-imported", title: "Imported issue", status: "blocked", github_url: "https://github.com/unbraind/pm-cli/issues/1",
     tags: ["ordinary", "gh:Unbraind/pm-cli#1", "gh:unbraind/pm-web#2"],
     description: "GH issue #1: https://github.com/unbraind/pm-cli/issues/1",
     blockedReason: "unbraind/pm-cli#854 and unbraind/pm-web#2",
@@ -236,9 +236,12 @@ test("collectBlockerReferences excludes every own provenance key from all text s
     dependencies: [{ id: "github:unbraind/pm-web#2", kind: "blocked_by" }],
     comments: [{ text: "Self: GH-1; actual blocker: #854; other: unbraind/pm-web#854" }],
   };
+  assert.throws(() => github.collectBlockerReferences({ ...item, github_repo: "other/project" }, "other/repo"), { code: "github_import_owner_conflict" });
   assert.deepEqual(github.collectBlockerReferences(item, "other/repo").map(ref => ref.key),
-    ["unbraind/pm-cli#854", "unbraind/pm-web#854"]);
-  assert.deepEqual(github.collectBlockerReferences({ ...item, tags: ["ordinary"] }, "unbraind/pm-cli")
+    ["unbraind/pm-cli#854", "unbraind/pm-web#2", "unbraind/pm-web#854"]);
+  assert.deepEqual(github.collectBlockerReferences({ ...item, github_url: undefined, tags: ["ordinary"] }, "unbraind/pm-cli")
+    .map(ref => ref.key), ["unbraind/pm-cli#854", "unbraind/pm-web#2", "unbraind/pm-web#854"]);
+  assert.deepEqual(github.collectBlockerReferences({ ...item, github_url: undefined, description: `Context. ${item.description}`, tags: ["ordinary"] }, "unbraind/pm-cli")
     .map(ref => ref.key), ["unbraind/pm-cli#1", "unbraind/pm-cli#854", "unbraind/pm-web#2", "unbraind/pm-web#854"]);
 });
 
@@ -438,7 +441,13 @@ test("imported blocker candidates clear only real blockers and never their own p
     "--blocked-reason", "unbraind/pm-cli#854"]);
   const selfOnly = createItem(root, "Imported closed issue", ["--tags", "gh:unbraind/pm-cli#854",
     "--description", "GH issue #854: https://github.com/unbraind/pm-cli/issues/854"]);
-  for (const id of [blocked, selfOnly]) pm(root, ["update", id, "--status", "blocked"]);
+  for (const [id, number] of [[blocked, 1246], [selfOnly, 854]] as const) {
+    await mutateItem({ pmRoot: root, id, settings: await readSettings(root), author: "fixture", op: "update", mutate: document => {
+      document.metadata.github_url = `https://github.com/unbraind/pm-cli/issues/${number}`;
+      return { changedFields: ["github_url"] };
+    } });
+    pm(root, ["update", id, "--status", "blocked"]);
+  }
   await withEnv({ GH_TOKEN: "ghp-test" }, () => withMockGithub(
     graphqlFixtureHandler([["query", fixture("issue-854-closed.json")]]), async (server) => {
       const report = await runBlockers(root, { comment: true });

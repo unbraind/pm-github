@@ -1,6 +1,8 @@
+import { parseGithubUrl, parseGithubIssueUrl, githubUrlTokens } from "./github-url.ts";
 import { readGithubWorkspace, githubStatusIsTerminal } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
-import { normalizeImportValue } from "./import-fidelity.ts";
+import { GithubIdentityConflictError, normalizeImportValue } from "./import-fidelity.ts";
+import { buildGithubOwnershipIndex, type GithubOwnershipIndex, withGithubOwnershipLock, assertGithubOwnershipConsistency, githubOwnershipClaims, GithubImportOwnershipError } from "./import-ownership.ts";
 /** Close delivered tracker items using merged pull requests and head-check evidence. */
 import { close, hashDocument, locateItem, readLocatedItem, runWithActiveExtensions, setActiveExtensionHooks, listAllComplete, certifyCompleteListResult, getHistoryPath, readHistoryEntries, verifyHistoryEntries, PmCliError, EXIT_CODE, type ItemDocument } from "@unbrained/pm-cli/sdk";
 
@@ -24,8 +26,31 @@ export interface CloseoutRow {
 
 /** Stable decisions used by automation and compact skip counts. */
 export type CloseoutCode = "already_terminal" | "other_repository" | "duplicate_selection" | "explicit_skip"
+  | "github_import_owner_conflict" | "github_identity_conflict"
   | "needs_review" | "unknown_item" | "epic" | "active_children" | "not_delivery" | "close_failed"
   | "head_checks_passed" | "head_checks_failed" | "head_evidence_unavailable" | "required_checks_unverified" | "not_merged" | "incomplete_merge";
+
+/** Explicit delivery may close local items, but never an issue owned by a different repository. */
+export function assertCloseoutGithubOwner(item: ItemDocument["metadata"], repo: string, peers: readonly ItemDocument["metadata"][] | GithubOwnershipIndex = []): void {
+  const ownership = Array.isArray(peers) ? buildGithubOwnershipIndex(peers, [repo]) : peers as GithubOwnershipIndex;
+  const state = ownership.states.get(item) ?? githubOwnershipClaims(item, false, false, [repo]);
+  const owners = state.owners;
+  if (state.evidence && owners.length !== 1) throw new GithubImportOwnershipError(item.id, `${repo.toLowerCase()} (delivery repository)`, state.claims);
+  assertGithubOwnershipConsistency(item, undefined, ownership);
+  if (owners.length && !owners[0]!.startsWith(`${repo.toLowerCase()}#`)) {
+    throw new GithubImportOwnershipError(item.id, `${repo.toLowerCase()} (delivery repository)`, owners);
+  }
+}
+
+/** Convert malformed ownership into one eligible item's outcome, never a run-wide failure. */
+export function closeoutOwnershipConflict(item: ItemDocument["metadata"], repo: string, peers: readonly ItemDocument["metadata"][] | GithubOwnershipIndex): GithubImportOwnershipError | GithubIdentityConflictError | undefined {
+  try { assertCloseoutGithubOwner(item, repo, peers); }
+  catch (error: unknown) {
+    if (!(error instanceof GithubImportOwnershipError || error instanceof GithubIdentityConflictError)) throw error;
+    return error;
+  }
+  return undefined;
+}
 
 /** Which head-check policy was evaluated for one selected pull request. */
 interface CheckGate {
@@ -163,8 +188,9 @@ function pullRequest(value: unknown, repo: string, number: number): PullRequest 
   const base = record(raw.base);
   const baseRepo = record(base.repo);
   const head = raw.head === null || raw.head === undefined ? {} : record(raw.head);
+  const locator = parseGithubIssueUrl(raw.html_url);
   if (raw.number !== number || text(baseRepo.full_name).toLowerCase() !== repo.toLowerCase()
-    || text(raw.html_url).toLowerCase() !== `https://github.com/${repo}/pull/${number}`.toLowerCase()
+    || locator?.key !== `${repo.toLowerCase()}#${number}` || locator.kind !== "pull" || locator.api || locator.url.protocol !== "https:"
     || (raw.body !== null && typeof raw.body !== "string")) throw new Error("Pull-request identity or body is unverifiable.");
   return {
     number, body: raw.body as string | null, merged: typeof raw.merged === "boolean" ? raw.merged : null,
@@ -373,27 +399,30 @@ export function declaresDelivery(prefix: string, suffix = ""): boolean {
 
 /** Extract only canonical tracker links, retaining foreign references solely for skip rows. */
 export function extractCloseoutItems(body: string): { item: string; repo: string; declared: boolean }[] {
-  const links = body.matchAll(/https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/blob\/main\/\.agents\/pm\/((?:[^/\s?#<>)\]"']+\/)+)([^/\s?#<>)\]"']+)\.toon(?=$|[\s?#<>)\]"'])/g);
+  const links = githubUrlTokens(body);
   const seen = new Set<string>();
   const refs: { key: string; repo: string; item: string; declared: boolean }[] = [];
   return [...links].flatMap(match => {
+    const target = parseGithubUrl(match.raw);
+    if (!target || target.api || target.url.protocol !== "https:" || target.kind !== "blob" || target.value !== "main" || target.tail[0] !== ".agents" || target.tail[1] !== "pm" || target.tail.length < 4 || !target.tail.at(-1)!.endsWith(".toon")) return [];
     let components: string[];
-    try {
-      components = [...match[2]!.slice(0, -1).split("/"), match[3]!].map(decodeURIComponent);
-    } catch { return []; }
+    try { components = target.tail.slice(2).map(decodeURIComponent); }
+    catch { return []; }
     if (components.some(component => /^\.{1,2}$|[/\\\0]/.test(component))) return [];
-    const item = components.at(-1)!;
-    const key = `${match[1]!.toLowerCase()}/${item}`;
+    const item = components.at(-1)!.slice(0, -5);
+    if (!item) return [];
+    const repository = `${target.owner}/${target.name}`;
+    const key = `${target.repo}/${item}`;
     const lineEnd = body.indexOf("\n", match.index);
     const declared = declaresDelivery(body.slice(body.lastIndexOf("\n", match.index) + 1, match.index),
-      body.slice(match.index + match[0].length, lineEnd < 0 ? body.length : lineEnd));
+      body.slice(match.index + match.raw.length, lineEnd < 0 ? body.length : lineEnd));
     if (seen.has(key)) {
       // A later "Closes <link>" line still declares an item an earlier line only mentioned.
       if (declared) for (const entry of refs) if (entry.key === key) entry.declared = true;
       return [];
     }
     seen.add(key);
-    const entry = { key, repo: match[1]!, item, declared };
+    const entry = { key, repo: repository, item, declared };
     refs.push(entry);
     return [entry];
   }).map(({ repo, item, declared }) => ({ repo, item, declared }));
@@ -562,6 +591,7 @@ async function closeoutAttempt(pmPath: string, repo: string | undefined, options
     documents.set(id, document);
     items.set(id, document.metadata);
   }
+  const ownership = buildGithubOwnershipIndex([...items.values()], [repo]);
   await observer?.("snapshot");
   // Containers close when their children are done, never because a pull request mentions them.
   const activeChildren = new Map<string, number>();
@@ -607,6 +637,7 @@ async function closeoutAttempt(pmPath: string, repo: string | undefined, options
     }
     for (const ref of refs) {
       const role = deliveryRole(ref.declared, items.get(ref.item)?.tags.includes(`delivery-pr:${pr.html_url}`) === true, commitsReadable);
+      let ownershipConflict: GithubImportOwnershipError | GithubIdentityConflictError | undefined;
       let reason: string;
       let code: CloseoutCode;
       if (ref.repo.toLowerCase() !== repo.toLowerCase()) { code = "other_repository"; reason = "Link points to another repository."; }
@@ -620,6 +651,7 @@ async function closeoutAttempt(pmPath: string, repo: string | undefined, options
         code = "not_delivery";
         reason = "Mentioned, not delivered. A mention is not delivery. This fully inspected PR has no delivery claim and is context only.";
       }
+      else if ((ownershipConflict = closeoutOwnershipConflict(items.get(ref.item)!, repo, ownership))) { code = ownershipConflict.code; reason = ownershipConflict.message; }
       else if (!gate.ok) { code = gate.code; reason = gate.reason; }
       else if (role === "unresolved") { code = "head_evidence_unavailable"; reason = "Commit delivery evidence unavailable or incomplete."; }
       else {
@@ -641,7 +673,7 @@ async function closeoutAttempt(pmPath: string, repo: string | undefined, options
       const row: CloseoutRow = { item: ref.item, pr: number, action: "skip", code, reason };
       plan.push(row);
       if (role !== "context" && pr.merged !== false && items.has(ref.item) && ref.repo.toLowerCase() === repo.toLowerCase()
-        && !skip.has(ref.item) && !githubStatusIsTerminal(items.get(ref.item)!.status, workspace.statuses)
+        && !skip.has(ref.item) && !ownershipConflict && !githubStatusIsTerminal(items.get(ref.item)!.status, workspace.statuses)
         && !isEpic(items.get(ref.item)!.type) && !activeChildren.has(ref.item)) {
         const group = candidates.get(ref.item) ?? [];
         group.push({ row, pr, declared: ref.declared, commitsReadable });
@@ -716,12 +748,13 @@ async function closeoutAttempt(pmPath: string, repo: string | undefined, options
         await observer?.("before_close");
         // The pinned SDK has no public close(expectedRevision). Its transactional hook runs
         // inside the same per-item lock as lifecycle validation, persistence and history.
-        await runWithActiveExtensions({ path: pmRoot, noExtensions: true }, async () => {
+        await withGithubOwnershipLock(pmRoot, () => runWithActiveExtensions({ path: pmRoot, noExtensions: true }, async () => {
           setActiveExtensionHooks({ beforeCommand: [], afterCommand: [], onRead: [], onWrite: [], onIndex: [],
             beforeMutation: [{ layer: "project", name: "closeout-revision", run: async context => {
               await observer?.("locked");
               // SDK close may also auto-unblock dependents. Every resulting write needs its own snapshot.
               const before = context.before!;
+              assertCloseoutGithubOwner(before.metadata, repo, await context.sdk.list());
               const id = before.metadata.id;
               if (hashDocument(before) !== snapshots.get(id)) {
                 if (id !== entry.row.item) dependentConflicts.set(id, entry.row.pr);
@@ -732,10 +765,14 @@ async function closeoutAttempt(pmPath: string, repo: string | undefined, options
           await close(entry.row.item, entry.reason, { author: "pm-github", completedAt: entry.at,
             resolution: entry.resolution, expectedResult: entry.expectedResult, actualResult: entry.actualResult,
           }, { pmRoot, noExtensions: true });
-        });
+        }));
         closed++;
         handled.add(entry.row.item);
       } catch (error: unknown) {
+        if (error instanceof GithubImportOwnershipError || error instanceof GithubIdentityConflictError) {
+          entry.row.action = "skip"; entry.row.code = error.code; entry.row.reason = error.message;
+          handled.add(entry.row.item); continue;
+        }
         if (error instanceof PmCliError && (error.code === "closeout_revision_changed"
           || (error.code === undefined && error.exitCode === EXIT_CODE.CONFLICT))) {
           if (retry) {

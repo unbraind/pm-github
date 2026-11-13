@@ -33,7 +33,7 @@ const changelog = readFileSync(resolve(repoRoot, "CHANGELOG.md"), "utf8");
 
 const CLI = "@unbrained/pm-cli";
 const EXACT_VERSION = /^\d+\.\d+\.\d+$/;
-const SDK_CONTRACT_FLOOR = "2026.10.17";
+const SDK_CONTRACT_FLOOR = "2026.10.23";
 
 /**
  * Two independent systems enforce the pm CLI compatibility floor, and each reads
@@ -98,7 +98,7 @@ test("the extension manifest declares the same floor the CLI actually enforces",
   assert.strictEqual(
     declared,
     SDK_CONTRACT_FLOOR,
-    "lossless table decoding and under-lock transaction matching require the pm CLI 2026.10.17 host contract",
+    "lossless table decoding, under-lock transaction matching and fenced ownership leases require the pm CLI 2026.10.23 host contract",
   );
   assert.ok(
     !Object.hasOwn(extensionManifest, "pm"),
@@ -109,7 +109,7 @@ test("the extension manifest declares the same floor the CLI actually enforces",
     /BREAKING: pm-github now requires pm CLI 2026\.8\.20 or newer; older hosts may fail installation or runtime validation/,
     "CHANGELOG.md must disclose the compatibility break enforced by the manifest and peer dependency",
   );
-  assert.match(changelog, /BREAKING: PM CLI 2026\.10\.17 minimum/,
+  assert.match(changelog, /BREAKING: PM CLI 2026\.10\.23 minimum/,
     "the pending pm item must disclose the current SDK compatibility break");
 });
 

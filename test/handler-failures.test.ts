@@ -31,10 +31,11 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { normalizeItemId } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness, type ExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import type { SearchProviderQueryContext } from "@unbrained/pm-cli/sdk/authoring";
 
-import extension, { parseImportOptions, runImport, type GhIssue } from "../index.ts";
+import extension, { deriveAtomicItemId, parseProvenanceTag, parseImportOptions, runImport, type GhIssue } from "../index.ts";
 import { projectItemTag } from "../projects.ts";
 import {
   captureStderr,
@@ -95,11 +96,14 @@ function freshTracker(): string {
  * through `pm close` with a factual reason. The resulting item still carries
  * the requested tag and status — only the mechanism changed.
  */
-function createLinkedItem(root: string, title: string, tag: string, status: string): string {
+function createLinkedItem(root: string, title: string, tag: string, status: string, importerOwned = false): string {
+  const reference = parseProvenanceTag(tag)!;
+  const ownedId = importerOwned ? ["--id", deriveAtomicItemId(reference.repo, reference.number, "test-", normalizeItemId),
+    "--author", "pm-github", "--description", `GH issue #${reference.number}: https://github.com/${reference.repo}/issues/${reference.number}`] : [];
   const createStatus = status === "closed" ? "open" : status;
   const r = spawnSync(
     PM_BIN,
-    ["--path", root, "create", "task", title, "--status", createStatus, "--tags", tag],
+    ["--path", root, "create", "task", title, "--status", createStatus, "--tags", tag, ...ownedId],
     PM_SPAWN_OPTS,
   );
   assert.strictEqual(r.status, 0, `pm create failed: ${r.error?.message ?? r.stderr}`);
@@ -235,7 +239,7 @@ test("runSync --dry-run previews a divergence (pm open, GitHub closed → would 
   const ext = await harnessPromise;
   const root = freshTracker();
   try {
-    createLinkedItem(root, "Linked", "gh:a/b#5", "open");
+    createLinkedItem(root, "Linked", "gh:a/b#5", "open", true);
     await withEnv({ GITHUB_TOKEN: "tok", GH_TOKEN: undefined }, async () => {
       await withMockGithub((_req, res) => {
         // Upstream issue is closed; pm item is open → desired "open" diverges.
@@ -243,7 +247,7 @@ test("runSync --dry-run previews a divergence (pm open, GitHub closed → would 
       }, async () => {
         const { result } = await ext.runCommand({
           command: "github sync",
-          options: { repo: "a/b", "dry-run": true },
+          options: { repo: "a/b", "allow-reference-tags": true, "dry-run": true },
           pmRoot: root,
           global: { json: true },
         });
@@ -262,7 +266,7 @@ test("runSync --apply PATCHes GitHub to match pm status", async () => {
   const ext = await harnessPromise;
   const root = freshTracker();
   try {
-    createLinkedItem(root, "Linked", "gh:a/b#6", "closed");
+    createLinkedItem(root, "Linked", "gh:a/b#6", "closed", true);
     await withEnv({ GITHUB_TOKEN: "tok", GH_TOKEN: undefined }, async () => {
       await withMockGithub((req, res) => {
         if (req.method === "GET") {
@@ -273,7 +277,7 @@ test("runSync --apply PATCHes GitHub to match pm status", async () => {
       }, async (server) => {
         const { result } = await ext.runCommand({
           command: "github sync",
-          options: { repo: "a/b" },
+          options: { repo: "a/b", "allow-reference-tags": true },
           pmRoot: root,
           global: { json: true },
         });
@@ -293,14 +297,14 @@ test("runSync skips an issue already in the desired state", async () => {
   const ext = await harnessPromise;
   const root = freshTracker();
   try {
-    createLinkedItem(root, "Linked", "gh:a/b#7", "open");
+    createLinkedItem(root, "Linked", "gh:a/b#7", "open", true);
     await withEnv({ GITHUB_TOKEN: "tok", GH_TOKEN: undefined }, async () => {
       await withMockGithub((_req, res) => {
         jsonResponse(res, 200, { number: 7, state: "open" }); // already matches
       }, async (server) => {
         const { result } = await ext.runCommand({
           command: "github sync",
-          options: { repo: "a/b" },
+          options: { repo: "a/b", "allow-reference-tags": true },
           pmRoot: root,
           global: { json: true },
         });
@@ -319,7 +323,7 @@ test("runSync tolerates a 404 reading upstream state (skipped, not aborted)", as
   const ext = await harnessPromise;
   const root = freshTracker();
   try {
-    createLinkedItem(root, "Linked", "gh:a/b#8", "open");
+    createLinkedItem(root, "Linked", "gh:a/b#8", "open", true);
     await withEnv({ GITHUB_TOKEN: "tok", GH_TOKEN: undefined }, async () => {
       await withMockGithub((_req, res) => {
         // The linked issue was deleted upstream.
@@ -327,7 +331,7 @@ test("runSync tolerates a 404 reading upstream state (skipped, not aborted)", as
       }, async (server) => {
         const { result } = await ext.runCommand({
           command: "github sync",
-          options: { repo: "a/b" },
+          options: { repo: "a/b", "allow-reference-tags": true },
           pmRoot: root,
           global: { json: true },
         });
@@ -471,7 +475,7 @@ test("search provider maps remote matches to local imported items and drops the 
         context: searchContext({
           query: "memory leak",
           repo: "a/b",
-          documents: [{ metadata: { id: "pm-1", title: "Linked", tags: ["gh:a/b#5"] }, body: "" }],
+          documents: [{ metadata: { id: "pm-1", title: "Linked", github_url: "https://github.com/a/b/issues/5", tags: ["gh:a/b#5"] }, body: "" }],
         }),
       });
       const list = Array.isArray(hits) ? hits : (hits as { hits?: unknown[] }).hits;
@@ -709,7 +713,7 @@ test("runSync rejects --ids naming an unknown pm item", async () => {
   const ext = await harnessPromise;
   const root = freshTracker();
   try {
-    createLinkedItem(root, "Linked", "gh:a/b#5", "open");
+    createLinkedItem(root, "Linked", "gh:a/b#5", "open", true);
     await withEnv({ GITHUB_TOKEN: "tok", GH_TOKEN: undefined }, async () => {
       await assert.rejects(
         ext.runCommand({
@@ -1123,7 +1127,7 @@ function statusForTag(root: string, tag: string): string | undefined {
 test("runImport closes a linked item whose upstream issue was closed", async () => {
   const root = freshTracker();
   try {
-    createLinkedItem(root, "Linked", "gh:a/b#5", "open");
+    createLinkedItem(root, "Linked", "gh:a/b#5", "open", true);
     await withEnv({ GITHUB_TOKEN: "tok", GH_TOKEN: undefined }, async () => {
       await withMockGithub((request, res) => {
         if (request.url === "/graphql") graphqlOk(res, { repository: { issue: { timelineItems: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } });
@@ -1176,7 +1180,7 @@ test("runImport creates and closes an unlinked issue that is already closed upst
 test("runImport reopens a linked item whose upstream issue was reopened", async () => {
   const root = freshTracker();
   try {
-    createLinkedItem(root, "Linked", "gh:a/b#6", "closed");
+    createLinkedItem(root, "Linked", "gh:a/b#6", "closed", true);
     await withEnv({ GITHUB_TOKEN: "tok", GH_TOKEN: undefined }, async () => {
       await withMockGithub((_req, res) => {
         jsonResponse(res, 200, [upstreamIssue(6, "Linked", "open")]);

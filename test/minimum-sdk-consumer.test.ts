@@ -58,6 +58,7 @@ test("packed package type-checks and imports against its exact declared minimum 
     };
     const minimum = manifest.pm_min_version;
     assert.match(minimum, /^\d+\.\d+\.\d+$/);
+    assert.equal(minimum, "2026.10.23", "Ownership writes require the first published fenced-lock SDK");
     assert.equal(pkg.peerDependencies[cli], `>=${minimum}`);
     assert.match(pkg.devDependencies[cli]!, /^\d+\.\d+\.\d+$/, "the development pin is independent of the consumer floor");
     const packed = JSON.parse(run("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", scratch], repo, environment)) as { filename: string }[];
@@ -110,10 +111,18 @@ test("packed package type-checks and imports against its exact declared minimum 
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import extension, { planGithubLabelMigration, validateGithubLabelMigrationReport, buildAtomicImportMutations } from "pm-github";
-import { init, create, update, get, mutateItem, readSettings, encodePmTableRows, normalizeItemId } from "@unbrained/pm-cli/sdk";
+import { readGithubImportOwner, mutateGithubOwnedItem } from "pm-github/dist/import-ownership.js";
+import { init, create, update, get, mutateItem, readSettings, encodePmTableRows, normalizeItemId, acquireLockLease } from "@unbrained/pm-cli/sdk";
 assert.ok(extension);
 const root = join(process.cwd(), "tracker");
 await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { pmRoot: root, cwd: process.cwd(), noExtensions: true });
+const lease = await acquireLockLease(root, "minimum-fence", 30, "fixture", false, false, 0);
+let fenced = 0;
+await lease.fence(async () => { fenced++; });
+assert.equal(fenced, 1);
+await lease.release();
+await assert.rejects(() => lease.fence(async () => { fenced++; }), error => error.code === "lock_lost");
+assert.equal(fenced, 1, "A lost SDK lease must never invoke its write callback");
 const scope = { clearDeps: true, unset: ["parent", "sprint", "release", "goal", "objective"] };
 const item = (await create({ title: "Minimum SDK witness", type: "Task", tags: "bug", ...scope }, { pmRoot: root })).item;
 const assigned = spawnSync(process.execPath, [join(process.cwd(), "node_modules/.bin/pm"), "--path", root, "update", item.id, "--stdin-json"], {
@@ -148,6 +157,18 @@ const preserved = (await get(owner.id, {}, { pmRoot: root })).item;
 assert.ok(preserved.tags.includes("bug, bug"));
 assert.ok(preserved.tags.includes('["array"]'));
 assert.ok(!preserved.tags.includes("array"));
+
+await mutateItem({ pmRoot: root, settings, id: item.id, author: "fixture", op: "update", mutate: document => {
+  document.metadata.github_url = "https://github.com/fixture/repo/issues/1";
+  document.metadata.github_repo = "fixture/repo"; document.metadata.github_number = 1;
+  return { changedFields: ["github_url", "github_repo", "github_number"] };
+} });
+const target = { id: item.id, repo: "fixture/repo", number: 1 };
+const revision = await readGithubImportOwner(root, target);
+assert.match(revision, /^[a-f0-9]{64}$/);
+await mutateGithubOwnedItem(root, target, "update", { title: "Owned minimum-SDK update" }, revision);
+assert.equal((await get(item.id, {}, { pmRoot: root })).item.title, "Owned minimum-SDK update");
+await assert.rejects(() => mutateGithubOwnedItem(root, target, "update", { title: "Stale revision rejected" }, revision), /revision|hash|changed/i);
 
 console.log(JSON.stringify({ sdk: ${JSON.stringify(minimum)}, extension_import: true, encoded_rows: true, native_comma: true, json_tag: true, non_git: true }));
 `);

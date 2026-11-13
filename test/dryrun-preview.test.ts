@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { withImportPreview } from "./helpers/import-preview.ts";
+import { withMockGithub, jsonResponse } from "./helpers/mock-github-server.ts";
 
 import { parseImportOptions, runImport } from "../index.ts";
 import type { GhIssue } from "../index.ts";
@@ -25,25 +27,19 @@ const issue = (number: number, title: string): GhIssue => ({
 });
 
 async function previewImport(atomic: boolean) {
+  return withImportPreview(async root => {
   const messages: string[] = [];
   const originalError = console.error;
   console.error = (...values: unknown[]) => messages.push(values.join(" "));
   try {
-    const result = await runImport(
-      "acme/widgets",
-      "/unused-dry-run-workspace",
-      parseImportOptions({ dryRun: true, ...(atomic ? { atomic: true } : {}) }),
-      {
-        resolveToken: () => undefined,
-        fetchIssues: async () => [issue(1, "Brand new"), issue(2, "Already linked")],
-        // #2 is already in the workspace, carrying the provenance tag the import writes.
-        readItems: () => [{ id: "existing-id", tags: ["gh:acme/widgets#2"] }],
-      },
-    );
+    const result = await withMockGithub((request, response) => {
+      jsonResponse(response, 200, request.url?.includes("/timeline") ? [] : [issue(1, "Brand new"), issue(2, "Already linked")]);
+    }, () => runImport("acme/widgets", root, parseImportOptions({ dryRun: true, ...(atomic ? { atomic: true } : {}) }), { resolveToken: () => undefined }));
     return { result, messages };
   } finally {
     console.error = originalError;
   }
+  });
 }
 
 test("non-atomic --dry-run previews updates for already-linked issues instead of counting them as imports", async () => {

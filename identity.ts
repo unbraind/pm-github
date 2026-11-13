@@ -1,3 +1,4 @@
+import { normalizeGithubClaim, parseGithubIssueUrl, githubUrlTokens } from "./github-url.ts";
 import { ownValue } from "./own-record.ts";
 /** Offline identity diagnosis and explicitly approved, single-item provenance repairs. */
 import { createHash } from "node:crypto";
@@ -8,7 +9,8 @@ import {
   type BulkItemMutation, type CommitItemMutationsOptions, type ItemMetadata,
 } from "@unbrained/pm-cli/sdk";
 import { readRefreshItems } from "./refresh.ts";
-import { serializeImportTags } from "./import-fidelity.ts";
+import { githubOwnershipClaims } from "./import-ownership.ts";
+import { serializeImportTags, githubLinkReferences, legacyGithubDescriptionIdentity } from "./import-fidelity.ts";
 
 /** Full certified metadata plus the explicitly requested body projection. */
 type IdentityItem = ItemMetadata & { body: string };
@@ -37,8 +39,8 @@ export interface IdentityRepairPlan {
 }
 /** Canonicalize exact GitHub locators; opaque external references retain provider semantics. */
 function identity(value: string): string {
-  const match = /^(?:gh:([^/\s]+\/[^#\s]+)#|https?:\/\/github\.com\/([^/\s]+\/[^/\s]+)\/(?:issues|pull)\/)([1-9]\d*)(?:\/?(?:[?#].*)?)?$/i.exec(value);
-  return match ? `gh:${(match[1] ?? match[2]!).toLowerCase()}#${BigInt(match[3]!).toString()}` : value;
+  const key = normalizeGithubClaim(value);
+  return key ? `gh:${key}` : value;
 }
 /** Build edges from structured identity fields; prose URLs are explicitly weaker evidence. */
 function graph(items: readonly IdentityItem[]): { nodes: IdentityNode[]; edges: IdentityEdge[] } {
@@ -48,18 +50,28 @@ function graph(items: readonly IdentityItem[]): { nodes: IdentityNode[]; edges: 
     const id = item.id!;
     const providers = [...new Set(Object.entries(item).filter(([key, value]) => /^(linear|jira|ado)_(?:.*_)?(?:id|key|url|identifier)$/i.test(key) && Boolean(value) && (typeof value !== "string" || value.trim() !== "")).map(([key]) => key.split("_")[0]!.toLowerCase()))].sort();
     const claims: IdentityEdge[] = [];
-    for (const tag of item.tags) if (/^gh:[^/\s]+\/[^#\s]+#[1-9]\d*$/i.test(tag)) claims.push({ item: id, identity: identity(tag), source: "tag", strength: "claim" });
+    for (const tag of item.tags) if (/^gh:[^/\s]+\/[^#\s]+#[1-9]\d*$/i.test(tag)) claims.push({ item: id, identity: identity(tag), source: "tag", strength: "mention" });
+    const ownership = githubOwnershipClaims(item);
     for (const source of ["external_ref", "github_url"]) {
       const value = ownValue(item, source);
-      if (typeof value === "string" && value.trim()) claims.push({ item: id, identity: identity(value), source, strength: "claim" });
+      if (typeof value !== "string") continue;
+      const key = normalizeGithubClaim(value);
+      if (key && ownership.claims.includes(key)) claims.push({ item: id, identity: `gh:${key}`, source, strength: "claim" });
+      else if (source === "external_ref" && !/^gh:/i.test(value) && !parseGithubIssueUrl(value) && /^[a-z][a-z0-9_-]*:\S+$/i.test(value)) {
+        claims.push({ item: id, identity: value, source, strength: "claim" });
+      }
     }
-    const declared = /^GitHub issue(?:\s*:\s+|\s+)(https?:\/\/\S+)/i.exec(item.description);
-    if (declared && identity(declared[1]!).startsWith("gh:")) claims.push({ item: id, identity: identity(declared[1]!), source: "declaration", strength: "claim" });
-    const github = claims.some(edge => edge.identity.startsWith("gh:"));
+    for (const key of ownership.claims) if (!claims.some(edge => edge.identity === `gh:${key}` && edge.strength === "claim")) {
+      claims.push({ item: id, identity: `gh:${key}`, source: !ownership.direct && legacyGithubDescriptionIdentity(item)?.key === key ? "declaration" : "import-provenance", strength: "claim" });
+    }
+    const github = claims.some(edge => edge.strength === "claim" && edge.identity.startsWith("gh:"));
     nodes.push({ id, providers, native_owner: typeof item.source_owner === "string" ? item.source_owner : null, ownership: providers.length ? (github && item.github_link_only !== true ? "mixed" : "provider") : github ? "github" : "local" });
     edges.push(...claims);
-    for (const match of `${item.description}\n${item.body}`.matchAll(/https?:\/\/github\.com\/[^/\s<>]+\/[^/\s<>]+\/(?:issues|pull)\/[1-9]\d*/gi)) {
-      const key = identity(match[0]);
+    const references = [...githubLinkReferences(item), ...githubUrlTokens(`${item.description}\n${item.body}\n${item.external_ref ?? ""}`).flatMap(match => {
+      const parsed = parseGithubIssueUrl(match.raw); return parsed ? [parsed] : [];
+    })];
+    for (const reference of references) {
+      const key = `gh:${reference.key}`;
       if (!claims.some(edge => edge.identity === key) && !edges.some(edge => edge.item === id && edge.identity === key && edge.strength === "mention")) edges.push({ item: id, identity: key, source: "prose", strength: "mention" });
     }
   }
@@ -102,7 +114,7 @@ function plan(items: IdentityItem[], key: string, owner: string, detach: string)
   if (!key.startsWith("gh:") || owner === detach || owners.length !== 1 || owners[0] !== owner || !target ||
     nodes.find(node => node.id === owner)!.ownership === "mixed" ||
     claims.some(edge => edge.item !== owner && edge.item !== detach) ||
-    !claims.some(edge => edge.item === detach) || claims.some(edge => edge.item === detach && !["tag", "external_ref"].includes(edge.source)) ||
+    !edges.some(edge => edge.item === detach && edge.identity === key) || claims.some(edge => edge.item === detach && !["tag", "external_ref"].includes(edge.source)) ||
     target.source_owner ||
     edges.some(edge => [owner, detach].includes(edge.item) && edge.strength === "claim" && edge.identity.startsWith("gh:") && edge.identity !== key) ||
     target.github_link_only === false || Object.keys(target).some(field => /^github_/i.test(field))) {

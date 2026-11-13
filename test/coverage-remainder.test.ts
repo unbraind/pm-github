@@ -5,6 +5,7 @@
  * the local HTTP stand-in. Injected dependencies are the production seams
  * (fetch, commit, pm subprocess via PATH), not substitutes for the unit.
  */
+import { createImportMirror } from "./helpers/import-mirror.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { spawn, spawnSync } from "node:child_process";
@@ -13,11 +14,11 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { create, listAllComplete, certifyCompleteListResult } from "@unbrained/pm-cli/sdk";
+import { init, normalizeItemId, create, mutateItem, readSettings, listAllComplete, certifyCompleteListResult, runWithActiveExtensions, setActiveExtensionHooks } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness, type ExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 
 import extension, {
-  applyClientFilters,
+  deriveAtomicItemId, applyClientFilters,
   applyExportPlan,
   buildIssuesUrl,
   collectProjectsV2Pages,
@@ -29,7 +30,7 @@ import extension, {
   runImport,
   syncGithubCommentsToAnnotations,
   type GhIssue,
-  type ImportOptions,
+  type ImportOptions, type PmItem,
 } from "../index.ts";
 import { nodeScenario } from "./helpers/node-scenario.ts";
 import { withReadOnlyDirectory } from "./helpers/read-only-directory.ts";
@@ -46,6 +47,8 @@ const harnessPromise: Promise<ExtensionTestHarness> = createExtensionTestHarness
 });
 
 const REAL_PM = fileURLToPath(new URL("../node_modules/.bin/pm", import.meta.url));
+// Standalone test invocations use the same pinned CLI as npm test.
+process.env.PATH = path.dirname(REAL_PM) + path.delimiter + process.env.PATH;
 
 function issue(overrides: Partial<GhIssue> = {}): GhIssue {
   return {
@@ -58,7 +61,7 @@ function issue(overrides: Partial<GhIssue> = {}): GhIssue {
     milestone: null,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-10-01T00:00:00Z",
-    html_url: `https://example.test/acme/widgets/issues/${overrides.number ?? 7}`,
+    html_url: `https://github.com/acme/widgets/issues/${overrides.number ?? 7}`,
     user: null,
     ...overrides,
   };
@@ -82,9 +85,12 @@ function gitTracker(prefix: string): string {
 
 /** Create the real target represented by a command-failure fixture snapshot. */
 async function seedGithubItem(root: string, number: number) {
-  return (await create({ title: "old", type: "Task", tags: `gh:acme/widgets#${number}` },
+  return (await createImportMirror({ title: "old", type: "Task", tags: `gh:acme/widgets#${number}` },
     { pmRoot: path.join(root, ".agents/pm") })).item;
 }
+
+/** Explicit importer-generated targets for command-failure snapshots. */
+function mirrorId(number: number): string { return deriveAtomicItemId("acme/widgets", number, "test-", normalizeItemId); }
 
 /** Prime source metadata so a readonly fixture isolates optional annotation writes. */
 async function primeSourceTask(root: string): Promise<string> {
@@ -95,6 +101,16 @@ async function primeSourceTask(root: string): Promise<string> {
   const result = await listAllComplete({}, { pmRoot: tracker, noExtensions: true });
   certifyCompleteListResult(result);
   return result.items[0]!.id;
+}
+
+/** Exercise a real SDK policy refusal at its locked mutation boundary. */
+async function withNativeRefusal(root: string, refuses: (before: PmItem | undefined, after: PmItem | undefined) => boolean, run: () => Promise<void>) {
+  await runWithActiveExtensions({ path: path.join(root, ".agents/pm"), noExtensions: true }, async () => {
+    setActiveExtensionHooks({ beforeCommand: [], afterCommand: [], onRead: [], onWrite: [], onIndex: [], beforeMutation: [{ layer: "project", name: "fixture-native-refusal", run: context => {
+      if (refuses(context.before?.metadata, context.after?.metadata)) return { allow: false, code: "fixture_refused", remediation: "Fixture policy refusal" };
+    } }] });
+    await run();
+  });
 }
 
 async function withFakePm(body: string, fn: () => Promise<void>): Promise<void> {
@@ -130,12 +146,13 @@ test("client filters and issue URL query keep optional import constraints", () =
 test("atomic import falls back when settings are unreadable and reports interruption", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-atomic-settings-"));
   try {
+    await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { cwd: root, pmRoot: root, noExtensions: true });
     const entry = {
       issueNumber: 7,
       title: "Widget",
       itemType: "Task",
       status: "open",
-      description: "d",
+      description: "GH issue #7: https://github.com/acme/widgets/issues/7",
       body: "b",
       tags: ["gh:acme/widgets#7"],
       comments: [],
@@ -209,8 +226,8 @@ test("dependency linking reports a non-Error snapshot failure and a detector fai
   assert.match(skipped.failures[0] ?? "", /metadata down/);
   const advised = await linkImportedDependencies("acme/widgets", [issue({ number: 1, body: "Blocked by #2" })], "unused", {
     listItemMetadata: async () => [
-      { id: "pm-1", tags: ["gh:acme/widgets#1"], status: "open" },
-      { id: "pm-2", tags: ["gh:acme/widgets#2"], status: "open" },
+      { id: "pm-1", github_repo: "acme/widgets", github_number: 1, tags: ["gh:acme/widgets#1"], status: "open" },
+      { id: "pm-2", github_repo: "acme/widgets", github_number: 2, tags: ["gh:acme/widgets#2"], status: "open" },
     ],
     applyDependencyLink: () => ({ ok: true, stderr: "" }),
     collectOrderingCycleWarnings: () => { throw "detector down"; },
@@ -223,6 +240,7 @@ test("dependency linking reports a non-Error snapshot failure and a detector fai
 test("ungated import skips a blank title, reports comment-fetch failure, and previews link-deps", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-import-preview-"));
   try {
+    await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { cwd: root, pmRoot: root, noExtensions: true });
     const { stderr, result } = await captureStderr(() => runImport("acme/widgets", root, opts({ "link-deps": true, dryRun: true, "with-comments": true }), {
       resolveToken: () => "tok",
       readItems: () => [],
@@ -289,12 +307,7 @@ test("a gated non-atomic import fails closed when a planned write fails", async 
   try {
     const existing = await seedGithubItem(root, 8);
     const clean = await seedGithubItem(root, 9);
-    await withFakePm(`
-      for arg in "$@"; do
-        if [ "$arg" = "close" ]; then echo close-refused >&2; exit 1; fi
-      done
-      exec "$REAL_PM" "$@"
-    `, async () => {
+    await withNativeRefusal(root, (_before, after) => after?.id === existing.id && after.status === "closed", async () => {
       await captureStderr(() => assert.rejects(runImport("acme/widgets", root, opts({ gate: true }), {
         resolveToken: () => "tok",
         readItems: () => [existing, clean],
@@ -319,16 +332,12 @@ for (const linking of [false, true]) {
     const source: GhIssue = { ...recorded, state_reason: "not_planned",
       ...(linking ? { body: "Mirrored from https://linear.app/fixture/issue/ENG-85" } : {}) };
     try {
-      const owner = (await create({ title: "Existing owner", type: "Task",
+      const owner = (await (linking ? create : createImportMirror)({ title: "Existing owner", type: "Task",
         description: linking ? "[linear] linear_id=fixture linear_url=https://linear.app/fixture/issue/ENG-85" : "Existing GitHub owner",
         tags: linking ? "linear:fixture" : "gh:unbraind/pm-beads#85" }, { pmRoot: tracker })).item;
-      const refused = linking ? "--add-tags" : "canceled";
-      await withFakePm(`
-        for arg in "$@"; do
-          if [ "$arg" = "${refused}" ]; then echo fixture-refused >&2; exit 1; fi
-        done
-        exec "$REAL_PM" "$@"
-      `, async () => {
+      await withNativeRefusal(root, (before, after) => after?.id === owner.id && (linking
+        ? !before?.tags?.includes("gh:unbraind/pm-beads#85") && Boolean(after.tags?.includes("gh:unbraind/pm-beads#85"))
+        : after.status === "canceled"), async () => {
         await withMockGithub((request, response) => {
           jsonResponse(response, 200, request.url?.includes("/timeline") ? [] : [source]);
         }, async () => {
@@ -381,70 +390,50 @@ test("a gated import fails closed when a per-comment add fails mid-sync", nonRoo
   const root = gitTracker("pm-github-gated-add-fail-");
   const tracker = path.join(root, ".agents", "pm");
   const itemId = await primeSourceTask(root);
-  assert.ok(itemId);
   const syncedComment = { id: 21, user: { login: "octo" }, created_at: "2026-01-01T00:00:00Z", body: "already synced" };
   const failingComment = { id: 22, user: { login: "octo" }, created_at: "2026-01-02T00:00:00Z", body: "cannot land" };
-  // Land the first comment while the tasks directory is still writable so the
-  // gated run below proves the loop continues past it: one skip, one failure.
   await syncGithubCommentsToAnnotations(itemId, [syncedComment], tracker, 7);
-  const tasksDir = path.join(tracker, "tasks");
   try {
-    await withReadOnlyDirectory(tasksDir, async () => {
-      await withFakePm(`exit 0`, async () => {
-        const gated = await captureStderr(() => assert.rejects(runImport("acme/widgets", root, opts({ gate: true, "comments-mode": "annotations" }), {
-          resolveToken: () => "tok",
-          readItems: () => [{ id: itemId, title: "old", status: "open", tags: ["gh:acme/widgets#7"] }],
-          fetchIssues: async () => [issue({ comments: 2 })],
-          fetchIssueComments: async () => [syncedComment, failingComment],
-        }), /planned write\(s\) failed/));
-        assert.match(gated.stderr.join("\n"), /comment 22 sync failed/);
-      });
+    await withReadOnlyDirectory(path.join(tracker, "tasks"), async () => {
+      const gated = await captureStderr(() => assert.rejects(runImport("acme/widgets", root, opts({ type: "Task", gate: true, "comments-mode": "annotations" }), {
+        resolveToken: () => "tok", fetchIssues: async () => [issue({ comments: 2 })],
+        fetchIssueComments: async () => [syncedComment, failingComment],
+      }), /planned write\(s\) failed/));
+      assert.match(gated.stderr.join("\n"), /comment 22 sync failed/);
     });
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("a gated import fails closed when a created id cannot be parsed with annotations sync on", async () => {
-  const root = gitTracker("pm-github-gated-unparsed-");
+test("native creation returns its planned identity and synchronizes annotations without CLI output parsing", async () => {
+  const root = gitTracker("pm-github-native-create-");
   try {
-    await withFakePm(`
-      json=0
-      for arg in "$@"; do
-        if [ "$arg" = "--json" ]; then json=1; fi
-      done
-      if [ "$json" = "1" ]; then printf '%s\\n' 'not-json'; exit 0; fi
-      exit 0
-    `, async () => {
-      const gated = await captureStderr(() => assert.rejects(runImport("acme/widgets", root, opts({ gate: true, "comments-mode": "annotations" }), {
-        resolveToken: () => "tok",
-        readItems: () => [],
-        fetchIssues: async () => [issue({ comments: 1 })],
-        fetchIssueComments: async () => [{ id: 31, user: { login: "octo" }, created_at: "2026-01-01T00:00:00Z", body: "note" }],
-      }), /Could not finalize.*created id missing/));
-      assert.match(gated.stderr.join("\n"), /could not parse created item id — comments not synced/);
-    });
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+    const { result } = await captureStderr(() => runImport("acme/widgets", root, opts({ gate: true, "comments-mode": "annotations" }), {
+      resolveToken: () => "tok", fetchIssues: async () => [issue({ comments: 1 })],
+      fetchIssueComments: async () => [{ id: 31, user: { login: "octo" }, created_at: "2026-01-01T00:00:00Z", body: "note" }],
+    }));
+    assert.equal("imported" in result && result.imported, 1);
+    const item = certifyCompleteListResult(await listAllComplete({ includeBody: true }, { pmRoot: path.join(root, ".agents/pm") })).items[0]!;
+    assert.equal(item.id, mirrorId(7));
+    assert.equal(item.comments?.length, 1);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test("a gated atomic import fails closed when committed items lack their planned comments", async () => {
   const root = gitTracker("pm-github-gated-atomic-comments-");
   const tracker = path.join(root, ".agents", "pm");
   try {
-    await assert.rejects(captureStderr(() => runImport("acme/widgets", tracker, opts({ atomic: true, gate: true, "comments-mode": "annotations" }), {
-      resolveToken: () => "tok",
-      readItems: () => [{ id: "pm-fresh", title: "t", status: "open", tags: ["gh:acme/widgets#7"] }],
-      fetchIssues: async () => [issue({ comments: 1 })],
-      fetchIssueComments: async () => [{ id: 41, user: { login: "octo" }, created_at: "2026-01-01T00:00:00Z", body: "note" }],
-      // The commit "succeeds" but routes no created id, so the planned comment
-      // is unreachable — only the comment-failure count can fail the run closed.
-      commitAtomic: async () => ({ transactionId: "tx-comments", recovered: false, imported: 1, updated: 0, itemIds: new Map() }),
-    })), /planned write\(s\) failed/);
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+    await runWithActiveExtensions({ path: tracker, noExtensions: true }, async () => {
+      setActiveExtensionHooks({ beforeCommand: [], afterCommand: [], onRead: [], onWrite: [], onIndex: [], beforeMutation: [{ layer: "project", name: "fixture-comments", run: context => {
+        if (context.operation === "comment_add") return { allow: false, code: "fixture_annotation_refused", remediation: "Repair source comments on a normal sync" };
+      } }] });
+      await assert.rejects(captureStderr(() => runImport("acme/widgets", tracker, opts({ atomic: true, gate: true, "comments-mode": "annotations" }), {
+        resolveToken: () => "tok", fetchIssues: async () => [issue({ comments: 1 })],
+        fetchIssueComments: async () => [{ id: 41, user: { login: "octo" }, created_at: "2026-01-01T00:00:00Z", body: "note" }],
+      })), /planned write\(s\) failed/);
+    });
+    assert.equal((await listAllComplete({}, { pmRoot: tracker })).items.length, 1);
+    assert.deepEqual(fs.readdirSync(path.join(tracker, "transactions/pm-github")).filter(name => name.endsWith(".json")), []);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test("the same comment-sync failures without --gate still import with a warning", nonRootOnly, async () => {
@@ -459,29 +448,29 @@ test("the same comment-sync failures without --gate still import with a warning"
     const lockPath = importCommentSyncLockPath(root, itemId);
     fs.mkdirSync(path.dirname(lockPath), { recursive: true });
     fs.writeFileSync(lockPath, JSON.stringify({ pid: holder.pid, token: "held", created_at: new Date().toISOString() }) + "\n");
-    await withFakePm(`exit 0`, async () => {
-      const contended = await captureStderr(() => runImport("acme/widgets", root, opts({ "comments-mode": "annotations" }), {
+    {
+      const contended = await captureStderr(() => runImport("acme/widgets", root, opts({ type: "Task", "comments-mode": "annotations" }), {
         resolveToken: () => "tok",
-        readItems: () => [{ id: itemId, title: "old", status: "open", tags: ["gh:acme/widgets#7"] }],
         fetchIssues: async () => [issue({ comments: 1 })],
         fetchIssueComments: async () => [failingComment],
       }));
-      assert.ok("updated" in contended.result && contended.result.updated === 1);
+      assert.ok("updated" in contended.result && contended.result.updated === 0);
+      assert.ok("commentWriteFailures" in contended.result && contended.result.commentWriteFailures === 1);
       assert.match(contended.stderr.join("\n"), /another import holds the comment-sync lock/);
-    });
+    }
     fs.rmSync(lockPath, { force: true });
     const tasksDir = path.join(tracker, "tasks");
     await withReadOnlyDirectory(tasksDir, async () => {
-      await withFakePm(`exit 0`, async () => {
-        const refused = await captureStderr(() => runImport("acme/widgets", root, opts({ "comments-mode": "annotations" }), {
+      {
+        const refused = await captureStderr(() => runImport("acme/widgets", root, opts({ type: "Task", "comments-mode": "annotations" }), {
           resolveToken: () => "tok",
-          readItems: () => [{ id: itemId, title: "old", status: "open", tags: ["gh:acme/widgets#7"] }],
           fetchIssues: async () => [issue({ comments: 1 })],
           fetchIssueComments: async () => [failingComment],
         }));
-        assert.ok("updated" in refused.result && refused.result.updated === 1);
+        assert.ok("updated" in refused.result && refused.result.updated === 0);
+        assert.ok("commentWriteFailures" in refused.result && refused.result.commentWriteFailures === 1);
         assert.match(refused.stderr.join("\n"), /comment 52 sync failed/);
-      });
+      }
     });
   } finally {
     holder.kill("SIGKILL");
@@ -489,73 +478,26 @@ test("the same comment-sync failures without --gate still import with a warning"
   }
 });
 
-test("non-atomic import reports update, close, reopen, and unparsed-id failures", async () => {
+test("non-atomic import reports native update, close, reopen and create policy failures", async () => {
   const root = gitTracker("pm-github-import-fail-");
-  const listed = spawnSync(REAL_PM, ["--pm-path", root, "--json", "list", "--full"], { encoding: "utf8" });
-  assert.equal(listed.status, 0, listed.stderr);
   try {
-    await withFakePm(`
-      for arg in "$@"; do
-        if [ "$arg" = "update" ]; then echo update-refused >&2; exit 1; fi
-      done
-      exit 0
-    `, async () => {
+    const existing7 = await seedGithubItem(root, 7);
+    const existing8 = await seedGithubItem(root, 8);
+    await captureStderr(() => runImport("acme/widgets", root, opts({ atomic: true }), { resolveToken: () => undefined,
+      fetchIssues: async () => [issue({ number: 9, state: "closed", state_reason: "completed", closed_at: "2026-02-01T00:00:00Z" })], fetchIssueTimeline: async () => [] }));
+    const cases = [
+      { source: issue({ assignee: { login: "octo" }, milestone: { title: "Now" } }), id: existing7.id, message: /update failed/, refuses: (before: PmItem | undefined, after: PmItem | undefined) => before?.title !== after?.title },
+      { source: issue({ number: 8, state: "closed", state_reason: "completed", closed_at: "2026-02-01T00:00:00Z" }), id: existing8.id, message: /close reconciliation failed/, refuses: (_before: PmItem | undefined, after: PmItem | undefined) => after?.status === "closed" },
+      { source: issue({ number: 9 }), id: mirrorId(9), message: /reopen reconciliation failed/, refuses: (before: PmItem | undefined, after: PmItem | undefined) => before?.status === "closed" && after?.status === "open" },
+      { source: issue({ number: 10 }), id: mirrorId(10), message: /create failed/, refuses: (before: PmItem | undefined) => !before },
+    ];
+    for (const entry of cases) await withNativeRefusal(root, (before, after) => after?.id === entry.id && entry.refuses(before, after), async () => {
       const { stderr } = await captureStderr(() => assert.rejects(runImport("acme/widgets", root, opts(), {
-        resolveToken: () => "tok",
-        readItems: () => [{ id: "pm-existing", title: "old", status: "open", tags: ["gh:acme/widgets#7"] }],
-        fetchIssues: async () => [issue({ assignee: { login: "octo" }, milestone: { title: "Now" } })],
+        resolveToken: () => "tok", fetchIssues: async () => [entry.source], fetchIssueTimeline: async () => [],
       }), /Imported 0 issue/));
-
-      assert.match(stderr.join("\n"), /update failed/);
+      assert.match(stderr.join("\n"), entry.message);
     });
-
-    await withFakePm(`
-      for arg in "$@"; do
-        if [ "$arg" = "close" ]; then echo close-refused >&2; exit 1; fi
-      done
-      exit 0
-    `, async () => {
-      const closed = await captureStderr(() => assert.rejects(runImport("acme/widgets", root, opts(), {
-        resolveToken: () => "tok",
-        readItems: () => [{ id: "pm-existing", title: "old", status: "open", tags: ["gh:acme/widgets#8"] }],
-        fetchIssues: async () => [issue({ number: 8, state: "closed", state_reason: "completed", closed_at: "2026-02-01T00:00:00Z" })],
-      }), /Imported 0 issue/));
-      assert.match(closed.stderr.join("\n"), /close reconciliation failed|close after import failed/);
-    });
-
-    await withFakePm(`
-      for arg in "$@"; do
-        if [ "$arg" = "open" ]; then echo reopen-refused >&2; exit 1; fi
-      done
-      exit 0
-    `, async () => {
-      const reopened = await captureStderr(() => assert.rejects(runImport("acme/widgets", root, opts(), {
-        resolveToken: () => "tok",
-        readItems: () => [{ id: "pm-existing", title: "old", status: "closed", tags: ["gh:acme/widgets#9"] }],
-        fetchIssues: async () => [issue({ number: 9, state: "open" })],
-      }), /Imported 0 issue/));
-      assert.match(reopened.stderr.join("\n"), /reopen reconciliation failed/);
-    });
-
-    await withFakePm(`
-      json=0
-      for arg in "$@"; do
-        if [ "$arg" = "--json" ]; then json=1; fi
-      done
-      if [ "$json" = "1" ]; then printf '%s\\n' 'not-json'; exit 0; fi
-      exit 0
-    `, async () => {
-      const parsed = await captureStderr(() => assert.rejects(runImport("acme/widgets", root, opts({ "comments-mode": "annotations" }), {
-        resolveToken: () => "tok",
-        readItems: () => [],
-        fetchIssues: async () => [issue({ number: 10, state: "closed", comments: 1 })],
-        fetchIssueComments: async () => [{ id: 1, user: { login: "octo" }, created_at: "2026-01-01T00:00:00Z", body: "note" }],
-      }), /Imported 0 issue/));
-      assert.match(parsed.stderr.join("\n"), /could not parse created item id/);
-    });
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 test("comment sync skips a contended lock and reports a per-comment write failure", nonRootOnly, async () => {
@@ -708,13 +650,20 @@ test("sync reports a non-retryable PATCH failure and the after-command hook name
       assert.ok(id);
       assert.equal(spawnSync(REAL_PM, ["--path", root, "close", id, "--reason", "fixture closed"], { encoding: "utf8" }).status, 0);
     }
+    const tracker = path.join(root, ".agents/pm");
+    const linked = (await listAllComplete({}, { pmRoot: tracker })).items[0]!;
+    const linkedId = linked.id;
+    await mutateItem({ pmRoot: tracker, settings: await readSettings(tracker), id: linkedId, author: "fixture", op: "update", mutate: document => {
+      document.metadata.github_url = "https://github.com/acme/widgets/issues/5";
+      return { changedFields: ["github_url"] };
+    } });
     await withEnv({ GITHUB_TOKEN: "tok", GH_TOKEN: undefined }, async () => {
       const patched = await captureStderr(() => withMockGithub((req, res) => {
         if (req.method === "PATCH") jsonResponse(res, 422, { message: "no" });
         else jsonResponse(res, 200, { state: "open", title: "Linked", number: 5 });
       }, () => ext.runCommand({
         command: "github sync",
-        options: { repo: "acme/widgets" },
+        options: { repo: "acme/widgets", "allow-reference-tags": true },
         pmRoot: root,
         global: { json: false },
       })));
@@ -722,41 +671,42 @@ test("sync reports a non-retryable PATCH failure and the after-command hook name
     });
 
     await withFakePm(`
+      case " $* " in *" list "*) exec "$REAL_PM" "$@" ;; esac
       case "$FAKE_PM_MODE" in
         fail) exit 1 ;;
         badjson) printf '%s\n' 'not-json'; exit 0 ;;
         missingtags) printf '%s\n' '{}'; exit 0 ;;
         notag) printf '%s\n' '{"tags":["local"]}'; exit 0 ;;
-        *) printf '%s\n' '{"tags":["gh:acme/widgets#5"]}'; exit 0 ;;
+        *) printf '%s\n' '{"id":"pm-linked","github_url":"https://github.com/acme/widgets/issues/5","tags":["gh:acme/widgets#5"]}'; exit 0 ;;
       esac
     `, async () => {
       await withEnv({ PM_GITHUB_SYNC: "1" }, async () => {
         const nudged = await captureStderr(() => ext.runHook({
           kind: "after_command",
-          context: { command: "close", args: ["pm-linked"], pm_root: root, ok: true },
+          context: { command: "close", args: [linkedId], pm_root: root, ok: true },
         }));
         assert.match(nudged.stderr.join("\n"), /pm github sync --repo acme\/widgets/);
         process.env.FAKE_PM_MODE = "fail";
         const silent = await captureStderr(() => ext.runHook({
           kind: "after_command",
-          context: { command: "close", args: ["pm-linked"], pm_root: root, ok: true },
+          context: { command: "close", args: [linkedId], pm_root: root, ok: true },
         }));
         assert.equal(silent.stderr.join("\n"), "");
         process.env.FAKE_PM_MODE = "badjson";
-        await ext.runHook({ kind: "after_command", context: { command: "update", args: ["pm-linked"], pm_root: root, ok: true } });
+        await ext.runHook({ kind: "after_command", context: { command: "update", args: [linkedId], pm_root: root, ok: true } });
         process.env.FAKE_PM_MODE = "notag";
-        await ext.runHook({ kind: "after_command", context: { command: "close", args: ["pm-linked"], pm_root: root, ok: true } });
+        await ext.runHook({ kind: "after_command", context: { command: "close", args: [linkedId], pm_root: root, ok: true } });
         process.env.FAKE_PM_MODE = "missingtags";
-        const missingTags = await captureStderr(() => ext.runHook({ kind: "after_command", context: { command: "close", args: ["pm-linked"], pm_root: root, ok: true } }));
-        assert.equal(missingTags.stderr.join("\n"), "");
+        const missingTags = await captureStderr(() => ext.runHook({ kind: "after_command", context: { command: "close", args: [linkedId], pm_root: root, ok: true } }));
+        assert.match(missingTags.stderr.join("\n"), /pm github sync --repo acme\/widgets/);
         delete process.env.FAKE_PM_MODE;
-        await ext.runHook({ kind: "after_command", context: { command: "list", args: ["pm-linked"], pm_root: root, ok: true } });
+        await ext.runHook({ kind: "after_command", context: { command: "list", args: [linkedId], pm_root: root, ok: true } });
         await ext.runHook({ kind: "after_command", context: { command: "close", args: [], pm_root: root, ok: true } });
-        await ext.runHook({ kind: "after_command", context: { command: "close", args: ["pm-linked"], pm_root: "", ok: true } });
-        await ext.runHook({ kind: "after_command", context: { command: "close", args: ["pm-linked"], pm_root: root, ok: false } });
+        await ext.runHook({ kind: "after_command", context: { command: "close", args: [linkedId], pm_root: "", ok: true } });
+        await ext.runHook({ kind: "after_command", context: { command: "close", args: [linkedId], pm_root: root, ok: false } });
       });
       delete process.env.PM_GITHUB_SYNC;
-      await ext.runHook({ kind: "after_command", context: { command: "close", args: ["pm-linked"], pm_root: root, ok: true } });
+      await ext.runHook({ kind: "after_command", context: { command: "close", args: [linkedId], pm_root: root, ok: true } });
     });
   } finally {
     delete process.env.FAKE_PM_MODE;
@@ -782,21 +732,21 @@ test("plain imports preserve assigned metadata and synchronize existing annotati
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test("plain create close failures and unreadable annotation identities report incomplete imports", async () => {
+test("plain create and close policy failures report incomplete imports", async () => {
   const root = gitTracker("pm-github-create-boundary-");
   const tracker = path.join(root, ".agents/pm");
   try {
-    await withFakePm(`for arg in "$@"; do if [ "$arg" = "close" ]; then echo close-refused >&2; exit 1; fi; done\nexec "$REAL_PM" "$@"`, async () => {
+    await withNativeRefusal(root, (_before, after) => after?.id === mirrorId(7) && after.status === "closed", async () => {
       const { stderr } = await captureStderr(() => assert.rejects(runImport("acme/widgets", tracker, opts(), {
         resolveToken: () => undefined, fetchIssues: async () => [issue({ state: "closed", closed_at: null })],
       }), /Imported 0 issue/));
       assert.match(stderr.join("\n"), /close after import failed/);
     });
-    await withFakePm(`for arg in "$@"; do if [ "$arg" = "create" ]; then printf 'not-json'; exit 0; fi; done\nexec "$REAL_PM" "$@"`, async () => {
+    await withNativeRefusal(root, (before, after) => !before && after?.id === mirrorId(2), async () => {
       const { stderr } = await captureStderr(() => assert.rejects(runImport("acme/widgets", tracker, opts({ "comments-mode": "annotations" }), {
         resolveToken: () => undefined, fetchIssues: async () => [issue({ number: 2 })], fetchIssueComments: async () => [],
-      }), /Could not finalize.*created id missing/));
-      assert.match(stderr.join("\n"), /comments not synced/);
+      }), /Imported 0 issue/));
+      assert.match(stderr.join("\n"), /create failed/);
     });
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

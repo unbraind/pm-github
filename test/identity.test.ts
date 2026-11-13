@@ -71,22 +71,23 @@ test("copied prose, structured multi-provider owners, exact refs and bounded gra
   await item(root, { description: `GitHub issue: ${url.replace("/1", "/5")}` });
   await item(root, { description: "See https://github.com/fixture/repo/pull/6" });
   await item(root, { description: "GitHub issue https://example.invalid/issue/1" });
-  const conflict = await item(root, { github_url: "https://github.com/fixture/repo/issues/8", tags: ["gh:fixture/repo#9"], source_owner: "fixture-provider" });
+  const conflict = await item(root, { github_url: "https://github.com/fixture/repo/issues/8", external_ref: "gh:fixture/repo#9", tags: ["gh:fixture/repo#9"], source_owner: "fixture-provider" });
   for (const entry of readdirSync(root, { recursive: true, withFileTypes: true }).filter(entry => entry.isFile())) chmodSync(join(entry.parentPath, entry.name), 0o444);
   const before = snapshot(root);
   const report = await exploreGithubIdentities(root);
   assert.equal(report.scanned, 11);
   assert.equal(report.collisions, 4);
-  assert.equal(report.mentions, 2);
+  assert.ok(report.edges.some(edge => edge.item === conflict && edge.identity === "gh:fixture/repo#9" && edge.strength === "claim"));
+  assert.equal(report.mentions, 5);
   assert.equal(report.nodes.find(node => node.id === conflict)?.native_owner, "fixture-provider");
   assert.equal(report.nodes.find(node => node.id === copied)?.ownership, "local");
   assert.equal((await exploreGithubIdentities(root, { identity: "gh:fixture/repo#2" })).nodes.find(node => node.id === provider)?.ownership, "provider");
   assert.equal((await exploreGithubIdentities(root, { identity: "gh:fixture/repo#3" })).nodes.find(node => node.id === mixed)?.ownership, "mixed");
   assert.equal(report.nodes.find(node => node.id === owner)?.ownership, "github");
   const first = await exploreGithubIdentities(root, { limit: 1 });
-  assert.equal(first.total, 5);
+  assert.equal(first.total, 6);
   assert.equal(first.next, 1);
-  assert.equal((await exploreGithubIdentities(root, { limit: 1, offset: 4 })).next, null);
+  assert.equal((await exploreGithubIdentities(root, { limit: 1, offset: 5 })).next, null);
   assert.deepEqual((await exploreGithubIdentities(root, { identity: "absent" })).edges, []);
   assert.deepEqual(snapshot(root), before);
   for (const options of [{ limit: 0 }, { limit: 101 }, { limit: 1.1 }, { offset: -1 }, { offset: NaN }]) await assert.rejects(exploreGithubIdentities(root, options), code("invalid_options"));
@@ -135,7 +136,7 @@ test("refuse contradictory owners, source metadata, opaque providers and changed
   const b = await item(root, { tags: ["gh:fixture/repo#2"] });
   await assert.rejects(planGithubIdentityRepair(root, "gh:fixture/repo#2", a, b), code("ambiguous_identity"));
   const external = await item(root, { external_ref: key });
-  await assert.rejects(planGithubIdentityRepair(root, key, owner, external), code("ambiguous_identity"));
+  await assert.rejects(planGithubIdentityRepair(root, key, owner, external), code("unsupported_repair"));
   const before = snapshot(root);
   await item(root, { github_url: url });
   const multiple = snapshot(root);
@@ -144,9 +145,9 @@ test("refuse contradictory owners, source metadata, opaque providers and changed
   assert.notDeepEqual(before, multiple);
 }));
 
-for (const fields of [{ github_url: url }, { github_link_only: false }, { github_number: 1 }, { source_owner: "fixture-provider" }, { tags: [key, "gh:fixture/repo#2"] }]) {
+for (const fields of [{ github_url: url }, { github_link_only: false }, { github_number: 1 }, { source_owner: "fixture-provider" }]) {
   test(`source-owned duplicates require manual review (${Object.keys(fields).join()})`, async () => tracker(async root => {
-    const owner = await item(root, { description: `GitHub issue ${url}` });
+    const owner = await item(root, { github_link_only: true, description: `GitHub issue ${url}` });
     const detach = await item(root, { tags: [key], ...fields });
     const before = snapshot(root);
     await assert.rejects(planGithubIdentityRepair(root, key, owner, detach), code("ambiguous_identity"));
@@ -161,7 +162,7 @@ test("registered command uses compact host TOON/JSON, read-only graph, repair pr
   const run = async (options: Record<string, unknown>) => (await harness.runCommand({ command: "github identity", pmRoot: root, args: [], options })).result;
   assert.equal((await run({}) as { scanned: number }).scanned, 2);
   const report = await run({ limit: "1", offset: "0", identity: key }) as { collisions: number };
-  assert.equal(report.collisions, 1);
+  assert.equal(report.collisions, 0);
   const proposed = await run({ identity: key, owner, detach }) as { approval: string };
   assert.match(proposed.approval, /^[a-f0-9]{64}$/);
   await assert.rejects(run({ owner }), code("invalid_options"));
@@ -298,6 +299,9 @@ test("an owner with a conflicting github_number cannot authorize detaching anoth
   const owner = await item(root, { github_url: url, github_number: 2 });
   const detach = await item(root, { tags: [key] });
   const before = snapshot(root);
+  const report = await exploreGithubIdentities(root);
+  assert.equal(report.collisions, 2, "read-only diagnostics must still expose both contradictory claims");
+  assert.deepEqual(report.edges.filter(edge => edge.item === owner && edge.strength === "claim").map(edge => edge.identity).sort(), [key, "gh:fixture/repo#2"]);
   await assert.rejects(planGithubIdentityRepair(root, key, owner, detach), code("ambiguous_identity"));
   await assert.rejects(applyGithubIdentityRepair(root, { identity: key, owner, detach, approval: "a".repeat(64), author: "fixture" }), code("ambiguous_identity"));
   assert.deepEqual(snapshot(root), before);

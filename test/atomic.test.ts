@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import * as sdk from "@unbrained/pm-cli/sdk";
+import { withImportPreview } from "./helpers/import-preview.ts";
+import { withMockGithub, jsonResponse } from "./helpers/mock-github-server.ts";
 
 import {
   CommandError,
@@ -13,6 +15,8 @@ import {
   deriveAtomicItemId,
   deriveAtomicTransactionId,
   importGithubAtomic,
+  listUnfinishedGithubImports,
+  readGithubImportPlan,
   parseImportOptions,
   resolveCommitItemMutations,
   runImport,
@@ -92,7 +96,7 @@ test("parseImportOptions enables atomic mode without changing the default", () =
   assert.strictEqual(parseImportOptions({ atomic: "1" }).atomic, true);
 });
 
-test("atomic dry-run previews creates and updates without invoking the SDK", async () => {
+test("atomic dry-run reads real ownership without committing tracker writes", async () => withImportPreview(async root => {
   const issue = (number: number, title: string): GhIssue => ({
     number,
     title,
@@ -106,25 +110,13 @@ test("atomic dry-run previews creates and updates without invoking the SDK", asy
     updated_at: "2026-07-21T00:00:00Z",
     html_url: `https://github.com/acme/widgets/issues/${number}`,
   });
-  let sdkCalls = 0;
   const messages: string[] = [];
   const originalError = console.error;
   console.error = (...values: unknown[]) => messages.push(values.join(" "));
   try {
-    const result = await runImport(
-      "acme/widgets",
-      "/unused-dry-run-workspace",
-      parseImportOptions({ atomic: true, dryRun: true }),
-      {
-        resolveToken: () => undefined,
-        fetchIssues: async () => [issue(1, "New"), issue(2, "Existing"), issue(3, "   ")],
-        readItems: () => [{ id: "existing-id", tags: ["gh:acme/widgets#2"] }],
-        commitAtomic: async () => {
-          sdkCalls++;
-          throw new Error("atomic dry-run must not call the SDK commit path");
-        },
-      },
-    );
+    const result = await withMockGithub((request, response) => {
+      jsonResponse(response, 200, request.url?.includes("/timeline") ? [] : [issue(1, "New"), issue(2, "Existing"), issue(3, "   ")]);
+    }, () => runImport("acme/widgets", root, parseImportOptions({ atomic: true, dryRun: true }), { resolveToken: () => undefined }));
 
     assert.deepStrictEqual(result, {
       dryRun: true,
@@ -134,12 +126,11 @@ test("atomic dry-run previews creates and updates without invoking the SDK", asy
       wouldSkip: 1,
       atomic: true,
     });
-    assert.strictEqual(sdkCalls, 0);
     assert.ok(messages.some((message) => /Atomic plan would import 1, update 1, skip 1/.test(message)));
   } finally {
     console.error = originalError;
   }
-});
+}));
 
 test("transaction identity is content-sensitive and independent of fetch order", () => {
   const first = entry(1, "First");
@@ -403,29 +394,39 @@ test("a failed mixed batch restores pre-existing updates and closes", async () =
 });
 
 test("incomplete compensation is reported as potentially partial and resumable", async () => {
-  const incomplete = new AggregateError(
-    [new Error("apply failed"), new Error("restore failed")],
-    "Workspace transaction failed and compensation failed: restore failed",
-  );
-  await assert.rejects(
-    () => importGithubAtomic(
-      "/unused-incomplete-compensation-workspace",
-      "acme/widgets",
-      [entry(50, "Needs repair")],
-      {
-        commitItemMutations: async () => { throw incomplete; },
-        normalizeItemId: (input, prefix) => `${prefix}${input}`,
-        readSettings: async () => ({ id_prefix: "test-" }),
+  const root = freshTracker();
+  try {
+    await assert.rejects(
+      () => importGithubAtomic(root, "acme/widgets", [entry(50, "Original recovery plan")], {
+        onTransition: context => {
+          if (context.transition === "step_recorded") throw new Error("Fixture apply failed");
+          if (context.transition === "compensating") throw new Error("Fixture compensation interrupted");
+        },
+      }),
+      (err: unknown) => {
+        assert.ok(err instanceof CommandError);
+        assert.match(err.message, /compensation was incomplete/);
+        assert.match(err.message, /may contain partially applied state/);
+        assert.doesNotMatch(err.message, /no new partial committed state/);
+        return true;
       },
-    ),
-    (err: unknown) => {
-      assert.ok(err instanceof CommandError);
-      assert.match((err as Error).message, /compensation was incomplete/);
-      assert.match((err as Error).message, /may contain partially applied state/);
-      assert.doesNotMatch((err as Error).message, /no new partial committed state/);
-      return true;
-    },
-  );
+    );
+    const pending = await listUnfinishedGithubImports(root);
+    assert.equal(pending.length, 1);
+    assert.equal(pending[0]!.status, "compensating");
+    await assert.rejects(() => importGithubAtomic(root, "acme/widgets", [entry(50, "Changed retry input")]), { code: "github_import_plan_drift" });
+    const originalPlan = await readGithubImportPlan(root, pending[0]!.transactionId);
+    assert.ok(originalPlan, "a compensated create keeps the original plan while its history reserves the identity");
+    assert.equal(originalPlan.entries[0]!.title, "Original recovery plan");
+    assert.equal(itemCount(root), 0);
+    const originalId = originalPlan.itemIds![0]![1];
+    await sdk.restore(originalId, "1", { author: "fixture", message: "Explicitly restore original transaction birth" }, { pmRoot: root });
+    const recovered = await importGithubAtomic(root, "acme/widgets", [entry(50, "Changed retry input")]);
+    assert.equal(recovered.transactionId, pending[0]!.transactionId);
+    assert.equal(listItems(root)[0]!.title, "Original recovery plan");
+    assert.deepEqual(await listUnfinishedGithubImports(root), []);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+
 });
 
 test("SDK resolution reports an actionable version error", async () => {

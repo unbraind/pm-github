@@ -8,6 +8,7 @@ import test from "node:test";
 import { create, get, listAllComplete, certifyCompleteListResult } from "@unbrained/pm-cli/sdk";
 import { parseImportOptions, prepareGithubImport, runImport, verifyImportIdempotency, type GhIssue, type PreparedGithubImport } from "../index.ts";
 import { AmbiguousCitationError, matchImportedIssue as resolveImportedIssue } from "../import-fidelity.ts";
+import { githubRepositoryHash } from "../import-ownership.ts";
 import { captureStderr, withEnv } from "./helpers/mock-github-server.ts";
 
 /** Existing adoption regressions opt in explicitly; default-off cases call the production matcher directly. */
@@ -93,7 +94,7 @@ for (const atomic of [false, true]) {
     const entry = (preview.result.plan as { action: string; candidates: string[]; remedy: string }[])[0]!;
     assert.equal(entry.action, "ambiguous_citation");
     assert.deepEqual(entry.candidates, [first.id, second.id].sort());
-    assert.match(entry.remedy, /Tag the correct item with gh:acme\/widgets#30/);
+    assert.match(entry.remedy, /Set github_url to https:\/\/github.com\/acme\/widgets\/issues\/30/);
     assert.match(preview.stderr.join("\n"), /ambiguous_citation/);
     for (const gate of [false, true]) await assert.rejects(importing(pmRoot, { atomic, gate }, batch), /ambiguous_citation/);
     assert.deepEqual(await items(pmRoot), before);
@@ -201,6 +202,17 @@ for (const atomic of [false, true]) {
   }));
 
 }
+
+test("an unrelated item with contradictory GitHub aliases does not abort citation matching", () => {
+  // Structured-ownership checks only ask whether owners exist; conflicts outside the target warn instead of refusing.
+  // The conflicted item cites the imported issue, so it is an eligible citation candidate whose ownership is checked.
+  // An importer-created id (claims #41) and github_url (claims #42) disagree; the prose cites only the imported #30,
+  // so the item is an eligible candidate and no other explicit field short-circuits the structured-owner check.
+  const conflicted = { id: `fixture-github-${githubRepositoryHash(repo)}-41`, author: "pm-github", title: "Elsewhere", github_url: `https://github.com/${repo}/issues/42`, description: `Fixes ${repo}#30` };
+  let result: ReturnType<typeof matchImportedIssue> | undefined;
+  assert.doesNotThrow(() => { result = matchImportedIssue([conflicted], issue); });
+  assert.equal(result!.via, "new", "an item that already has owners is never adopted by citation");
+});
 
 test("raw exclusion rejects Markdown-wrapped second numbers across every prose field", () => {
   const wrappers = [["**", "**"], ["*", "*"], ["_", "_"], ["`", "`"], ["```text\n", "\n```"], ["<", ">"], ["[reference](", ")"], ["![reference](", ")"]];
@@ -394,9 +406,9 @@ test("bare numbers, other repos, longer identities, URL paths and different issu
   assert.equal(matchImportedIssue([{ title: repo + "#30" }], issue).via, "new");
 });
 
-test("tagged and URL-linked owners take precedence over even multiple prose citations", () => {
+test("import-provenance and URL-linked owners take precedence over even multiple prose citations", () => {
   const citing = ["first", "second"].map(id => ({ id, body: `Fixes ${issue.html_url}\n\nIssue: ${issue.html_url}` }));
-  const tagged = { id: "tagged", tags: [`gh:${repo}#30`] };
+  const tagged = { id: "tagged", github_repo: repo, github_number: 30, tags: [`gh:${repo}#30`] };
   assert.equal(matchImportedIssue([...citing, tagged], issue, tagged).item, tagged);
   const linked = { id: "linked", github_url: issue.html_url };
   assert.equal(matchImportedIssue([...citing, linked], issue).item, linked);
@@ -639,14 +651,12 @@ test("citation adoption never overwrites an item that already carries structured
   const owned = [
     { id: "url", description: `Fixes ${repo}#30`, github_url: "https://github.com/acme/widgets/issues/31" },
     { id: "number", description: `Fixes ${repo}#30`, github_number: 31 },
-    { id: "links", description: `Fixes ${repo}#30`, external_links: ["https://github.com/acme/widgets/issues/31"] },
     { id: "ref", description: `Fixes ${repo}#30`, external_ref: "gh:acme/widgets#31" },
     { id: "linear", description: `Fixes ${repo}#30`, external_ref: "linear:ENG-31" },
     { id: "source-owner", description: `Fixes ${repo}#30`, source_owner: "linear", status: "closed" },
     { id: "provider-field", description: `Fixes ${repo}#30`, jira_issue_key: "ENG-31" },
     { id: "github-field", description: `Fixes ${repo}#30`, github_state: "closed" },
     { id: "githuburl", description: `Fixes ${repo}#30`, githuburl: "https://github.com/acme/widgets/issues/31" },
-    { id: "upper-tag", title: `${repo}#30`, description: `Fixes ${repo}#30`, tags: ["GH:other/widgets#31"] },
     { id: "not-link-only", description: `Fixes ${repo}#30`, github_link_only: false },
   ];
   for (const item of owned) {
@@ -654,6 +664,10 @@ test("citation adoption never overwrites an item that already carries structured
     assert.equal(result.item, undefined, item.id);
     assert.deepEqual(result.citation_candidates, [{ id: item.id, reason: "structured_owner" }], item.id);
   }
+  const linkedReference = { id: "links", description: `Fixes ${repo}#30`, external_links: ["https://github.com/acme/widgets/issues/31"] };
+  assert.equal(matchImportedIssue([linkedReference], issue).item, linkedReference, "generic links do not establish another owner");
+  const reference = { id: "upper-tag", title: `${repo}#30`, description: `Fixes ${repo}#30`, tags: ["GH:other/widgets#31"] };
+  assert.equal(matchImportedIssue([reference], issue).item, reference, "reference tags do not establish another owner");
   const native = { id: "native", description: "GitHub issue https://github.com/acme/widgets/issues/31", title: `Fix ${repo}#30` };
   assert.equal(matchImportedIssue([native], issue).item, undefined);
   const docs = { id: "docs", description: `Fixes ${repo}#30`, links: ["https://example.com/design"] };

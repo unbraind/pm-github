@@ -1,4 +1,5 @@
 /** Scheduled failures use real API transports and SDK trackers, including plain directories. */
+import { createImportMirror } from "./helpers/import-mirror.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -87,7 +88,7 @@ test("malformed policy objects and non-Error pagination failures never expose pa
 });
 
 test("scheduled repeat import preserves item and history bytes after identical GitHub input", async () => tracker(async root => {
-  const local = await create({ type: "Issue", title: "Native linked issue", author: "fixture", tags: "gh:fixture/project#2" }, { pmRoot: root });
+  const local = await createImportMirror({ type: "Issue", title: "Native linked issue", author: "fixture", tags: "gh:fixture/project#2" }, { pmRoot: root });
   const issue = { number: 1, title: "Imported issue", body: "\n\nPublic content \n", state: "closed", state_reason: "completed", labels: [], assignee: null, milestone: null,
     created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-02T00:00:00Z", closed_at: "2026-10-02T00:00:00Z", html_url: "https://github.com/fixture/project/issues/1" };
   await withMockGithub((request, response) => jsonResponse(response, 200, request.url === "/graphql"
@@ -107,11 +108,17 @@ test("scheduled repeat import preserves item and history bytes after identical G
     await assert.rejects(commitItemMutations({ ...pending, onTransition: context => {
       if (context.transition === "committing") throw new WorkspaceTransactionInterruptedError("Fixture interruption");
     } }), WorkspaceTransactionInterruptedError);
-    // Keep the source projection matched while leaving a real journal unfinished.
-    await runImport("fixture/project", root, opts);
-    const held = await runImport("fixture/project", root, opts);
-    assert.ok(!("unchanged" in held), "An unfinished journal cannot hide behind a no-op receipt.");
+    // A legacy journal without an original plan cannot be replaced by fresh input.
+    const held = snapshot(root);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await assert.rejects(() => runImport("fixture/project", root, opts), { code: "github_import_plan_missing" });
+      assert.equal(snapshot(root), held, "Refusal must preserve all durable tracker bytes.");
+    }
     await commitItemMutations(pending);
+    await runImport("fixture/project", root, opts);
+    const restored = snapshot(root);
+    await runImport("fixture/project", root, opts);
+    assert.equal(snapshot(root), restored);
   });
 }));
 

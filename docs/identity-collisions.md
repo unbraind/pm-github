@@ -25,17 +25,22 @@ credentials and provider payloads are absent from the report.
 Contradictory GitHub claims on one item also count as collisions. The node
 includes the tracker's explicit `source_owner` as `native_owner` when present.
 
-A claim comes from `external_ref`, an exact `gh:owner/repo#N` tag, `github_url`,
-or a leading `GitHub issue URL` declaration. GitHub URL case and issue/pull URL
+A claim comes from `external_ref`, durable importer provenance, `github_url`
+(the whole value), an explicit `github_link_only` link declaration, or a legacy
+native declaration at the start of the description (`GitHub issue <url>` or
+`GH issue #N: <url>`, whose stated number must match the URL) even without
+`github_link_only`. Proven importer IDs also claim their hash-verified source issue. GitHub URL case and issue/pull URL
 forms normalize to one identity. Other external references remain opaque and
 case-sensitive: this command does not reinterpret Jira or Linear identifiers.
-URLs elsewhere in prose are `mention` edges and never establish ownership.
+Free-form `gh:owner/repo#N` tags and URLs elsewhere in prose are `mention` edges and never establish ownership. Tags never constrain explicit provenance or become claim edges. Accepted API URL mentions such as `https://api.github.com/repos/o/r/issues/7` group with `gh:o/r#7`; API URLs remain mentions, rather than structured ownership fields.
 A copied example containing a Linear label and an issue URL remains a local
 item with a mention. Structured Linear/Jira/ADO id/key/URL fields record real
 provider evidence. A provider item with `github_link_only: true` retains
 provider ownership; a provider item also claiming native GitHub ownership
 without that marker is `mixed` and requires review. These conservative labels
 are diagnostic evidence, not a provider migration or a duplicate-close policy.
+
+The [ownership routing inventory](identity-ownership-inventory.md) lists every operational selector, raw collector and non-owning reference reader. The explorer uses the same claims function for diagnostics; it can display contradictions that operational selectors refuse.
 
 ## Review and apply one repair
 

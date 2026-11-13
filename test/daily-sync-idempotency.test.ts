@@ -40,7 +40,7 @@ for (const atomic of [false, true]) test(`random issue sets imported twice produ
         const initialized = spawnSync(join(packageRoot, "node_modules/.bin/pm"), ["--path", root, "init", "fixture"], { encoding: "utf8" });
         assert.equal(initialized.status, 0, initialized.stderr);
         const source = issues(seed);
-        // Native existing owners and newly created mirrors share one import batch.
+        // Reference-only native work and newly created mirrors share one import batch.
         const owner = (await create({ title: "Old native owner", type: "Issue", tags: "gh:fixture/project#1" }, { pmRoot: root, noExtensions: true })).item;
         const deps = { fetchIssues: async () => source, resolveToken: () => undefined };
         const options = parseImportOptions({ atomic });
@@ -53,7 +53,7 @@ for (const atomic of [false, true]) test(`random issue sets imported twice produ
         await captureStderr(() => runImport("fixture/project", root, options, deps));
         const after = snapshot(root);
         for (const [file, bytes] of before) if (file.includes(owner.id)) assert.equal(after.get(file), bytes);
-        assert.equal((await get(owner.id, {}, { pmRoot: root, noExtensions: true })).item.title, source[0]!.title);
+        assert.equal((await get(owner.id, {}, { pmRoot: root, noExtensions: true })).item.title, owner.title, "reference-only work keeps its curated title");
         assert.equal("updated" in second && second.updated, 0);
         const preview = (await captureStderr(() => runImport("fixture/project", root, { ...options, dryRun: true }, deps))).result;
         assert.equal("wouldUpdate" in preview && preview.wouldUpdate, 0, "preview shares the write path's normalized no-op decision");

@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
 import test from "node:test";
-import { matchImportedIssue, trimLocatorPunctuation } from "../import-fidelity.ts";
+import { matchImportedIssue, trimLocatorPunctuation, githubLinkReferences } from "../import-fidelity.ts";
 import { scanLineForRuleHits } from "../gate.ts";
 import { githubApiBase, type GhIssue } from "../index.ts";
 import { withEnv } from "./helpers/mock-github-server.ts";
@@ -11,7 +11,7 @@ const url = "https://github.com/fixture/project/issues/42";
 const issue: GhIssue = { number: 42, title: "Fixture", body: "", state: "open", labels: [],
   assignee: null, milestone: null, created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-01T00:00:00Z", html_url: url };
 
-test("ownership declaration parity with citation adoption disabled: colon, whitespace and missing URL", () => {
+test("legacy ownership declarations retain first-URL parsing: colon, whitespace and missing URL", () => {
   const rows: ReadonlyArray<readonly [string, boolean]> = [
     [`GitHub issue ${url}`, true], [`GitHub issue   ${url}`, true],
     [`GitHub issue\t${url}`, true], [`GitHub issue: ${url}`, true],
@@ -53,7 +53,8 @@ test("locator punctuation trim parity table", () => {
     assert.equal(input.replace(/[),.;]+$/, ""), expected);
     assert.equal(trimLocatorPunctuation(input), expected);
   }
-  assert.equal(matchImportedIssue([{ id: "owner", links: url + "),.;" }], issue).item?.id, "owner");
+  assert.equal(matchImportedIssue([{ id: "owner", links: url + "),.;" }], issue).item, undefined);
+  assert.deepEqual(githubLinkReferences({ links: url + "),.;" }).map(reference => reference.key), ["fixture/project#42"]);
   assert.equal(matchImportedIssue([{ id: "owner", links: url + "))x" }], issue).item, undefined);
   assert.equal(trimLocatorPunctuation(url + ":!]}", "),.;:!]}"), url);
   assert.equal(trimLocatorPunctuation(url + ":!]}"), url + ":!]}");

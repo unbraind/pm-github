@@ -1,3 +1,4 @@
+import { createImportMirror } from "./helpers/import-mirror.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -74,18 +75,24 @@ test("ungated import tolerates unavailable comments and still writes the issue",
   assert.equal(readPmItems(root)[0].body, "Original body");
 });
 
-test("import reports real mutation failures after a linked local item disappears", async t => {
+test("import refuses before mutation after a linked local item disappears", async t => {
   const root = tracker(t);
-  const created = JSON.parse(pm(root, ["create", "task", "Linked", "--tags", "gh:acme/widgets#1", "--json"])) as { id: string };
+  const created = (await createImportMirror({ title: "Linked", type: "Task", tags: "gh:acme/widgets#1" }, { pmRoot: root })).item;
   const snapshot = readPmItems(root);
   pm(root, ["delete", created.id, "--message", "Fixture concurrent deletion"]);
+  const history = fs.readFileSync(path.join(root, "history", `${created.id}.jsonl`), "utf8");
   await withMockGithub((_req, res) => jsonResponse(res, 200, [issue()]), async () => {
     const { stderr } = await captureStderr(async () => {
-      await assert.rejects(runImport("acme/widgets", root, parseImportOptions({}), { resolveToken: () => undefined, readItems: () => snapshot }), /Imported 0 issue\(s\); 1 failed/);
+      await assert.rejects(runImport("acme/widgets", root, parseImportOptions({}), { resolveToken: () => undefined, readItems: () => snapshot }), error => {
+        assert.equal((error as { code: string }).code, "item_not_found");
+        assert.match(String(error), /intended item and history; restore them before retrying/);
+        return true;
+      });
     });
-    assert.match(stderr.join("\n"), /update failed/);
+    assert.doesNotMatch(stderr.join("\n"), /update failed|create failed/);
   });
   assert.deepEqual(readPmItems(root), []);
+  assert.equal(fs.readFileSync(path.join(root, "history", `${created.id}.jsonl`), "utf8"), history);
 });
 
 test("import rejects an unknown item type and allows a corrected retry", async t => {
@@ -103,7 +110,7 @@ test("import rejects an unknown item type and allows a corrected retry", async t
 
 test("import reconciles a canceled item when GitHub reports completion", async t => {
   const root = tracker(t);
-  pm(root, ["create", "task", "Canceled", "--status", "canceled", "--tags", "gh:acme/widgets#1"]);
+  await createImportMirror({ title: "Canceled", type: "Task", status: "canceled", tags: "gh:acme/widgets#1" }, { pmRoot: root });
   await withMockGithub((_req, res) => jsonResponse(res, 200, [issue({ state: "closed" })]), async () => {
     const result = await runImport("acme/widgets", root, parseImportOptions({}), { resolveToken: () => undefined });
     assert.ok("updated" in result);

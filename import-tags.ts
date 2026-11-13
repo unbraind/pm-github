@@ -16,7 +16,7 @@ export function nativeTagAdditions(current: readonly string[] | undefined, desir
 
 /** Resolve a prepared or replayed import while preserving native tags retained from an existing owner. */
 export function importTagValues(entry: PreparedGithubImport): string[] {
-  const retained = entry.linkOnly || entry.identity?.via === "citation" ? toImportTags(entry.match?.tags) : [];
+  const retained = entry.linkOnly || entry.preserveContent || entry.identity?.via === "citation" ? toImportTags(entry.match?.tags) : [];
   const native = new Set(retained);
   return toImportTags([...retained, ...githubLabelsToTags(entry.tags.filter(tag => !native.has(toImportTags([tag])[0]!)))]);
 }
@@ -24,7 +24,7 @@ export function importTagValues(entry: PreparedGithubImport): string[] {
 /** Preserve existing owner tags by adding only new provider-derived atoms instead of serializing native state as CSV. */
 export function importTagOptions(entry: PreparedGithubImport): { tags?: string; addTags?: string[] } {
   const tags = importTagValues(entry);
-  if (entry.match?.id && (entry.linkOnly || entry.identity?.via === "citation")) {
+  if (entry.match?.id && (entry.linkOnly || entry.preserveContent || entry.identity?.via === "citation")) {
     return { addTags: nativeTagAdditions(entry.match.tags, tags).map(tag => serializeImportTags([tag])) };
   }
   return { tags: serializeImportTags(tags) };

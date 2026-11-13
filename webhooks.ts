@@ -1,8 +1,9 @@
+import { writeGithubStateAtomic, syncGithubStatePath } from "./durable-state.ts";
 /** Durable authenticated issue-event hints; provider reads, never event payloads, produce proposals. */
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
-import { open, mkdir, readdir, readFile } from "node:fs/promises";
+import { mkdir, readdir, readFile } from "node:fs/promises";
 import { join, basename } from "node:path";
-import { acquireLock, writeFileAtomic, resolvePmRoot, ensureTrackerInitialized } from "@unbrained/pm-cli/sdk";
+import { acquireLock, resolvePmRoot, ensureTrackerInitialized } from "@unbrained/pm-cli/sdk";
 import { runRefresh } from "./refresh.ts";
 
 /** Stable refusal discriminators; no secret, payload or storage path is included in diagnostics. */
@@ -80,14 +81,15 @@ function refusal(error: unknown, code: WebhookRefusalCode, remedy: string): neve
 }
 /** Flush published records and the containing directory before acknowledging durable intake. */
 async function persist(file: string, value: unknown): Promise<void> {
-  await writeFileAtomic(file, JSON.stringify(value) + "\n");
-  await flush(file);
+  await writeGithubStateAtomic(file, JSON.stringify(value) + "\n");
+  await flushGithubWebhookState(file);
 }
 /** Finish a prior publisher's flush as well as a fresh receipt's durable acknowledgment. */
-async function flush(file: string): Promise<void> {
-  for (const target of [file, join(file, ".."), join(file, "../.."), join(file, "../../..")]) {
-    const handle = await open(target, "r");
-    try { await handle.sync(); } finally { await handle.close(); }
+export async function flushGithubWebhookState(file: string, platform: () => NodeJS.Platform = () => process.platform): Promise<void> {
+  const currentPlatform = platform();
+  await syncGithubStatePath(file, false, currentPlatform);
+  for (const target of [join(file, ".."), join(file, "../.."), join(file, "../../..")]) {
+    await syncGithubStatePath(target, true, currentPlatform);
   }
 }
 /** Serialize independent writers using the host's token-owned, crash-recoverable tracker lock. */
@@ -135,7 +137,7 @@ export async function acceptGithubWebhook(pmRoot: string, input: GithubWebhookDe
       const existing = await readRecord(file, repo);
       if (JSON.stringify(existing) !== JSON.stringify(record)) throw new WebhookRefusal("delivery_conflict", "The delivery identifier already names different bytes; retain both source receipts and investigate the adapter.");
       // A previous process may have died after rename but before its flush.
-      await flush(file);
+      await flushGithubWebhookState(file);
       return { ok: true, repo, delivery: record.delivery, duplicate: true };
     }
     await persist(file, record);
@@ -181,9 +183,11 @@ export async function reconcileGithubWebhooks(pmRoot: string, repoArg: string, l
       if (row.changes.length) proposals.push({ id: row.id, number: row.number, fields: row.changes.map(change => change.field),
         lifecycle: row.changes.filter(change => ["status", "github_state", "github_updated_at", "closed_at", "completed_at"].includes(change.field)) });
     }
+    const deferred = new Set(preview?.deferred_imports?.flatMap(entry => entry.issue_numbers) ?? []);
     let reconciled = 0;
     let unlinked = 0;
     for (const record of records) {
+      if (deferred.has(record.number)) continue;
       const row = preview!.plan.find(entry => entry.number === record.number);
       if (row?.reason) continue;
       if (!row) unlinked++;

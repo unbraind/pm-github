@@ -1,10 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Keep GitHub reference tags separate from import identity (BREAKING: PM CLI 2026.10.23 minimum) ([pm-github-reference-identity](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-reference-identity.toon))
+
 ## 2026.11.12 - 2026-11-12
 
 ### Fixed
 
 - The gated sync holds a runner for up to two hours while it waits for caller CI it competes with for the same pool ([pm-github-fxhd](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-fxhd.toon))
+
+### Dependencies
+
+- Bump jscpd ([#232](https://github.com/unbraind/pm-github/pull/232))
 
 ## 2026.11.11 - 2026-11-11
 
@@ -16,6 +26,13 @@
 ### Security
 
 - Reusable Dependabot merge workflow with complete commit provenance ([pm-github-dependabot-merge](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-dependabot-merge.toon))
+
+### Dependencies
+
+- Bump the pm-toolchain group with 3 updates ([#227](https://github.com/unbraind/pm-github/pull/227))
+- Bump the codeql-action group across 1 directory with 2 updates ([#222](https://github.com/unbraind/pm-github/pull/222))
+- Bump entities from 8.1.0 to 9.0.0 ([#209](https://github.com/unbraind/pm-github/pull/209))
+- Bump the pm-toolchain group across 1 directory with 3 updates ([#194](https://github.com/unbraind/pm-github/pull/194))
 
 ## 2026.11.4 - 2026-11-04
 
@@ -31,11 +48,25 @@
 - Bound coverage aggregation memory and compare default-heap CI behavior ([pm-github-vhi6](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-vhi6.toon))
 - Approve or amend the noreply identity on the normalize-release-tag-version branch commit ([pm-github-8mkc](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-8mkc.toon))
 
+### Dependencies
+
+- Bump eslint ([#217](https://github.com/unbraind/pm-github/pull/217))
+
+## 2026.11.2 - 2026-11-02
+
+### Dependencies
+
+- Bump @types/node ([#208](https://github.com/unbraind/pm-github/pull/208))
+
 ## 2026.11.1 - 2026-11-01
 
 ### Fixed
 
 - Scheduled closeout reads required checks from the branch summary instead of failing every fleet caller ([pm-github-6g0m](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-6g0m.toon))
+
+### Dependencies
+
+- Bump the codeql-action group across 1 directory with 2 updates ([#200](https://github.com/unbraind/pm-github/pull/200))
 
 ## 2026.10.30 - 2026-10-30
 
@@ -55,6 +86,11 @@
 
 - Preview exact GitHub label migration impacts (BREAKING: PM CLI 2026.10.17 minimum) ([pm-github-2e38](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-2e38.toon))
 
+### Dependencies
+
+- Bump the pm-toolchain group with 3 updates ([#191](https://github.com/unbraind/pm-github/pull/191))
+- Bump the pm-toolchain group across 1 directory with 3 updates ([#186](https://github.com/unbraind/pm-github/pull/186))
+
 ## 2026.10.26 - 2026-10-26
 
 ### Added
@@ -68,6 +104,10 @@
 ### Other
 
 - Point the npm homepage at the package catalog and link the author ([pm-github-o846](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-o846.toon))
+
+### Dependencies
+
+- Bump jscpd ([#185](https://github.com/unbraind/pm-github/pull/185))
 
 ## 2026.10.25 - 2026-10-25
 
@@ -125,11 +165,23 @@
 - Closed: Gate historical identities and host-path privacy across every Git object ([pm-github-zqad](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-zqad.toon))
 - Closed: The daily release cannot build a changelog once the tracker outgrows the default output budget ([pm-github-ypi5](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-ypi5.toon))
 
+### Dependencies
+
+- Bump the pm-toolchain group across 1 directory with 3 updates ([#161](https://github.com/unbraind/pm-github/pull/161))
+- Bump the codeql-action group with 2 updates ([#170](https://github.com/unbraind/pm-github/pull/170))
+- Bump eslint ([#156](https://github.com/unbraind/pm-github/pull/156))
+- Bump the pm-toolchain group with 3 updates ([#155](https://github.com/unbraind/pm-github/pull/155))
+
 ## 2026.10.19 - 2026-10-19
 
 ### Fixed
 
 - Refuse closeout when required-check metadata is unverified ([pm-github-f1ev](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-f1ev.toon))
+
+### Dependencies
+
+- Bump the pm-toolchain group with 3 updates ([#153](https://github.com/unbraind/pm-github/pull/153))
+- Bump the pm-toolchain group with 2 updates ([#135](https://github.com/unbraind/pm-github/pull/135))
 
 ## 2026.10.16 - 2026-10-16
 
@@ -142,6 +194,10 @@
 
 - Refuse reusable sync runs outside the caller default branch ([pm-github-q4uz](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-q4uz.toon))
 
+### Dependencies
+
+- Bump the codeql-action group with 2 updates ([#136](https://github.com/unbraind/pm-github/pull/136))
+
 ## 2026.10.15 - 2026-10-15
 
 ### Added
@@ -153,12 +209,29 @@
 
 - closeout cannot close items in trackers that require structured close fields ([pm-github-2o9k](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-2o9k.toon))
 
+### Dependencies
+
+- Bump @toon-format/toon ([#123](https://github.com/unbraind/pm-github/pull/123))
+
 ## 2026.10.14 - 2026-10-14
 
 ### Added
 
 - Select GitHub issue imports and cap list volume ([pm-github-6srd](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-6srd.toon))
 - Revalidate blocked items against the live state of their GitHub blockers ([pm-github-fmrf](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-fmrf.toon))
+
+## 2026.10.13 - 2026-10-13
+
+### Dependencies
+
+- Bump the pm-toolchain group across 1 directory with 3 updates ([#117](https://github.com/unbraind/pm-github/pull/117))
+- Bump the dependencies group with 3 updates ([#118](https://github.com/unbraind/pm-github/pull/118))
+
+## 2026.10.9 - 2026-10-09
+
+### Dependencies
+
+- Bump pm-ops ([#113](https://github.com/unbraind/pm-github/pull/113))
 
 ## 2026.10.8 - 2026-10-08
 
@@ -179,11 +252,20 @@
 
 - Closed: Root CI runs skip the read-only-directory comment-sync fixtures visibly instead of failing them ([pm-github-rap0](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-rap0.toon))
 
+### Dependencies
+
+- Bump @babel/eslint-parser ([#111](https://github.com/unbraind/pm-github/pull/111))
+- Bump @unbrained/pm-cli ([#110](https://github.com/unbraind/pm-github/pull/110))
+
 ## 2026.9.26 - 2026-09-26
 
 ### Other
 
 - Certify pm CLI 2026.9.23 and adopt the guarded pm-ops merge-driver launcher ([pm-github-d2az](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-d2az.toon))
+
+### Dependencies
+
+- Bump the codeql-action group across 1 directory with 2 updates ([#96](https://github.com/unbraind/pm-github/pull/96))
 
 ## 2026.9.22 - 2026-09-22
 
@@ -194,6 +276,12 @@
 ### Other
 
 - Certify pm CLI 2026.9.21 and install merge drivers through the canonical pm-ops launcher ([pm-github-7azo](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-7azo.toon))
+
+## 2026.9.19 - 2026-09-19
+
+### Dependencies
+
+- Bump the codeql-action group across 1 directory with 2 updates ([#90](https://github.com/unbraind/pm-github/pull/90))
 
 ## 2026.9.18 - 2026-09-18
 
@@ -206,6 +294,11 @@
 ### Other
 
 - Certify pm CLI 2026.9.12 and the pm-ops 2026.9.11 auditor ([pm-github-u95z](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-u95z.toon))
+
+### Dependencies
+
+- Bump @types/node from 26.4.0 to 26.5.1 ([#84](https://github.com/unbraind/pm-github/pull/84))
+- Bump pm-changelog from 2026.9.6 to 2026.9.8 ([#85](https://github.com/unbraind/pm-github/pull/85))
 
 ## 2026.9.11 - 2026-09-11
 
@@ -239,6 +332,10 @@
 
 - Pin the pm toolchain and assert the changelog-date flag by difference ([pm-github-c5i4](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-c5i4.toon))
 
+### Dependencies
+
+- Bump pm-ops from 2026.8.17 to 2026.8.31 ([#73](https://github.com/unbraind/pm-github/pull/73))
+
 ## 2026.9.4 - 2026-09-04
 
 ### Security
@@ -250,6 +347,11 @@
 ### Fixed
 
 - Group codeql-action bumps into one pull request to end the split-PR deadlock ([pm-github-11qm](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-11qm.toon))
+
+### Dependencies
+
+- Bump @types/node from 26.3.0 to 26.4.0 ([#66](https://github.com/unbraind/pm-github/pull/66))
+- Bump the codeql-action group with 2 updates ([#67](https://github.com/unbraind/pm-github/pull/67))
 
 ## 2026.8.31 - 2026-08-31
 
@@ -271,6 +373,11 @@
 - Closed: Validate pm CLI development dependency bump ([pm-github-j8zh](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-j8zh.toon))
 - Closed: The publish-attestation gate misses a publish routed through an unquoted shell variable ([pm-github-tko1](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-tko1.toon))
 
+### Dependencies
+
+- Bump @unbrained/pm-cli from 2026.8.20 to 2026.8.25 ([#58](https://github.com/unbraind/pm-github/pull/58))
+- Bump @types/node from 26.2.0 to 26.3.0 ([#59](https://github.com/unbraind/pm-github/pull/59))
+
 ## 2026.8.18 - 2026-08-18
 
 ### Fixed
@@ -288,6 +395,12 @@
 ### Fixed
 
 - A github command can silently lose its preflight credential gate when the override scope drifts from the mutating command set ([pm-github-4ga9](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-4ga9.toon))
+
+### Dependencies
+
+- Bump pm-ops from 2026.8.8 to 2026.8.10 ([#37](https://github.com/unbraind/pm-github/pull/37))
+- Bump pm-changelog from 2026.8.6 to 2026.8.12 ([#39](https://github.com/unbraind/pm-github/pull/39))
+- Bump @types/node from 26.1.2 to 26.2.0 ([#38](https://github.com/unbraind/pm-github/pull/38))
 
 ## 2026.8.15 - 2026-08-15
 
@@ -325,6 +438,13 @@
 ### Closed
 
 - Closed: Fix terminal transitions for pm-cli 2026.8.3 close_reason enforcement ([pm-github-rwq9](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-rwq9.toon))
+
+## 2026.8.1 - 2026-08-01
+
+### Dependencies
+
+- Bump @types/node from 26.1.1 to 26.1.2 ([#26](https://github.com/unbraind/pm-github/pull/26))
+- Bump pm-changelog from 2026.7.25 to 2026.7.28 ([#25](https://github.com/unbraind/pm-github/pull/25))
 
 ## 2026.7.30 - 2026-07-30
 
@@ -377,6 +497,11 @@
 - Closed: Import dies with an unexplained pm list-all failed on any tracker over 1 MiB, and non-atomic --dry-run previews every issue as a create ([pm-github-tn92](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-tn92.toon))
 - Closed: CHANGELOG omits the shipped --link-deps feature and mislabels 2026.7.23 work as Unreleased ([pm-github-px45](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-px45.toon))
 
+### Dependencies
+
+- Bump pm-changelog from 2026.7.18 to 2026.7.23 ([#10](https://github.com/unbraind/pm-github/pull/10))
+- Bump @unbrained/pm-cli from 2026.7.22 to 2026.7.24 ([#11](https://github.com/unbraind/pm-github/pull/11))
+
 ## 2026.7.23 - 2026-07-23
 
 ### Added
@@ -399,6 +524,14 @@
 
 - Serialize marker-dedupe read-and-append across concurrent imports ([pm-github-503u](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-503u.toon))
 - Harden release bun-verify so registry-mirror lag cannot block the GitHub release ([pm-github-i6af](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-i6af.toon))
+
+## 2026.7.18 - 2026-07-18
+
+### Dependencies
+
+- Bump @unbrained/pm-cli from 2026.7.12 to 2026.7.17 ([#3](https://github.com/unbraind/pm-github/pull/3))
+- Bump pm-changelog from 2026.7.12 to 2026.7.15 ([#2](https://github.com/unbraind/pm-github/pull/2))
+- Bump actions/setup-node from 6 to 7 ([#1](https://github.com/unbraind/pm-github/pull/1))
 
 ## 2026.7.17 - 2026-07-17
 
@@ -436,6 +569,10 @@
 
 - Closed: Export --apply aborts the whole batch on the first failed item ([pm-github-q3lk](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-q3lk.toon))
 - Closed: export --apply exits 0 even when every item fails to write ([pm-github-77wj](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-77wj.toon))
+
+### Dependencies
+
+- Bump pm-changelog from 2026.7.10 to 2026.7.12 ([#30](https://github.com/unbraind/pm-github/pull/30))
 
 ## 2026.7.11 - 2026-07-11
 

@@ -1,3 +1,5 @@
+import { buildGithubOwnershipIndex, warnGithubOwnershipScope, githubOwnedIdentityKeys, GithubImportOwnershipError, ownershipStateOf } from "./import-ownership.ts";
+import { parseGithubIssueUrl } from "./github-url.ts";
 import { readGithubWorkspace, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
 import { importTagValues } from "./import-tags.ts";
@@ -8,11 +10,11 @@ import { join, basename } from "node:path";
 import { listAllComplete, certifyCompleteListResult, previewItemMutations, resolvePmRoot } from "@unbrained/pm-cli/sdk";
 import {
   CommandError, EXIT_CODE, decodeCompletePmItems, githubGraphQLResponse, importGithubAtomic,
-  listUnfinishedGithubImports, parseImportOptions, parseProvenanceTag, prepareGithubImport, readGithubImportPlan,
-  resolveGitHubToken, resumeGithubImport, validateGithubImportFidelity, validateGithubImportPlan,
+  listUnfinishedGithubImports, listRetainedGithubImportPlans, parseImportOptions, prepareGithubImport, readGithubImportPlan,
+  resolveGitHubToken, resumeGithubImport, assertGithubImportReplayPreflight, validateGithubImportFidelity, validateGithubImportPlan,
   type GhIssue, type PmItem, type PreparedGithubImport,
 } from "./index.ts";
-import { fetchImportTimeline, importFidelityFields, normalizeImportValue, readImportReleases } from "./import-fidelity.ts";
+import { fetchImportTimeline, type LegacyGithubIdentityConflict, importFidelityFields, normalizeImportValue, readImportReleases } from "./import-fidelity.ts";
 
 /** An existing item and its unique linked issue number. */
 export interface RefreshTarget { id: string; number: number; item: PmItem }
@@ -27,26 +29,29 @@ export interface RefreshEntry {
 }
 
 /** Select only explicit provenance, refusing conflicting links and duplicate local owners. */
-export function selectRefreshTargets(items: readonly PmItem[], repo: string): RefreshTarget[] {
+export function selectRefreshTargets(items: readonly PmItem[], repo: string, numbers?: readonly number[]): RefreshTarget[] {
   const targets = new Map<number, RefreshTarget>();
-  for (const item of items) {
+  const ownership = buildGithubOwnershipIndex(items, [repo]);
+  const requested = numbers && new Set(numbers.map(number => `${repo.toLowerCase()}#${number}`));
+  const selected = items.filter(item => !requested || ownershipStateOf(ownership, item).claims.some(key => requested.has(key)));
+  warnGithubOwnershipScope(ownership, selected);
+  for (const item of selected) {
     if (!item.id) continue;
+    const state = ownershipStateOf(ownership, item);
+    // PRs are excluded only after checking their complete ownership claims.
+    if (state.kinds.includes("pull")) { githubOwnedIdentityKeys(item, ownership, repo); continue; }
     const numbers = new Set<number>();
-    for (const tag of item.tags ?? []) {
-      const parsed = parseProvenanceTag(tag);
-      if (parsed?.repo === repo) numbers.add(parsed.number);
+    for (const key of state.claims) {
+      const [repository, number] = key.split("#");
+      if (repository === repo) numbers.add(Number(number));
     }
-    if (typeof item.github_url === "string") {
-      // Only /issues/ locators are refreshable: the batch query reads issue(...)
-      // nodes, so accepting /pull/ links would report every PR-linked item as
-      // missing on each run.
-      const url = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/issues\/(\d+)\/?$/i.exec(item.github_url);
-      if (url?.[1]!.toLowerCase() === repo) numbers.add(Number(url[2]));
-    }
+    // Invalid explicit numbers remain a refusal even when they cannot form a
+    // valid ownership key. Neither this validation nor tags create ownership.
     if (typeof item.github_repo === "string" && item.github_repo.toLowerCase() === repo && typeof item.github_number === "number") numbers.add(item.github_number);
-    if (numbers.size > 1) throw new CommandError(`Refresh found conflicting GitHub identities for ${item.id}.`);
+    for (const number of numbers) if (!Number.isSafeInteger(number) || number < 1) throw new CommandError(`Refresh found an invalid issue number for ${item.id}.`);
+    if (numbers.size > 1) throw new GithubImportOwnershipError(item.id, `Refresh found conflicting GitHub identities in ${repo}`, state.claims);
+    githubOwnedIdentityKeys(item, ownership, repo);
     for (const number of numbers) {
-      if (!Number.isSafeInteger(number) || number < 1) throw new CommandError(`Refresh found an invalid issue number for ${item.id}.`);
       if (targets.has(number)) throw new CommandError(`Refresh found multiple existing owners for issue #${number}.`);
       targets.set(number, { id: item.id, number, item });
     }
@@ -80,7 +85,7 @@ async function fetchRefreshBatch(repo: string, targets: readonly RefreshTarget[]
     if (error && error.type !== "NOT_FOUND") reason = error.type === "FORBIDDEN" ? "inaccessible" : "api_error";
     else if (response.data!.repository === null || node === null) reason = "not_found_or_inaccessible";
     else if (node === undefined) reason = "incomplete_response";
-    else if (node.url.toLowerCase() !== `https://github.com/${repo}/issues/${target.number}`) reason = "transferred";
+    else if (parseGithubIssueUrl(node.url)?.key !== `${repo}#${target.number}` || parseGithubIssueUrl(node.url)?.kind !== "issues") reason = "transferred";
     else if (node.number !== target.number || !node.title.trim() || !["OPEN", "CLOSED"].includes(node.state)) reason = "invalid_issue";
     if (reason) { results.push({ target, reason }); continue; }
     const issue = node!;
@@ -113,8 +118,8 @@ async function fetchRefreshBatch(repo: string, targets: readonly RefreshTarget[]
 
 /** Compare only refresh-owned fields; use the same source lifecycle projection as import finalization. */
 export function refreshChanges(entry: PreparedGithubImport, statuses?: GithubStatusRegistry): RefreshChange[] {
-  const desired = { ...importFidelityFields(entry.fidelity!, Boolean(entry.linkOnly)),
-    ...(entry.linkOnly ? {} : { title: entry.title, status: entry.status }), tags: importTagValues(entry) };
+  const desired = { ...importFidelityFields(entry.fidelity!, Boolean(entry.linkOnly), entry.preserveContent ? entry.match : undefined),
+    ...(entry.linkOnly ? {} : { ...(!entry.preserveContent ? { title: entry.title } : {}), status: entry.status }), tags: importTagValues(entry) };
   return Object.entries(desired).flatMap(([field, value]) => {
     const old = ownValue(entry.match, field) ?? null;
     const next = value ?? null;
@@ -160,23 +165,62 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
   const state = await readRefreshState(pmRoot);
   const workspace = state.workspace;
   let items = state.items;
-  let all = selectRefreshTargets(items, repo);
-  let targets = bounded(all);
+  const identityConflictFields: { identity_conflicts?: LegacyGithubIdentityConflict[] } = {};
+  let all = selectRefreshTargets(items, repo, scope?.numbers);
+  const initialTargets = bounded(all);
   const token = resolveGitHubToken();
   // Resume interrupted transactions for the selected targets BEFORE the
   // unchanged filter: a crash after finalization leaves linked items already
   // matching the source, so the pending journal would otherwise hide behind an
   // ordinary no-op report and never commit.
   const pending = (await listUnfinishedGithubImports(pmRoot))
-    .filter(journal => !journal.itemIds.length || journal.itemIds.some(id => targets.some(target => target.id === id)));
+    .filter(journal => !journal.itemIds.length || journal.itemIds.some(id => initialTargets.some(target => target.id === id)));
+  // Retained side-data plans can outlive a committed SDK journal. Recover those
+  // before polling, so a newly fetched plan is never reported as the old replay.
+  const recovery = new Map(pending.map(journal => [journal.transactionId, { transactionId: journal.transactionId, status: String(journal.status) }]));
+  const deferredImports: Array<{ transaction_id: string; code: string; item_ids: string[]; issue_numbers: number[]; message: string; resume_argv: string[] }> = [];
+  const currentItems = new Map(items.map(item => [item.id, item]));
+  const selectedIds = new Set(initialTargets.map(target => target.id));
+  const selectableKeys = new Set(all.map(target => `${target.number}:${target.id}`));
+  const requestedNumbers = scope && new Set(scope.numbers);
+  const deferredIds = new Set<string>();
+  for (const record of await listRetainedGithubImportPlans(pmRoot)) {
+    const pairs = record.itemIds ?? record.entries.flatMap(entry => entry.match?.id ? [[entry.issueNumber, entry.match.id] as [number, string]] : []);
+    const ids = pairs.map(([, id]) => id);
+    if (record.repo.toLowerCase() === repo) {
+      // A recorded source number scopes recovery diagnostics; it never grants ownership.
+      const selected = pairs.filter(([number, id]) => (!requestedNumbers || requestedNumbers.has(number)) &&
+        (opts.limit === undefined || selectedIds.has(id)));
+      const creates = new Set(record.mutations.filter(mutation => mutation.op === "create").map(mutation => mutation.id));
+      const matchedIds = new Set(record.entries.flatMap(entry => entry.match?.id ? [entry.match.id] : []));
+      const pendingCreates = new Set(ids.filter(id => !currentItems.has(id) && creates.has(id) && !matchedIds.has(id)));
+      const selectedRecordIds = new Set(selected.map(([, id]) => id));
+      const orphaned = selected.filter(([number, id]) => !pendingCreates.has(id) && !selectableKeys.has(`${number}:${id}`)).map(([, id]) => id);
+      if (orphaned.length) throw new GithubImportOwnershipError(orphaned.join(", "), `${repo} (retained transaction ${record.transactionId})`, ["recorded target is no longer selectable; restore its intended explicit ownership before retrying recovery"]);
+      // A refresh cannot create items or partially replay an atomic import outside its scope.
+      if (pendingCreates.size || selected.length !== pairs.length) {
+        recovery.delete(record.transactionId);
+        for (const id of ids) deferredIds.add(id);
+        deferredImports.push({ transaction_id: record.transactionId,
+          code: pendingCreates.size ? "github_import_pending_creates" : "github_import_outside_refresh_scope",
+          item_ids: pendingCreates.size ? [...pendingCreates] : ids.filter(id => !selectedRecordIds.has(id)),
+          issue_numbers: pairs.map(([number]) => number),
+          message: "Retained atomic import is deferred; resume the original import before refreshing those targets.",
+          resume_argv: ["pm", "github", "import", repo, "--atomic"] });
+        continue;
+      }
+    }
+    if (ids.some(id => selectedIds.has(id))) recovery.set(record.transactionId, { transactionId: record.transactionId, status: "retained" });
+  }
+  let targets = initialTargets.filter(target => !deferredIds.has(target.id));
   let resumed = 0;
-  if (pending.length) {
+  if (recovery.size) {
     if (opts.dryRun) {
-      throw new CommandError(`Refresh cannot preview while GitHub transaction ${pending.map(journal => journal.transactionId).join(", ")} is unfinished for selected linked items. Re-run without --dry-run to complete it.`);
+      throw new CommandError(`Refresh cannot preview while GitHub transaction ${[...recovery.keys()].join(", ")} is unfinished for selected linked items. Re-run without --dry-run to complete it.`);
     }
     // Validate the complete recovery set before the first transaction can write.
     const records = [];
-    for (const journal of pending) {
+    for (const journal of recovery.values()) {
       const record = await readGithubImportPlan(pmRoot, journal.transactionId);
       if (!record || record.transactionId !== journal.transactionId) {
         throw new CommandError(
@@ -185,6 +229,7 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
         );
       }
       validateGithubImportPlan(record, items);
+      assertGithubImportReplayPreflight(pmRoot, record);
       if (record.repo.toLowerCase() !== repo) {
         throw new CommandError(`Refresh cannot replay GitHub transaction ${journal.transactionId} for ${record.repo} while refreshing ${repo}. Re-run refresh for ${record.repo} first; nothing was refreshed.`);
       }
@@ -202,8 +247,8 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
     // The replay finalized the interrupted targets; re-read so this run
     // compares the committed state instead of the pre-replay snapshot.
     items = await readRefreshItems(pmRoot);
-    all = selectRefreshTargets(items, repo);
-    targets = bounded(all);
+    all = selectRefreshTargets(items, repo, scope?.numbers);
+    targets = bounded(all).filter(target => !deferredIds.has(target.id));
   }
   const plan: RefreshEntry[] = [];
   const prepared: PreparedGithubImport[] = [];
@@ -233,6 +278,6 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
     if (opts.atomic) await importGithubAtomic(pmRoot, repo, prepared, { updateOnly: true });
     else for (const entry of prepared) await importGithubAtomic(pmRoot, repo, [entry], { updateOnly: true });
   }
-  return { repo, dryRun: opts.dryRun, atomic: opts.atomic, selected: targets.length, filtered,
+  return { ...(deferredImports.length ? { deferred_imports: deferredImports } : {}), ...identityConflictFields, repo, dryRun: opts.dryRun, atomic: opts.atomic, selected: targets.length, filtered,
     unchanged, updated: prepared.length, missing, created: 0, resumed, plan };
 }

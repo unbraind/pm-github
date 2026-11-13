@@ -1,3 +1,4 @@
+import { createImportMirror as create } from "./helpers/import-mirror.ts";
 /** Lifecycle finalization uses real SDK guards and hooks in a tracker without git. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -6,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
-  create, getHistoryPath, getItemPath, readHistorySnapshot,
+  getHistoryPath, getItemPath, readHistorySnapshot,
   setActiveExtensionHooks, type ExtensionHookRegistry,
 } from "@unbrained/pm-cli/sdk";
 import { buildImportFidelity, persistImportFidelity } from "../import-fidelity.ts";
@@ -39,7 +40,7 @@ function hooks(): ExtensionHookRegistry {
 }
 
 test("lifecycle finalization honors transactional guards before either durable write", async () => tracker(async pmRoot => {
-  const item = (await create({ title: "Guarded lifecycle", type: "Task" }, { pmRoot })).item;
+  const item = (await create({ title: "Guarded lifecycle", type: "Task", tags: "gh:unbraind/pm-beads#85", description: `GH issue #85: ${issue.html_url}` }, { pmRoot })).item;
   const itemPath = getItemPath(pmRoot, item.type, item.id);
   const historyPath = getHistoryPath(pmRoot, item.id);
   const before = [readFileSync(itemPath, "utf8"), readFileSync(historyPath, "utf8")];
@@ -57,7 +58,7 @@ test("lifecycle finalization honors transactional guards before either durable w
 }));
 
 test("lifecycle finalization respects strict tracker ownership", async () => tracker(async pmRoot => {
-  const item = (await create({ title: "Owned lifecycle", type: "Task", assignee: "fixture-owner" }, { pmRoot })).item;
+  const item = (await create({ title: "Owned lifecycle", type: "Task", assignee: "fixture-owner", tags: "gh:unbraind/pm-beads#85", description: `GH issue #85: ${issue.html_url}` }, { pmRoot })).item;
   const settings = JSON.parse(readFileSync(join(pmRoot, "settings.json"), "utf8")) as { governance: Record<string, unknown> };
   settings.governance = { ...settings.governance, preset: "custom", ownership_enforcement: "strict" };
   writeFileSync(join(pmRoot, "settings.json"), JSON.stringify(settings));
@@ -69,7 +70,7 @@ test("lifecycle finalization respects strict tracker ownership", async () => tra
 }));
 
 test("SDK finalization preserves both import write hooks and JSON-pointer fields; retry emits none", async () => tracker(async pmRoot => {
-  const item = (await create({ title: "Observed lifecycle", type: "Task" }, { pmRoot })).item;
+  const item = (await create({ title: "Observed lifecycle", type: "Task", tags: "gh:unbraind/pm-beads#85", description: `GH issue #85: ${issue.html_url}` }, { pmRoot })).item;
   const registry = hooks();
   const writes: Parameters<ExtensionHookRegistry["onWrite"][number]["run"]>[0][] = [];
   registry.onWrite.push({ layer: "project", name: "fixture-observer", run: context => {
@@ -94,7 +95,7 @@ test("SDK finalization preserves both import write hooks and JSON-pointer fields
 }));
 
 test("import hook fields match the actual history patch when the clock advances after mutation", async () => tracker(async pmRoot => {
-  const item = (await create({ title: "Clock-boundary lifecycle", type: "Task" }, { pmRoot })).item;
+  const item = (await create({ title: "Clock-boundary lifecycle", type: "Task", tags: "gh:unbraind/pm-beads#85", description: `GH issue #85: ${issue.html_url}` }, { pmRoot })).item;
   const RealDate = Date;
   let clock = Date.parse(item.updated_at!);
   /** Freeze Date until a queued source-read observation advances the clock. */

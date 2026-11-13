@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { init, create, get, update, getHistoryPath, getItemPath, WorkspaceTransactionInterruptedError, setActiveExtensionRegistrations, listAllComplete, normalizeItemId } from "@unbrained/pm-cli/sdk";
+import { init, create, get, update, mutateItem, readSettings, getHistoryPath, getItemPath, WorkspaceTransactionInterruptedError, setActiveExtensionRegistrations, listAllComplete, normalizeItemId } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension, { runImport, parseImportOptions, importGithubAtomic, prepareGithubImport, deriveAtomicItemId, type GhIssue, type GhComment, type AtomicImportOptions } from "../index.ts";
 import { refreshChanges } from "../refresh.ts";
@@ -63,12 +63,16 @@ function assertSourceClosures(pmRoot: string, id: string, skip = 0, dates: reado
 
 test("mixed new and linked closed issues plus an open issue repeat with identical item and history bytes", async () => tracker(async pmRoot => {
   const linked = (await create({ title: "Previously linked", type: "Chore", status: "closed", closeReason: "Original closure",
-    completedAt: "2025-02-01T00:00:00Z", tags: `gh:${repo}#1` }, { pmRoot })).item;
-  await persistImportFidelity(pmRoot, linked.id, buildImportFidelity(issue(1), [], []), false);
+    completedAt: "2025-02-01T00:00:00Z", tags: `gh:${repo}#1`, description: `GH issue #1: https://github.com/${repo}/issues/1` }, { pmRoot })).item;
+  await mutateItem({ pmRoot, id: linked.id, settings: await readSettings(pmRoot), author: "fixture", op: "update", mutate: document => {
+    document.metadata.github_url = issue(1).html_url;
+    return { changedFields: ["github_url"] };
+  } });
+  await persistImportFidelity(pmRoot, linked.id, buildImportFidelity(issue(1), [], []), false, false, undefined, true);
   const issues = [issue(1), issue(2), issue(3, true), { ...issue(4), state: "open" as const, state_reason: null, closed_at: null }];
   const first = await importing(pmRoot, issues);
   assert.equal(first.imported, 3);
-  assert.equal(first.updated, 1);
+  assert.equal(first.updated, 0, "curated local content already has the complete source lifecycle");
   // Inspect every target via its normal provenance-aware plan, not result formatting.
   const items = (await listAllComplete({ includeBody: true }, { pmRoot, noExtensions: true })).items;
   const before = await Promise.all(items.map(item => bytes(pmRoot, item.id)));
@@ -77,13 +81,17 @@ test("mixed new and linked closed issues plus an open issue repeat with identica
   assert.deepEqual(await Promise.all(items.map(item => bytes(pmRoot, item.id))), before);
   assert.equal(items.length, 4);
   for (const item of items) {
+    if (item.id === linked.id) {
+      for (const field of ["created_at", "closed_at", "completed_at"] as const) assert.equal(item[field], linked[field]);
+      continue;
+    }
     assert.equal(item.created_at, issue(1).created_at);
     if (item.status === "closed") {
       assert.equal(item.closed_at, issue(1).closed_at);
       assert.equal(item.completed_at, issue(1).closed_at);
     }
   }
-  assert.equal((await get(linked.id, {}, { pmRoot })).item.created_at, issue(1).created_at);
+  assert.equal((await get(linked.id, {}, { pmRoot })).item.created_at, linked.created_at);
   for (const item of items) assertSourceClosures(pmRoot, item.id, item.id === linked.id ? 1 : 0);
 }));
 

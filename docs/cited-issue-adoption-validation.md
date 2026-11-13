@@ -2,13 +2,12 @@
 
 ## Final policy
 
-The primary duplicate prevention is to create issue work items with
-`gh:owner/repo#N` tags. Citation adoption is **off by default**. CLI
+Use an explicit `github_url` to link a curated owner; `gh:owner/repo#N` tags are references. Citation adoption is **off by default**. CLI
 `--adopt-cited`, SDK `adoptCited: true`, or reusable sync input `adopt-cited: true`
 explicitly enables it. The workflow input defaults to false and is passed to
 preview, gated import and repeat verification consistently.
 
-Default imports retain normal create behavior and established tag/structured
+Default imports retain normal create behavior and established explicit-identity/structured
 URL/provider matching. They add read-only `citation_candidates` hints. Multiple
 eligible prose candidates never trigger fallback ambiguity refusal by default.
 Their local fields and status remain unchanged, including closed items.
@@ -30,11 +29,11 @@ ownership. Any other normalized GitHub URL, repository, issue number or
 unattributable reference refuses adoption. PR URLs are other URLs, even with
 the same number. Bare hashes remain UNKNOWN because this item projection has
 no verified owning-repository context. Conservative refusals preserve normal
-create behavior; arbitrary prose remains weaker evidence than an explicit tag.
+create behavior; arbitrary prose remains weaker evidence than explicit importer provenance.
 
 One eligible owner with opt-in receives an `adopt` plan and normal upsert.
 Multiple eligible owners with opt-in refuse writes with typed
-`ambiguous_citation`, IDs and a tagging remedy. Receipts expose `wouldAdopt` /
+`ambiguous_citation`, IDs and an explicit-link remedy. Receipts expose `wouldAdopt` /
 `adopted`; gated idempotency counts one existing landing item. Status push,
 export and Projects matching retain their scope.
 

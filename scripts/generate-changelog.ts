@@ -14,6 +14,7 @@ export type ChangelogRunner = (command: string, args: readonly string[], options
  *
  * Only the explicit `changelog-unreleased` tag admits a nonterminal item. Other
  * ongoing work cannot acquire a release entry just because it was claimed.
+ * Dependency notes remain visible when a release window also contains PM work.
  *
  * @param root - Repository containing the tracker and release tags.
  * @param args - Optional pm-changelog arguments, including its check flag.
@@ -27,7 +28,7 @@ export async function generateChangelog(root: string, args: readonly string[], r
     const items = corpus.items.filter(item => workspace.statuses.terminal_done_statuses.has(canonicalGithubStatus(item.status, workspace.statuses)) || item.tags?.includes("changelog-unreleased"));
     const cli = resolve(dirname(createRequire(import.meta.url).resolve("pm-changelog/package.json")), "dist/cli.js");
     const result = runner("node", [cli, "--stdin", "--pm-root", ".agents/pm", "--status", [...new Set(["closed", ...items.map(item => item.status)])].join(","),
-      "--mode", "replace", "--output", "CHANGELOG.md", "--all-release-tags", "--release-version-from-package",
+      "--mode", "replace", "--output", "CHANGELOG.md", "--all-release-tags", "--release-version-from-package", "--dependency-updates",
       "--date-from-version", "--item-url-base", "https://github.com/unbraind/pm-github/blob/main/.agents/pm",
       "--respect-item-release", ...args], {
       cwd: root, input: JSON.stringify({ items }), encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: { ...process.env },

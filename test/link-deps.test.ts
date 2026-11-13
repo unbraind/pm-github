@@ -122,10 +122,10 @@ test("returns [] for empty/undefined body and bodies with no phrase", () => {
 // buildProvenanceIndexFromMetadata — pure
 // ---------------------------------------------------------------------------
 
-test("indexes items by their gh provenance tag", () => {
+test("indexes items by their explicit import identity", () => {
   const items: DepLinkSnapshotItem[] = [
-    { id: "pm-1", tags: ["bug", "gh:acme/widgets#1"] },
-    { id: "pm-2", tags: ["gh:acme/widgets#2"] },
+    { id: "pm-1", github_url: "https://github.com/acme/widgets/issues/1", tags: ["bug", "gh:acme/widgets#1"] },
+    { id: "pm-2", github_url: "https://github.com/acme/widgets/issues/2", tags: ["gh:acme/widgets#2"] },
     { id: "pm-3", tags: ["no-provenance"] },
   ];
   const index = buildProvenanceIndexFromMetadata(items);
@@ -134,12 +134,14 @@ test("indexes items by their gh provenance tag", () => {
   assert.strictEqual(index.size, 2);
 });
 
-test("first writer wins on a duplicated provenance tag", () => {
+test("duplicated explicit import identities remain unresolved", () => {
   const items: DepLinkSnapshotItem[] = [
-    { id: "pm-1", tags: ["gh:acme/widgets#1"] },
-    { id: "pm-dup", tags: ["gh:acme/widgets#1"] },
+    { id: "pm-1", github_url: "https://github.com/acme/widgets/issues/1", tags: ["gh:acme/widgets#1"] },
+    { id: "pm-dup", github_url: "https://github.com/acme/widgets/issues/1", tags: ["gh:acme/widgets#1"] },
   ];
-  assert.strictEqual(buildProvenanceIndexFromMetadata(items).get("acme/widgets#1"), "pm-1");
+  const ambiguous = new Map<string, string[]>();
+  assert.strictEqual(buildProvenanceIndexFromMetadata(items, ambiguous).has("acme/widgets#1"), false);
+  assert.deepEqual(ambiguous.get("acme/widgets#1"), ["pm-1", "pm-dup"]);
 });
 
 // ---------------------------------------------------------------------------
@@ -209,8 +211,8 @@ test("de-duplicates identical edges across issues", () => {
 
 function snapshot(deps: Record<string, Array<{ id: string; kind: string }>> = {}): DepLinkSnapshotItem[] {
   return [
-    { id: "pm-1", tags: ["gh:acme/widgets#1"], dependencies: deps["pm-1"] },
-    { id: "pm-2", tags: ["gh:acme/widgets#2"], dependencies: deps["pm-2"] },
+    { id: "pm-1", github_url: "https://github.com/acme/widgets/issues/1", tags: ["gh:acme/widgets#1"], dependencies: deps["pm-1"] },
+    { id: "pm-2", github_url: "https://github.com/acme/widgets/issues/2", tags: ["gh:acme/widgets#2"], dependencies: deps["pm-2"] },
   ];
 }
 

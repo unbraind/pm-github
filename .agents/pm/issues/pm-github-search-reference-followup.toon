@@ -1,0 +1,15 @@
+id: pm-github-search-reference-followup
+title: Map GitHub search hits through ownership instead of shared references
+description: "Latest CodeRabbit outside-diff review of PR 233, indexByProvenance: import o/r#7, then add a curated Chore carrying gh:o/r#7. Tag-based indexing lets the later reference replace the imported owner in GitHub search results. Use authoritative import identities and retain shared mentions without replacing the owner. Deferred from round-6 importer write protection."
+type: Issue
+status: open
+priority: 3
+tags: []
+created_at: "2026-11-11T22:21:15.600Z"
+updated_at: "2026-11-12T08:53:57.802Z"
+author: codex-github230-1111
+comments[1]{created_at,author,text}:
+  "2026-11-12T08:53:57.802Z",codex-github230-1111,"Round 9 tracker audit: moved the parent issue or PR reference from a gh tag to a docs link. This is reference hygiene only; deferred implementation remains out of scope and this item stays open."
+docs[1]{path,scope,note}:
+  "https://github.com/unbraind/pm-github/pull/233",project,Context reference; this follow-up is not the referenced issue or PR
+body: ""

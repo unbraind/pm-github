@@ -78,3 +78,23 @@ test("canonical changelog fails closed when the tracker read fails", async () =>
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("canonical changelog keeps released dependency notes beside pending PM work", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-released-changelog-"));
+  try {
+    assert.equal(spawnSync("git", ["init", "-b", "main", root]).status, 0);
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ version: "2026.11.12" }));
+    const released = "## 2026.11.12 - 2026-11-12\n\n### Dependencies\n\n- Bump fixture dependency ([#1](https://github.com/unbraind/pm-github/pull/1))\n";
+    fs.writeFileSync(path.join(root, "CHANGELOG.md"), "# Changelog\n\n" + released);
+    assert.equal(spawnSync("git", ["add", "package.json", "CHANGELOG.md"], { cwd: root }).status, 0);
+    assert.equal(spawnSync("git", ["-c", "user.name=SteveBot", "-c", "user.email=1153461+unbraind@users.noreply.github.com", "commit", "-m", "chore(deps-dev): bump fixture dependency (#1)"], { cwd: root }).status, 0);
+    const pmRoot = path.join(root, ".agents/pm"), cli = path.resolve("node_modules/.bin/pm");
+    assert.equal(spawnSync(cli, ["--pm-path", pmRoot, "init", "--defaults", "--agent-guidance", "skip"], { cwd: root }).status, 0);
+    await create({ title: "Pending whole-value ownership", status: "in_progress", tags: "changelog-unreleased" }, { cwd: root, pmRoot, noExtensions: true });
+    assert.equal(await generateChangelog(root, []), 0);
+    const output = fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8");
+    assert.ok(output.includes(released.split("### Dependencies")[1]!), "Released dependency notes survive when a PM item joins the window");
+    assert.match(output, /## 2026\.11\.12 - 2026-11-12[\s\S]*Pending whole-value ownership/);
+    assert.equal(await generateChangelog(root, ["--check"]), 0);
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
