@@ -2,12 +2,17 @@ id: pm-github-fxhd
 title: The gated sync holds a runner for up to two hours while it waits for caller CI it competes with for the same pool
 description: ""
 type: Issue
-status: in_progress
+status: closed
 priority: 2
 tags[5]: changelog-unreleased,ci,fleet,"gh:unbraind/pm-github#228",sync
 created_at: "2026-11-09T19:25:14.594Z"
-updated_at: "2026-11-11T16:10:59.223Z"
+updated_at: "2026-11-12T15:00:54.479Z"
+closed_at: "2026-11-12T15:00:54.460Z"
+completed_at: "2026-11-12T15:00:54.460Z"
 author: codex-agent
+resolution: Implemented and merged in #229 (6ccb293).
+expected_result: The change described by this item is on main.
+actual_result: "Merged in #229 as 6ccb293; checks successful at head 0428178: CodeQL, bun-release (22), bun-release (26), codeql, semgrep-cloud-platform/scan, test (22), test (26)."
 comments[42]{created_at,author,text}:
   "2026-11-09T20:06:55.015Z",codex-agent,"Continuation: retained the existing uncommitted sync and closeout edits. No remote task branch or PR exists. Auditing all workflow_call jobs and the dispatch/landing contracts before focused verification."
   "2026-11-09T20:09:30.888Z",codex-agent,"Class audit: both reusable sync and closeout dispatch steps contained the long PR/ancestry monitor; removed both. Dependabot has bounded API retries with no run polling and already has a job timeout. Added 60-minute sync/closeout job limits and five-minute dispatch caps; sync alerts retain 10 minutes. Before gh --auto, one-time repository setting and protected-base reads prevent immediate unprotected landing. Unknown metadata exits with a reason. Retained App-only unattended merging, scoped tokens, owned PR checks, closeout attribution holds/revocation, publication gates and parked-run reporting. A later schedule rebuilds/retries; persistent configuration problems need a maintainer."
@@ -213,4 +218,5 @@ docs[5]{path,scope}:
   docs/explicit-closeout-attribution.md,project
   docs/sync-workflow-caller.yml,project
   README.md,project
+close_reason: "Delivered by #229 \"Stop gated sync and closeout jobs from waiting for caller CI\" (merged as 6ccb293). Checks successful at the PR head 0428178: CodeQL, bun-release (22), bun-release (26), codeql, semgrep-cloud-platform/scan, test (22), test (26)."
 body: "Issue: https://github.com/unbraind/pm-github/issues/228. The dispatch step polls until it can land the PR (7200 s with github.token, 2400 s with an app token, over 120/40 attempts). The caller CI it waits for needs runners from the same free-tier account pool: between 10:00Z and 12:00Z on 2026-11-09, 77 fleet runs queued while 8 ran; a scheduled sync sat in that step from 10:27Z, holding a runner while waiting for CI that could not start. An automation job must never wait in-job for work that competes for the same runner pool.\n\nPlan: dispatch caller CI, arm GitHub native auto-merge on the owned PR, report parked runs and exit. When auto-merge cannot be armed (no required checks, loose or unreadable freshness policy, unreadable branch rules, disabled setting), print a notice with the reason; the next scheduled sync rebuilds and retries the PR. Persistent configuration problems require maintainer attention. Remove the whole polling class from both reusable workflows (sync and closeout), add timeout-minutes to every reusable job, add a contract test that fails on revert.\n\nNo-App mode also arms the protected request: approved native PR runs can satisfy required checks, as verified on public pm-csv#241. A maintainer must approve parked native runs; the App enables unattended runs and default-branch push events. Full closeout replay is linked as separately measured publication and decision files, with the original entry point retained for existing commands."
