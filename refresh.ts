@@ -1,4 +1,4 @@
-import { buildGithubOwnershipIndex, warnGithubOwnershipScope, githubOwnedIdentityKeys, GithubImportOwnershipError } from "./import-ownership.ts";
+import { buildGithubOwnershipIndex, warnGithubOwnershipScope, githubOwnedIdentityKeys, GithubImportOwnershipError, ownershipStateOf } from "./import-ownership.ts";
 import { parseGithubIssueUrl } from "./github-url.ts";
 import { readGithubWorkspace, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
@@ -33,11 +33,11 @@ export function selectRefreshTargets(items: readonly PmItem[], repo: string, num
   const targets = new Map<number, RefreshTarget>();
   const ownership = buildGithubOwnershipIndex(items, [repo]);
   const requested = numbers && new Set(numbers.map(number => `${repo.toLowerCase()}#${number}`));
-  const selected = items.filter(item => !requested || ownership.states.get(item)?.claims.some(key => requested.has(key)));
+  const selected = items.filter(item => !requested || ownershipStateOf(ownership, item).claims.some(key => requested.has(key)));
   warnGithubOwnershipScope(ownership, selected);
   for (const item of selected) {
     if (!item.id) continue;
-    const state = ownership.states.get(item)!;
+    const state = ownershipStateOf(ownership, item);
     // PRs are excluded only after checking their complete ownership claims.
     if (state.kinds.includes("pull")) { githubOwnedIdentityKeys(item, ownership, repo); continue; }
     const numbers = new Set<number>();

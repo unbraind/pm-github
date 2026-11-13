@@ -142,7 +142,7 @@ export function warnGithubOwnershipScope(index: GithubOwnershipIndex, selected: 
     if (declaration?.invalidNumber || suffix && (!Number.isSafeInteger(Number(suffix[1])) || Number(suffix[1]) < 1) || external && (!Number.isSafeInteger(Number(external[1])) || Number(external[1]) < 1)) {
       console.error(JSON.stringify({ code: "invalid_github_identity_number", item: item.id, declared: declaration?.declared, url: source ? source.key : undefined, suffix: suffix?.[1], external_number: external?.[1], remedy: "Make every declared issue number a matching positive safe integer; invalid declarations do not establish ownership." }));
     }
-    const state = index.states.get(item)!;
+    const state = ownershipStateOf(index, item);
     if (!scope.has(item.id) && state.claims.length > 1) console.error(JSON.stringify({ code: "out_of_scope_github_owner_conflict", items: [item.id], claims: state.claims }));
   }
   for (const [key, claimants] of index.claimants) {
@@ -151,6 +151,14 @@ export function warnGithubOwnershipScope(index: GithubOwnershipIndex, selected: 
   }
 }
 
+/**
+ * Read an item's ownership state from the index, deriving it for a separately allocated copy.
+ * The states map is keyed by object identity, so a caller that passes a copy of a corpus record would otherwise read
+ * it as unowned and skip every guard that depends on its claims.
+ */
+export function ownershipStateOf(index: Pick<GithubOwnershipIndex, "states" | "repositories">, item: PmItem): ReturnType<typeof githubOwnershipClaims> {
+  return index.states.get(item) ?? githubOwnershipClaims(item, false, false, index.repositories);
+}
 /** Every asserted identity constrains a provenance-bearing item; references alone do not create an owner. */
 export function githubOwnershipClaims(item: PmItem, provisional = false, _allowReferenceTags = false, repositories: readonly string[] = []): { owners: string[]; claims: string[]; evidence: boolean; kinds: string[]; direct: boolean } {
   const work = ownershipWork.getStore(); if (work) work.claimParses = (work.claimParses ?? 0) + 1;
@@ -202,7 +210,7 @@ export function assertGithubOwnershipConsistency(item: PmItem, target?: GithubOw
 /** Select targets only after checking every claim and every peer; repository scoping never hides a contradiction. */
 export function githubOwnedIdentityKeys(item: PmItem, peers: readonly PmItem[] | GithubOwnershipIndex = [], repo?: string, _allowReferenceTags = false): string[] {
   const index = ownershipIndex(peers, repo ? [repo] : []);
-  const state = index.states.get(item) ?? githubOwnershipClaims(item, false, false, index.repositories);
+  const state = ownershipStateOf(index, item);
   if (repo && !state.claims.some(key => key.slice(0, key.lastIndexOf("#")) === repo.toLowerCase())) return [];
   return assertGithubOwnershipConsistency(item, undefined, index);
 }

@@ -1,4 +1,4 @@
-import { type GithubOwnershipIndex, buildGithubOwnershipIndex, warnGithubOwnershipScope, githubOwnedIdentityKeys, githubOwnershipClaims, assertGithubOwnershipConsistency } from "./import-ownership.ts";
+import { type GithubOwnershipIndex, buildGithubOwnershipIndex, warnGithubOwnershipScope, githubOwnedIdentityKeys, githubOwnershipClaims, assertGithubOwnershipConsistency, ownershipStateOf } from "./import-ownership.ts";
 import { parseGithubUrl } from "./github-url.ts";
 import { canonicalGithubStatus, githubStatusKind, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
@@ -501,7 +501,7 @@ export function buildProjectPushPlan(
     const [repository, number] = keys[0]?.split("#") ?? [];
     const issueKey = repository && number ? { repo: repository, number: Number(number) } : undefined;
     if (!linked && issueKey) linked = byIssue.get(`${issueKey.repo}#${issueKey.number}`);
-    if (linked?.content.repo && linked.content.number && ownership.states.get(item)?.evidence) {
+    if (linked?.content.repo && linked.content.number && ownershipStateOf(ownership, item).evidence) {
       assertGithubOwnershipConsistency(item, { id: item.id, repo: linked.content.repo, number: linked.content.number }, ownership);
     }
 
@@ -614,7 +614,7 @@ function indexSelectedByIssue(selected: PmItemLike[], corpus: PmItemLike[], proj
   const ownership = buildGithubOwnershipIndex(corpus.filter((item): item is PmItemLike => Boolean(item)), projectItems.flatMap(item => item.content.repo ? [item.content.repo] : []));
   const issues = new Set(projectItems.flatMap(item => item.content.repo && item.content.number ? [`${item.content.repo.toLowerCase()}#${item.content.number}`] : []));
   const nodes = new Set(projectItems.map(item => item.id));
-  const candidates = selected.filter(item => (ownership.states.get(item) ?? githubOwnershipClaims(item, false, false, ownership.repositories)).claims.some(key => issues.has(key)) || (item.tags ?? []).some(tag => {
+  const candidates = selected.filter(item => ownershipStateOf(ownership, item).claims.some(key => issues.has(key)) || (item.tags ?? []).some(tag => {
     const parsed = parseProjectItemTag(tag);
     return parsed && parsed.owner === ref.owner.toLowerCase() && parsed.number === ref.number && nodes.has(parsed.itemId);
   }));
@@ -655,8 +655,7 @@ export function buildProjectPullPlan(
       pm = pmByIssue.get(`${pi.content.repo.toLowerCase()}#${pi.content.number}`);
     }
     if (!pm || !pm.id || !pmItems.some(selected => selected.id === pm!.id)) continue; // unlinked project items are handled by import
-    // A separately allocated copy of a selected item misses the identity-keyed states map; derive its claims like line 617.
-    if (pi.content.repo && pi.content.number && (ownership.states.get(pm) ?? githubOwnershipClaims(pm, false, false, ownership.repositories)).evidence) {
+    if (pi.content.repo && pi.content.number && ownershipStateOf(ownership, pm).evidence) {
       assertGithubOwnershipConsistency(pm, { id: pm.id, repo: pi.content.repo, number: pi.content.number }, ownership);
     }
 
@@ -738,7 +737,7 @@ export function buildProjectImportPlan(
       existing = pmByIssue.get(`${c.repo.toLowerCase()}#${c.number}`);
     }
 
-    if (existing?.id && c.repo && c.number && ownership.states.get(existing)?.evidence) {
+    if (existing?.id && c.repo && c.number && ownershipStateOf(ownership, existing).evidence) {
       assertGithubOwnershipConsistency(existing, { id: existing.id, repo: c.repo, number: c.number }, ownership);
     }
 

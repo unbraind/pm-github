@@ -1,5 +1,5 @@
 import { writeGithubStateAtomic, syncGithubStatePath, type GithubStateWriteOptions } from "./durable-state.ts";
-import { buildGithubOwnershipIndex, warnGithubOwnershipScope, withGithubItemConsistency, readGithubOwnershipSnapshot, githubRepositoryHash, githubOwnershipClaims, githubOwnedIdentityKeys, assertGithubOwnershipConsistency, assertGithubImportOwner, GithubImportOwnershipError, readGithubImportOwner, withGithubImportOwners, mutateGithubOwnedItem, type GithubOwnershipIndex, type GithubOwnedTarget } from "./import-ownership.ts";
+import { buildGithubOwnershipIndex, warnGithubOwnershipScope, withGithubItemConsistency, readGithubOwnershipSnapshot, githubRepositoryHash, githubOwnershipClaims, githubOwnedIdentityKeys, assertGithubOwnershipConsistency, assertGithubImportOwner, GithubImportOwnershipError, readGithubImportOwner, withGithubImportOwners, mutateGithubOwnedItem, type GithubOwnershipIndex, type GithubOwnedTarget, ownershipStateOf } from "./import-ownership.ts";
 import { parseGithubIssueUrl, githubUrlTokens } from "./github-url.ts";
 import { readGithubWorkspace, canonicalGithubStatus, githubStatusKind, githubStatusIsTerminal, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
@@ -1287,7 +1287,7 @@ export function resolveSearchCorpus(documents: unknown, pmRootValue: unknown): P
 export function indexByProvenance(items: PmItem[], targets?: ReadonlySet<string>): Map<string, PmItem> {
   const index = new Map<string, PmItem>();
   const claims = buildGithubOwnershipIndex(items);
-  const selected = items.filter(item => !targets || claims.states.get(item)?.claims.some(key => targets.has(key)));
+  const selected = items.filter(item => !targets || ownershipStateOf(claims, item).claims.some(key => targets.has(key)));
   warnGithubOwnershipScope(claims, selected);
   for (const item of selected) if (item.id) for (const key of githubOwnedIdentityKeys(item, claims)) if (!targets || targets.has(key)) index.set(key, item);
   return index;
@@ -3442,10 +3442,10 @@ export function verifyImportIdempotency(
   const identityOwners = new Map<string, string>();
   const duplicateIdentities = new Set<string>();
   const targets = new Set(prepared.map(entry => `${repo.toLowerCase()}#${entry.issueNumber}`));
-  const selected = existing.filter(item => item.id && ownership.states.get(item)?.claims.some(key => targets.has(key)));
+  const selected = existing.filter(item => item.id && ownershipStateOf(ownership, item).claims.some(key => targets.has(key)));
   // Record competing claims before the shared resolver refuses them, preserving
   // the duplicate-identity gate as an independently exercised batch boundary.
-  for (const item of selected) for (const key of ownership.states.get(item)!.claims) {
+  for (const item of selected) for (const key of ownershipStateOf(ownership, item).claims) {
     if (!targets.has(key)) continue;
     const prior = identityOwners.get(key);
     if (prior && prior !== item.id) duplicateIdentities.add(key);
@@ -3722,7 +3722,7 @@ export async function runImport(
   const identityConflictFields: { identity_conflicts?: LegacyGithubIdentityConflict[] } = {};
   const ownership = buildGithubOwnershipIndex(existingItems, [repo]);
   const importTargets = new Set(filtered.map(issue => `${repo.toLowerCase()}#${issue.number}`));
-  warnGithubOwnershipScope(ownership, existingItems.filter(item => ownership.states.get(item)?.claims.some(key => importTargets.has(key))));
+  warnGithubOwnershipScope(ownership, existingItems.filter(item => ownershipStateOf(ownership, item).claims.some(key => importTargets.has(key))));
   const existing = indexByImportIdentity(existingItems, ownership, importTargets);
   const fidelityContext = { statuses: workspace.statuses, items: existingItems, ownership, releases: readImportReleases(pmRoot),
     timeline: dependencies.fetchIssueTimeline ?? (dependencies.fetchIssues ? async () => [] : fetchImportTimeline) };

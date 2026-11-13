@@ -1,7 +1,7 @@
 import { normalizeGithubRepository, normalizeGithubClaim, parseGithubUrl, parseGithubIssueUrl } from "./github-url.ts";
 import { readGithubWorkspace, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue, setOwnValue } from "./own-record.ts";
-import { buildGithubOwnershipIndex, githubOwnedIdentityKeys, assertGithubImportOwner, GithubImportOwnershipError, assertGithubOwnershipConsistency, githubOwnershipClaims, withGithubImportOwners, type GithubOwnershipIndex, type GithubOwnedTarget } from "./import-ownership.ts";
+import { buildGithubOwnershipIndex, githubOwnedIdentityKeys, assertGithubImportOwner, GithubImportOwnershipError, assertGithubOwnershipConsistency, githubOwnershipClaims, withGithubImportOwners, type GithubOwnershipIndex, type GithubOwnedTarget, ownershipStateOf } from "./import-ownership.ts";
 /** Source lifecycle, release-window and cross-provider identity rules for issue imports. */
 import { spawnSync } from "node:child_process";
 import { decodeHTML } from "entities";
@@ -369,7 +369,7 @@ export function importerCreatedItem(item: PmItem, _repo: string, _number: number
 /** Index durable importer identities while allowing arbitrary shared reference tags. */
 export function indexByImportIdentity(items: readonly PmItem[], ownership = buildGithubOwnershipIndex(items), targets?: ReadonlySet<string>): Map<string, PmItem> {
   const result = new Map<string, PmItem>();
-  for (const item of items) if (item.id && (!targets || ownership.states.get(item)?.claims.some(key => targets.has(key)))) for (const key of githubOwnedIdentityKeys(item, ownership)) if (!targets || targets.has(key)) result.set(key, item);
+  for (const item of items) if (item.id && (!targets || ownershipStateOf(ownership, item).claims.some(key => targets.has(key)))) for (const key of githubOwnedIdentityKeys(item, ownership)) if (!targets || targets.has(key)) result.set(key, item);
   return result;
 }
 
@@ -385,7 +385,7 @@ export function matchImportedIssue(items: readonly PmItem[], issue: GhIssue, _ta
     legacyGithubDescriptionIdentity(item)?.canonical === issueUrl;
   const candidates = items.filter(item => {
     if (!item.id) return false;
-    const state = ownership.states.get(item)!;
+    const state = ownershipStateOf(ownership, item);
     if (state.claims.includes(issueKey)) assertGithubOwnershipConsistency(item, { id: item.id, repo, number: issue.number }, ownership);
     if (state.owners.length) return state.owners.includes(issueKey);
     return locators(providerProvenance(item)).some(url => !parseGithubIssueUrl(url) && bodyUrls.has(url));

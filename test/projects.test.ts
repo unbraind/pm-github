@@ -289,6 +289,17 @@ test("buildProjectPullPlan: linked item with diverging board status yields an up
   );
 });
 
+test("buildProjectPushPlan: a copied selected item is still checked against its own GitHub owner", () => {
+  // Same identity class as the pull planner: a copy of a corpus record misses the states map.
+  const original = { id: "pm-1", title: "P", status: "closed", github_url: "https://github.com/o/r/issues/7", tags: [projectItemTag(REF, "PVTI_c")] };
+  const copy = structuredClone(original);
+  const board: ProjectItem[] = [{ id: "PVTI_c", statusOptionId: "opt_todo", statusName: "Todo", content: { typename: "Issue", repo: "o/r", number: 8, title: "P" } }];
+  assert.throws(() => buildProjectPushPlan([copy], REF, board, STATUS_FIELD, { corpus: [original] }), /owner|ownership|o\/r#7|o\/r#8/i);
+  // Must allow: the copy on its own issue plans a status change.
+  const own: ProjectItem[] = [{ ...board[0]!, content: { ...board[0]!.content, number: 7 } }];
+  assert.ok(buildProjectPushPlan([copy], REF, own, STATUS_FIELD, { corpus: [original] }).entries.some(entry => entry.action === "set-status"));
+});
+
 test("buildProjectPullPlan: a copied selected item is still checked against its own GitHub owner", () => {
   // The corpus holds the original; the selection passes a separately allocated copy, which misses the states map.
   const original = { id: "pm-1", title: "P", status: "open", github_url: "https://github.com/o/r/issues/7", tags: [projectItemTag(REF, "PVTI_c")] };

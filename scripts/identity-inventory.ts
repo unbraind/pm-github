@@ -13,6 +13,7 @@ const additional = new Map([
   ["import-fidelity.ts/legacyGithubDescriptionIdentity", "Legacy native declaration identity: anchored at description start, first complete issue/PR URL, with trailing punctuation removed. No link-only marker or whole-description match is required."],
   ["import-fidelity.ts/githubLinkReferences", "Reference extraction only: supported link fields expose prose and API URL mentions, never owner claims or an import target."],
   ["projects.ts/indexSelectedByIssue", "Build one complete ownership index, then validate only selected tracker items matched by current board issue keys or project-item IDs. Off-board conflicts warn; a peer claiming a board candidate still refuses."],
+  ["import-ownership.ts/ownershipStateOf", "Identity-safe state read: the states map is keyed by object identity, so a separately allocated copy of a corpus record derives its claims instead of reading as unowned; every planner and selector uses it."],
   ["import-ownership.ts/warnGithubOwnershipScope", "Diagnostics only: malformed native numbers and conflicts wholly outside selected targets emit warnings naming affected IDs; no warning chooses an owner or authorizes writes."],
 ]);
 
