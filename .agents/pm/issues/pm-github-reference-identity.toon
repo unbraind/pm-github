@@ -3,12 +3,17 @@ title: "Keep GitHub reference tags separate from import identity (BREAKING: PM C
 description: "Preserve curated local fields, allow shared reference tags, and retain migration-free matching of existing importer provenance."
 type: Issue
 pm_format_version: 2
-status: in_progress
+status: closed
 priority: 2
 tags[2]: changelog-unreleased,"gh:unbraind/pm-github#230"
 created_at: "2026-11-11T10:19:25.073Z"
-updated_at: "2026-11-13T14:17:53.658Z"
+updated_at: "2026-11-13T23:51:40.127Z"
+closed_at: "2026-11-13T23:51:40.059Z"
+completed_at: "2026-11-13T23:51:40.059Z"
 author: codex-github230-1111
+resolution: Implemented and merged in #233 (5766ef0).
+expected_result: The change described by this item is on main.
+actual_result: "Merged in #233 as 5766ef0; checks successful at head a5f1cc1: CodeQL, bun-release (22), bun-release (26), codeql, semgrep-cloud-platform/scan, test (22), test (26)."
 comments[136]{created_at,author,text}:
   "2026-11-11T10:19:28.756Z",codex-github230-1111,"Read issue 230 and all comments. Branch starts from main; PR229 changes workflows and docs separately. Plan: distinguish explicit importer identity from references, preserve curated linked content, retain legacy persisted provenance, and prove behavior with real SDK trackers and behavioral reverts. Task-specific gate budget applies: focused importer/sync/dependent tests, lint and typecheck; full suite only within 45 minutes."
   "2026-11-11T10:24:30.654Z",codex-github230-1111,"Implemented separate durable import identity lookup; shared gh references no longer select owners or collide. Curated links merge provenance/lifecycle while deterministic importer records mirror content. New real SDK regressions pass 9/9, including no-git curated links and byte-identical legacy resync beside shared references. Reviewing existing tests that assumed tag-only ownership; updating mirror fixtures to explicit importer identities."
@@ -1011,6 +1016,7 @@ docs[7]:
   - path: README.md
     scope: project
     note: All owner claims must agree and remain unique; journal-aware cleanup
+close_reason: "Delivered by #233 \"Keep GitHub reference tags out of import identity\" (merged as 5766ef0). Checks successful at the PR head a5f1cc1: CodeQL, bun-release (22), bun-release (26), codeql, semgrep-cloud-platform/scan, test (22), test (26)."
 github_number: 230
 github_url: "https://github.com/unbraind/pm-github/issues/230"
 body: ""
