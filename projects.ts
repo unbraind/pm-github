@@ -655,7 +655,8 @@ export function buildProjectPullPlan(
       pm = pmByIssue.get(`${pi.content.repo.toLowerCase()}#${pi.content.number}`);
     }
     if (!pm || !pm.id || !pmItems.some(selected => selected.id === pm!.id)) continue; // unlinked project items are handled by import
-    if (pi.content.repo && pi.content.number && ownership.states.get(pm)?.evidence) {
+    // A separately allocated copy of a selected item misses the identity-keyed states map; derive its claims like line 617.
+    if (pi.content.repo && pi.content.number && (ownership.states.get(pm) ?? githubOwnershipClaims(pm, false, false, ownership.repositories)).evidence) {
       assertGithubOwnershipConsistency(pm, { id: pm.id, repo: pi.content.repo, number: pi.content.number }, ownership);
     }
 

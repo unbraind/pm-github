@@ -289,6 +289,17 @@ test("buildProjectPullPlan: linked item with diverging board status yields an up
   );
 });
 
+test("buildProjectPullPlan: a copied selected item is still checked against its own GitHub owner", () => {
+  // The corpus holds the original; the selection passes a separately allocated copy, which misses the states map.
+  const original = { id: "pm-1", title: "P", status: "open", github_url: "https://github.com/o/r/issues/7", tags: [projectItemTag(REF, "PVTI_c")] };
+  const copy = structuredClone(original);
+  const board: ProjectItem[] = [{ id: "PVTI_c", statusOptionId: "opt_done", statusName: "Done", content: { typename: "Issue", repo: "o/r", number: 8, title: "P" } }];
+  assert.throws(() => buildProjectPullPlan([copy], REF, board, undefined, undefined, [original]), /owner|ownership|o\/r#7|o\/r#8/i);
+  // Must allow: the same copy on its own issue still pulls the board status.
+  const own: ProjectItem[] = [{ ...board[0]!, content: { ...board[0]!.content, number: 7 } }];
+  assert.equal(buildProjectPullPlan([copy], REF, own, undefined, undefined, [original]).entries.length, 1);
+});
+
 test("buildProjectPullPlan: unknown board status is skipped, not forced", () => {
   const id = "PVTI_q";
   const projectItems: ProjectItem[] = [
