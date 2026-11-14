@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Default reusable workflows to their own release (migration: drop pm-github-version); warn on explicit holds ([pm-github-workflow-own-release](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-workflow-own-release.toon))
+
 ### Other
 
 - Close delivered pm items and reserve in progress for active work (2026-10-24) ([pm-github-rv9m](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-rv9m.toon))
