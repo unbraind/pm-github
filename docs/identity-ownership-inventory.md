@@ -123,4 +123,4 @@ The identity-field/tag scan finds 5 auxiliary locations. The inventory generator
 | `scripts/dependabot-merge.ts:145` | Explicit GitHub CLI transport parameter; targets come from repository/PR arguments. |
 | `scripts/prove-gate-public-forms.ts:4` | Privacy-gate documentation reference; no target lookup. |
 | `.github/workflows/pm-github-sync.yml:27` | Importer option documentation or typed diagnostic rendering; no independent target lookup. |
-| `.github/workflows/pm-github-sync.yml:466` | Importer option documentation or typed diagnostic rendering; no independent target lookup. |
+| `.github/workflows/pm-github-sync.yml:458` | Importer option documentation or typed diagnostic rendering; no independent target lookup. |
