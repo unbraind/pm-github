@@ -6,7 +6,7 @@ status: closed
 priority: 2
 tags[2]: maintenance,tracker-hygiene
 created_at: "2026-10-24T21:40:01.860Z"
-updated_at: "2026-11-14T08:55:19.607Z"
+updated_at: "2026-11-14T09:03:36.295Z"
 closed_at: "2026-11-14T08:53:06.253Z"
 completed_at: "2026-11-14T08:53:06.253Z"
 author: codex-agent
@@ -14,13 +14,14 @@ estimated_minutes: 60
 acceptance_criteria: "Every original in-progress and open item is inspected; delivery closures name the implementing merged PR, date and merge SHA and match the recorded acceptance; inactive work is open with claims released; original history records remain append-only; tracker health, changelog and PR CI outcomes are recorded."
 risk: low
 confidence: high
-comments[6]{created_at,author,text}:
+comments[7]{created_at,author,text}:
   "2026-10-24T21:40:02.778Z",codex-agent,"Oriented context, searched existing hygiene work, and read the complete tracker. Checking every original in-progress and open item against PR title/body/commits, delivery links and acceptance. The owner authorizes evidence-backed closure in this sweep. Ambiguous claims remain open; no PR merge or history rewrite."
   "2026-10-24T21:53:34.413Z",codex-agent,Delivery closures are complete except pm-github-f1ev and pm-github-2o9k. The repo-pinned SDK refuses both records with project_runtime_item_format_incompatible because existing linked tests retain updated_by/updated_at metadata while the consumer floor is 2026.10.5. No evidence or history was removed. A prepared peer/manifest 2026.10.10 floor proposal passes 4/4 compatibility checks outside this tracker and awaits owner authorization because it changes consumer support. General bounded aggregation returns to open. Release this sweep claim while the compatibility decision is pending.
   "2026-10-24T21:54:53.731Z",codex-agent,"Local tracker verification passed: repository changelog generation and consistency check, pinned strict health with required merge drivers under isolated Git identity, changed-item history verification, independent original-history prefix checks and linked git diff --check. The audit claim is released. Remaining in-progress count: 2. Any preserved guarded records and the required owner compatibility decision are explicitly listed in the PR. No production function changed, so source-function revert proof is inapplicable; per-item merged ancestry and lifecycle/history checks are the evidence. The PR will carry the full before/after/evidence table. Complete npm/Bun release checks and native platform checks run in PR CI; their final outcome is reported separately, without treating queued or skipped checks as approval."
   "2026-11-14T08:48:56.606Z",codex-sweep-1114,"2026-11-14 sweep: inspected context, searched prior hygiene work, and read the complete tracker. Verify each in-progress item against acceptance, merged delivery, exact PR-head checks and linked issue state. Close complete delivery, reopen idle or partial work, preserve other live claims and all prior history."
   "2026-11-14T08:51:31.821Z",codex-sweep-1114,"Sweep decisions: 6 delivered items closed, 3 idle or partial items reopened, 0 canceled, 0 left alone. Evidence and remaining work are recorded per item. Linked git diff --check passed. Final tracker and changelog validation follows; release gates and hosted CI are separate evidence."
   "2026-11-14T08:55:19.606Z",codex-sweep-1114,"Audit correction: inspected merged PR 233 source and reran all five real-tracker URL-alias refresh regressions successfully. The alias follow-up meets its original acceptance and is closed despite the later generic deferred handoff. Caller rollout and blocker repository-hint follow-ups remain open. The earlier reopening and this correction both remain in append-only history. Final validation follows after this write."
+  "2026-11-14T09:03:36.294Z",codex-sweep-1114,"Native lifecycle accounting: closing pm-github-dependabot-merge also automatically unblocked pm-github-dependabot-activation from blocked to open. Its separate live runtime, token/protection and caller-adoption acceptance remains open and is now explicitly documented in the sweep table. This is one additional opened dependent beyond the original in-progress audit."
 files[10]:
   - path: .agents/pm
     scope: project
