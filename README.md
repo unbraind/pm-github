@@ -1181,10 +1181,21 @@ those follow-up workflows must run automatically. GitHub documents the
 [PR approval exception and suppressed push events](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
 GitHub enforces required checks and conversation resolution. **Never wait in-job
 for caller CI: it takes runners from the same account pool**, so polling here can
-only lengthen the queue it waits on. The dispatch step performs no in-job wait —
-no contract requires one: the parked-run report reads runs GitHub already
-registered for the published head, and landing is owned by armed auto-merge or
-a later scheduled retry. The closeout armed flag records only an observed
+only lengthen the queue it waits on. After dispatch and auto-merge preparation, a separate receipt step confirms only
+that each selected workflow run has appeared. It shares a 60-second budget
+across all selected workflows (including API time), with at most 12 discovery
+rounds. Queued or running runs count immediately; no check conclusion is read.
+The query matches the workflow, branch, published head, dispatch event and
+dispatch start time, so an older run for the same head cannot confirm a new
+dispatch. Timeout or API failure emits a notice and keeps the sync successful.
+The job summary lists the PR URL, registered CI run URLs and any runs already
+parked as `action_required`. The reusable outputs are `pr-url`, `ci-run-urls`
+and `parked-run-urls` (both run lists are JSON arrays), and `ci-confirmation`
+(`confirmed`, `timed_out`, or `disabled`). The hourly approval sweep or a
+maintainer approves parked native runs; protected native auto-merge or a later
+scheduled retry owns landing. Callers need only the workflow pin bump already
+covered by the #238 sweep; no input or permission change is required. See the
+[migration notes](docs/no-ci-polling-migration.md). The closeout armed flag records only an observed
 successful arm, so a failed arm stays revocable by the always() cleanup. A base advance after publication, or an unavailable
 auto-merge, waits for the next scheduled rebuild, which force-rebuilds the bot
 branch from the current default branch and re-arms. The existing daily schedules
@@ -1192,7 +1203,9 @@ and separate sync/closeout concurrency groups remain. Unresolved conversations
 continue to block landing. Every job in the reusable workflows declares an
 explicit `timeout-minutes` (60 for sync, closeout and Dependabot; 10 for
 sync alerts), and each sync/closeout dispatch step has a five-minute hard limit.
-That limit covers API failures or hangs, not a wait for checks.
+That limit covers dispatch API failures or hangs. The separate registration
+receipt step has a two-minute hard limit and its own 60-second discovery budget;
+neither step waits for checks to finish.
 
 See [the caller audit and one-time setup](docs/bot-pr-automation.md) for the App
 credential mapping, CodeQL trigger changes and explicit CI overrides. GitHub

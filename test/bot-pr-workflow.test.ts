@@ -527,7 +527,7 @@ for (const kind of ["sync", "closeout"]) {
 test("sync and closeout share PR maintenance apart from the closeout attribution hold", () => {
   const hold = 'if [[ "${CLOSEOUT_REVIEW:-0}" != 0 ]]; then\n'
     + '  echo "::notice::Delivery attribution needs review; caller checks were dispatched and automatic landing is disabled."\n'
-    + '  exit 0\nfi\n';
+    + 'fi\n';
   const closeout = maintenance("closeout");
   assert.equal(closeout.split(hold).length, 2);
   const landingReceipt = '# The flag records an observed successful arm, never the intention: a\n'
@@ -536,7 +536,11 @@ test("sync and closeout share PR maintenance apart from the closeout attribution
     + 'if [[ "${auto_merge_armed}" == true ]]; then\n'
     + '  printf \'CLOSEOUT_AUTOMERGE_ALLOWED=true\\n\' >> "${GITHUB_ENV}"\nfi\n';
   assert.equal(closeout.split(landingReceipt).length, 2);
-  assert.equal(maintenance("sync"), closeout.replace(hold, "").replace(landingReceipt, ""));
+  const guardedArm = 'auto_merge_armed=false\nif [[ "${CLOSEOUT_REVIEW:-0}" == 0 ]]; then\n'
+    + '  enable_auto_merge && auto_merge_armed=true || auto_merge_armed=false\nfi';
+  assert.equal(closeout.split(guardedArm).length, 2);
+  assert.equal(maintenance("sync"), closeout.replace(hold, "").replace(landingReceipt, "")
+    .replace(guardedArm, "enable_auto_merge && auto_merge_armed=true || auto_merge_armed=false"));
 });
 
 for (const kind of ["sync", "closeout"]) {
@@ -556,7 +560,7 @@ for (const kind of ["sync", "closeout"]) {
     assert.match(mint, /skip-token-revoke: false/);
     assert.ok(source.indexOf("name: Verify strict pm health") < source.indexOf("name: Create automation app token"));
     assert.ok(source.indexOf("name: Validate publication credentials") < source.indexOf("name: Commit gated"));
-    assert.equal(source.split("GH_TOKEN: ${{ steps.automation_token.outputs.token || github.token }}").length - 1, kind === "closeout" ? 3 : 2);
+    assert.equal(source.split("GH_TOKEN: ${{ steps.automation_token.outputs.token || github.token }}").length - 1, kind === "closeout" ? 4 : 3);
     assert.equal((source.match(/secrets\.automation_app_private_key/g) ?? []).length, 2);
     assert.match(source, /APP_DEADLINE: \$\{\{ steps.publication_auth.outputs.deadline \}\}/);
     assert.doesNotMatch(source, /MAINTENANCE_|--admin|gh pr review|resolveReviewThread|\/check-runs.*--method POST/);
@@ -575,6 +579,18 @@ for (const kind of ["sync", "closeout"]) {
       }
     }
   }));
+  if (kind === "closeout") {
+    test("closeout: attribution hold still dispatches and captures parked URLs without arming", () => fixture(f => {
+      f.env.CLOSEOUT_REVIEW = "1";
+      f.env.PARKED_URL = "https://github.com/acme/widgets/actions/runs/123";
+      const r = f.execute(kind);
+      assert.equal(r.status, 0, String(r.stderr));
+      assert.match(String(r.stdout), /Delivery attribution needs review/);
+      assert.match(f.receipts(), /workflow run/);
+      assert.match(f.receipts(), /PARKED_CI_RUN_URLS=\["https:/);
+      assert.doesNotMatch(f.receipts(), /pr merge|CLOSEOUT_AUTOMERGE_ALLOWED=true/);
+    }));
+  }
   test(`${kind}: the dispatch step shell never sleeps or polls other runs`, () => {
     const source = parse(readFileSync(join(root, `.github/workflows/pm-github-${kind}.yml`), "utf8")) as { jobs: Record<string, { steps: Record<string, unknown>[] }> };
     const step = source.jobs[`gated-${kind}`]!.steps.find(step => step.name === "Dispatch caller CI and report parked runs")!;
