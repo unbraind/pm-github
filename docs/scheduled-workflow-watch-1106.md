@@ -21,9 +21,12 @@ about a later default branch or rerun. No caller repository was modified.
 | Planned source content fails privacy scan | Sync: pm-jev. | [job](https://github.com/unbraind/pm-jev/actions/runs/42207291810/job/127857017395), annotation: item `pm-jev-admission-teardown`, field `body`, rule `absolute-host-path`. | Caller-owned source remediation or reviewed content-addressed allowlist. Latest package removes one historical finding but retains another; no matched values are published here. |
 | Closeout hides the command's actual stderr | Closeout: pm-brief, pm-changelog, pm-context, pm-csv, pm-gantt-chart, pm-jira, pm-linear, pm-rl, pm-slack, pm-slack-standup, pm-vcs. | [pm-slack job](https://github.com/unbraind/pm-slack/actions/runs/42210316609/job/127867049216), [pm-context job](https://github.com/unbraind/pm-context/actions/runs/42210348997/job/127867158497). Both expose only the generic token/validation message. A pm-slack read-only local replay reveals `Unverifiable GitHub pagination.` | These pins precede numeric repository pagination and actionable diagnostic fixes. Adopt 2026.11.4 or later. All eleven callers currently return a numeric next-page URL on the first 100-PR REST page, which their pinned guard rejects. Historical hidden stderr is unavailable; later required-check or close-validation refusals remain independently actionable. This PR also handles plain host stderr and redacts candidate diagnostics before the existing final privacy scan. |
 
-The deprecated `pm-github-version` input does **not** override a release-tagged
-workflow SHA. Removing a stale input removes a warning; it does not repair any
-of the failures above. No ambiguity error was observed in the sampled install
+At the time of this watch, the deprecated `pm-github-version` input did **not**
+override a release-tagged workflow SHA. Issue #238 subsequently changes this
+contract: an explicit hold is honored with a two-version warning; callers should
+remove the input to follow the workflow manifest version. For the historical
+runs above, removing a stale input only removed a warning; it did not repair
+those failures. No ambiguity error was observed in the sampled install
 failures: the failure occurred after installation in the exact-version verifier.
 
 ## Disposable public-data replays
