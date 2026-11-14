@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Exclude PR owners in every supported explicit URL field during refresh ([pm-github-pr-url-alias-followup](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-pr-url-alias-followup.toon))
 - Minimum-SDK consumer fixture installs development-tool peers it cannot satisfy ([pm-github-gevp](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-gevp.toon))
 - Packed projection fixture cleanup can mask its own test outcome ([pm-github-mes8](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-mes8.toon))
 - Explain scheduled install mismatches and preserve redacted command failure diagnostics ([pm-github-o9r7](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-o9r7.toon))

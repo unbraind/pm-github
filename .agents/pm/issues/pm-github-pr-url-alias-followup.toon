@@ -2,11 +2,13 @@ id: pm-github-pr-url-alias-followup
 title: Exclude PR owners in every supported explicit URL field during refresh
 description: "Review follow-up from PR #233 thread PRRT_kwDOTbN4pM62Q99D: identity resolution recognizes GitHubURL aliases, while refresh PR exclusion checks github_url only. Evaluate all supported explicit URL fields before the issue-only GraphQL query. Separate from round-4 durable-state publication; retain real tracker tests for aliases and issue owners."
 type: Issue
-status: open
+status: closed
 priority: 3
 tags[1]: review-followup
 created_at: "2026-11-11T18:20:19.928Z"
-updated_at: "2026-11-14T08:49:49.546Z"
+updated_at: "2026-11-14T08:55:15.689Z"
+closed_at: "2026-11-14T08:55:15.604Z"
+completed_at: "2026-11-14T08:55:15.604Z"
 author: codex-github230-1111
 comments[4]{created_at,author,text}:
   "2026-11-11T20:20:11.029Z",codex-github230-1111,"Round 5 centralizes recognized explicit URL aliases in explicitGithubIdentities and makes ownership matching and refresh consume the same parsed kind. Five real SDK alias scenarios verify PRs are excluded before querying, canonical PR controls stay excluded, issue aliases still refresh, and curated titles stay unchanged. The selector/model also checks all 1024 case/optional-underscore spellings. Focused Node/Bun files pass 30/30; full gates and reverts remain in progress."
@@ -25,4 +27,5 @@ docs[2]:
     note: Context reference; this follow-up is not the referenced issue or PR
   - path: "https://github.com/unbraind/pm-github/pull/233#discussion_r4540585165"
     scope: project
+close_reason: "https://github.com/unbraind/pm-github/pull/233 merged 2026-11-13T17:13:15Z; merge SHA 5766ef01f8fff0b4dd2c1c07474b2d55636ab535; PR head a5f1cc1761ff4c2adcce8b98bb849648da668a02. Delivered: Refresh excludes PR owners in every recognized explicit URL alias through the shared ownership kind parser; canonical PRs remain excluded and issue aliases still refresh without changing curated content. Green at that head: test (22), codeql, test (26), bun-release (22), bun-release (26), CodeQL, CodeRabbit, Greptile Review, semgrep-cloud-platform/scan. Other check outcomes: verified-auto-merge: SKIPPED; audit-armed-requests: SKIPPED; cubic · AI code reviewer: NEUTRAL; Sourcery review: SKIPPED (not counted as green). Current-main verification: node --test --test-concurrency=1 --test-name-pattern \"^Refresh excludes PRs\" test/github-url.test.ts passed 5/5 with no failures or skips. This implementation and its original scope supersede the contradictory generic deferred handoff and the earlier sweep reopening."
 body: ""
