@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Default reusable workflows to their own release (migration: drop pm-github-version); warn on explicit holds ([pm-github-workflow-own-release](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-workflow-own-release.toon))
+
 ## 2026.11.14 - 2026-11-14
 
 ### Fixed

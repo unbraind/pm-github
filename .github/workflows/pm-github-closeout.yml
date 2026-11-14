@@ -12,7 +12,7 @@ on:
         required: false
         default: ${{ github.repository }}
       pm-github-version:
-        description: "Deprecated: fallback only for a non-release commit; pin a release SHA instead"
+        description: "Deprecated exact extension hold; omit to follow the workflow release (differing holds warn)"
         type: string
         required: false
         default: ""
@@ -132,20 +132,13 @@ jobs:
         run: |
           set -euo pipefail
           [[ "${WORKFLOW_SHA}" =~ ^[a-f0-9]{40}$ ]] || { echo "::error::Cannot identify the reusable workflow commit from job.workflow_sha."; exit 1; }
-          # No checkout, authentication, API pagination, or local tags involved.
-          remote_tags="$(git ls-remote --tags https://github.com/unbraind/pm-github 'refs/tags/v*')" || { echo "::error::Cannot read pm-github release tags; refusing an unverified install."; exit 1; }
-          declare -A tag_commits=() peeled_commits=()
-          while read -r sha ref; do
-            [[ "${sha}" =~ ^[a-f0-9]{40}$ ]] || continue
-            # Validate the whole tag before using it as an associative-array key.
-            # declare evaluates subscripts, so arbitrary remote refs are not operands.
-            grep -zEq '^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?(\^\{\})?$' < <(printf '%s\0' "${ref}") || continue
-            if [[ "${ref}" == *'^{}' ]]; then
-              declare "peeled_commits[${ref%'^{}'}]=${sha}"
-            elif [[ "${ref}" == refs/tags/v* ]]; then
-              declare "tag_commits[${ref}]=${sha}"
-            fi
-          done <<< "${remote_tags}"
+          # job.workflow_sha belongs to this reusable job, even for a tag pin.
+          # Fetch our manifest at that immutable commit; the caller checkout and
+          # release-tag spelling are never version authorities.
+          manifest="$(curl --fail --silent --show-error --location --retry 2 --max-time 60 \
+            "https://raw.githubusercontent.com/unbraind/pm-github/${WORKFLOW_SHA}/package.json")" || { echo "::error::Cannot read pm-github package.json at the reusable workflow commit."; exit 1; }
+          workflow_version="$(jq -ser 'select(length == 1) | .[0] | select(.name == "pm-github") | .version | select(type == "string" and (contains("\n") | not) and (contains("\r") | not))' <<< "${manifest}" 2>/dev/null)" || { echo "::error::Invalid pm-github workflow package metadata."; exit 1; }
+          grep -zEq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$' < <(printf '%s\0' "${workflow_version}") || { echo "::error::Workflow package version must be an exact numeric version: N.N.N or N.N.N-N."; exit 1; }
           # Release tags keep zero-padded date components (v2026.11.02) while the
           # daily release plan publishes npm versions without padding (2026.11.2),
           # so strip the padding from every component before comparing or installing.
@@ -166,39 +159,20 @@ jobs:
             done
             printf '%s' "${normalized}${suffix:+-${suffix}}"
           }
-          PM_GITHUB_VERSION=""
-          for ref in "${!tag_commits[@]}"; do
-            # Annotated tags must match their peeled commit, never the tag object.
-            [[ "${peeled_commits[$ref]-${tag_commits[$ref]}}" == "${WORKFLOW_SHA}" ]] || continue
-            candidate="${ref#refs/tags/v}"
-            grep -zEq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$' < <(printf '%s\0' "${candidate}") || continue
-            candidate="$(normalize_pm_github_version "${candidate}")"
-            if [[ -n "${PM_GITHUB_VERSION}" && "${PM_GITHUB_VERSION}" != "${candidate}" ]]; then
-              echo "::error::Multiple release versions tag this workflow commit; refusing an ambiguous install."
-              exit 1
-            fi
-            PM_GITHUB_VERSION="${candidate}"
-          done
-          if [[ -z "${PM_GITHUB_VERSION}" ]]; then
-            if [[ -z "${REQUESTED_PM_GITHUB_VERSION}" ]]; then
-              echo "::error::No release tag matches this reusable workflow commit. Pin a release SHA (a commit tagged vN.N.N or vN.N.N-N)."
-              exit 1
-            fi
-            echo "::warning::pm-github-version is deprecated; no release tag matches this workflow commit, so using the legacy input as a normalized version. Pin a release SHA instead."
+          workflow_version="$(normalize_pm_github_version "${workflow_version}")"
+          PM_GITHUB_VERSION="${workflow_version}"
+          if [[ -n "${REQUESTED_PM_GITHUB_VERSION}" ]]; then
             grep -zEq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$' < <(printf '%s\0' "${REQUESTED_PM_GITHUB_VERSION}") || { echo "::error::pm-github-version must be an exact numeric version: N.N.N or N.N.N-N."; exit 1; }
             PM_GITHUB_VERSION="$(normalize_pm_github_version "${REQUESTED_PM_GITHUB_VERSION}")"
-          elif [[ -n "${REQUESTED_PM_GITHUB_VERSION}" ]]; then
-            requested="${REQUESTED_PM_GITHUB_VERSION}"
-            # An unparseable legacy input stays raw: it can never equal a validated
-            # tag version, so it only warns, and the arithmetic never sees it.
-            if grep -zEq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$' < <(printf '%s\0' "${requested}"); then
-              requested="$(normalize_pm_github_version "${requested}")"
-            fi
-            if [[ "${requested}" != "${PM_GITHUB_VERSION}" ]]; then
-              echo "::warning::pm-github-version is deprecated and differs from the workflow release tag; using the tag version."
+            if [[ "${PM_GITHUB_VERSION}" != "${workflow_version}" ]]; then
+              echo "::warning::pm-github-version is deprecated: workflow ${workflow_version} installs extension ${PM_GITHUB_VERSION} as an explicit hold. Drop pm-github-version to follow the workflow release."
             fi
           fi
-          grep -zEq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$' < <(printf '%s\0' "${PM_GITHUB_VERSION}") || { echo "::error::pm-github-version must be an exact numeric version: N.N.N or N.N.N-N."; exit 1; }
+          # Resolve existence before setup, extension installation, or tracker writes.
+          # Public registry reads require no npm configuration or credentials.
+          package="$(curl --fail --silent --show-error --location --retry 2 --max-time 60 \
+            "https://registry.npmjs.org/pm-github/${PM_GITHUB_VERSION}")" || { echo "::error::Selected pm-github extension ${PM_GITHUB_VERSION} is unavailable; refusing tracker writes."; exit 1; }
+          jq -se --arg version "${PM_GITHUB_VERSION}" 'length == 1 and .[0].name == "pm-github" and .[0].version == $version' <<< "${package}" >/dev/null 2>&1 || { echo "::error::Registry metadata does not identify the selected pm-github version; refusing tracker writes."; exit 1; }
           printf 'PM_GITHUB_VERSION=%s\n' "${PM_GITHUB_VERSION}" >> "${GITHUB_ENV}"
 
       - name: Validate closeout inputs

@@ -984,22 +984,35 @@ workflow. `github.job_workflow_sha` is not a documented context property;
 never used to discover the reusable workflow's version. These workflow identity
 context properties are not available on GitHub Enterprise Server.
 
-The resolver uses public `git ls-remote --tags https://github.com/unbraind/pm-github
-'refs/tags/v*'`. It matches lightweight tags directly and annotated tags by their
-peeled `^{}` commit (never the tag object), strips `v`, and requires an exact
-numeric version `N.N.N` or `N.N.N-N`. It reads all matching refs in one request,
-without API pagination or new credentials. Lookup errors and multiple release
-versions on one commit fail closed. Release version discovery needs no GitHub App, and no release-time workflow
-stamping is required. The release workflow keeps its existing token behavior.
+The resolver fetches public `package.json` from
+`https://raw.githubusercontent.com/unbraind/pm-github/<job.workflow_sha>/package.json`.
+It validates the package name and exact numeric version `N.N.N` or `N.N.N-N`,
+then strips leading zeros from date components as the daily release plan does
+(for example `v2026.11.04` publishes `2026.11.4`). The SHA is resolved by GitHub
+for both SHA and tag pins; no ref string parsing, local tags, mutable branch,
+or caller package metadata participates. Missing or invalid workflow metadata
+fails closed even with an explicit input. Release version discovery needs no
+GitHub App, and no release-time workflow stamping is required. The release
+workflow keeps its existing token behavior.
 
-Pin **release commit SHAs**, with their matching tag in a same-line comment
-(for example `uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@<40-character-release-sha> # v2026.10.16`).
-New callers omit `pm-github-version`. If no release tag matches the workflow
-commit, the job fails with instructions to pin a release SHA. For compatibility,
-a nonempty deprecated input provides an exact-version fallback with a warning
-only when no tag matches. If a tag matches and the input differs, the job warns
-and uses the tag version. Untrusted input is passed through `env:`, never inserted
-into shell source or warning text. No `latest`, range, or floating install tag is used.
+**Migration:** remove `pm-github-version` from existing callers. Pin the workflow
+release SHA and keep its same-line release tag comment for Dependabot. With the
+input omitted, a workflow pin update also updates the installed extension,
+including the curated import identity fix released in `2026.11.14`.
+An explicit exact version remains a deliberate hold: a differing value is
+honored and emits `::warning::` naming both the workflow and extension versions.
+Both values are validated and normalized before comparison or diagnostic output.
+No `latest`, range, or floating install tag is accepted.
+
+Before checkout/setup can write any tracker data, the resolver verifies the
+selected extension using the public exact-version npm registry endpoint
+`https://registry.npmjs.org/pm-github/<version>` and checks its name and version.
+A missing release, network error, or invalid response stops the job before
+tracker writes. Installation still verifies the installed version independently.
+An untagged development commit uses its own manifest version and therefore
+requires that exact version to be published; an explicit published hold may
+be used for development. See [the caller inventory](docs/workflow-version-callers.md)
+for the follow-up migration sweep; this change does not edit callers.
 
 GitHub documents [reusable-workflow updates](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/auto-update-actions)
 and [SHA pins and same-line version comments](https://docs.github.com/en/code-security/reference/supply-chain-security/supported-ecosystems-and-repositories#github-actions).
