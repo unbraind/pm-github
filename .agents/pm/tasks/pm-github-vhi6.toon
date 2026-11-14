@@ -2,11 +2,13 @@ id: pm-github-vhi6
 title: Bound coverage aggregation memory and compare default-heap CI behavior
 description: "During the PR #122 privacy-scope regression work, an identity-isolated npm release:check completed 587/587 tests with zero failures, skips or cancellations, then c8 report aggregation exhausted Node's default 4 GiB heap. Native coverage receipts occupied approximately 2.9 GiB. The security fix is being validated with NODE_OPTIONS=--max-old-space-size=12288 and unchanged source inventory and four 100-percent thresholds. Compare default-heap CI behavior, investigate bounded report aggregation or documented resource requirements, and retain complete authored-source and real CLI coverage. Earlier local heap-exhaustion observations also appear in pm-github-fmrf; this task tracks current default-heap acceptance separately from the scope fix in pm-github-wrmt."
 type: Task
-status: in_progress
+status: closed
 priority: 2
 tags[5]: changelog-unreleased,coverage,follow-up,gates,"gh:unbraind/pm-github#177"
 created_at: "2026-10-14T14:32:34.672Z"
-updated_at: "2026-11-06T12:58:09.775Z"
+updated_at: "2026-11-14T08:49:30.594Z"
+closed_at: "2026-11-14T08:49:30.487Z"
+completed_at: "2026-11-14T08:49:30.487Z"
 author: codex-agent
 release: 2026.11.4
 comments[31]{created_at,author,text}:
@@ -51,4 +53,5 @@ tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
 docs[2]{path,scope}:
   docs/bounded-coverage-merge.md,project
   docs/explicit-closeout-attribution.md,project
+close_reason: "https://github.com/unbraind/pm-github/pull/215 merged 2026-11-03T23:36:49Z; merge SHA ceaecfe2226e5b41fa39a5c546824d7f1081f79f; PR head 7e29ca02e8a3df023d3ac4cea079662a08601991. Delivered: Incremental c8 merge bounded to 3 GiB, default-heap release acceptance and 512-receipt/128 MiB regression plus exact merge-mode revert proof. Green at that head: test (22), codeql, test (26), bun-release (22), bun-release (26), CodeQL, CodeRabbit, Sourcery review, semgrep-cloud-platform/scan. Other check outcomes: enable-auto-merge: SKIPPED; cubic · AI code reviewer: NEUTRAL (not counted as green). https://github.com/unbraind/pm-github/pull/223 merged 2026-11-06T20:49:50Z; merge SHA 300e115242b4ebbe52f7e7437116517d2221c787; PR head 0c9525292b4baa6d90c7f85d841b0a9eb50f2a00. Delivered: Incremental c8 merge bounded to 3 GiB, default-heap release acceptance and 512-receipt/128 MiB regression plus exact merge-mode revert proof. Green at that head: test (22), codeql, test (26), bun-release (22), bun-release (26), CodeQL, CodeRabbit, semgrep-cloud-platform/scan. Other check outcomes: verified-auto-merge: SKIPPED; verified-auto-merge: SKIPPED; verified-auto-merge: SKIPPED; verified-auto-merge: SKIPPED; audit-armed-requests: SKIPPED; audit-armed-requests: SKIPPED; audit-armed-requests: SKIPPED; audit-armed-requests: SKIPPED; cubic · AI code reviewer: NEUTRAL; Sourcery review: SKIPPED (not counted as green)."
 body: ""

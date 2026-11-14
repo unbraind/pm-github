@@ -2,11 +2,13 @@ id: pm-github-gevp
 title: Minimum-SDK consumer fixture installs development-tool peers it cannot satisfy
 description: "Tracks gh:unbraind/pm-github#199 (filed 2026-10-29, missed by the blind issue watch; the three failures already covered by gh:unbraind/pm-github#197 are tracked separately). test/minimum-sdk-consumer.test.ts spreads all devDependencies into the consumer root and then overrides the CLI to the declared minimum (2026.10.17), while the manifest now installs pm-ops 2026.10.26 whose peer requires CLI >=2026.10.20 — an unsatisfiable graph, npm ERESOLVE before any packed import or declaration check runs. The PR #194 checks still fail as of run 41330041504. Fix the fixture to install only runtime dependencies plus the enforced minimum CLI (isolating the witness from development-tool peer requirements) so the packed extension, authored SDK imports and shipped declarations are verified at the floor independently of the development lock."
 type: Issue
-status: in_progress
+status: closed
 priority: 2
 tags[7]: ci,dependencies,fixtures,"gh:unbraind/pm-github#194","gh:unbraind/pm-github#199",migration,sdk
 created_at: "2026-11-02T09:17:16.438Z"
-updated_at: "2026-11-05T06:15:39.732Z"
+updated_at: "2026-11-14T08:49:42.279Z"
+closed_at: "2026-11-14T08:49:42.207Z"
+completed_at: "2026-11-14T08:49:42.207Z"
 author: pi-glm
 comments[14]{created_at,author,text}:
   "2026-11-04T19:20:31.399Z",codex-toolchain-1104,"Root cause (coupling): two compatibility assertions required the development SDK to equal the peer minimum range. The brief requires an exact development pin independently of the declared runtime minimum. Baseline compatibility-floor.test.ts fails on exact 2026.11.4 versus >=2026.10.17. Retain the declared minimum and enforce exact development pin/lock identity plus numerical compatibility; the packed consumer still verifies the exact minimum artifact."
@@ -35,4 +37,5 @@ docs[3]{path,scope}:
   docs/sdk-minimum.md,project
   docs/toolchain-1104-validation.md,project
   README.md,project
+close_reason: "https://github.com/unbraind/pm-github/pull/194 merged 2026-11-05T07:27:33Z; merge SHA 650797d569e4a50ea98945c2f2dda389cd6c0eb7; PR head 943e5403860b731970275f4063a08e34ee614b81. Delivered: Minimum-SDK consumer fixture isolates runtime dependencies and the declared CLI floor from incompatible development-tool peer dependencies. Green at that head: test (22), codeql, test (26), bun-release (22), bun-release (26), CodeQL, semgrep-cloud-platform/scan. Other check outcomes: CodeRabbit: SKIPPED; Sourcery review: SKIPPED (not counted as green)."
 body: ""

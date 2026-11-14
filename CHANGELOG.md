@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Minimum-SDK consumer fixture installs development-tool peers it cannot satisfy ([pm-github-gevp](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-gevp.toon))
+- Packed projection fixture cleanup can mask its own test outcome ([pm-github-mes8](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-mes8.toon))
+- Explain scheduled install mismatches and preserve redacted command failure diagnostics ([pm-github-o9r7](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-o9r7.toon))
+
+### Security
+
+- Reusable Dependabot merge workflow with complete commit provenance ([pm-github-dependabot-merge](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-dependabot-merge.toon))
+
+### Other
+
+- Bound lifecycle compensation quarantine to verified SDK pins ([pm-github-toolchain-1110](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-toolchain-1110.toon))
+
 ## 2026.11.14 - 2026-11-14
 
 ### Fixed
@@ -17,15 +33,6 @@
 - Bump jscpd ([#232](https://github.com/unbraind/pm-github/pull/232))
 
 ## 2026.11.11 - 2026-11-11
-
-### Fixed
-
-- Explain scheduled install mismatches and preserve redacted command failure diagnostics ([pm-github-o9r7](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-o9r7.toon))
-- Packed projection fixture cleanup can mask its own test outcome ([pm-github-mes8](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-mes8.toon))
-
-### Security
-
-- Reusable Dependabot merge workflow with complete commit provenance ([pm-github-dependabot-merge](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-dependabot-merge.toon))
 
 ### Dependencies
 

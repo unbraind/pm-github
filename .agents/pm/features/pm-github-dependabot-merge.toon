@@ -2,11 +2,13 @@ id: pm-github-dependabot-merge
 title: Reusable Dependabot merge workflow with complete commit provenance
 description: "Replace copied auto-merge logic with a reusable workflow that revokes stale requests and only arms verified Dependabot-only PRs. Companion: pm-cli-website-wis6."
 type: Feature
-status: in_progress
+status: closed
 priority: 2
 tags[6]: changelog-unreleased,ci,dependabot,"gh:unbraind/pm-github#221",security,workflows
 created_at: "2026-11-05T00:19:21.862Z"
-updated_at: "2026-11-05T15:19:27.697Z"
+updated_at: "2026-11-14T08:49:35.159Z"
+closed_at: "2026-11-14T08:49:35.117Z"
+completed_at: "2026-11-14T08:49:35.117Z"
 author: codex-agent
 acceptance_criteria: "Foreign authors or committers, metadata failures, API errors, stale heads and unsupported events cannot arm; existing requests are revoked with sanitized notices and summary.; Execute regression cases for opens, rebases, foreign author, foreign committer, major update, over 100 commits and API failures; verify real fleet commit provenance.; Migrate the own caller, document release SHA pinning and extra groups, regenerate changelog and run package gates.; Only trusted pull_request_target events with Dependabot author and actor plus a complete trusted commit list and allowed metadata can arm squash auto-merge.; Scheduled audits independently revoke unsafe requests without arming."
 comments[66]{created_at,author,text}:
@@ -127,4 +129,5 @@ tests[4]:
       source_ref: feat/reusable-dependabot-merge
 docs[1]{path,scope,note}:
   README.md,project,Trusted caller and eventual revocation contract
+close_reason: "https://github.com/unbraind/pm-github/pull/221 merged 2026-11-05T16:59:37Z; merge SHA a7e4d4bb3334f822ff2ecd726a3320f790fc7cb4; PR head 83abb9e2946a5cdfa7263f7d97d41ec172b8f2df. Delivered: Reusable Dependabot merge workflow verifies complete commit provenance, revokes stale unsafe requests, permits only trusted events and performs independent scheduled disarming. Green at that head: test (22), codeql, test (26), bun-release (22), bun-release (26), CodeQL, CodeRabbit, semgrep-cloud-platform/scan. Other check outcomes: cubic · AI code reviewer: NEUTRAL; Sourcery review: SKIPPED (not counted as green)."
 body: ""

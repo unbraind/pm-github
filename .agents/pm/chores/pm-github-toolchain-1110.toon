@@ -2,11 +2,13 @@ id: pm-github-toolchain-1110
 title: Bound lifecycle compensation quarantine to verified SDK pins
 description: "Adapt https://github.com/unbraind/pm-github/pull/227 using existing pm-github-quay evidence for unresolved upstream GH-1656."
 type: Chore
-status: in_progress
+status: closed
 priority: 2
 tags[1]: "gh:unbraind/pm-github#227"
 created_at: "2026-11-10T12:43:45.298Z"
-updated_at: "2026-11-10T17:49:07.937Z"
+updated_at: "2026-11-14T08:49:08.279Z"
+closed_at: "2026-11-14T08:49:08.195Z"
+completed_at: "2026-11-14T08:49:08.195Z"
 author: codex-toolchain-1110
 comments[3]{created_at,author,text}:
   "2026-11-10T12:43:48.205Z",codex-toolchain-1110,"Upstream pm-cli GH-1656 remains OPEN. Installed CHANGELOG 2026.11.5/2026.11.6 contains GH-1655, GH-1660, revision follow-ups and GH-1670, but no owned-finalization step or GH-1656 fix. Existing pm-github-quay and docs/atomic-finalization-197-recheck.md already prove 2026.11.4/.5/.6 all fail both lifecycle compensation guarantees. Reproduced on this 2026.11.6 worktree before changing the predicate: the real mixed import and recovered refresh still report incomplete compensation; the fresh no-op-finalizer control passes. Extend only the explicit verified-pin allowlist to .5/.6, preserve every assertion and keep future .7/unverified SDKs executing the checks. This is a quarantine maintenance change, not a rollback repair. Full coverage intentionally excluded per task instructions."
@@ -30,4 +32,5 @@ tests[2]:
       author: codex-toolchain-1110
       created_at: "2026-11-10T17:49:06.078Z"
       source_kind: local_mutation
+close_reason: "https://github.com/unbraind/pm-github/pull/227 merged 2026-11-10T19:48:53Z; merge SHA 3a69b475fbf83af0ac859bdf0bfe7afd9032241c; PR head d71db1566c710df98c982d52ab48f28c0110ab0e. Delivered: Bounded lifecycle-compensation quarantine to exactly verified SDK versions with regression guards; unresolved upstream guarantees remain explicitly skipped. Green at that head: test (22), codeql, verified-auto-merge / dependabot-merge, verified-auto-merge / dependabot-merge, test (26), bun-release (22), bun-release (26), CodeQL, semgrep-cloud-platform/scan. Other check outcomes: audit-armed-requests: SKIPPED; audit-armed-requests: SKIPPED; CodeRabbit: SKIPPED; Sourcery review: SKIPPED (not counted as green)."
 body: ""

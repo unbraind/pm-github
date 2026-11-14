@@ -2,11 +2,13 @@ id: pm-github-mes8
 title: Packed projection fixture cleanup can mask its own test outcome
 description: "Tracks gh:unbraind/pm-github#202 (filed 2026-10-30, missed by the blind issue watch). test/import-projection.test.ts on current main still ends with a bare 'finally { rmSync(base, { recursive: true, force: true }) }' (line ~258), so an ENOTEMPTY from the isolated HOME teardown replaces an earlier exception from the protected body and the receipt proves neither that the packed import assertions passed nor that they failed. Observed once on the merged CodeQL-pin PR #200 head (Node 22, run 41029600935). Make the final cleanup non-fatal (or run it outside the assertion path and log residuals), so a teardown race cannot mask the actual test outcome; keep the two Bun lanes green."
 type: Issue
-status: in_progress
+status: closed
 priority: 2
 tags[4]: changelog-unreleased,ci,fixtures,"gh:unbraind/pm-github#202"
 created_at: "2026-11-02T09:17:17.491Z"
-updated_at: "2026-11-06T16:58:11.089Z"
+updated_at: "2026-11-14T08:49:25.612Z"
+closed_at: "2026-11-14T08:49:25.506Z"
+completed_at: "2026-11-14T08:49:25.506Z"
 author: pi-glm
 resolution: "One fixture owner guards setup, producer completion and teardown. Fixture-local global storage and supported inline flushing keep writers inside that lifecycle. Bounded removal preserves the original failure and aggregates cleanup failures; setup failures remove partial trees. All packed npm/native Bun assertions, child deadlines and test timeouts remain intact."
 comments[11]{created_at,author,text}:
@@ -30,4 +32,5 @@ tests[2]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   NPM_CONFIG_USERCONFIG=/dev/null node --test --test-concurrency=1 test/import-projection.test.ts,project,codex-astra,"2026-11-06T12:49:05.501Z",local_mutation,coverage-memory-bound-and-fixture-cleanup
 docs[1]{path,scope}:
   docs/packed-fixture-lifecycle.md,project
+close_reason: "https://github.com/unbraind/pm-github/pull/223 merged 2026-11-06T20:49:50Z; merge SHA 300e115242b4ebbe52f7e7437116517d2221c787; PR head 0c9525292b4baa6d90c7f85d841b0a9eb50f2a00. Delivered: Shared fixture ownership starts before setup, awaits fixture writers and preserves primary test failures through teardown, with Node/Bun and independent revert proofs. Green at that head: test (22), codeql, test (26), bun-release (22), bun-release (26), CodeQL, CodeRabbit, semgrep-cloud-platform/scan. Other check outcomes: verified-auto-merge: SKIPPED; verified-auto-merge: SKIPPED; verified-auto-merge: SKIPPED; verified-auto-merge: SKIPPED; audit-armed-requests: SKIPPED; audit-armed-requests: SKIPPED; audit-armed-requests: SKIPPED; audit-armed-requests: SKIPPED; cubic · AI code reviewer: NEUTRAL; Sourcery review: SKIPPED (not counted as green)."
 body: ""

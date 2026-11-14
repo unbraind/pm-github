@@ -2,11 +2,13 @@ id: pm-github-o9r7
 title: Explain scheduled install mismatches and preserve redacted command failure diagnostics
 description: "The November 6 fleet watch still samples old workflow releases with silent exact-version verification failures and hidden closeout stderr. Existing normalization, pagination and no-op fixes require caller pin adoption. Strengthen the current workflow install verifier with actionable safe messages, preserve actionable non-JSON or host-wrapped error details through the diagnostic path, and record the per-caller adoption and validation inventory without changing caller repositories."
 type: Issue
-status: in_progress
+status: closed
 priority: 1
 tags[5]: changelog-unreleased,closeout,diagnostics,sync,workflows
 created_at: "2026-11-06T22:47:15.345Z"
-updated_at: "2026-11-07T09:22:37.640Z"
+updated_at: "2026-11-14T08:49:00.891Z"
+closed_at: "2026-11-14T08:49:00.815Z"
+completed_at: "2026-11-14T08:49:00.815Z"
 author: codex-agent
 acceptance_criteria: Real workflow regressions fail under function-only behavioral reversions; version mismatches identify safe expected and actual versions; command errors remain actionable after privacy redaction; existing gates still refuse publication; public caller replays distinguish package fixes from caller-owned policy and provenance.
 comments[9]{created_at,author,text}:
@@ -38,4 +40,5 @@ tests[5]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   "bun run release:check",project,codex-agent,"2026-11-07T09:17:21.528Z",local_mutation,scheduled-sync-closeout-failures
 docs[1]{path,scope}:
   docs/scheduled-workflow-watch-1106.md,project
+close_reason: "https://github.com/unbraind/pm-github/pull/225 merged 2026-11-07T10:49:25Z; merge SHA 0e070fa97ca53a865d1979375a8a603cd0245cd3; PR head 853b86871a5ae4de09027285b7b2faaabcb05cac. Delivered: Safe expected/actual install-version diagnostics, preserved redacted command failure causes, caller replay and adoption inventory with refusing gates intact. Green at that head: test (22), codeql, test (26), bun-release (22), bun-release (26), CodeQL, CodeRabbit, Greptile Review, Sourcery review, semgrep-cloud-platform/scan. Other check outcomes: verified-auto-merge: SKIPPED; verified-auto-merge: SKIPPED; verified-auto-merge: SKIPPED; audit-armed-requests: SKIPPED; audit-armed-requests: SKIPPED; audit-armed-requests: SKIPPED; cubic · AI code reviewer: NEUTRAL (not counted as green)."
 body: ""
