@@ -194,7 +194,9 @@ the queued merge against the latest base; configure caller checks for merge-grou
 validation when selecting that policy. An unavailable auto-merge also waits for
 the next scheduled retry. See GitHub's
 [strict checks and merge queue rules](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches). Sync and closeout jobs have 60-minute timeouts;
-their dispatch steps have five-minute timeouts and no polling. Sync alerts use
+their dispatch steps have five-minute timeouts and no completion polling.
+The following receipt steps have two-minute timeouts and confirm run appearance
+within one shared 60-second budget; see the [migration notes](no-ci-polling-migration.md). Sync alerts use
 10 minutes. The Dependabot reusable job already had a 60-minute timeout;
 its bounded API retries do not wait for caller runs. The non-reusable release
 workflow is outside this caller-workflow change.
@@ -225,7 +227,8 @@ and closeout suites retain privacy, scope, ownership, lease, no-op and attributi
 revocation boundaries.
 
 The approval-required run listing is informational. Both dispatch steps query it
-once after auto-merge preparation; if the lookup fails, they print a notice to
+once after auto-merge preparation; the receipt step exports that snapshot without
+retrying the parked-run lookup. If the lookup fails, they print a notice to
 inspect the bot PR and exit successfully without retrying or revoking auto-merge.
 Successful lookups still report each parked run URL. Dispatch failures continue
 to fail the job before auto-merge can be armed.

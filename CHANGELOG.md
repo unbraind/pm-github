@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed
+
+- The gated sync holds a runner for up to two hours while it waits for caller CI it competes with for the same pool ([pm-github-fxhd](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-fxhd.toon))
+- Default reusable workflows to their own release (migration: drop pm-github-version); warn on explicit holds ([pm-github-workflow-own-release](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-workflow-own-release.toon))
+
 ### Other
 
 - Close delivered pm items and reserve in progress for active work (2026-10-24) ([pm-github-rv9m](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-rv9m.toon))
@@ -14,10 +19,6 @@
 - Keep GitHub reference tags separate from import identity (BREAKING: PM CLI 2026.10.23 minimum) ([pm-github-reference-identity](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-reference-identity.toon))
 
 ## 2026.11.12 - 2026-11-12
-
-### Fixed
-
-- The gated sync holds a runner for up to two hours while it waits for caller CI it competes with for the same pool ([pm-github-fxhd](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-fxhd.toon))
 
 ### Dependencies
 

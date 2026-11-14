@@ -984,22 +984,37 @@ workflow. `github.job_workflow_sha` is not a documented context property;
 never used to discover the reusable workflow's version. These workflow identity
 context properties are not available on GitHub Enterprise Server.
 
-The resolver uses public `git ls-remote --tags https://github.com/unbraind/pm-github
-'refs/tags/v*'`. It matches lightweight tags directly and annotated tags by their
-peeled `^{}` commit (never the tag object), strips `v`, and requires an exact
-numeric version `N.N.N` or `N.N.N-N`. It reads all matching refs in one request,
-without API pagination or new credentials. Lookup errors and multiple release
-versions on one commit fail closed. Release version discovery needs no GitHub App, and no release-time workflow
-stamping is required. The release workflow keeps its existing token behavior.
+The resolver fetches public `package.json` from
+`https://raw.githubusercontent.com/unbraind/pm-github/<job.workflow_sha>/package.json`.
+It validates the package name and exact numeric version `N.N.N` or `N.N.N-N`,
+then strips leading zeros from date components as the daily release plan does
+(for example `v2026.11.04` publishes `2026.11.4`). The SHA is resolved by GitHub
+for both SHA and tag pins; no ref string parsing, local tags, mutable branch,
+or caller package metadata participates. Missing or invalid workflow metadata
+fails closed even with an explicit input. Release version discovery needs no
+GitHub App, and no release-time workflow stamping is required. The release
+workflow keeps its existing token behavior.
 
-Pin **release commit SHAs**, with their matching tag in a same-line comment
-(for example `uses: unbraind/pm-github/.github/workflows/pm-github-sync.yml@<40-character-release-sha> # v2026.10.16`).
-New callers omit `pm-github-version`. If no release tag matches the workflow
-commit, the job fails with instructions to pin a release SHA. For compatibility,
-a nonempty deprecated input provides an exact-version fallback with a warning
-only when no tag matches. If a tag matches and the input differs, the job warns
-and uses the tag version. Untrusted input is passed through `env:`, never inserted
-into shell source or warning text. No `latest`, range, or floating install tag is used.
+**Migration:** remove `pm-github-version` from existing callers in the same change
+that moves their workflow pin; a pin update alone keeps a stale input as an
+explicit hold. Pin the workflow
+release SHA and keep its same-line release tag comment for Dependabot. With the
+input omitted, a workflow pin update also updates the installed extension,
+including the curated import identity fix released in `2026.11.14`.
+An explicit exact version remains a deliberate hold: a differing value is
+honored and emits `::warning::` naming both the workflow and extension versions.
+Both values are validated and normalized before comparison or diagnostic output.
+No `latest`, range, or floating install tag is accepted.
+
+Before checkout/setup can write any tracker data, the resolver verifies the
+selected extension using the public exact-version npm registry endpoint
+`https://registry.npmjs.org/pm-github/<version>` and checks its name and version.
+A missing release, network error, or invalid response stops the job before
+tracker writes. Installation still verifies the installed version independently.
+An untagged development commit uses its own manifest version and therefore
+requires that exact version to be published; an explicit published hold may
+be used for development. See [the caller inventory](docs/workflow-version-callers.md)
+for the follow-up migration sweep; this change does not edit callers.
 
 GitHub documents [reusable-workflow updates](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/auto-update-actions)
 and [SHA pins and same-line version comments](https://docs.github.com/en/code-security/reference/supply-chain-security/supported-ecosystems-and-repositories#github-actions).
@@ -1166,10 +1181,21 @@ those follow-up workflows must run automatically. GitHub documents the
 [PR approval exception and suppressed push events](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
 GitHub enforces required checks and conversation resolution. **Never wait in-job
 for caller CI: it takes runners from the same account pool**, so polling here can
-only lengthen the queue it waits on. The dispatch step performs no in-job wait —
-no contract requires one: the parked-run report reads runs GitHub already
-registered for the published head, and landing is owned by armed auto-merge or
-a later scheduled retry. The closeout armed flag records only an observed
+only lengthen the queue it waits on. After dispatch and auto-merge preparation, a separate receipt step confirms only
+that each selected workflow run has appeared. It shares a 60-second budget
+across all selected workflows (including API time), with at most 12 discovery
+rounds. Queued or running runs count immediately; no check conclusion is read.
+The query matches the workflow, branch, published head, dispatch event and
+dispatch start time, so an older run for the same head cannot confirm a new
+dispatch. Timeout or API failure emits a notice and keeps the sync successful.
+The job summary lists the PR URL, registered CI run URLs and any runs already
+parked as `action_required`. The reusable outputs are `pr-url`, `ci-run-urls`
+and `parked-run-urls` (both run lists are JSON arrays), and `ci-confirmation`
+(`confirmed`, `timed_out`, or `disabled`). The hourly approval sweep or a
+maintainer approves parked native runs; protected native auto-merge or a later
+scheduled retry owns landing. Callers need only the workflow pin bump already
+covered by the #238 sweep; no input or permission change is required. See the
+[migration notes](docs/no-ci-polling-migration.md). The closeout armed flag records only an observed
 successful arm, so a failed arm stays revocable by the always() cleanup. A base advance after publication, or an unavailable
 auto-merge, waits for the next scheduled rebuild, which force-rebuilds the bot
 branch from the current default branch and re-arms. The existing daily schedules
@@ -1177,7 +1203,9 @@ and separate sync/closeout concurrency groups remain. Unresolved conversations
 continue to block landing. Every job in the reusable workflows declares an
 explicit `timeout-minutes` (60 for sync, closeout and Dependabot; 10 for
 sync alerts), and each sync/closeout dispatch step has a five-minute hard limit.
-That limit covers API failures or hangs, not a wait for checks.
+That limit covers dispatch API failures or hangs. The separate registration
+receipt step has a two-minute hard limit and its own 60-second discovery budget;
+neither step waits for checks to finish.
 
 See [the caller audit and one-time setup](docs/bot-pr-automation.md) for the App
 credential mapping, CodeQL trigger changes and explicit CI overrides. GitHub
