@@ -6,10 +6,15 @@
 
 - Default reusable workflows to their own release (migration: drop pm-github-version); warn on explicit holds ([pm-github-workflow-own-release](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-workflow-own-release.toon))
 
+### Other
+
+- Close delivered pm items and reserve in progress for active work (2026-10-24) ([pm-github-rv9m](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-rv9m.toon))
+
 ## 2026.11.14 - 2026-11-14
 
 ### Fixed
 
+- Exclude PR owners in every supported explicit URL field during refresh ([pm-github-pr-url-alias-followup](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-pr-url-alias-followup.toon))
 - Keep GitHub reference tags separate from import identity (BREAKING: PM CLI 2026.10.23 minimum) ([pm-github-reference-identity](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-reference-identity.toon))
 
 ## 2026.11.12 - 2026-11-12
@@ -28,10 +33,15 @@
 
 - Explain scheduled install mismatches and preserve redacted command failure diagnostics ([pm-github-o9r7](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-o9r7.toon))
 - Packed projection fixture cleanup can mask its own test outcome ([pm-github-mes8](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-mes8.toon))
+- Minimum-SDK consumer fixture installs development-tool peers it cannot satisfy ([pm-github-gevp](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-gevp.toon))
 
 ### Security
 
 - Reusable Dependabot merge workflow with complete commit provenance ([pm-github-dependabot-merge](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-dependabot-merge.toon))
+
+### Other
+
+- Bound lifecycle compensation quarantine to verified SDK pins ([pm-github-toolchain-1110](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-toolchain-1110.toon))
 
 ### Dependencies
 
