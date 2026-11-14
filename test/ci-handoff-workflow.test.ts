@@ -28,6 +28,7 @@ function fixture(kind: string, overrides: NodeJS.ProcessEnv, verify: (result: { 
     DISPATCHED_CI_WORKFLOWS: "ci.yml codeql.yml", CI_DISPATCH_STARTED_AT: "2026-11-14T00:00:00Z",
     PARKED_CI_RUN_URLS: '["https://github.com/acme/widgets/actions/runs/99"]',
     GITHUB_OUTPUT: join(dir, "output"), GITHUB_STEP_SUMMARY: join(dir, "summary"), RECEIPTS: join(dir, "receipts"),
+    REAL_SLEEP: spawnSync("bash", ["-c", "command -v sleep"], { encoding: "utf8" }).stdout.trim(),
     ...overrides, PATH: join(dir, "bin") + ":" + process.env.PATH };
   try {
     mkdirSync(join(dir, "bin"));
@@ -40,6 +41,19 @@ set -euo pipefail
 printf '%s\\n' "$*" >> "$RECEIPTS"
 [[ "$1 $2" == 'run list' ]] || exit 99
 [[ "$*" != *--status* && "$*" != *conclusion* ]] || exit 98
+if [[ "\${LOOKUP:-}" == deadline || "\${LOOKUP:-}" == stuck ]]; then
+  if [[ "$*" == *'--workflow ci.yml'* ]]; then
+    printf '20' > "$RECEIPTS.clock"
+  else
+    printf '60' > "$RECEIPTS.clock"
+    if [[ "\${LOOKUP:-}" == stuck ]]; then
+      printf 'stuck-started\\n' >> "$RECEIPTS"
+      "$REAL_SLEEP" 120
+      printf 'stuck-finished\\n' >> "$RECEIPTS"
+    fi
+    exit 0
+  fi
+fi
 if [[ "\${LOOKUP:-}" == denied ]]; then printf 'partial output'; exit 1; fi
 if [[ "\${LOOKUP:-}" == timeout ]]; then exit 124; fi
 if [[ "\${LOOKUP:-}" == absent ]]; then exit 0; fi
@@ -49,9 +63,13 @@ if [[ "$*" == *'--workflow ci.yml'* ]]; then printf 'https://github.com/acme/wid
 else printf 'https://github.com/acme/widgets/actions/runs/12\\n'; fi
 `, { mode: 0o755 });
     writeFileSync(join(dir, "bin/sleep"), '#!/usr/bin/env bash\nprintf "sleep %s\\n" "$*" >> "$RECEIPTS"\n', { mode: 0o755 });
-    writeFileSync(join(dir, "bin/timeout"), '#!/usr/bin/env bash\nprintf "budget %s\\n" "$2" >> "$RECEIPTS"\nshift 2\nexec "$@"\n', { mode: 0o755 });
+    if (overrides.LOOKUP !== "stuck") writeFileSync(join(dir, "bin/timeout"), '#!/usr/bin/env bash\nprintf "budget %s\\n" "$2" >> "$RECEIPTS"\nshift 2\nexec "$@"\n', { mode: 0o755 });
     const shell = workflow(kind).jobs[`gated-${kind}`]!.steps!.find(step => step.name === handoffName)!.run!;
-    const result = spawnSync("bash", ["-c", shell], { cwd: dir, env, encoding: "utf8", timeout: 10_000 });
+    // Keep the production shell intact. A parent-shell DEBUG trap models only
+    // elapsed time; child lookups advance a deterministic shared clock receipt.
+    const controlledClock = overrides.LOOKUP === "deadline" || overrides.LOOKUP === "stuck"
+      ? `SECONDS=0\ntrap 'if [[ -f "$RECEIPTS.clock" ]]; then read -r SECONDS < "$RECEIPTS.clock" || :; fi' DEBUG\n` : "";
+    const result = spawnSync("bash", ["-c", controlledClock + shell], { cwd: dir, env, encoding: "utf8", timeout: 30_000 });
     const optionalRead = (file: string) => { try { return readFileSync(file, "utf8"); } catch { return ""; } };
     const output = Object.fromEntries(optionalRead(env.GITHUB_OUTPUT).trim().split("\n").map(line => {
       const index = line.indexOf("="); return [line.slice(0, index), line.slice(index + 1)];
@@ -93,6 +111,25 @@ for (const kind of ["sync", "closeout"]) {
       assert.equal(r.calls.split("\n").filter(line => line.startsWith("sleep")).length, 11);
       if (lookup === "partial") assert.deepEqual(JSON.parse(r.output["ci-run-urls"]!), ["https://github.com/acme/widgets/actions/runs/11"]);
     }));
+  }
+  for (const lookup of ["deadline", "stuck"]) {
+    test(`${kind}: ${lookup === "stuck" ? "real timeout kills a stuck lookup" : "shared deadline expires across workflows"} and retains partial URLs without a late lookup`, () => {
+      const started = Date.now();
+      fixture(kind, { LOOKUP: lookup, DISPATCHED_CI_WORKFLOWS: "ci.yml codeql.yml extra.yml" }, r => {
+        assert.equal(r.status, 0, r.stderr);
+        assert.equal(r.output["ci-confirmation"], "timed_out");
+        assert.deepEqual(JSON.parse(r.output["ci-run-urls"]!), ["https://github.com/acme/widgets/actions/runs/11"]);
+        assert.match(r.summary, /runs\/11/);
+        assert.doesNotMatch(r.calls, /--workflow extra.yml|sleep|stuck-finished/);
+        assert.equal(r.calls.split("\n").filter(line => line.startsWith("run list")).length, 2);
+        if (lookup === "stuck") {
+          assert.match(r.calls, /stuck-started/);
+          assert.doesNotMatch(r.calls, /budget/, "the real GNU timeout must execute");
+          assert.ok(Date.now() - started >= 9_000, "lookup must actually remain stuck until killed");
+          assert.ok(Date.now() - started < 25_000, "the stuck lookup must not consume the fixture deadline");
+        }
+      });
+    });
   }
   test(`${kind}: explicitly disabled dispatch reports the PR without querying or waiting`, () => fixture(kind, { DISPATCHED_CI_WORKFLOWS: "", PARKED_CI_RUN_URLS: undefined }, r => {
     assert.equal(r.status, 0, r.stderr);

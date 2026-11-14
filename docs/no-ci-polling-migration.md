@@ -66,3 +66,10 @@ output wiring; and disabled dispatch. A contract scans every reusable step to
 reject completion waits while permitting only the bounded appearance loop.
 Existing workflow tests keep the protected merge, hold, ownership and revocation
 checks. Restoring the historical completion-wait shell must fail that contract.
+
+Controlled-clock cases advance elapsed time across multiple workflow lookups to
+exhaust the shared deadline, retain a discovered URL and prevent the next lookup
+from starting. Stuck-command cases use real GNU `timeout` to kill a ten-second
+lookup, then verify successful informational reporting and retained partial URLs.
+Removing the deadline admission guard or shortening the real timeout independently
+fails these behavioral regressions in disposable copies.

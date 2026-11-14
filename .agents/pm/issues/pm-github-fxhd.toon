@@ -6,9 +6,9 @@ status: in_progress
 priority: 2
 tags[5]: changelog-unreleased,ci,fleet,"gh:unbraind/pm-github#228",sync
 created_at: "2026-11-09T19:25:14.594Z"
-updated_at: "2026-11-14T17:12:16.588Z"
+updated_at: "2026-11-14T17:21:11.052Z"
 author: codex-agent
-comments[47]{created_at,author,text}:
+comments[50]{created_at,author,text}:
   "2026-11-09T20:06:55.015Z",codex-agent,"Continuation: retained the existing uncommitted sync and closeout edits. No remote task branch or PR exists. Auditing all workflow_call jobs and the dispatch/landing contracts before focused verification."
   "2026-11-09T20:09:30.888Z",codex-agent,"Class audit: both reusable sync and closeout dispatch steps contained the long PR/ancestry monitor; removed both. Dependabot has bounded API retries with no run polling and already has a job timeout. Added 60-minute sync/closeout job limits and five-minute dispatch caps; sync alerts retain 10 minutes. Before gh --auto, one-time repository setting and protected-base reads prevent immediate unprotected landing. Unknown metadata exits with a reason. Retained App-only unattended merging, scoped tokens, owned PR checks, closeout attribution holds/revocation, publication gates and parked-run reporting. A later schedule rebuilds/retries; persistent configuration problems need a maintainer."
   "2026-11-09T20:11:34.716Z",codex-agent,"Revert proof in a disposable copy: replaced only the sync/closeout Dispatch caller CI and report parked runs blocks with HEAD baseline blocks, leaving current tests and job timeouts. node --test --test-concurrency=2 --test-name-pattern=\"armed auto-merge is requested exactly once|unavailable auto-merge reports|the dispatch step shell never sleeps|fallback without merging or polling\" test/bot-pr-workflow.test.ts exited 1: all 18 selected regressions failed (0 passed). Separately removed only the two new job timeout-minutes declarations with fixed dispatch: the every job in the reusable workflows contract exited 1 (1 failed). The package worktree stayed fixed throughout; the fixed focused contract suite passed 117/117 after these source changes. Build, build:test, typecheck and lint passed. No full release gate was run locally; CI owns it."
@@ -56,6 +56,9 @@ comments[47]{created_at,author,text}:
   "2026-11-14T17:09:45.866Z",codex-github-nopoll-1114,"Safety replay after build passed 4/4: prior armed request revoked before a later hold, parked-run lookup failure preserves the armed request, maintenance failure revokes, and workflow token bindings exclude installation/checkout persistence. typecheck, build:test, lint, privacy (9356 objects), docstrings (33 files / 315 declarations), and publish attestation passed. Runner-time expectation is below two minutes for the measured 44-second workload plus at most 60 seconds of registration discovery, versus the historical about 85-minute fleet average; not a newly measured fleet rollout. No caller changes beyond the #238 pin sweep. Final-head full npm/Bun release gates and unchanged four-dimensional 100-percent coverage are delegated to CI under the targeted task instructions."
   "2026-11-14T17:10:35.313Z",codex-github-nopoll-1114,Native Bun focused receipt suite passed 17/17 with zero failures. Pinned pm test executed the same 17 Node regressions with --run --progress successfully. Initial claim of the terminal item was refused; reopened the existing #228 item and claimed it successfully rather than creating a duplicate. No new pm CLI/SDK defect found.
   "2026-11-14T17:12:15.605Z",codex-github-nopoll-1114,"Implementation commit e0a83090f1a3963d8b7c1a1fc01064e278147379 pushed and PR https://github.com/unbraind/pm-github/pull/246 opened against main, based on still-open #245 head. At publication, CI https://github.com/unbraind/pm-github/actions/runs/43619767839 and CodeQL https://github.com/unbraind/pm-github/actions/runs/43619767884 are queued for that implementation head. Finish tracker writes and release the claim now, regenerate/check the changelog, then verify the resulting final head for at most 30 minutes; final CI status is reported separately without another tracker mutation. Shared-runner hold was checked before pushing and required no wait. Identity check printed only the required SteveBot noreply address. Leave this item in progress for orchestrator verification; no merge, release or review-thread interaction performed."
+  "2026-11-14T17:17:14.759Z",codex-github-nopoll-1114,"Read-only review inspection found a valid missing behavioral proof in review comment 4574827470: accelerated fixtures did not exercise shared deadline exhaustion or actual stuck-command termination. Add controlled-clock tests across three workflow selections and real GNU timeout cases, retaining partial URLs and refusing late lookups. Do not reply, resolve or react to the thread. Workflow implementation remains unchanged; record the fix commit/test mapping at final handoff."
+  "2026-11-14T17:19:57.082Z",codex-github-nopoll-1114,"Review thread PRRT_kwDOTbN4pM63g99s (comment 4574827470) now has behavioral coverage: controlled clock advances across ci.yml and codeql.yml to the shared deadline before extra.yml may start; already discovered CI URLs survive. Real GNU timeout kills a genuinely stuck lookup after ten seconds, and the receipt still exits successfully with partial URLs. All 4 selected Node budget tests and all 21 Bun receipt tests passed. In disposable copies, removing the admission guard fails each shared-deadline test, and changing the real timeout to one second fails each stuck-lookup test (four independent expected failures). No workflow implementation or approval/merge safety policy changed in this review fix. Thread remains open, with no reply/reaction/resolution."
+  "2026-11-14T17:21:10.122Z",codex-github-nopoll-1114,"Updated focused workflow group passed 199/199 through pinned pm test --run --progress (linked test 20), with zero failures/skips; native Bun receipt suite passed 21/21. typecheck, build:test and lint passed after adding the behavioral budget cases. CI and CodeQL for the prior head remain queued; the next push supersedes that head. Finish tracker writes before final-head CI inspection, preserve the original bounded CI cutoff, and leave PRRT_kwDOTbN4pM63g99s open for orchestrator response with the upcoming test-fix commit."
 files[13]{path,scope}:
   .github/workflows/pm-github-closeout.yml,project
   .github/workflows/pm-github-sync.yml,project
@@ -70,7 +73,7 @@ files[13]{path,scope}:
   test/closeout-workflow.test.ts,project
   test/helpers/closeout-workflow.ts,project
   test/import-gate.test.ts,project
-tests[22]:
+tests[23]:
   - command: node --test --test-concurrency=2 test/bot-pr-workflow.test.ts test/self-versioned-workflows.test.ts test/workflow-rule-names.test.ts
     scope: project
     timeout_seconds: 180
@@ -240,6 +243,13 @@ tests[22]:
     provenance:
       author: codex-github-nopoll-1114
       created_at: "2026-11-14T17:10:33.847Z"
+      source_kind: local_mutation
+      source_ref: fix/no-ci-polling-on-runners
+  - command: "node --test --test-concurrency=2 --test-name-pattern=\"shared deadline|real timeout\" test/ci-handoff-workflow.test.ts"
+    scope: project
+    provenance:
+      author: codex-github-nopoll-1114
+      created_at: "2026-11-14T17:19:57.911Z"
       source_kind: local_mutation
       source_ref: fix/no-ci-polling-on-runners
 docs[6]{path,scope}:
