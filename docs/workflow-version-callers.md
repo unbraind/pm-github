@@ -3,7 +3,7 @@
 Public default-branch contents API scan completed: 2026-11-14 09:14 UTC.
 Scanned 37 canonical fleet repository names and read 217 workflow files through `gh api repos/unbraind/<repo>/contents/.github/workflows/<file>`. Private repositories are excluded. No caller was edited.
 
-Migration: remove `pm-github-version` in a follow-up sweep after adopting the release containing #238. Keep the Dependabot-maintained workflow SHA and release comment. Explicit holds continue to install the requested version and warn when it differs from the workflow release.
+Migration: in each caller, move the workflow pin to the release containing #238 **and remove `pm-github-version` in the same change**. A pin update alone keeps every stale input below as an explicit hold, so the caller would go on installing the older extension (now with a warning). Keep the Dependabot-maintained workflow SHA and its same-line release comment. Keep an input only as a deliberate hold; it installs the requested version and warns when it differs from the workflow release.
 
 | Caller | Workflow file | Reusable workflow | Current pin | Pin comment | Input version |
 | --- | --- | --- | --- | --- | --- |

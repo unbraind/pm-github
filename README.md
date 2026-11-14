@@ -995,7 +995,9 @@ fails closed even with an explicit input. Release version discovery needs no
 GitHub App, and no release-time workflow stamping is required. The release
 workflow keeps its existing token behavior.
 
-**Migration:** remove `pm-github-version` from existing callers. Pin the workflow
+**Migration:** remove `pm-github-version` from existing callers in the same change
+that moves their workflow pin; a pin update alone keeps a stale input as an
+explicit hold. Pin the workflow
 release SHA and keep its same-line release tag comment for Dependabot. With the
 input omitted, a workflow pin update also updates the installed extension,
 including the curated import identity fix released in `2026.11.14`.
