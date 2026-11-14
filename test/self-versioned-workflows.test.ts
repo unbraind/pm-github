@@ -1,18 +1,19 @@
-/** Execute release-tag resolution and exact installation from the real workflows. */
+/** Execute manifest-based resolution and real package installation from workflow bash. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { decideDailyRelease } from "../scripts/daily-release-plan.ts";
 
 const root = resolve(import.meta.dirname, "..");
+const cli = join(root, "node_modules/.bin/pm");
 const files = [".github/workflows/pm-github-sync.yml", ".github/workflows/pm-github-closeout.yml"];
 const release = readFileSync(join(root, ".github/workflows/release.yml"), "utf8");
 const workflowSha = "a".repeat(40);
-const otherSha = "b".repeat(40);
 const version = "2027.1.2-3";
+const template = mkdtempSync(join(tmpdir(), "workflow-tracker-template-"));
 
 /** Extract one named step's real bash without executing adjacent steps. */
 function shell(source: string, name: string): string {
@@ -29,116 +30,183 @@ function fixture(run: (cwd: string) => void): void {
   try { run(cwd); } finally { rmSync(cwd, { recursive: true, force: true }); }
 }
 
-/** Execute real bash steps with an explicit environment and bounded runtime. */
+/** Execute real bash steps with isolated pm configuration and bounded runtime. */
 function bash(cwd: string, script: string, env: NodeJS.ProcessEnv = {}) {
-  return spawnSync("bash", ["-c", script], { cwd, env: { ...process.env, ...env }, encoding: "utf8", timeout: 30_000 });
+  const childEnv: NodeJS.ProcessEnv = { ...process.env, ...env, PM_AUTHOR: "fixture", PM_TELEMETRY_INLINE_FLUSH: "1",
+    PM_GLOBAL_PATH: join(cwd, "global"), PM_PATH: join(cwd, ".agents/pm"), NPM_CONFIG_USERCONFIG: "/dev/null" };
+  for (const key of ["NPM_TOKEN", "NODE_AUTH_TOKEN", "NPM_MEDIA_SERVER"]) delete childEnv[key];
+  return spawnSync("bash", ["-c", script], { cwd, env: childEnv, encoding: "utf8", timeout: 30_000 });
 }
 
-/** Inject only remote transport and package installation, retaining real resolver bash. */
+test.before(() => {
+  const init = bash(template, '"$REAL_PM" init fixture --defaults --agent-guidance skip', { REAL_PM: cli });
+  assert.equal(init.status, 0, init.stderr + init.stdout);
+  const seed = bash(template, '"$REAL_PM" create task "Existing curated item" --id curated --description "Curated content"', { REAL_PM: cli });
+  assert.equal(seed.status, 0, seed.stderr + seed.stdout);
+});
+test.after(() => rmSync(template, { recursive: true, force: true }));
+
+/** Snapshot every durable tracker byte, including native append-only history. */
+function snapshot(directory: string): Record<string, string> {
+  return Object.fromEntries(readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))
+    .flatMap(entry => entry.isDirectory()
+      ? Object.entries(snapshot(join(directory, entry.name))).map(([key, value]) => [entry.name + "/" + key, value])
+      : [[entry.name, readFileSync(join(directory, entry.name)).toString("base64")]]));
+}
+
+/** Replace external HTTP transport only; local fixture installation uses the real pinned pm. */
 function setup(cwd: string): NodeJS.ProcessEnv {
+  cpSync(join(template, ".agents"), join(cwd, ".agents"), { recursive: true });
   mkdirSync(join(cwd, "bin"));
-  mkdirSync(join(cwd, ".agents/pm/extensions/pm-github"), { recursive: true });
-  writeFileSync(join(cwd, "bin/git"), `#!/usr/bin/env bash
+  mkdirSync(join(cwd, "packages"));
+  // Deliberately unrelated caller metadata must never determine the installed version.
+  writeFileSync(join(cwd, "package.json"), '{"name":"caller","version":"1999.1.1"}');
+  writeFileSync(join(cwd, "bin/curl"), `#!/usr/bin/env bash
 set -euo pipefail
-[[ "$#" == 4 && "$1" == ls-remote && "$2" == --tags && "$3" == https://github.com/unbraind/pm-github && "$4" == 'refs/tags/v*' ]] || exit 95
-printf '%s\\n' "$REMOTE_TAGS"
-exit "\${REMOTE_STATUS:-0}"
+url="\${@: -1}"
+printf '%s\\n' "$url" >> http-receipt
+case "$url" in
+  "https://raw.githubusercontent.com/unbraind/pm-github/$WORKFLOW_SHA/package.json")
+    printf '%s' "$WORKFLOW_MANIFEST"; exit "\${MANIFEST_STATUS:-0}" ;;
+  "https://registry.npmjs.org/pm-github/"*)
+    selected="\${url##*/}"
+    [[ "$selected" != "\${MISSING_VERSION:-}" ]] || exit 22
+    [[ "\${REGISTRY_STATUS:-0}" == 0 ]] || exit "$REGISTRY_STATUS"
+    if [[ -n "\${REGISTRY_METADATA:-}" ]]; then printf '%s' "$REGISTRY_METADATA"; else
+      printf '{"name":"pm-github","version":"%s"}' "$selected"
+    fi ;;
+  *) exit 95 ;;
+esac
 `, { mode: 0o755 });
   writeFileSync(join(cwd, "bin/pm"), `#!/usr/bin/env bash
 set -euo pipefail
-[[ "$1" == package && "$2" == install && "$4" == --project ]]
-printf '%s\\n' "$3" > receipt
-printf '{"version":"%s"}' "\${INSTALLED_VERSION:-\${3#npm:pm-github@}}" > "$PM_SYNC_TRACKER/extensions/pm-github/package.json"
+if [[ "$1 $2" == 'package install' ]]; then
+  [[ "$3" == npm:pm-github@* && "$4" == --project ]] || exit 95
+  printf '%s\\n' "$3" > receipt
+  exec "$REAL_PM" package install "$FIXTURE_PACKAGES/\${3#npm:pm-github@}" --project
+fi
+exec "$REAL_PM" "$@"
 `, { mode: 0o755 });
-  return { WORKFLOW_SHA: workflowSha, REMOTE_TAGS: "", REMOTE_STATUS: "0", INSTALLED_VERSION: "",
-    REQUESTED_PM_GITHUB_VERSION: "", GITHUB_ENV: join(cwd, "github-env"),
-    PM_SYNC_TRACKER: ".agents/pm", PATH: join(cwd, "bin") + ":" + process.env.PATH };
+  return { WORKFLOW_SHA: workflowSha, WORKFLOW_MANIFEST: JSON.stringify({ name: "pm-github", version }),
+    REQUESTED_PM_GITHUB_VERSION: "", GITHUB_ENV: join(cwd, "github-env"), REAL_PM: cli,
+    PM_SYNC_TRACKER: ".agents/pm", FIXTURE_PACKAGES: join(cwd, "packages"), RUNNER_TEMP: cwd,
+    PATH: join(cwd, "bin") + ":" + process.env.PATH };
+}
+
+/** Supply a minimal real local extension, avoiding npm downloads while retaining pm installation. */
+function packageFixture(cwd: string, selected: string): void {
+  const directory = join(cwd, "packages", selected);
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, "package.json"), JSON.stringify({ name: "pm-github", version: selected, type: "module" }));
+  writeFileSync(join(directory, "manifest.json"), JSON.stringify({ name: "pm-github", version: selected,
+    description: "Synthetic workflow installation fixture", entry: "./index.js", capabilities: [] }));
+  writeFileSync(join(directory, "index.js"), "export default function () {}\n");
+}
+
+interface Scenario {
+  name: string;
+  manifest?: string;
+  input?: string;
+  expected?: string;
+  warning?: boolean;
+  env?: NodeJS.ProcessEnv;
+  error?: RegExp;
 }
 
 for (const file of files) {
   const source = readFileSync(join(root, file), "utf8");
   const kind = file.includes("closeout") ? "closeout" : "sync";
-  const scenarios = [
-    { name: "lightweight tag", tags: `${workflowSha}\trefs/tags/v${version}`, expected: version },
-    { name: "peeled annotated tag", tags: `${otherSha}\trefs/tags/v${version}\n${workflowSha}\trefs/tags/v${version}^{}`, expected: version },
-    { name: "peeled tag before object", tags: `${workflowSha}\trefs/tags/v${version}^{}\n${otherSha}\trefs/tags/v${version}`, expected: version },
-    { name: "unrelated and malformed tags ignored", tags: `${otherSha}\trefs/tags/v2020.1.1\n${workflowSha}\trefs/tags/vlatest\n${workflowSha}\trefs/tags/v${version}`, expected: version },
-    { name: "numeric version without suffix", tags: `${workflowSha}\trefs/tags/v2027.1.2`, expected: "2027.1.2" },
-    { name: "zero-padded tag resolves to the published unpadded version", tags: `${workflowSha}\trefs/tags/v2026.11.02`, expected: "2026.11.2" },
-    { name: "zero-padded tag with suffix keeps the suffix", tags: `${workflowSha}\trefs/tags/v2027.01.01-2`, expected: "2027.1.1-2" },
-    { name: "a component past 64-bit range normalizes as text without wrapping", tags: `${workflowSha}\trefs/tags/v18446744073709551616.11.02`, expected: "18446744073709551616.11.2" },
-    { name: "an all-zero component normalizes to 0", tags: `${workflowSha}\trefs/tags/v2026.00.000`, expected: "2026.0.0" },
-    { name: "zero-padded legacy input normalizes like a tag", tags: `${otherSha}\trefs/tags/v2020.1.1`, input: "2026.11.02", expected: "2026.11.2", warning: true },
-    { name: "padded tag matches a normalized input without warning", tags: `${workflowSha}\trefs/tags/v2026.11.02`, input: "2026.11.2", expected: "2026.11.2" },
-    { name: "two padded spellings of one version are not ambiguous", tags: `${workflowSha}\trefs/tags/v2026.11.02\n${workflowSha}\trefs/tags/v2026.11.2`, expected: "2026.11.2" },
-    { name: "no match with legacy input", tags: `${otherSha}\trefs/tags/v2020.1.1`, input: "2020.1.1", expected: "2020.1.1", warning: true },
-    { name: "tag overrides mismatched input", tags: `${workflowSha}\trefs/tags/v${version}`, input: "2020.1.1", expected: version, warning: true },
-    { name: "tag overrides malicious input safely", tags: `${workflowSha}\trefs/tags/v${version}`, input: "$(touch injected)\n::error::injected", expected: version, warning: true },
-    { name: "matching legacy input", tags: `${workflowSha}\trefs/tags/v${version}`, input: version, expected: version },
-    { name: "no match without input", tags: `${otherSha}\trefs/tags/v${version}`, error: /Pin a release SHA/ },
-    { name: "tag object is not a commit match", tags: `${workflowSha}\trefs/tags/v${version}\n${otherSha}\trefs/tags/v${version}^{}`, error: /Pin a release SHA/ },
-    { name: "multiline fallback refused as a whole value", tags: "", input: "2027.1.2\ninvalid", error: /exact numeric version/ },
-    { name: "valid first line cannot hide a second version", tags: "", input: "2027.1.2\n2027.2.3", error: /exact numeric version/ },
-    { name: "tag key is data rather than executable text", tags: `${workflowSha}\trefs/tags/v$(touch injected)`, input: "2027.1.2", expected: "2027.1.2", warning: true },
-    { name: "floating fallback refused", tags: "", input: "latest", error: /exact numeric version/ },
-    { name: "malicious fallback refused safely", tags: "", input: "$(touch injected)\n::error::injected", error: /exact numeric version/ },
-    { name: "remote failure cannot use fallback", tags: "", input: "2020.1.1", remoteStatus: "128", error: /Cannot read pm-github release tags/ },
-    { name: "missing workflow identity refused", tags: "", sha: "", input: "2020.1.1", error: /job.workflow_sha/ },
-    { name: "ambiguous release versions refused", tags: `${workflowSha}\trefs/tags/v2020.1.1\n${workflowSha}\trefs/tags/v${version}`, error: /Multiple release versions/ },
+  const scenarios: Scenario[] = [
+    { name: "omitted input follows manifest at SHA without release tags", expected: version },
+    { name: "zero-padded release normalizes", manifest: "2026.11.04", expected: "2026.11.4" },
+    { name: "zero-padded suffix release normalizes", manifest: "2027.01.01-2", expected: "2027.1.1-2" },
+    { name: "large numeric component normalizes without arithmetic overflow", manifest: "18446744073709551616.11.02", expected: "18446744073709551616.11.2" },
+    { name: "all-zero component stays zero", manifest: "2026.00.000", expected: "2026.0.0" },
+    { name: "older explicit hold installs the hold and warns with both versions", input: "2026.10.16", expected: "2026.10.16", warning: true },
+    { name: "newer explicit hold remains explicit", input: "2028.1.1", expected: "2028.1.1", warning: true },
+    { name: "matching explicit hold needs no warning", input: version, expected: version },
+    { name: "both sides normalize before comparison", manifest: "2026.11.04", input: "2026.011.004", expected: "2026.11.4" },
+    { name: "non-existent version fails before tracker write", input: "2099.1.1", env: { MISSING_VERSION: "2099.1.1" }, error: /unavailable; refusing tracker writes/ },
+    { name: "non-existent derived release fails before tracker write", env: { MISSING_VERSION: version }, error: /unavailable; refusing tracker writes/ },
+    { name: "registry outage fails closed", env: { REGISTRY_STATUS: "28" }, error: /unavailable; refusing tracker writes/ },
+    { name: "registry wrong version fails closed", env: { REGISTRY_METADATA: '{"name":"pm-github","version":"1999.1.1"}' }, error: /Registry metadata/ },
+    { name: "registry wrong package fails closed", env: { REGISTRY_METADATA: `{"name":"other","version":"${version}"}` }, error: /Registry metadata/ },
+    { name: "registry malformed JSON fails closed", env: { REGISTRY_METADATA: 'invalid"private-metadata' }, error: /Registry metadata/ },
+    { name: "manifest transport failure cannot use explicit fallback", input: "2026.10.16", env: { MANIFEST_STATUS: "22" }, error: /Cannot read pm-github package.json/ },
+    { name: "manifest malformed JSON fails closed", env: { WORKFLOW_MANIFEST: 'invalid"private-metadata' }, error: /Invalid pm-github workflow package metadata/ },
+    { name: "manifest wrong package fails closed", env: { WORKFLOW_MANIFEST: '{"name":"caller","version":"1999.1.1"}' }, error: /Invalid pm-github workflow package metadata/ },
+    { name: "manifest missing version fails closed", env: { WORKFLOW_MANIFEST: '{"name":"pm-github"}' }, error: /Invalid pm-github workflow package metadata/ },
+    { name: "manifest version with a trailing newline refused", manifest: "2026.11.4\n", error: /Invalid pm-github workflow package metadata/ },
+    { name: "manifest JSON stream refused", env: { WORKFLOW_MANIFEST: '{"name":"pm-github","version":"2026.11.4"} {"name":"other"}' }, error: /Invalid pm-github workflow package metadata/ },
+    { name: "registry JSON stream refused", env: { REGISTRY_METADATA: '{"name":"other"} {"name":"pm-github","version":"2027.1.2-3"}' }, error: /Registry metadata/ },
+    { name: "manifest floating version refused", manifest: "latest", error: /Workflow package version/ },
+    { name: "missing job workflow SHA refused", env: { WORKFLOW_SHA: "" }, error: /job.workflow_sha/ },
+    { name: "tag ref cannot substitute for resolved SHA", env: { WORKFLOW_SHA: "refs/tags/v2026.11.04" }, error: /job.workflow_sha/ },
+    { name: "floating explicit input refused", input: "latest", error: /exact numeric version/ },
+    { name: "multiline explicit input refused as a whole", input: "2026.11.4\n2026.11.5", error: /exact numeric version/ },
+    { name: "malicious explicit input refused without execution or disclosure", input: "$(touch injected)\n::error::injected", error: /exact numeric version/ },
   ];
   for (const scenario of scenarios) {
     test(`${kind} resolves ${scenario.name}`, () => fixture(cwd => {
-      const env: NodeJS.ProcessEnv = { ...setup(cwd), REMOTE_TAGS: scenario.tags, REQUESTED_PM_GITHUB_VERSION: scenario.input ?? "",
-        WORKFLOW_SHA: scenario.sha ?? workflowSha, REMOTE_STATUS: scenario.remoteStatus ?? "0", RUNNER_TEMP: cwd };
-      const scope = shell(source, "Resolve sync commit scope").split("<<'SCOPE'\n")[1]!.split("\nSCOPE")[0]!;
-      writeFileSync(join(cwd, "pm-github-sync-scope.sh"), scope);
-      const script = shell(source, "Resolve pm-github release version");
-      const result = bash(cwd, script, env);
+      const env: NodeJS.ProcessEnv = { ...setup(cwd), WORKFLOW_MANIFEST: JSON.stringify({ name: "pm-github", version: scenario.manifest ?? version }),
+        REQUESTED_PM_GITHUB_VERSION: scenario.input ?? "", ...scenario.env };
+      const before = snapshot(join(cwd, ".agents/pm"));
+      // A real tracker mutation immediately after the resolver must remain unreachable on refusal.
+      const result = bash(cwd, 'set -euo pipefail\n' + shell(source, "Resolve pm-github release version")
+        + '\npm update fixture-curated --description "Reached tracker write"', env);
       const output = result.stdout + result.stderr;
-      assert.doesNotMatch(output, /::error::injected/);
-      assert.notEqual(bash(cwd, "test -e injected").status, 0);
+      assert.doesNotMatch(output, /::error::injected|private-metadata/);
+      assert.equal(existsSync(join(cwd, "injected")), false);
       if (scenario.error) {
         assert.notEqual(result.status, 0, output);
         assert.match(output, scenario.error);
-        assert.notEqual(bash(cwd, 'test -s "$GITHUB_ENV"', env).status, 0);
+        assert.equal(existsSync(env.GITHUB_ENV!), false);
+        assert.deepEqual(snapshot(join(cwd, ".agents/pm")), before, "all real tracker bytes must remain unchanged");
+        assert.equal(existsSync(join(cwd, "receipt")), false);
       } else {
         assert.equal(result.status, 0, output);
+        assert.notDeepEqual(snapshot(join(cwd, ".agents/pm")), before, "control mutation proves the real tracker write is reachable");
         assert.equal(readFileSync(env.GITHUB_ENV!, "utf8"), `PM_GITHUB_VERSION=${scenario.expected}\n`);
         assert.equal(output.includes("::warning::pm-github-version is deprecated"), !!scenario.warning, output);
-        // Consume the real GITHUB_ENV file as the runner does for the install step.
-        const install = 'set -a; source "$GITHUB_ENV"; set +a\n' + shell(source, "Install pinned pm-github extension");
-        const installed = bash(cwd, install, env);
+        if (scenario.warning) assert.match(output, new RegExp(`workflow ${version} installs extension ${scenario.expected}`.replaceAll(".", "\\.")));
+        assert.match(readFileSync(join(cwd, "http-receipt"), "utf8"), new RegExp(`/pm-github/${scenario.expected}\\n$`.replaceAll(".", "\\.")));
+        packageFixture(cwd, scenario.expected!);
+        const scope = shell(source, "Resolve sync commit scope").split("<<'SCOPE'\n")[1]!.split("\nSCOPE")[0]!;
+        writeFileSync(join(cwd, "pm-github-sync-scope.sh"), scope);
+        const installed = bash(cwd, 'set -a; source "$GITHUB_ENV"; set +a\n' + shell(source, "Install pinned pm-github extension"), env);
         assert.equal(installed.status, 0, installed.stderr + installed.stdout);
         assert.equal(readFileSync(join(cwd, "receipt"), "utf8").trim(), `npm:pm-github@${scenario.expected}`);
-        const wrong = bash(cwd, install, { ...env, INSTALLED_VERSION: "1999.1.1" });
-        assert.notEqual(wrong.status, 0, "installed-version verification remains fail closed");
-        assert.ok((wrong.stdout + wrong.stderr).includes(`::error::Installed pm-github version 1999.1.1 differs from resolved workflow version ${scenario.expected}.`));
+        const metadata = JSON.parse(readFileSync(join(cwd, ".agents/pm/extensions/pm-github/package.json"), "utf8")) as { version: string };
+        assert.equal(metadata.version, scenario.expected);
       }
     }));
   }
-  test(`${kind} install verification explains invalid metadata without disclosing its contents`, () => fixture(cwd => {
-    const env = { ...setup(cwd), RUNNER_TEMP: cwd, PM_GITHUB_VERSION: version };
+  test(`${kind} install verification explains invalid metadata without disclosure`, () => fixture(cwd => {
+    const env = { ...setup(cwd), PM_GITHUB_VERSION: version };
     const scope = shell(source, "Resolve sync commit scope").split("<<'SCOPE'\n")[1]!.split("\nSCOPE")[0]!;
     writeFileSync(join(cwd, "pm-github-sync-scope.sh"), scope);
     const secret = "ghp_" + "A".repeat(36);
-    for (const installed of [secret, 'invalid"metadata', 'broken"source\\suffix']) {
-      const result = bash(cwd, shell(source, "Install pinned pm-github extension"), { ...env, INSTALLED_VERSION: installed });
+    for (const installed of ["1999.1.1", secret, 'invalid"metadata', 'broken"source\\suffix']) {
+      // Model damaged installed metadata at the transport boundary, retaining the real verifier.
+      mkdirSync(join(cwd, ".agents/pm/extensions/pm-github"), { recursive: true });
+      writeFileSync(join(cwd, ".agents/pm/extensions/pm-github/package.json"), `{"version":"${installed}"}`);
+      writeFileSync(join(cwd, "bin/pm"), "#!/usr/bin/env bash\nexit 0\n", { mode: 0o755 });
+      const result = bash(cwd, shell(source, "Install pinned pm-github extension"), env);
       assert.notEqual(result.status, 0);
       const output = result.stdout + result.stderr;
-      assert.ok(output.includes(installed === secret
-        ? `::error::Installed pm-github version <invalid> differs from resolved workflow version ${version}.`
-        : "::error::Cannot read installed pm-github version"));
+      assert.ok(output.includes(installed === "1999.1.1"
+        ? `::error::Installed pm-github version 1999.1.1 differs from resolved workflow version ${version}.`
+        : installed === secret ? `::error::Installed pm-github version <invalid> differs from resolved workflow version ${version}.`
+          : "::error::Cannot read installed pm-github version"));
       assert.ok(!output.includes(secret));
-      for (const representation of [installed, JSON.stringify(installed).slice(1, -1)]) {
-        assert.ok(!output.includes(representation), "every rejected metadata value and its serialized form must remain private");
-      }
-      assert.ok(!(result.stdout + result.stderr).includes(cwd), "module/parser diagnostics must not expose the tracker path");
+      assert.ok(!output.includes(cwd), "parser diagnostics must not expose the tracker path");
     }
   }));
-  test(`${kind} binds documented job identity and omits deprecated template input`, () => {
+  test(`${kind} binds job identity, preflights before writes, and omits template input`, () => {
     assert.match(source, /WORKFLOW_SHA: \$\{\{ job.workflow_sha \}\}/);
     assert.match(source, /REQUESTED_PM_GITHUB_VERSION: \$\{\{ inputs.pm-github-version \}\}/);
     assert.match(source, /pm-github-version:\n        description: [^\n]+\n        type: string\n        required: false\n        default: ""/);
+    assert.ok(source.indexOf("- name: Resolve pm-github release version") < source.indexOf("- name: Checkout caller default branch"));
     assert.doesNotMatch(shell(source, "Resolve pm-github release version"), /\$\{\{/);
     const caller = readFileSync(join(root, `docs/${kind}-workflow-caller.yml`), "utf8");
     assert.doesNotMatch(caller, /pm-github-version/);
@@ -151,43 +219,17 @@ test("both reusable workflows execute identical version resolution", () => {
     shell(readFileSync(join(root, files[1]), "utf8"), "Resolve pm-github release version"));
 });
 
-/** Every tag the release plan can emit, including zero-padded dates and -N suffixes. */
-const plannedTodays = ["2026.11.02", "2026.09.01", "2026.10.19", "2027.01.01-2"];
-
-/** Resolve one planned tag through a real workflow step and return its exported version. */
-function resolvePlannedTag(cwd: string, file: string, tag: string): string {
-  const env: NodeJS.ProcessEnv = { ...setup(cwd), REMOTE_TAGS: `${workflowSha}\trefs/tags/${tag}`,
-    REQUESTED_PM_GITHUB_VERSION: "", WORKFLOW_SHA: workflowSha, REMOTE_STATUS: "0", RUNNER_TEMP: cwd };
-  const script = shell(readFileSync(join(root, file), "utf8"), "Resolve pm-github release version");
-  const result = bash(cwd, script, env);
-  assert.equal(result.status, 0, result.stdout + result.stderr);
-  return readFileSync(env.GITHUB_ENV!, "utf8");
-}
-
-test("workflow resolution equals the release plan's npm version for every planned tag", () => {
-  for (const today of plannedTodays) {
+test("workflow manifest normalization equals the release plan npm version", () => {
+  for (const today of ["2026.11.04", "2026.09.01", "2026.10.19", "2027.01.01-2"]) {
     const plan = decideDailyRelease({ existingPrs: [], mainSha: "new-main", lastRelease: null, today });
-    for (const file of files) {
-      fixture(cwd => {
-        assert.equal(resolvePlannedTag(cwd, file, plan.tag), `PM_GITHUB_VERSION=${plan.npm_version}\n`,
-          `${plan.tag} must resolve to the npm version the release plan publishes`);
-      });
-    }
+    for (const file of files) fixture(cwd => {
+      const env: NodeJS.ProcessEnv = { ...setup(cwd), WORKFLOW_MANIFEST: JSON.stringify({ name: "pm-github", version: plan.tag.slice(1) }) };
+      const result = bash(cwd, shell(readFileSync(join(root, file), "utf8"), "Resolve pm-github release version"), env);
+      assert.equal(result.status, 0, result.stdout + result.stderr);
+      assert.equal(readFileSync(env.GITHUB_ENV!, "utf8"), `PM_GITHUB_VERSION=${plan.npm_version}\n`);
+    });
   }
 });
-
-test("the padded-tag rows fail when the tag normalization is removed", () => fixture(cwd => {
-  const original = shell(readFileSync(join(root, files[0]), "utf8"), "Resolve pm-github release version");
-  const unnormalized = original.replace('candidate="$(normalize_pm_github_version "${candidate}")"',
-    'candidate="${candidate}"');
-  assert.notEqual(unnormalized, original, "the normalization step must exist to be removed");
-  const env: NodeJS.ProcessEnv = { ...setup(cwd), REMOTE_TAGS: `${workflowSha}\trefs/tags/v2026.11.02`,
-    REQUESTED_PM_GITHUB_VERSION: "", WORKFLOW_SHA: workflowSha, REMOTE_STATUS: "0", RUNNER_TEMP: cwd };
-  const result = bash(cwd, unnormalized, env);
-  assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.equal(readFileSync(env.GITHUB_ENV!, "utf8"), "PM_GITHUB_VERSION=2026.11.02\n",
-    "without normalization the padded tag resolves to the padded version, failing the row that expects 2026.11.2");
-}));
 
 test("release retains token behavior and never stamps or commits reusable workflows", () => {
   assert.doesNotMatch(release, /release_token|RELEASE_APP_|release-stamped|Stamp the workflow/);
@@ -197,7 +239,6 @@ test("release retains token behavior and never stamps or commits reusable workfl
   }
 });
 
-/** Keep the two independent version-discovery requirements explicit in caller documentation. */
 test("version discovery documents App-free lookup and no release-time stamping", () => {
   const readme = readFileSync(join(root, "README.md"), "utf8").replace(/\s+/g, " ");
   assert.match(readme, /Release version discovery needs no GitHub App, and no release-time workflow stamping is required\./);
