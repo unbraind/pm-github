@@ -14,6 +14,7 @@
 
 ### Other
 
+- Close delivered pm items and reserve in progress for active work (2026-10-24) ([pm-github-rv9m](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-rv9m.toon))
 - Bound lifecycle compensation quarantine to verified SDK pins ([pm-github-toolchain-1110](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-toolchain-1110.toon))
 
 ## 2026.11.14 - 2026-11-14
