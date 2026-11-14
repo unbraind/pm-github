@@ -6,12 +6,12 @@ status: closed
 priority: 2
 tags[5]: changelog-unreleased,coverage,follow-up,gates,"gh:unbraind/pm-github#177"
 created_at: "2026-10-14T14:32:34.672Z"
-updated_at: "2026-11-14T08:49:30.594Z"
+updated_at: "2026-11-14T10:06:13.028Z"
 closed_at: "2026-11-14T08:49:30.487Z"
-completed_at: "2026-11-14T08:49:30.487Z"
+completed_at: "2026-11-03T23:36:49.000Z"
 author: codex-agent
 release: 2026.11.4
-comments[31]{created_at,author,text}:
+comments[32]{created_at,author,text}:
   "2026-10-14T15:04:27.090Z",codex-agent,"Confirmed resource workaround: complete identity-isolated npm and Bun release:check each passed 587/587 tests and all 11 checks with NODE_OPTIONS=--max-old-space-size=12288. Coverage remains exact 100/100/100/100 across 12 authored modules, without source exemptions or threshold changes. The earlier default-heap npm run passed all 587 tests before c8 aggregation exhausted the heap. Default-heap CI comparison and bounded aggregation remain follow-up work; the security change does not alter coverage implementation or CI memory settings."
   "2026-10-24T14:34:24.911Z",codex-agent,"Additional measured receipt from pm-github-closeout-attribution / PR 174: CI https://github.com/unbraind/pm-github/actions/runs/40101464708 at 30b94f1 failed all four npm/Bun release jobs on Node 22/26 with JavaScript heap exhaustion during c8 aggregation at the existing 8192 MiB limit. The Node 26 test phases each passed 1337/1337, zero failures/cancellations/skips before aggregation failed. No release-gate pass is claimed. This round reduces repeated setup in the new 36-case workflow matrix (shared immutable Git/tracker baselines and only the actual closeout/publication steps); the broader bounded aggregation task remains open, with thresholds, source inventory and heap configuration unchanged."
   "2026-10-24T15:10:00.744Z",codex-agent,"Second receipt: https://github.com/unbraind/pm-github/actions/runs/40103921945 at ad2e7cb passed 1337/1337 tests in every npm/Bun Node 22/26 job, then all four c8 aggregations exhausted the unchanged 8192 MiB heap. Sharing tracker callers alone was insufficient while package setup still repeated per cell. The next harness prepares package/scope setup once per immutable baseline; every one of the 36 cases still restores input, runs actual branch preparation, real CLI closeout, publication privacy/refusal gates and leased push, with fresh receipts and provenance/history assertions. No coverage resource or threshold change is used. The broader bounded aggregation task remains open."
@@ -43,6 +43,7 @@ comments[31]{created_at,author,text}:
   "2026-11-06T12:42:36.437Z",codex-astra,"Reopened only to revalidate still-open #177 against main 03c3059. Main contains merged #215 (ceaecfe), native incremental c8 aggregation and the 3072 MiB cap. Reuse this owner for current-head regression/resource and CI evidence; no coverage implementation change if reproduction passes."
   "2026-11-06T12:46:27.435Z",codex-astra,"Unchanged main verification: node --test --test-concurrency=2 test/coverage-gate.test.ts passes 13/13, zero skips. The real c8 regression merges 512 receipts (158244352 serialized bytes) under a 128 MiB heap; timed peak RSS for the focused command is 116064 KiB. Verified #215 merged as ceaecfe and all four npm/Bun Node22/26 CI jobs passed at 7e29ca0 in run 41718350180. Those are historical full-gate receipts; the new PR will supply final-head CI. No coverage code change is needed for #177."
   "2026-11-06T12:56:09.782Z",codex-astra,"Current verification is complete without coverage code changes: the pm-linked coverage command passes 13/13 with zero skipped cases. Removing only --merge-async in a disposable copy fails the 512-receipt expected-success assertion through heap exhaustion; the untouched implementation passes again. Main already fixes #177 via #215. Full npm/Bun Node22/26 CI on the combined fixture PR remains an independent final-head gate."
+  "2026-11-14T10:06:13.026Z",codex-sweep-1114,"Release-attribution correction: completed_at = 2026-11-03T23:36:49Z from https://github.com/unbraind/pm-github/pull/215 (merge SHA ceaecfe2226e5b41fa39a5c546824d7f1081f79f); first containing release tag v2026.11.04, recorded release 2026.11.4."
 files[4]{path,scope}:
   scripts/coverage-gate.ts,project
   test/closeout-workflow.test.ts,project

@@ -6,14 +6,16 @@ status: closed
 priority: 2
 tags[1]: "gh:unbraind/pm-github#227"
 created_at: "2026-11-10T12:43:45.298Z"
-updated_at: "2026-11-14T08:49:08.279Z"
+updated_at: "2026-11-14T10:05:18.915Z"
 closed_at: "2026-11-14T08:49:08.195Z"
-completed_at: "2026-11-14T08:49:08.195Z"
+completed_at: "2026-11-10T19:48:53.000Z"
 author: codex-toolchain-1110
-comments[3]{created_at,author,text}:
+release: 2026.11.11
+comments[4]{created_at,author,text}:
   "2026-11-10T12:43:48.205Z",codex-toolchain-1110,"Upstream pm-cli GH-1656 remains OPEN. Installed CHANGELOG 2026.11.5/2026.11.6 contains GH-1655, GH-1660, revision follow-ups and GH-1670, but no owned-finalization step or GH-1656 fix. Existing pm-github-quay and docs/atomic-finalization-197-recheck.md already prove 2026.11.4/.5/.6 all fail both lifecycle compensation guarantees. Reproduced on this 2026.11.6 worktree before changing the predicate: the real mixed import and recovered refresh still report incomplete compensation; the fresh no-op-finalizer control passes. Extend only the explicit verified-pin allowlist to .5/.6, preserve every assertion and keep future .7/unverified SDKs executing the checks. This is a quarantine maintenance change, not a rollback repair. Full coverage intentionally excluded per task instructions."
   "2026-11-10T12:45:37.105Z",codex-toolchain-1110,"Exact local counts: exposed SDK 2026.11.6 reproduction 3 tests: 1 passed, 2 failed, 0 skipped. After bounded quarantine maintenance: 5 tests: 3 passed, 0 failed, 2 skipped; these skips retain the unresolved guarantees rather than certify rollback. Linked predicate regression also runs through pm test. Auto-merge disabled before any push."
   "2026-11-10T17:49:07.279Z",codex-toolchain-1110,"Final focused run on SDK 2026.11.6 completed all three changed test files: 91 tests, 89 passed, zero failed/canceled, two skipped. Both skips are the existing unsupported lifecycle-compensation guarantees for GH-1656; they are not passing rollback evidence. Typecheck, build:test, lint and changelog:check pass. These test modules have no importing test-module consumers; the guard regression reads and evaluates the actual quarantine declarations and skip options. Upstream GH-1656 was rechecked and remains OPEN, and installed CHANGELOG 2026.11.5/2026.11.6 contains no owned-finalization fix. The earlier real SDK reproduction reports 1 passed and 2 failed without the waiver. Keep the exact verified 2026.11.4/.5/.6 allowlist and automatically execute assertions on unverified future versions. No production compensation implementation, assertion or coverage threshold changed. Per orchestrator instruction, CI certifies the full gate; full coverage was not run locally. Auto-merge disabled before push."
+  "2026-11-14T10:05:18.887Z",codex-sweep-1114,"Release-attribution correction: completed_at = 2026-11-10T19:48:53Z from https://github.com/unbraind/pm-github/pull/227 (merge SHA 3a69b475fbf83af0ac859bdf0bfe7afd9032241c); first containing release tag v2026.11.11, recorded release 2026.11.11."
 files[3]{path,scope}:
   test/atomic-finalization-quarantine.test.ts,project
   test/import-fidelity.test.ts,project
