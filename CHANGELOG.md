@@ -103,6 +103,10 @@
 - Bump the pm-toolchain group with 3 updates ([#191](https://github.com/unbraind/pm-github/pull/191))
 - Bump the pm-toolchain group across 1 directory with 3 updates ([#186](https://github.com/unbraind/pm-github/pull/186))
 
+## 2026.10.27 - 2026-10-27
+
+No changes.
+
 ## 2026.10.26 - 2026-10-26
 
 ### Added
@@ -268,6 +272,10 @@
 
 - Bump @babel/eslint-parser ([#111](https://github.com/unbraind/pm-github/pull/111))
 - Bump @unbrained/pm-cli ([#110](https://github.com/unbraind/pm-github/pull/110))
+
+## 2026.10.4 - 2026-10-04
+
+No changes.
 
 ## 2026.9.26 - 2026-09-26
 
@@ -524,6 +532,10 @@
 
 - Closed: Recommend pm merge reconcile (2026.7.22) over raw history-repair in Multi-agent merge safety docs ([pm-github-wpit](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-wpit.toon))
 
+## 2026.7.22 - 2026-07-22
+
+No changes.
+
 ## 2026.7.21 - 2026-07-21
 
 ### Other
@@ -592,6 +604,14 @@
 
 - Adopt current pm SDK and TypeScript 7 toolchain ([pm-github-sq5l](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-sq5l.toon))
 
+## 2026.7.10 - 2026-07-10
+
+No changes.
+
+## 2026.7.7 - 2026-07-07
+
+No changes.
+
 ## 2026.7.6 - 2026-07-06
 
 ### Fixed
@@ -603,11 +623,31 @@
 - Align Node engine with pm CLI runtime ([pm-github-zinh](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-zinh.toon))
 - Regenerate CHANGELOG after pm close item ([pm-github-um6d](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-um6d.toon))
 
+## 2026.6.14 - 2026-06-14
+
+No changes.
+
+## 2026.6.13-1 - 2026-06-13
+
+No changes.
+
 ## 2026.6.13 - 2026-06-13
 
 ### Other
 
 - Daily Release publish step runs prepublishOnly post-tag: align npm publish with --ignore-scripts ([pm-github-za4r](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-za4r.toon))
+
+## 2026.6.10 - 2026-06-10
+
+No changes.
+
+## 2026.6.9 - 2026-06-09
+
+No changes.
+
+## 2026.6.8 - 2026-06-08
+
+No changes.
 
 ## 2026.6.7 - 2026-06-07
 
@@ -667,6 +707,14 @@
 ### Fixed
 
 - Thrown errors lacked exitCode → runtime re-invoked handler (double fetch) ([pm-github-fgay](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-fgay.toon))
+
+## 2026.5.31 - 2026-05-31
+
+No changes.
+
+## 2026.5.30 - 2026-05-30
+
+No changes.
 
 ## 2026.5.29 - 2026-05-29
 

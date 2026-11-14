@@ -190,11 +190,9 @@ test("the padded-tag rows fail when the tag normalization is removed", () => fix
 }));
 
 test("release retains token behavior and never stamps or commits reusable workflows", () => {
-  assert.doesNotMatch(release, /release_token|RELEASE_APP_|release-stamped|Stamp the workflow/);
-  assert.match(release, /GH_TOKEN: \$\{\{ github.token \}\}/);
-  for (const step of ["Update release version", "Commit release files", "Verify merged release"]) {
-    assert.doesNotMatch(shell(release, step), /pm-github-(?:sync|closeout)\.yml/);
-  }
+  assert.doesNotMatch(release, /release_token|RELEASE_APP_|release-stamped|Stamp the workflow|secrets:/u);
+  assert.match(release, /uses: unbraind\/pm-ops\/\.github\/workflows\/daily-release\.yml@[a-f0-9]{40}/u);
+  assert.doesNotMatch(release, /prepare-script:|release-files:/u);
 });
 
 /** Keep the two independent version-discovery requirements explicit in caller documentation. */
