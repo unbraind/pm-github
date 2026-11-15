@@ -897,6 +897,22 @@ function packWorkflowCandidate(packageRoot: string, destination: string, env: No
     { ...env, PM_PATH: path.join(packageRoot, ".agents", "pm") });
 }
 
+let candidateArchive: Promise<string> | undefined;
+let candidateDirectory: string | undefined;
+test.after(() => { if (candidateDirectory) fs.rmSync(candidateDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); });
+
+/** Reuse one immutable build artifact; each workflow still installs into its own real consumer. */
+function workflowCandidate(env: NodeJS.ProcessEnv): Promise<string> {
+  return candidateArchive ??= (async () => {
+    candidateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "pm-workflow-candidate-"));
+    const packed = await packWorkflowCandidate(repoRoot, candidateDirectory, env);
+    assert.equal(packed.code, 0, packed.stderr);
+    const [{ filename }] = JSON.parse(packed.stdout) as [{ filename: string }];
+    console.info("workflow candidate: packed once for isolated consumers");
+    return path.join(candidateDirectory, filename);
+  })();
+}
+
 /** Install the candidate and create a local gh PR receipt boundary, never a network writer. */
 async function prepareWorkflowFixture(root: string, base: string, inspectSetup?: () => void): Promise<NodeJS.ProcessEnv> {
   if (!fs.existsSync(path.join(root, "package.json"))) fs.writeFileSync(path.join(root, "package.json"), "{}\n");
@@ -975,11 +991,7 @@ esac
     POST_IMPORT_SCRIPT: "changelog:full", CI_WORKFLOWS: "ci.yml", SYNC_PR_NUMBER: "1",
     PM_SYNC_TRACKER: ".agents/pm", PM_GITHUB_VERSION: "2026.10.4", DEFAULT_BRANCH: "main", SYNC_BRANCH, SYNC_LEASE: "", RUNNER_TEMP: base,
     GITHUB_ENV: path.join(base, "job-env"), REVIEW_RECEIPT: path.join(base, "review.md"), REVIEW_ACTIONS: path.join(base, "review-actions") };
-  const packageRoot = path.resolve(import.meta.dirname, "..");
-  const packed = await packWorkflowCandidate(packageRoot, base, env);
-  assert.equal(packed.code, 0, packed.stderr);
-  const [{ filename }] = JSON.parse(packed.stdout) as [{ filename: string }];
-  const archive = path.join(base, filename).replace(/'/g, "'\\''");
+  const archive = (await workflowCandidate(env)).replace(/'/g, "'\\''");
   const clean = await executeWorkflow(workflowShell(["Resolve sync commit scope", "Require clean setup artifacts"]), root, env);
   assert.equal(clean.code, 0, clean.stdout + clean.stderr);
   const installed = await executeWorkflow(`./node_modules/.bin/pm package install '${archive}' --project`, root, env);

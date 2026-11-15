@@ -6,11 +6,11 @@ status: in_progress
 priority: 2
 tags[2]: ci,performance
 created_at: "2026-11-15T05:41:47.478Z"
-updated_at: "2026-11-15T07:29:11.759Z"
+updated_at: "2026-11-15T07:57:43.429Z"
 assignee: codex-sol
 claim_principal: codex-sol
 author: codex-sol
-comments[18]{created_at,author,text}:
+comments[19]{created_at,author,text}:
   "2026-11-15T05:41:51.913Z",codex-sol,"Plan: preserve required test (22) and test (26), move exhaustive npm/Bun gates and native Bun suite to deep CI, retain strict tracker health and all release gate checks. CodeQL is not required. Release and reusable pm-github workflows are excluded from this task. Baseline successful main CI run 43646546806 took 1h29m25s. Related existing items: pm-github-r14n and pm-github-gaq8 remain independent fixture issues."
   "2026-11-15T05:46:17.564Z",codex-sol,"Implementation: PR tier keeps exact required names, hosted Ubuntu, 30-minute bounds, PR cancellation, and a docs/tracker cheap path. Deep retains four Node22/26 x npm/Bun gates plus both exhaustive native Bun suites, with full depth, scale 3, 120-minute bounds and 02:11 UTC schedule. Typecheck, lint and strict unique-key YAML parsing pass. Actionlint is unavailable. Baseline Node26 gate took 27m14s plus 28m34s native Bun; largest seeded models took 50.07s and 49.29s. Focused quick tests are running; an initial test-compilation typing issue was corrected."
   "2026-11-15T05:48:52.279Z",codex-sol,"PR #249 opened at implementation head 3b13dd9. New workflow detector regression passes eight Git-history cases, including docs-only, code, lockfile, workflow, newline filenames, deletion, source-to-docs rename and manual dispatch. Privacy gate passed 9542 Git objects with approved identities and no secret or host-path matches. Required PR checks are queued. Linked test result persistence is disabled by project policy, so result receipts are recorded in comments."
@@ -29,6 +29,7 @@ comments[18]{created_at,author,text}:
   "2026-11-15T07:09:04.167Z",codex-sol,"First complete hosted success: run 43686568201 at da98eb62ce06343a58ecd0a8b5bb2094f0e663f4. Jobs API created-to-completed: test (22) 17m27s, test (26) 22m25s; each queued 2s. Node26 passed 2129 tests with zero failures/cancellations and the two unchanged SDK quarantines; all 34 authored modules reached exact 100/100/100/100. Native Bun metadata/lifecycle and bunx smoke passed. This proves functionality but misses the 15-minute target. The measured remaining publication corpus is being reduced to its first 25/49 scenarios in quick mode, with all full/default scenarios retained. Local selected publication replay passed in 38.545s; shared collector controls passed under Node and Bun."
   "2026-11-15T07:14:17.272Z",codex-sol,"Deep-only harness correction: the original native Bun suite command hard-coded a 600000ms per-test limit, which would ignore PM_TEST_TIME_SCALE=3. The deep workflow now retains the same complete file glob and aggregate failure behavior, restores npm's local CLI PATH, and passes Bun a 1800000ms timeout via the required scale. The 120-minute job cap remains. Strict YAML parsing and bash syntax validation pass; no full-depth local suite was executed."
   "2026-11-15T07:29:11.758Z",codex-sol,"Run 43688644393 at 9d799cf7461d00f7d7d415c171b641cbc5e815ea passed both required checks: test (22) 12m24s, test (26) 15m43s created-to-completed; each queued 2s. Node26: 2106 pass, zero failures/cancellations, two unchanged SDK skips, and exact 100/100/100/100. Covered testing took 699.568s and native aggregation about 203s. With all workflow corpora now bounded, enabling the explicit four-worker quick override to remove the remaining 43-second budget miss; full/default/local-without-override stay at two. The expanded worker and corpus controls pass locally, and native c8 remapping, all-source scope, thresholds and 3GiB merge ceiling remain unchanged."
+  "2026-11-15T07:57:43.428Z",codex-sol,"Run 43690285777 passed both required checks, but four-worker coverage regressed to 17m56s (test execution 756.739s plus about 267s aggregation), versus the two-worker 15m43s result. Keeping the original two-worker coverage implementation. The import workflow fixtures now reuse one freshly packed immutable candidate per process, following the existing closeout fixture pattern; every scenario still performs its own real install and uses independent project/tracker state. Explicit clone/worktree packing remains uncached. Local positive, adversarial and clone/worktree packing checks pass with this cache. No production coverage script or coverage thresholds remain changed."
 files[29]{path,scope}:
   .github/workflows/ci-deep.yml,project
   .github/workflows/ci.yml,project
@@ -59,7 +60,7 @@ files[29]{path,scope}:
   test/support/corpus.ts,project
   test/support/depth.ts,project
   test/support/time.ts,project
-tests[8]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+tests[9]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
   npm run typecheck && npm run lint,project,300,codex-sol,"2026-11-15T05:44:53.187Z",local_mutation,ci/quick-pr-tier-deep-local-tier
   "npm run build && npm run build:test && env PM_TEST_DEPTH=quick PM_TEST_TIME_SCALE=3 node --test --test-concurrency=2 test/bounded-cli.test.ts test/ci-handoff-workflow.test.ts test/cited-issue-adoption.test.ts test/discussion-model.test.ts test/discussions.test.ts test/gate-public-forms.test.ts test/http-boundary.test.ts test/import-gate.test.ts test/import-lock.test.ts test/import-regex-sampling.test.ts test/import-regex.test.ts test/import-selection.test.ts test/issue-forms.test.ts test/label-import-model.test.ts test/labels.test.ts test/smoke.test.ts",project,1200,codex-sol,"2026-11-15T05:45:20.015Z",local_mutation,ci/quick-pr-tier-deep-local-tier
   node --test test/ci-tiers.test.ts,project,120,codex-sol,"2026-11-15T05:47:43.970Z",local_mutation,ci/quick-pr-tier-deep-local-tier
@@ -68,6 +69,7 @@ tests[8]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,
   env PM_TEST_DEPTH=quick PM_TEST_TIME_SCALE=3 node --test --test-name-pattern='item decision end to end' test/closeout-workflow.test.ts,project,600,codex-sol,"2026-11-15T06:09:52.491Z",local_mutation,ci/quick-pr-tier-deep-local-tier
   env PM_TEST_DEPTH=quick PM_TEST_TIME_SCALE=3 node --test --test-name-pattern='the executable reusable workflow pushes only a clean import' test/import-gate.test.ts,project,300,codex-sol,"2026-11-15T06:39:05.379Z",local_mutation,ci/quick-pr-tier-deep-local-tier
   env PM_TEST_DEPTH=quick PM_TEST_TIME_SCALE=3 node --test --test-name-pattern='schedule without repository payload resolves trunk' test/closeout-workflow.test.ts,project,300,codex-sol,"2026-11-15T07:02:13.086Z",local_mutation,ci/quick-pr-tier-deep-local-tier
+  env PM_TEST_DEPTH=quick PM_TEST_TIME_SCALE=3 node --test --test-name-pattern='the executable reusable workflow pushes only a clean import|the executable reusable workflow never publishes each adversarial fixture|workflow packing isolates prepare' test/import-gate.test.ts,project,600,codex-sol,"2026-11-15T07:53:03.665Z",local_mutation,ci/quick-pr-tier-deep-local-tier
 docs[1]{path,scope}:
   docs/ci-tiers.md,project
 body: ""

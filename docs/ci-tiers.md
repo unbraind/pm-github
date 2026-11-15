@@ -2,8 +2,8 @@
 
 Required checks remain `test (22)` and `test (26)`. PRs and dispatch run on
 GitHub-hosted Ubuntu with quick depth, cancellation of superseded PRs, and a
-30-minute timeout per job. Hosted quick tests use four workers to overlap
-IO-heavy CLI fixtures; local/default and full runs retain two. No main push starts this tier. Tracker/docs-only
+30-minute timeout per job. Hosted Node 22 tests use four workers to overlap
+IO-heavy CLI fixtures; Node 26 coverage, local/default and full runs retain two. No main push starts this tier. Tracker/docs-only
 PRs run only dependency installation, strict tracker health with required merge
 drivers, and changelog consistency in both required jobs. The detector compares
 PR endpoints with NUL-delimited paths and rename folding disabled, so moving
@@ -64,15 +64,18 @@ Fixed pagination, corpus-size, memory and exhaustive domain fixtures retain thei
 original sizes. Coverage thresholds and source inventory are unchanged in both
 depths. Aggregate diversity assertions scale with the sampled corpus.
 
-Coverage permits four test workers only with the explicit combination
-`PM_TEST_DEPTH=quick PM_TEST_WORKERS=4` used by hosted PR CI. Full/default,
-unknown overrides and local quick runs without that override retain two.
-Native c8 merging, source inclusion and exact four-dimensional thresholds stay
-unchanged; unit controls enforce full-depth rejection of the override.
+Coverage retains its original two-worker implementation, native c8 remapping,
+incremental merging, source inventory, and exact four-dimensional thresholds.
 Hosted Node 22 uses the same build, test compilation and complete file glob as
 `npm test`, with four workers and npm's local-bin PATH restored explicitly;
 there is no separate coverage, changelog or pack command. The existing embedded
 packed tests remain. No test files or assertions are omitted by worker selection.
+
+Import workflow fixtures pack one immutable candidate per test process, matching
+the existing closeout fixture pattern. Every scenario still performs a real
+installation into a fresh consumer and tracker. The explicit clone/worktree
+packing regression remains uncached and checks those independent paths. The
+shared tarball is disposable and removed by the test lifetime hook.
 
 The original native Bun suite is a separate contract: `bun run release:check`
 executes the gate's Node scripts, so it cannot replace `test:bun`. The quick gate's
