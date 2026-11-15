@@ -1,0 +1,18 @@
+id: pm-github-ci-coverage-latency
+title: Profile native coverage receipt aggregation and remaining quick-gate latency
+description: "Follow-up to pm-github-ci-v2 and companion pm-cli-website-dyhg. CI tiering preserves all old checks and exact source coverage, but the 15-minute queue-inclusive target remains unmet. Passing runs measured 3-7 minutes in native coverage aggregation plus substantial SDK/CLI fixture time. Distinct from closed pm-github-vhi6, which bounded merge memory. Profile immutable synthetic or ignored coverage receipts and reduce latency without heuristic URL exclusions, lost source-map counts, lower thresholds, or removed consumer contracts. Keep shared hosted queue delay separate from execution cost."
+type: Task
+status: open
+priority: 2
+tags[3]: ci,follow-up,performance
+created_at: "2026-11-15T08:38:16.637Z"
+updated_at: "2026-11-15T08:38:20.430Z"
+author: codex-sol
+acceptance_criteria: Capture per-phase timings and complete source counters; compare native remapped counters and LCOV against any candidate using immutable receipts; retain all four 100-percent thresholds and loaded/unloaded/branch refusal controls; do not commit binary or temporary receipts; record pushed-head queue and execution evidence
+files[2]{path,scope}:
+  scripts/coverage-gate.ts,project
+  test/coverage-gate.test.ts,project
+docs[2]{path,scope}:
+  docs/bounded-coverage-merge.md,project
+  docs/ci-tiers.md,project
+body: ""

@@ -73,7 +73,9 @@ packed tests remain. No test files or assertions are omitted by worker selection
 
 Import workflow fixtures pack one immutable candidate per test process, matching
 the existing closeout fixture pattern. Every scenario still performs a real
-installation into a fresh consumer and tracker. The explicit clone/worktree
+installation into a fresh consumer and tracker. Packed bytes are copied to each
+fixture's original unique archive locator, preserving package-manager cache
+isolation as well as project isolation. The explicit clone/worktree
 packing regression remains uncached and checks those independent paths. The
 shared tarball is disposable and removed by the test lifetime hook.
 
@@ -124,3 +126,10 @@ the package task and PR; host contention makes direct speedup ratios unreliable.
 Tracking: [pm-github-ci-v2](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-ci-v2.toon).
 Companion: `pm-cli-website-dyhg`. Existing fixture investigations
 `pm-github-r14n` and `pm-github-gaq8` retain their separate scopes.
+
+The 15-minute queue-inclusive budget remains an acceptance gap on measured runs.
+Shared hosted queue delay and SDK/coverage execution are reported separately in
+the task and PR. Further native receipt/fixture profiling is tracked by
+`pm-github-ci-coverage-latency`; its memory-bounded predecessor `pm-github-vhi6`
+has a separate completed scope. No source exclusions, remapping shortcuts or
+lower coverage thresholds were introduced to hide this gap.

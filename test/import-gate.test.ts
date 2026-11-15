@@ -991,7 +991,12 @@ esac
     POST_IMPORT_SCRIPT: "changelog:full", CI_WORKFLOWS: "ci.yml", SYNC_PR_NUMBER: "1",
     PM_SYNC_TRACKER: ".agents/pm", PM_GITHUB_VERSION: "2026.10.4", DEFAULT_BRANCH: "main", SYNC_BRANCH, SYNC_LEASE: "", RUNNER_TEMP: base,
     GITHUB_ENV: path.join(base, "job-env"), REVIEW_RECEIPT: path.join(base, "review.md"), REVIEW_ACTIONS: path.join(base, "review-actions") };
-  const archive = (await workflowCandidate(env)).replace(/'/g, "'\\''");
+  const candidate = await workflowCandidate(env);
+  // Keep the original per-fixture locator as well as separate installed state;
+  // only packing is shared, so SDK/package-manager caches remain independent.
+  const consumerArchive = path.join(base, path.basename(candidate));
+  fs.copyFileSync(candidate, consumerArchive);
+  const archive = consumerArchive.replace(/'/g, "'\\''");
   const clean = await executeWorkflow(workflowShell(["Resolve sync commit scope", "Require clean setup artifacts"]), root, env);
   assert.equal(clean.code, 0, clean.stdout + clean.stderr);
   const installed = await executeWorkflow(`./node_modules/.bin/pm package install '${archive}' --project`, root, env);
