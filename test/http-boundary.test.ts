@@ -553,7 +553,7 @@ test("requestOnce fails a request after 30s without a response", { timeout: test
       /request timed out after 30s/,
     )));
     assert.ok(performance.now() - started >= 29_000);
-    assert.ok(performance.now() - started < testTime(40_000));
+    assert.ok(performance.now() - started < 40_000);
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolve) => { server.close(() => resolve()); });

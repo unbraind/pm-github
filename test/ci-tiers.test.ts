@@ -9,7 +9,7 @@ import { parse } from "yaml";
 import { nodeToolingExecutable } from "../scripts/main-invocation.ts";
 import { workflowCorpus } from "./support/corpus.ts";
 
-type Workflow = { jobs: { test: { steps: { id?: string; name?: string; run?: string }[] } } };
+type Workflow = { jobs: { test: { steps: { id?: string; name?: string; if?: string; run?: string }[] } } };
 const workflow = parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8")) as Workflow;
 const detector = workflow.jobs.test.steps.find(step => step.id === "changes")!.run!;
 
@@ -97,5 +97,16 @@ test("workflow corpora preserve the default set and quick prefix with original c
   } finally {
     if (previous === undefined) delete process.env.PM_TEST_DEPTH;
     else process.env.PM_TEST_DEPTH = previous;
+  }
+});
+
+
+test("docs and tracker changes retain privacy without running product tests", () => {
+  const steps = workflow.jobs.test.steps;
+  const privacy = steps.find(step => step.run === "npm run privacy");
+  assert.ok(privacy);
+  assert.equal(privacy.if, "steps.changes.outputs.code != 'true'");
+  for (const name of ["Engines floor build and tests", "Quick npm release gate", "Bun install and bunx smoke"]) {
+    assert.match(steps.find(step => step.name === name)!.if!, /code == 'true'/);
   }
 });

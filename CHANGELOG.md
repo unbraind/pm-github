@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+No changes.
+
+## 2026.11.15 - 2026-11-15
+
 ### Fixed
 
 - The gated sync holds a runner for up to two hours while it waits for caller CI it competes with for the same pool ([pm-github-fxhd](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-fxhd.toon))
