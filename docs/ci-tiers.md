@@ -15,6 +15,7 @@ source into documentation still selects code validation.
 | Strict pm health / required merge drivers | — | yes | yes | yes |
 | Typecheck | — | yes | — | all four gates |
 | Build / test TypeScript compilation | yes | yes | — | all four gates |
+| Closeout decision property matrix | first 25/186 | first 25/186 | — | all 186 cells |
 | Tests, including real packed npm and native Bun consumers | quick | quick via coverage | — | full in all four gates |
 | Docstrings, lint, zero duplication, privacy | — | yes | — | all four gates |
 | Exact all-source coverage, 100% lines/statements/branches/functions | — | quick | — | full in all four gates |
@@ -41,7 +42,10 @@ runners queue; this change does not edit that variable or branch protection.
 `PM_TEST_DEPTH=quick` runs the same deterministic prefix at one tenth depth,
 rounded up and with a minimum of 25 (capped by the original count). Thus 500-case
 models use 50, 1000-case numeric fuzz uses 100, and 4096-case citation fuzz uses
-410. Unset, `full`, and unrecognized values retain the original counts. Seed
+410. The generated 186-cell closeout decision property matrix uses its first
+25 cells in quick mode; all 186 remain in full mode. Its Cartesian-product
+generation, independent oracle and per-cell publication checks remain unchanged.
+Unset, `full`, and unrecognized values retain the original counts. Seed
 initialization, generation, per-case assertions and operation order are retained.
 Fixed pagination, corpus-size, memory and exhaustive domain fixtures retain their
 original sizes. Coverage thresholds and source inventory are unchanged in both
