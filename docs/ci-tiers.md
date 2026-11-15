@@ -134,7 +134,7 @@ at source `0e5ae434d13ec1e0db9866d0575411720ca32678`:
 
 Both passed. Node 26 reported 2,106 passing tests, no failures or cancellations,
 the two existing SDK compensation quarantines, and 100% in every coverage
-dimension across 34 authored modules. Testing took 892.125s and native coverage
+dimension across 32 authored modules. Testing took 892.125s and native coverage
 aggregation about 244s. The fastest completed bounded-corpus run was
 [43688644393](https://github.com/unbraind/pm-github/actions/runs/43688644393):
 12m24s / 15m43s wall for Node 22/26, with two seconds of queueing each.
@@ -156,3 +156,20 @@ the task and PR. Further native receipt/fixture profiling is tracked by
 `pm-github-ci-coverage-latency`; its memory-bounded predecessor `pm-github-vhi6`
 has a separate completed scope. No source exclusions, remapping shortcuts or
 lower coverage thresholds were introduced to hide this gap.
+
+Final implementation receipt:
+[43696188386](https://github.com/unbraind/pm-github/actions/runs/43696188386),
+head `9a9a1bbff50d9c1834fa3022ba5080803b9c5b42`, passed both required checks:
+
+| Required check | Created → completed | Queue | Execution |
+| --- | --- | --- | --- |
+| test (22) | 16m43s | 5m33s | 11m10s |
+| test (26) | 29m03s | 7m05s | 21m58s |
+
+Both reported 2,106 passes, no failures/cancellations and two pre-existing SDK
+compensation skips. Node 26 retained exact 100/100/100/100 across **32** authored
+modules; earlier task comments naming 34 modules were a receipt transcription
+error, not a change in source inventory. Testing took 1,035.706s and coverage
+aggregation about 233s. The installed bunx launcher and eight native Bun smoke
+tests passed. The 15-minute budget remains unmet; no full-depth post-merge result
+is claimed by these quick-tier receipts.
