@@ -18,7 +18,7 @@ searches so optional computed access was included.
 | `webhooks.ts` | Require an own PR discriminator on issue payloads. |
 | `gate.ts` | Guard escape-table and selected patch field reads. |
 | `scripts/coverage-gate.ts` | Guard external threshold and coverage-counter dimension lookup; thresholds and scope are unchanged. |
-| `scripts/release-merge-policy.ts` | Guard lockfile package entry lookup. The isolated shell fixture copies the shared helper too. |
+| `retired local merge policy helper` | Guard lockfile package entry lookup. The isolated shell fixture copies the shared helper too. |
 | Test helpers/runners | Environment snapshots and real-data repair counters use `Map`; generated GraphQL fixtures use null-prototype accumulators. Manifest lookups use the shared own reader. |
 
 `own-record.ts` centralizes guarded reads (`Object.hasOwn` before indexing),
@@ -51,3 +51,7 @@ check while eliminating redundant child profiles. The legacy unselected export
 path remains available. A real no-git tracker test also removes `pm` from PATH;
 the form export preview still succeeds. Source inventory, coverage thresholds,
 heap limit and CI commands are unchanged.
+
+The reusable Daily Release migration retires local release planning and merge
+waiting. Historical measurements above describe the earlier package revision;
+current release execution is owned by the pinned pm-ops workflow.

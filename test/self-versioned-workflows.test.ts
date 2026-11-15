@@ -5,7 +5,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, 
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { decideDailyRelease } from "../scripts/daily-release-plan.ts";
+import { decideDailyRelease } from "pm-ops/daily-release";
 
 const root = resolve(import.meta.dirname, "..");
 const cli = join(root, "node_modules/.bin/pm");
@@ -221,7 +221,7 @@ test("both reusable workflows execute identical version resolution", () => {
 
 test("workflow manifest normalization equals the release plan npm version", () => {
   for (const today of ["2026.11.04", "2026.09.01", "2026.10.19", "2027.01.01-2"]) {
-    const plan = decideDailyRelease({ existingPrs: [], mainSha: "new-main", lastRelease: null, today });
+    const plan = decideDailyRelease({ existingPrs: [], mainSha: "new-main", lastRelease: null, today, hasChanges: true, releaseTags: [] });
     for (const file of files) fixture(cwd => {
       const env: NodeJS.ProcessEnv = { ...setup(cwd), WORKFLOW_MANIFEST: JSON.stringify({ name: "pm-github", version: plan.tag.slice(1) }) };
       const result = bash(cwd, shell(readFileSync(join(root, file), "utf8"), "Resolve pm-github release version"), env);
@@ -232,11 +232,9 @@ test("workflow manifest normalization equals the release plan npm version", () =
 });
 
 test("release retains token behavior and never stamps or commits reusable workflows", () => {
-  assert.doesNotMatch(release, /release_token|RELEASE_APP_|release-stamped|Stamp the workflow/);
-  assert.match(release, /GH_TOKEN: \$\{\{ github.token \}\}/);
-  for (const step of ["Update release version", "Commit release files", "Verify merged release"]) {
-    assert.doesNotMatch(shell(release, step), /pm-github-(?:sync|closeout)\.yml/);
-  }
+  assert.doesNotMatch(release, /release_token|RELEASE_APP_|release-stamped|Stamp the workflow|secrets:/u);
+  assert.match(release, /uses: unbraind\/pm-ops\/\.github\/workflows\/daily-release\.yml@[a-f0-9]{40}/u);
+  assert.doesNotMatch(release, /prepare-script:|release-files:/u);
 });
 
 test("version discovery documents App-free lookup and no release-time stamping", () => {
