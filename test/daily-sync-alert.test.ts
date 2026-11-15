@@ -86,6 +86,8 @@ esac
     assert.doesNotMatch(readFileSync(receipt, "utf8"), /untrusted|unknown-rule/);
     run({ JOBS_JSON: JSON.stringify({ name: "gated-sync", steps: [{ name: "Record safe failure rules", conclusion: "failure" }] }) });
     assert.match(readFileSync(receipt, "utf8"), /^Failing step: Record safe failure rules\n/);
+    run({ JOBS_JSON: JSON.stringify({ name: "gated-sync", steps: [{ name: "Confirm caller CI registration and summarize handoff", conclusion: "failure" }] }) });
+    assert.match(readFileSync(receipt, "utf8"), /^Failing step: Confirm caller CI registration and summarize handoff\n/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

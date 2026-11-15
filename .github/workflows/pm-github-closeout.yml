@@ -47,6 +47,20 @@ on:
         required: false
         default: "22.18.0"
 
+    outputs:
+      pr-url:
+        description: "Owned automation pull request URL"
+        value: ${{ jobs.gated-closeout.outputs.pr-url }}
+      ci-run-urls:
+        description: "JSON array of registered caller CI run URLs"
+        value: ${{ jobs.gated-closeout.outputs.ci-run-urls }}
+      parked-run-urls:
+        description: "JSON array of already approval-required run URLs"
+        value: ${{ jobs.gated-closeout.outputs.parked-run-urls }}
+      ci-confirmation:
+        description: "confirmed, timed_out, or disabled; never waits for completion"
+        value: ${{ jobs.gated-closeout.outputs.ci-confirmation }}
+
     secrets:
       automation_app_private_key:
         description: "Private key for the optional automation App installed on the calling repository"
@@ -72,6 +86,11 @@ jobs:
     # owned by GitHub's native auto-merge and the next scheduled closeout, so a
     # hung job must stop here instead of holding a shared fleet runner.
     timeout-minutes: 60
+    outputs:
+      pr-url: ${{ steps.ci_handoff.outputs.pr-url }}
+      ci-run-urls: ${{ steps.ci_handoff.outputs.ci-run-urls }}
+      parked-run-urls: ${{ steps.ci_handoff.outputs.parked-run-urls }}
+      ci-confirmation: ${{ steps.ci_handoff.outputs.ci-confirmation }}
     env:
       REPOSITORY: ${{ inputs.repository }}
       SYNC_BRANCH: pm-github/closeout
@@ -744,14 +763,18 @@ jobs:
             return 1
           }
           head_sha="$(git rev-parse HEAD)"
+          printf 'DISPATCHED_CI_WORKFLOWS=%s\n' "${workflows[*]}" >> "${GITHUB_ENV}"
+          printf 'CI_DISPATCH_STARTED_AT=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_ENV}"
           dispatch_checks
           if [[ "${CLOSEOUT_REVIEW:-0}" != 0 ]]; then
             echo "::notice::Delivery attribution needs review; caller checks were dispatched and automatic landing is disabled."
-            exit 0
           fi
           # Capture the arm status before any later command: a reported fallback
           # must not fail the step, and only an observed success may record it.
-          enable_auto_merge && auto_merge_armed=true || auto_merge_armed=false
+          auto_merge_armed=false
+          if [[ "${CLOSEOUT_REVIEW:-0}" == 0 ]]; then
+            enable_auto_merge && auto_merge_armed=true || auto_merge_armed=false
+          fi
           # The flag records an observed successful arm, never the intention: a
           # failed arm leaves any request armed earlier in this run revocable by
           # the always() cleanup instead of surviving it.
@@ -763,6 +786,8 @@ jobs:
             parked_runs=""
             echo "::notice::Could not list approval-required runs; inspect the bot PR for workflows awaiting maintainer approval. Dispatch and auto-merge preparation are unchanged."
           fi
+          parked_json="$(jq -cn --arg urls "${parked_runs}" '$urls | split("\n") | map(select(length > 0))')"
+          printf 'PARKED_CI_RUN_URLS=%s\n' "${parked_json}" >> "${GITHUB_ENV}"
           while IFS= read -r run_url; do
             [[ -n "${run_url}" ]] || continue
             echo "::notice::A pull-request workflow requires maintainer approval: ${run_url}. Dispatched head checks do not satisfy PR branch rules; the optional automation App starts eligible native PR runs."
@@ -775,6 +800,66 @@ jobs:
           # No in-job wait remains because no contract needs one: the parked-run
           # report reads runs GitHub already registered for the published head.
           echo "::notice::Landing stays outside this runner: required checks decide the armed auto-merge, and the next scheduled run retries when auto-merge cannot be armed or the base advanced. Unresolved conversations still require resolution."
+
+      - name: Confirm caller CI registration and summarize handoff
+        id: ci_handoff
+        if: env.SYNC_PUBLISHED == 'true'
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ steps.automation_token.outputs.token || github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pr_url="${GITHUB_SERVER_URL:-https://github.com}/${REPOSITORY}/pull/${SYNC_PR_NUMBER}"
+          run_urls='[]'
+          confirmation=disabled
+          read -r -a pending <<< "${DISPATCHED_CI_WORKFLOWS:-}"
+          head_sha="$(git rev-parse HEAD)"
+          # One shared 60-second budget for all workflows, including API time.
+          # Only discover registration: queued, running and completed all count.
+          deadline=$((SECONDS + 60))
+          for round in {1..12}; do
+            [[ ${#pending[@]} != 0 ]] || break
+            missing=()
+            for workflow_file in "${pending[@]}"; do
+              remaining=$((deadline - SECONDS))
+              [[ ${remaining} -ge 10 ]] || break
+              if urls="$(timeout --signal=KILL 10s gh run list -R "${REPOSITORY}" \
+                --workflow "${workflow_file}" --branch "${SYNC_BRANCH}" --commit "${head_sha}" \
+                --event workflow_dispatch --created ">=${CI_DISPATCH_STARTED_AT}" \
+                --limit 100 --json url --jq '.[].url')" && [[ -n "${urls}" ]]; then
+                run_urls="$(jq -cn --argjson previous "${run_urls}" --arg urls "${urls}" '$previous + ($urls | split("\n") | map(select(length > 0))) | unique')"
+              else
+                missing+=("${workflow_file}")
+              fi
+            done
+            if [[ ${remaining:-0} -lt 10 ]]; then break; fi
+            pending=("${missing[@]}")
+            [[ ${#pending[@]} != 0 ]] || break
+            remaining=$((deadline - SECONDS))
+            [[ ${remaining} -gt 0 && ${round} -lt 12 ]] || break
+            pause=$((remaining < 5 ? remaining : 5))
+            sleep "${pause}"
+          done
+          if [[ -n "${DISPATCHED_CI_WORKFLOWS:-}" ]]; then
+            confirmation=confirmed
+            if [[ ${#pending[@]} != 0 ]]; then
+              confirmation=timed_out
+              echo "::notice::Caller CI registration not confirmed within 60 seconds; inspect ${pr_url}. Sync remains successful; the next scheduled run retries."
+            fi
+          fi
+          parked_urls="${PARKED_CI_RUN_URLS:-[]}"
+          {
+            printf 'pr-url=%s\nci-run-urls=%s\nparked-run-urls=%s\nci-confirmation=%s\n' "${pr_url}" "${run_urls}" "${parked_urls}" "${confirmation}"
+          } >> "${GITHUB_OUTPUT}"
+          {
+            printf '### Caller CI handoff\n\nPR: %s\n\nRegistration: `%s` (appearance only; no completion wait).\n\n' "${pr_url}" "${confirmation}"
+            printf 'Registered caller CI runs:\n'
+            jq -r '.[] | "- " + .' <<< "${run_urls}"
+            printf '\nAlready parked as `action_required`:\n'
+            jq -r '.[] | "- " + .' <<< "${parked_urls}"
+            printf '\nRequired PR checks decide protected auto-merge. The hourly approval sweep or a maintainer handles parked native runs. The next scheduled run rebuilds and retries if landing is blocked.\n'
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       # Also revoke on dispatch/maintenance failure, cancellation, disabled CI,
       # no publication, or a hold. This runs even when an earlier step failed.

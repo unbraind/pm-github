@@ -698,6 +698,7 @@ test("the caller default branch guard is first and preserves the remaining step 
     "Gate tracker and regenerated changelog", "Verify strict pm health",
     "Create automation app token", "Validate publication credentials",
     "Commit gated sync changes and open review PR", "Dispatch caller CI and report parked runs",
+    "Confirm caller CI registration and summarize handoff",
     "Record safe failure rules", "Reconcile sync failure tracking issue",
   ]);
   assert.match(steps[0]!, /RUN_REF: \$\{\{ github.ref \}\}/);
@@ -1647,7 +1648,7 @@ test("workflow input shell diagnoses a foreign repository and branch outside aut
 test("workflow credentials stay out of install steps and checkout persistence", () => {
   const steps = workflow.split(/\n      - name: /).slice(1);
   const tokenSteps = steps.filter(step => step.includes("GH_TOKEN:")).map(step => step.split("\n")[0]);
-  assert.deepEqual(tokenSteps, ["Require caller default branch", "Validate GitHub access", "Revalidate GitHub blockers (report only)", "Preview GitHub to pm plan", "Gated GitHub to pm import", "Verify repeat import is a no-op", "Commit gated sync changes and open review PR", "Dispatch caller CI and report parked runs", "Reconcile sync failure tracking issue"]);
+  assert.deepEqual(tokenSteps, ["Require caller default branch", "Validate GitHub access", "Revalidate GitHub blockers (report only)", "Preview GitHub to pm plan", "Gated GitHub to pm import", "Verify repeat import is a no-op", "Commit gated sync changes and open review PR", "Dispatch caller CI and report parked runs", "Confirm caller CI registration and summarize handoff", "Reconcile sync failure tracking issue"]);
   assert.doesNotMatch(workflow.slice(0, stepOffset("Require caller default branch")), /GH_TOKEN:/);
   assert.match(steps.find(step => step.startsWith("Checkout caller default branch"))!, /persist-credentials: false/);
   assert.match(workflowShell(["Install dependencies"]), /npm ci --ignore-scripts/);
