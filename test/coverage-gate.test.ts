@@ -8,6 +8,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { collectCoverageSources, COVERAGE_HEAP_FLAG, runCoverageGate, runCoverageGateIfMain, splitHeapOverrides, type CoverageRunner } from "../scripts/coverage-gate.ts";
 import { nodeToolingExecutable } from "../scripts/main-invocation.ts";
+import { withEnv } from "./helpers/mock-github-server.ts";
 
 /** Create an independently runnable project with one branching source and its test. */
 function coverageFixture(): string {
@@ -104,14 +105,21 @@ test("node tooling selects Node under Bun and the current executable otherwise",
   assert.equal(nodeToolingExecutable({}), process.execPath);
 });
 
-test("full coverage gates cap test execution at two workers", () => {
+test("full and local coverage retain two workers; only explicit quick runs use four", async () => {
   const root = coverageFixture();
   try {
     const receipt = receiptRunner(root, "complete");
-    assert.equal(runCoverageGate(root, (command, args, options) => {
-      assert.ok(args.includes("--test-concurrency=2"));
-      return receipt(command, args, options);
-    }), 0);
+    for (const [depth, workers, expected] of [
+      [undefined, undefined, 2], ["full", "4", 2], ["quick", undefined, 2],
+      ["quick", "4", 4], ["quick", "128", 2], ["other", "4", 2],
+    ] as const) {
+      await withEnv({ PM_TEST_DEPTH: depth, PM_TEST_WORKERS: workers }, async () => {
+        assert.equal(runCoverageGate(root, (command, args, options) => {
+          assert.ok(args.includes(`--test-concurrency=${expected}`));
+          return receipt(command, args, options);
+        }), 0);
+      });
+    }
     const manifest = JSON.parse(readFileSync(join(import.meta.dirname, "../package.json"), "utf8")) as { scripts: { test: string } };
     assert.match(manifest.scripts.test, /--test-concurrency=2/);
   } finally { rmSync(root, { recursive: true, force: true }); }

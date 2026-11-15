@@ -2,8 +2,8 @@
 
 Required checks remain `test (22)` and `test (26)`. PRs and dispatch run on
 GitHub-hosted Ubuntu with quick depth, cancellation of superseded PRs, and a
-30-minute timeout per job. Hosted Node 22 tests use four workers to overlap
-IO-heavy CLI fixtures; Node 26 coverage, local/default and full runs retain two. No main push starts this tier. Tracker/docs-only
+30-minute timeout per job. Hosted quick tests use four workers to overlap
+IO-heavy CLI fixtures; local/default and full runs retain two. No main push starts this tier. Tracker/docs-only
 PRs run only dependency installation, strict tracker health with required merge
 drivers, and changelog consistency in both required jobs. The detector compares
 PR endpoints with NUL-delimited paths and rename folding disabled, so moving
@@ -36,7 +36,9 @@ daily release at 03:23, hourly release recovery at :41, Dependabot at 04:23, and
 CodeQL at 03:43 Monday. The four original Node 22/26 × npm/Bun release gates remain,
 with distinct `deep (22, npm)`, `deep (22, bun)`, `deep (26, npm)`, and
 `deep (26, bun)` names. Each job has a 120-minute cap, full depth, and
-`PM_TEST_TIME_SCALE=3`. Deep concurrency cancels older runs of the same ref.
+`PM_TEST_TIME_SCALE=3`. Its native Bun loop keeps the original file set and
+aggregate failure behavior, scaling the per-test harness cap from 10 to 30
+minutes and preserving npm's local CLI PATH. Deep concurrency cancels older runs of the same ref.
 The local runner expression uses the self-hosted `pm-local` pool unless the
 controller sets `PM_LOCAL_DEEP=off`, which selects GitHub-hosted Ubuntu. Busy local
 runners queue; this change does not edit that variable or branch protection.
@@ -62,7 +64,11 @@ Fixed pagination, corpus-size, memory and exhaustive domain fixtures retain thei
 original sizes. Coverage thresholds and source inventory are unchanged in both
 depths. Aggregate diversity assertions scale with the sampled corpus.
 
-Coverage retains the original two-worker cap and unmodified gate implementation.
+Coverage permits four test workers only with the explicit combination
+`PM_TEST_DEPTH=quick PM_TEST_WORKERS=4` used by hosted PR CI. Full/default,
+unknown overrides and local quick runs without that override retain two.
+Native c8 merging, source inclusion and exact four-dimensional thresholds stay
+unchanged; unit controls enforce full-depth rejection of the override.
 Hosted Node 22 uses the same build, test compilation and complete file glob as
 `npm test`, with four workers and npm's local-bin PATH restored explicitly;
 there is no separate coverage, changelog or pack command. The existing embedded

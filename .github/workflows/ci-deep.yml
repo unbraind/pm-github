@@ -73,4 +73,12 @@ jobs:
       # for its node-based scripts and therefore cannot replace this suite.
       - name: Exhaustive native Bun extension behavior
         if: matrix.runner == 'npm'
-        run: npm run test:bun
+        run: |
+          # Preserve npm run's CLI environment and the original suite/failure
+          # aggregation, while scaling Bun's fixed per-test harness deadline.
+          export PATH="$PWD/node_modules/.bin:$PATH"
+          bun_status=0
+          for test_file in test/*.test.ts; do
+            bun test --timeout "$((600000 * PM_TEST_TIME_SCALE))" "$test_file" || bun_status=1
+          done
+          exit "$bun_status"
