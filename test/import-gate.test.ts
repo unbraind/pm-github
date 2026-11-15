@@ -1,4 +1,4 @@
-import { testDepth } from "./support/depth.ts";
+import { workflowCorpus } from "./support/corpus.ts";
 import { testTime } from "./support/time.ts";
 // Gated import pipeline: plan completeness + provenance idempotency verified
 // BEFORE any mutation, the fail-closed tracker privacy gate AFTER it, and the
@@ -996,13 +996,10 @@ const WORKFLOW_IMPORT_SEQUENCE = ["Resolve sync commit scope", "Validate GitHub 
   "Verify repeat import is a no-op", "Run caller post-import script", "Gate tracker and regenerated changelog",
   "Verify strict pm health", "Validate publication credentials", "Commit gated sync changes and open review PR", "Dispatch caller CI and report parked runs"] as const;
 
-// Exhaustive shell scenarios form a deterministic corpus separate from core
-// import unit tests above. Register the same prefix in quick CI and all scenarios
-// by default; every selected scenario keeps its original fixture and assertions.
-const workflowScenarios: (() => void)[] = [];
-const workflowTest = ((...args: Parameters<typeof test>) => {
-  workflowScenarios.push(() => { Reflect.apply(test, undefined, args); });
-}) as typeof test;
+// Core unit tests above run in both tiers; exhaustive shell scenarios keep
+// their original registrations and assertions, with a deterministic quick prefix.
+const importWorkflowCorpus = workflowCorpus(test, "import-workflow");
+const workflowTest = importWorkflowCorpus.test;
 
 for (const attributes of ["missing", "outdated"] as const) {
   for (const registry of ["tracked", "untracked"] as const) {
@@ -1920,6 +1917,4 @@ workflowTest("failed extension installation restores tracked bookkeeping before 
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 
-const selectedWorkflowScenarios = workflowScenarios.slice(0, testDepth(workflowScenarios.length));
-console.info(`import-workflow scenarios: ${selectedWorkflowScenarios.length}/${workflowScenarios.length}; deterministic prefix`);
-for (const register of selectedWorkflowScenarios) register();
+importWorkflowCorpus.register();

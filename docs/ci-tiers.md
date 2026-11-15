@@ -15,7 +15,8 @@ source into documentation still selects code validation.
 | Strict pm health / required merge drivers | — | yes | yes | yes |
 | Typecheck | — | yes | — | all four gates |
 | Build / test TypeScript compilation | yes | yes | — | all four gates |
-| Exhaustive import workflow shell scenarios | first 25 | first 25 | — | all original scenarios |
+| Exhaustive import workflow shell scenarios | first 25/50 | first 25/50 | — | all 50 scenarios |
+| Closeout publication workflow scenarios | first 25/49 | first 25/49 | — | all 49 scenarios |
 | Closeout decision property matrix | first 25/186 | first 25/186 | — | all 186 cells |
 | Tests, including real packed npm and native Bun consumers | quick | quick via coverage | — | full in all four gates |
 | Docstrings, lint, zero duplication, privacy | — | yes | — | all four gates |
@@ -50,7 +51,11 @@ The expensive import workflow shell scenarios are collected separately from
 core import unit tests; quick registers their first 25 scenarios and full/default
 registers every original scenario, with unchanged fixtures and assertions. This
 moves exhaustive workflow combinations to deep CI while retaining a deterministic
-PR prefix and the complete core unit suite. Unset, `full`, and unrecognized values
+PR prefix and the complete core unit suite. Closeout publication similarly keeps
+its first 25 of 49 scenarios in quick mode and all 49 in full/default mode.
+The shared test-only collector preserves exact callback and option identities;
+its unit controls verify complete default/unknown-depth registration and quick
+prefix order using fake registrations, without executing a full product corpus. Unset, `full`, and unrecognized values
 retain the original counts. Seed
 initialization, generation, per-case assertions and operation order are retained.
 Fixed pagination, corpus-size, memory and exhaustive domain fixtures retain their

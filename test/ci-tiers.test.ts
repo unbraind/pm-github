@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import { parse } from "yaml";
 import { nodeToolingExecutable } from "../scripts/main-invocation.ts";
+import { workflowCorpus } from "./support/corpus.ts";
 
 type Workflow = { jobs: { test: { steps: { id?: string; name?: string; run?: string }[] } } };
 const workflow = parse(readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8")) as Workflow;
@@ -71,4 +72,30 @@ test('local CLI lookup', () => assert.equal(spawnSync('pm', [], { encoding: 'utf
     const negative = run(script.replace('export PATH="$PWD/node_modules/.bin:$PATH"', ""));
     assert.equal(negative.status, 1, "Without npm's local-bin environment, real child CLI lookup must fail.");
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("workflow corpora preserve the default set and quick prefix with original callbacks and options", () => {
+  const previous = process.env.PM_TEST_DEPTH;
+  try {
+    for (const [depth, count] of [[undefined, 50], ["quick", 25], ["unknown", 50]] as const) {
+      if (depth === undefined) delete process.env.PM_TEST_DEPTH;
+      else process.env.PM_TEST_DEPTH = depth;
+      const calls: unknown[][] = [];
+      const record = ((...args: unknown[]) => { calls.push(args); }) as typeof test;
+      const corpus = workflowCorpus(record, "fixture");
+      const callbacks = Array.from({ length: 50 }, () => () => undefined);
+      const options = { timeout: 12345 };
+      for (let index = 0; index < callbacks.length; index++) corpus.test(`case ${index}`, options, callbacks[index]!);
+      assert.equal(calls.length, 0, "Registration is deferred until the corpus is complete.");
+      corpus.register();
+      assert.deepEqual(calls.map(args => args[0]), Array.from({ length: count }, (_, index) => `case ${index}`));
+      for (let index = 0; index < calls.length; index++) {
+        assert.equal(calls[index]![1], options, "Keep the exact original test options.");
+        assert.equal(calls[index]![2], callbacks[index], "Keep the exact original assertion callback.");
+      }
+    }
+  } finally {
+    if (previous === undefined) delete process.env.PM_TEST_DEPTH;
+    else process.env.PM_TEST_DEPTH = previous;
+  }
 });
