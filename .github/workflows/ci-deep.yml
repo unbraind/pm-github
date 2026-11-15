@@ -57,8 +57,13 @@ jobs:
       - name: Verify tracked pm project health
         run: ./node_modules/.bin/pm health --strict-exit --require-merge-drivers
 
-      - name: Full release gate
-        run: ${{ matrix.runner }} run release:check
+      - name: Full npm release gate
+        if: matrix.runner == 'npm'
+        run: npm run release:check
+
+      - name: Full Bun release gate
+        if: matrix.runner == 'bun'
+        run: bun run release:check
 
       - name: Verify Bun can install the package graph
         if: matrix.runner == 'npm'

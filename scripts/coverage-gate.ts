@@ -134,16 +134,13 @@ export function runCoverageGate(root: string, runner: CoverageRunner = spawnSync
     if (inherited.rest === undefined) delete coverageEnv.NODE_OPTIONS;
     else coverageEnv.NODE_OPTIONS = inherited.rest;
     const node = nodeToolingExecutable(process.versions);
-    // Hosted quick CI overlaps IO-heavy CLI fixtures. Local and exhaustive runs
-    // retain the two-worker bound, even if the worker override is inherited.
-    const workers = process.env.PM_TEST_DEPTH === "quick" && process.env.PM_TEST_WORKERS === "4" ? 4 : 2;
     // c8 12 incrementally merges one receipt into its accumulator at a time.
     // The default retains every raw child receipt, including excluded code.
     // Keep c8's native remapping and inclusion logic; do not pre-filter URLs.
     const result = runner(node, [COVERAGE_HEAP_FLAG, c8, "--merge-async", "--100", "--all", "--exclude-after-remap", "--extension=.ts", "--extension=.js",
       `--reports-dir=${reports}`, `--temp-directory=${join(reports, "v8")}`,
       "--reporter=text", "--reporter=lcov", "--reporter=json-summary", "--reporter=json",
-      ...sources.map(file => `--include=${file}`), node, ...inherited.heap, "--test", `--test-concurrency=${workers}`, ...config.tests],
+      ...sources.map(file => `--include=${file}`), node, ...inherited.heap, "--test", "--test-concurrency=2", ...config.tests],
       { cwd: root, stdio: "inherit", env: coverageEnv });
     if (result.error || result.status !== 0) {
       rmSync(join(reports, "lcov.info"), { force: true });

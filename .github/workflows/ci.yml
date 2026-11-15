@@ -17,7 +17,6 @@ jobs:
     timeout-minutes: 30
     env:
       PM_TEST_DEPTH: quick
-      PM_TEST_WORKERS: "4"
     strategy:
       fail-fast: false
       matrix:
@@ -99,6 +98,8 @@ jobs:
         run: |
           npm run build
           npm run build:test
+          # Match npm test's environment for fixtures that spawn the pm CLI.
+          export PATH="$PWD/node_modules/.bin:$PATH"
           node --test --test-concurrency=4 test/*.test.ts
 
       - name: Quick npm release gate
