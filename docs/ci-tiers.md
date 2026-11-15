@@ -15,6 +15,7 @@ source into documentation still selects code validation.
 | Strict pm health / required merge drivers | — | yes | yes | yes |
 | Typecheck | — | yes | — | all four gates |
 | Build / test TypeScript compilation | yes | yes | — | all four gates |
+| Exhaustive import workflow shell scenarios | first 25 | first 25 | — | all original scenarios |
 | Closeout decision property matrix | first 25/186 | first 25/186 | — | all 186 cells |
 | Tests, including real packed npm and native Bun consumers | quick | quick via coverage | — | full in all four gates |
 | Docstrings, lint, zero duplication, privacy | — | yes | — | all four gates |
@@ -45,7 +46,12 @@ models use 50, 1000-case numeric fuzz uses 100, and 4096-case citation fuzz uses
 410. The generated 186-cell closeout decision property matrix uses its first
 25 cells in quick mode; all 186 remain in full mode. Its Cartesian-product
 generation, independent oracle and per-cell publication checks remain unchanged.
-Unset, `full`, and unrecognized values retain the original counts. Seed
+The expensive import workflow shell scenarios are collected separately from
+core import unit tests; quick registers their first 25 scenarios and full/default
+registers every original scenario, with unchanged fixtures and assertions. This
+moves exhaustive workflow combinations to deep CI while retaining a deterministic
+PR prefix and the complete core unit suite. Unset, `full`, and unrecognized values
+retain the original counts. Seed
 initialization, generation, per-case assertions and operation order are retained.
 Fixed pagination, corpus-size, memory and exhaustive domain fixtures retain their
 original sizes. Coverage thresholds and source inventory are unchanged in both

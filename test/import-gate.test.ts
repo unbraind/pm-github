@@ -1,3 +1,4 @@
+import { testDepth } from "./support/depth.ts";
 import { testTime } from "./support/time.ts";
 // Gated import pipeline: plan completeness + provenance idempotency verified
 // BEFORE any mutation, the fail-closed tracker privacy gate AFTER it, and the
@@ -995,9 +996,17 @@ const WORKFLOW_IMPORT_SEQUENCE = ["Resolve sync commit scope", "Validate GitHub 
   "Verify repeat import is a no-op", "Run caller post-import script", "Gate tracker and regenerated changelog",
   "Verify strict pm health", "Validate publication credentials", "Commit gated sync changes and open review PR", "Dispatch caller CI and report parked runs"] as const;
 
+// Exhaustive shell scenarios form a deterministic corpus separate from core
+// import unit tests above. Register the same prefix in quick CI and all scenarios
+// by default; every selected scenario keeps its original fixture and assertions.
+const workflowScenarios: (() => void)[] = [];
+const workflowTest = ((...args: Parameters<typeof test>) => {
+  workflowScenarios.push(() => { Reflect.apply(test, undefined, args); });
+}) as typeof test;
+
 for (const attributes of ["missing", "outdated"] as const) {
   for (const registry of ["tracked", "untracked"] as const) {
-    test(`setup artifacts never enter tracker publication: ${attributes} attributes, ${registry} registry`, async () => {
+    workflowTest(`setup artifacts never enter tracker publication: ${attributes} attributes, ${registry} registry`, async () => {
       const { root, base, bare, git } = initSyncRepo();
       const registryPath = ".agents/pm/extensions/.managed-extensions.json";
       const originalAttributes = "# Caller-owned attributes\n*.txt text eol=lf\n";
@@ -1053,7 +1062,7 @@ for (const attributes of ["missing", "outdated"] as const) {
 }
 
 for (const artifact of [".gitattributes", ".agents/pm/extensions/.managed-extensions.json"]) {
-  test(`preexisting setup artifact edits are preserved and refused: ${artifact}`, async () => {
+  workflowTest(`preexisting setup artifact edits are preserved and refused: ${artifact}`, async () => {
     const { root, base, bare, git } = initSyncRepo();
     const planted = "# Caller change must survive refusal\n";
     try {
@@ -1073,7 +1082,7 @@ for (const artifact of [".gitattributes", ".agents/pm/extensions/.managed-extens
       }
     } finally { fs.rmSync(base, { recursive: true, force: true }); }
   });
-  test(`caller edits to setup artifacts still refuse publication: ${artifact}`, async () => {
+  workflowTest(`caller edits to setup artifacts still refuse publication: ${artifact}`, async () => {
     const { root, base, bare, git } = initSyncRepo();
     try {
       fs.writeFileSync(path.join(root, "post-import.cjs"), 'require("node:fs").appendFileSync(process.env.ARTIFACT, " ");\n');
@@ -1100,7 +1109,7 @@ for (const artifact of [".gitattributes", ".agents/pm/extensions/.managed-extens
   });
 }
 
-test("strict health restores isolated setup artifacts even on failure", async () => {
+workflowTest("strict health restores isolated setup artifacts even on failure", async () => {
   const { root, base, bare, git } = initSyncRepo();
   try {
     const env = await prepareWorkflowFixture(root, base);
@@ -1115,7 +1124,7 @@ test("strict health restores isolated setup artifacts even on failure", async ()
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 
-test("workflow packing isolates prepare from the caller tracker in clones and linked worktrees", async () => {
+workflowTest("workflow packing isolates prepare from the caller tracker in clones and linked worktrees", async () => {
   const { root, base } = initSyncRepo();
   try {
     const clone = path.join(base, "package-clone");
@@ -1157,7 +1166,7 @@ exec '${npm.stdout.trim().replace(/'/g, "'\\''")}' "$@"
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 
-test("the executable reusable workflow never publishes each adversarial fixture", async () => {
+workflowTest("the executable reusable workflow never publishes each adversarial fixture", async () => {
   const cases = [
     { body: GH_TOKEN, comment: "", rule: "github-token-classic" },
     { body: "clean", comment: GH_TOKEN, rule: "github-token-classic" },
@@ -1199,7 +1208,7 @@ test("the executable reusable workflow never publishes each adversarial fixture"
   }
 });
 
-test("the executable reusable workflow pushes only a clean import and creates or updates linked reviews", async () => {
+workflowTest("the executable reusable workflow pushes only a clean import and creates or updates linked reviews", async () => {
   const { root, base, bare, git } = initSyncRepo();
   try {
     fs.mkdirSync(path.join(root, ".github/workflows"), { recursive: true });
@@ -1263,7 +1272,7 @@ fs.writeFileSync("CHANGELOG.md", "# Changelog\\n- " + items[0] + "\\n");
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 
-test("the caller default branch trunk flows from schedule guard through real Git preparation and review", async () => {
+workflowTest("the caller default branch trunk flows from schedule guard through real Git preparation and review", async () => {
   const { root, base, bare, git } = initSyncRepo();
   try {
     assert.equal(git(["branch", "-m", "trunk"]).status, 0);
@@ -1307,7 +1316,7 @@ test("the caller default branch trunk flows from schedule guard through real Git
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 
-test("the workflow never edits a fork PR sharing the sync branch name", async () => {
+workflowTest("the workflow never edits a fork PR sharing the sync branch name", async () => {
   const { root, base, bare, git } = initSyncRepo();
   try {
     const env = await prepareWorkflowFixture(root, base);
@@ -1381,7 +1390,7 @@ async function replayNoChangeSequence(prListOverrides: NodeJS.ProcessEnv, change
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 }
 
-test("an install-only settings change never reaches the sync commit", async () => {
+workflowTest("an install-only settings change never reaches the sync commit", async () => {
   const run = await replayNoChangeSequence({});
   assert.equal(run.code, 0, run.stderr + "\n" + run.stdout);
   assert.match(run.stdout, /no PR is needed/);
@@ -1389,7 +1398,7 @@ test("an install-only settings change never reaches the sync commit", async () =
   assert.deepEqual(run.refs, ["refs/heads/main"]);
 });
 
-test("a no-change run closes an own open sync PR and exits successfully", async () => {
+workflowTest("a no-change run closes an own open sync PR and exits successfully", async () => {
   const run = await replayNoChangeSequence({ OWN_OPEN_PR: "1" });
   assert.equal(run.code, 0, run.stderr + "\n" + run.stdout);
   assert.match(run.stdout, /no PR is needed/);
@@ -1397,7 +1406,7 @@ test("a no-change run closes an own open sync PR and exits successfully", async 
   assert.deepEqual(run.refs, ["refs/heads/main"], "a no-change run pushes nothing");
 });
 
-test("a no-change run with only a fork PR sharing the branch name closes nothing", async () => {
+workflowTest("a no-change run with only a fork PR sharing the branch name closes nothing", async () => {
   const run = await replayNoChangeSequence({ FORK_OPEN_PR: "7" });
   assert.equal(run.code, 0, run.stderr + "\n" + run.stdout);
   assert.match(run.stdout, /no PR is needed/);
@@ -1405,7 +1414,7 @@ test("a no-change run with only a fork PR sharing the branch name closes nothing
   assert.deepEqual(run.refs, ["refs/heads/main"]);
 });
 
-test("a no-op import discards stale changelog drift and leaves a clean checkout without publication", async () => {
+workflowTest("a no-op import discards stale changelog drift and leaves a clean checkout without publication", async () => {
   for (const ownPr of [undefined, "1"]) {
     const run = await replayNoChangeSequence({ OWN_OPEN_PR: ownPr }, "stale");
     assert.equal(run.code, 0, run.stderr + "\n" + run.stdout);
@@ -1418,7 +1427,7 @@ test("a no-op import discards stale changelog drift and leaves a clean checkout 
   }
 });
 
-test("a no-op import discards a newly generated changelog absent from HEAD", async () => {
+workflowTest("a no-op import discards a newly generated changelog absent from HEAD", async () => {
   const run = await replayNoChangeSequence({}, "absent");
   assert.equal(run.code, 0, run.stderr + "\n" + run.stdout);
   assert.match(run.stdout, /::notice::.*changelog:check owns that/);
@@ -1429,7 +1438,7 @@ test("a no-op import discards a newly generated changelog absent from HEAD", asy
   assert.equal(run.published, false);
 });
 
-test("packed installed CLI repeats a completed gated import under native Bun within 45 seconds", { timeout: testTime(180_000) }, async () => {
+workflowTest("packed installed CLI repeats a completed gated import under native Bun within 45 seconds", { timeout: testTime(180_000) }, async () => {
   const { root, base, bare } = initSyncRepo();
   try {
     const env = await prepareWorkflowFixture(root, base);
@@ -1457,7 +1466,7 @@ test("packed installed CLI repeats a completed gated import under native Bun wit
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 
-test("gated comment imports reject malformed second HTTP pages before writing", async () => {
+workflowTest("gated comment imports reject malformed second HTTP pages before writing", async () => {
   const { root, base, git } = initSyncRepo();
   try {
     for (const badPage of ["not JSON", "{}"] ) {
@@ -1479,7 +1488,7 @@ test("gated comment imports reject malformed second HTTP pages before writing", 
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 
-test("gated pre-write input errors carry the command exit code", async () => {
+workflowTest("gated pre-write input errors carry the command exit code", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-preview-error-"));
   const previousCeiling = process.env.GIT_CEILING_DIRECTORIES;
   try {
@@ -1515,7 +1524,7 @@ async function resolveNpmProject(root: string, base: string, input: string): Pro
 }
 
 for (const directory of [".", "tests/oracle"]) {
-  test(`npm-project-dir ${directory === "." ? "default" : "subdirectory"} installs, prepends PATH and runs the caller script in the selected project`, async () => {
+  workflowTest(`npm-project-dir ${directory === "." ? "default" : "subdirectory"} installs, prepends PATH and runs the caller script in the selected project`, async () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-npm-project-"));
     const root = path.join(base, "work");
     const project = path.join(root, directory);
@@ -1561,7 +1570,7 @@ for (const directory of [".", "tests/oracle"]) {
 }
 
 for (const scenario of ["parent", "embedded-parent", "absolute", "missing-package", "missing-directory", "symlink-escape", "symlink-newline-target", "newline", "colon", "empty"] as const) {
-  test(`npm-project-dir refuses ${scenario} before install or environment publication`, async () => {
+  workflowTest(`npm-project-dir refuses ${scenario} before install or environment publication`, async () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-npm-invalid-"));
     const root = path.join(base, "work");
     fs.mkdirSync(root);
@@ -1587,7 +1596,7 @@ for (const scenario of ["parent", "embedded-parent", "absolute", "missing-packag
   });
 }
 
-test("npm-project-dir subdirectory CLI and SDK keep the tracker and publication at the repository root", async () => {
+workflowTest("npm-project-dir subdirectory CLI and SDK keep the tracker and publication at the repository root", async () => {
   const { root, base, bare, git } = initSyncRepo();
   try {
     const env = await prepareWorkflowFixture(root, base);
@@ -1620,7 +1629,7 @@ test("npm-project-dir subdirectory CLI and SDK keep the tracker and publication 
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 
-test("workflow input shell accepts numeric same-day pins and refuses floating versions", async () => {
+workflowTest("workflow input shell accepts numeric same-day pins and refuses floating versions", async () => {
   for (const [version, valid] of [["2026.10.6", true], ["2026.10.6-1", true], ["2026.10.6-12", true], ["latest", false], ["^2026.10.6", false], ["2026.10.6-beta", false], ["2026.10.6-1; true", false]] as const) {
     const result = await executeWorkflow(workflowShell(["Validate sync inputs"]), repoRoot, {
       ...process.env, REPOSITORY: "acme/widgets", CALLING_REPOSITORY: "acme/widgets", SYNC_BRANCH, PM_GITHUB_VERSION: version,
@@ -1630,7 +1639,7 @@ test("workflow input shell accepts numeric same-day pins and refuses floating ve
   }
 });
 
-test("workflow input shell diagnoses a foreign repository and branch outside automation/", async () => {
+workflowTest("workflow input shell diagnoses a foreign repository and branch outside automation/", async () => {
   for (const [input, value, diagnostic] of [
     ["REPOSITORY", "acme/other", "::error::repository must equal the calling repository (acme/widgets)."],
     ["SYNC_BRANCH", "feature/sync", "::error::sync-branch must start with automation/."],
@@ -1646,7 +1655,7 @@ test("workflow input shell diagnoses a foreign repository and branch outside aut
   }
 });
 
-test("workflow credentials stay out of install steps and checkout persistence", () => {
+workflowTest("workflow credentials stay out of install steps and checkout persistence", () => {
   const steps = workflow.split(/\n      - name: /).slice(1);
   const tokenSteps = steps.filter(step => step.includes("GH_TOKEN:")).map(step => step.split("\n")[0]);
   assert.deepEqual(tokenSteps, ["Require caller default branch", "Validate GitHub access", "Revalidate GitHub blockers (report only)", "Preview GitHub to pm plan", "Gated GitHub to pm import", "Verify repeat import is a no-op", "Commit gated sync changes and open review PR", "Dispatch caller CI and report parked runs", "Confirm caller CI registration and summarize handoff", "Reconcile sync failure tracking issue"]);
@@ -1657,7 +1666,7 @@ test("workflow credentials stay out of install steps and checkout persistence", 
   assert.match(workflowShell(["Commit gated sync changes and open review PR"]), /gh auth setup-git\n\s*git push/);
 });
 
-test("scheduled blocker report warns on clearance, preserves items, and fails on query errors", async () => {
+workflowTest("scheduled blocker report warns on clearance, preserves items, and fails on query errors", async () => {
   const { root, base } = initSyncRepo();
   try {
     const env = await prepareWorkflowFixture(root, base);
@@ -1681,7 +1690,7 @@ test("scheduled blocker report warns on clearance, preserves items, and fails on
 });
 
 
-test("post-import changelog findings and script failures block publication", async () => {
+workflowTest("post-import changelog findings and script failures block publication", async () => {
   for (const script of ["generate-secret", "fail-script"]) {
     const { root, base, bare, git } = initSyncRepo();
     try {
@@ -1715,7 +1724,7 @@ test("post-import changelog findings and script failures block publication", asy
   }
 });
 
-test("caller post-import changes outside the commit scope fail closed for every Git status class", async () => {
+workflowTest("caller post-import changes outside the commit scope fail closed for every Git status class", async () => {
   for (const mode of ["staged", "unstaged", "untracked", "credential", "rename", "multiple"] as const) {
     const { root, base, bare, git } = initSyncRepo();
     try {
@@ -1759,7 +1768,7 @@ if (mode === "multiple") writeFileSync("second.txt", "changed\\n");
   }
 });
 
-test("publication rechecks late changes and rescans the exact working content it commits", async () => {
+workflowTest("publication rechecks late changes and rescans the exact working content it commits", async () => {
   for (const mode of ["staged", "unstaged", "untracked", "credential", "tracker-secret", "attributes", "registry"] as const) {
     const { root, base, bare, git } = initSyncRepo();
     try {
@@ -1792,7 +1801,7 @@ test("publication rechecks late changes and rescans the exact working content it
   }
 });
 
-test("restricted commit excludes unrelated staged content even when scope checks are bypassed", async () => {
+workflowTest("restricted commit excludes unrelated staged content even when scope checks are bypassed", async () => {
   const { root, base, bare, git } = initSyncRepo();
   try {
     const env = await prepareWorkflowFixture(root, base);
@@ -1815,7 +1824,7 @@ test("restricted commit excludes unrelated staged content even when scope checks
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 
-test("post-import script can be overridden or disabled and defaults tolerate an absent script", async () => {
+workflowTest("post-import script can be overridden or disabled and defaults tolerate an absent script", async () => {
   const { root, base } = initSyncRepo();
   try {
     fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ scripts: { custom: "node custom.cjs" } }));
@@ -1830,7 +1839,7 @@ test("post-import script can be overridden or disabled and defaults tolerate an 
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
 
-test("dispatch handles disabled, invalid, failed, and unpublished caller workflows", async () => {
+workflowTest("dispatch handles disabled, invalid, failed, and unpublished caller workflows", async () => {
   const { root, base, git } = initSyncRepo();
   try {
     const env = await prepareWorkflowFixture(root, base);
@@ -1855,7 +1864,7 @@ test("dispatch handles disabled, invalid, failed, and unpublished caller workflo
 
 
 for (const adoptCited of [undefined, "false", "true"]) {
-  test(`reusable workflow explicit opt-in ${adoptCited ?? "unset"} governs preview import and repeat`, async () => {
+  workflowTest(`reusable workflow explicit opt-in ${adoptCited ?? "unset"} governs preview import and repeat`, async () => {
     const { root, base, git } = initSyncRepo();
     try {
       const env = await prepareWorkflowFixture(root, base);
@@ -1883,14 +1892,14 @@ for (const adoptCited of [undefined, "false", "true"]) {
   });
 }
 
-test("reusable workflow adoption input defaults false and the example retains that default", () => {
+workflowTest("reusable workflow adoption input defaults false and the example retains that default", () => {
   assert.match(workflow, /adopt-cited:\n        description: [^\n]+\n        type: boolean\n        required: false\n        default: false/);
   assert.match(workflow, /ADOPT_CITED: \$\{\{ inputs.adopt-cited \}\}/);
   assert.match(callerExample, /adopt-cited: false/);
 });
 
 
-test("failed extension installation restores tracked bookkeeping before returning", async () => {
+workflowTest("failed extension installation restores tracked bookkeeping before returning", async () => {
   const { root, base, git } = initSyncRepo();
   const registry = ".agents/pm/extensions/.managed-extensions.json";
   try {
@@ -1910,3 +1919,7 @@ test("failed extension installation restores tracked bookkeeping before returnin
     assert.equal(git(["status", "--porcelain", "--", registry]).stdout, "");
   } finally { fs.rmSync(base, { recursive: true, force: true }); }
 });
+
+const selectedWorkflowScenarios = workflowScenarios.slice(0, testDepth(workflowScenarios.length));
+console.info(`import-workflow scenarios: ${selectedWorkflowScenarios.length}/${workflowScenarios.length}; deterministic prefix`);
+for (const register of selectedWorkflowScenarios) register();
