@@ -4,8 +4,8 @@
 # this package asks for that.
 #
 # Why this exists separately from `npm run changelog:check`: that script only
-# exercises the package.json invocation. `.github/workflows/release.yml` calls
-# pm-changelog directly. If either side lost --date-from-version the two would
+# exercises the package.json invocation. the canonical Daily Release calls the package
+# changelog scripts through its pinned reusable workflow. If either side lost --date-from-version the two would
 # disagree during a release -- one heading derived from the clock, the other
 # from the version -- and the release would fail on the divergence rather than
 # on the stale date the flag exists to remove.

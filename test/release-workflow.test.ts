@@ -1,6 +1,6 @@
 /** Contracts owned by callers while the released workflow owns release execution. */
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { test } from 'node:test';
 import { isScalar, parseDocument } from 'yaml';
@@ -61,4 +61,11 @@ test('package-owned approval and preparation inputs are preserved', () => {
   "retire-unpublished": "${{ github.event_name == 'workflow_dispatch' && inputs.retire-unpublished == true }}",
   "release-enabled": "${{ github.ref == 'refs/heads/main' }}"
 });
+});
+
+test('thin caller has no obsolete local release implementation artefacts', () => {
+  assert.equal(existsSync("scripts/daily-release-plan.ts"), false, "Retired release-copy artefact: scripts/daily-release-plan.ts");
+  assert.equal(existsSync("scripts/release-merge-policy.ts"), false, "Retired release-copy artefact: scripts/release-merge-policy.ts");
+  assert.equal(existsSync("test/daily-release-plan.test.ts"), false, "Retired release-copy artefact: test/daily-release-plan.test.ts");
+  assert.equal(existsSync("test/release-merge-policy.test.ts"), false, "Retired release-copy artefact: test/release-merge-policy.test.ts");
 });

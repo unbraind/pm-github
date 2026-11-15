@@ -90,7 +90,7 @@ None of the old cancellations is classified as a host-load timeout: they came fr
 | 56 | `test/prove-gate-public-forms.test.ts:1:1` | test/prove-gate-public-forms.test.ts | fixed | File completed; prior budget cancellation cleared |
 | 57 | `test/refresh.test.ts:1:1` | test/refresh.test.ts | upstream pm-cli#1656 | File completed; one exact SDK-bound skip, other cases pass |
 | 58 | `test/release-approval.test.ts:1:1` | test/release-approval.test.ts | fixed | File completed; prior budget cancellation cleared |
-| 59 | `test/release-merge-policy.test.ts:1:1` | test/release-merge-policy.test.ts | fixed | File completed; prior budget cancellation cleared |
+| 59 | `retired local merge policy suite:1:1` | retired local merge policy suite | fixed | File completed; prior budget cancellation cleared |
 | 60 | `test/release-workflow.test.ts:1:1` | test/release-workflow.test.ts | fixed | File completed; prior budget cancellation cleared |
 | 61 | `test/repeat-import-noop.test.ts:1:1` | test/repeat-import-noop.test.ts | fixed | File completed; prior budget cancellation cleared |
 | 62 | `test/review-round1.test.ts:1:1` | test/review-round1.test.ts | fixed | File completed; prior budget cancellation cleared |
@@ -131,3 +131,7 @@ Issues #197 and #199 remain open. PM evidence belongs to `pm-github-quay` and `p
 The gate validates all 29 authored modules, including operational scripts. Every dimension has zero skipped source entries. The two test skips remain an explicit behavioral gap for atomic finalization; complete source coverage does not certify those rollback guarantees.
 
 The coverage gate alone took about three hours, including its 132-minute test phase and lengthy native merge, so the overall follow-up exceeded the approximate time budget.
+
+The reusable Daily Release migration retires local release planning and merge
+waiting. Historical measurements above describe the earlier package revision;
+current release execution is owned by the pinned pm-ops workflow.

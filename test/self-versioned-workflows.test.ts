@@ -5,7 +5,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, 
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
-import { decideDailyRelease } from "../scripts/daily-release-plan.ts";
+import { decideDailyRelease } from "pm-ops/daily-release";
 
 const root = resolve(import.meta.dirname, "..");
 const cli = join(root, "node_modules/.bin/pm");
@@ -221,7 +221,7 @@ test("both reusable workflows execute identical version resolution", () => {
 
 test("workflow manifest normalization equals the release plan npm version", () => {
   for (const today of ["2026.11.04", "2026.09.01", "2026.10.19", "2027.01.01-2"]) {
-    const plan = decideDailyRelease({ existingPrs: [], mainSha: "new-main", lastRelease: null, today });
+    const plan = decideDailyRelease({ existingPrs: [], mainSha: "new-main", lastRelease: null, today, hasChanges: true, releaseTags: [] });
     for (const file of files) fixture(cwd => {
       const env: NodeJS.ProcessEnv = { ...setup(cwd), WORKFLOW_MANIFEST: JSON.stringify({ name: "pm-github", version: plan.tag.slice(1) }) };
       const result = bash(cwd, shell(readFileSync(join(root, file), "utf8"), "Resolve pm-github release version"), env);
