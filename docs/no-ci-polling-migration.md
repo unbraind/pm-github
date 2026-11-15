@@ -51,6 +51,12 @@ the measured 44-second workload is representative: registration usually appears
 on the first lookup, and its additional wait budget is at most 60 seconds.
 This is a budget and expectation, not a new live fleet timing measurement.
 Installation, import size and API latency can increase total job duration.
+The hard worst-case primary job duration is 60 minutes for either sync or
+closeout, including setup and import. Dispatch has a five-minute step limit;
+registration has a 60-second discovery budget and a two-minute step limit.
+Sync's separate status-issue job can add at most ten minutes afterward (70
+minutes for the sequential workflow path). None of these limits depends on
+caller CI completing.
 
 Gated import, idempotency, privacy/redaction, sync holds and #230 ownership
 selection are unchanged. Other reusable workflows were searched: Dependabot
@@ -71,5 +77,9 @@ Controlled-clock cases advance elapsed time across multiple workflow lookups to
 exhaust the shared deadline, retain a discovered URL and prevent the next lookup
 from starting. Stuck-command cases use real GNU `timeout` to kill a ten-second
 lookup, then verify successful informational reporting and retained partial URLs.
+The blocked CLI double replaces itself with the sleeper, matching a single
+executable. Shell job control deliberately exposes a descendant that could
+otherwise survive the timeout and retain captured output; failed fixtures clean
+up their recorded process.
 Removing the deadline admission guard or shortening the real timeout independently
 fails these behavioral regressions in disposable copies.

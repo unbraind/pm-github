@@ -6,9 +6,9 @@ status: in_progress
 priority: 2
 tags[5]: changelog-unreleased,ci,fleet,"gh:unbraind/pm-github#228",sync
 created_at: "2026-11-09T19:25:14.594Z"
-updated_at: "2026-11-14T20:26:32.212Z"
+updated_at: "2026-11-15T00:48:04.805Z"
 author: codex-agent
-comments[52]{created_at,author,text}:
+comments[57]{created_at,author,text}:
   "2026-11-09T20:06:55.015Z",codex-agent,"Continuation: retained the existing uncommitted sync and closeout edits. No remote task branch or PR exists. Auditing all workflow_call jobs and the dispatch/landing contracts before focused verification."
   "2026-11-09T20:09:30.888Z",codex-agent,"Class audit: both reusable sync and closeout dispatch steps contained the long PR/ancestry monitor; removed both. Dependabot has bounded API retries with no run polling and already has a job timeout. Added 60-minute sync/closeout job limits and five-minute dispatch caps; sync alerts retain 10 minutes. Before gh --auto, one-time repository setting and protected-base reads prevent immediate unprotected landing. Unknown metadata exits with a reason. Retained App-only unattended merging, scoped tokens, owned PR checks, closeout attribution holds/revocation, publication gates and parked-run reporting. A later schedule rebuilds/retries; persistent configuration problems need a maintainer."
   "2026-11-09T20:11:34.716Z",codex-agent,"Revert proof in a disposable copy: replaced only the sync/closeout Dispatch caller CI and report parked runs blocks with HEAD baseline blocks, leaving current tests and job timeouts. node --test --test-concurrency=2 --test-name-pattern=\"armed auto-merge is requested exactly once|unavailable auto-merge reports|the dispatch step shell never sleeps|fallback without merging or polling\" test/bot-pr-workflow.test.ts exited 1: all 18 selected regressions failed (0 passed). Separately removed only the two new job timeout-minutes declarations with fixed dispatch: the every job in the reusable workflows contract exited 1 (1 failed). The package worktree stayed fixed throughout; the fixed focused contract suite passed 117/117 after these source changes. Build, build:test, typecheck and lint passed. No full release gate was run locally; CI owns it."
@@ -61,7 +61,12 @@ comments[52]{created_at,author,text}:
   "2026-11-14T17:21:10.122Z",codex-github-nopoll-1114,"Updated focused workflow group passed 199/199 through pinned pm test --run --progress (linked test 20), with zero failures/skips; native Bun receipt suite passed 21/21. typecheck, build:test and lint passed after adding the behavioral budget cases. CI and CodeQL for the prior head remain queued; the next push supersedes that head. Finish tracker writes before final-head CI inspection, preserve the original bounded CI cutoff, and leave PRRT_kwDOTbN4pM63g99s open for orchestrator response with the upcoming test-fix commit."
   "2026-11-14T20:24:05.034Z",codex-followups-1114,"Review follow-up for PR 246: merge the fixed PR 245 branch, regenerate the ownership inventory with the repository CLI if this branch shifted more workflow lines, and run the same inventory-related test files and typecheck/lint gates. Preserve all no-runner-polling behavior. Full npm/Bun certification remains in CI."
   "2026-11-14T20:26:31.165Z",codex-followups-1114,"Merged fixed PR 245 commit 4bd7c31. The inherited generated inventory still failed --check on this branch because its own workflow lines moved; repository generator --write changes the auxiliary anchor from 440 to 458 and --check now passes. The same complete inventory/round-twelve linked test command passes 37/37 with zero failures/skips; npm run typecheck, npm run build:test and npm run lint pass. Preserve both parents and merge this repair as one follow-up commit. No workflow implementation changed. Full npm/Bun release gates remain in CI."
-files[14]{path,scope}:
+  "2026-11-15T00:31:36.759Z",codex-agent,"PR 246 current review audit: fetched all review threads and all comments; zero unresolved threads, one resolved Greptile deadline-coverage thread, no CodeRabbit reviews or outside-diff findings. Merge origin/main after PR 245 while preserving own-release installation and bounded caller dispatch. Read failed CI job logs before changing code; inspect and fix every actual failure and the whole handoff diff. Full npm/Bun release gates remain delegated to CI because this package exceeds the local gate budget."
+  "2026-11-15T00:35:50.432Z",codex-agent,"Failed CI 43637580336 logs retrieved per job because gh run view --log-failed returned an empty log: both npm matrix jobs and both Bun release jobs fail the real-timeout fixture and the sync step-order assertion. The fixture launched a descendant sleeper that could outlive the killed CLI double and hold capture pipes; model the actual single CLI executable with exec, exercise shell job control deterministically, and clean the recorded fixture PID on failure. Add the missing registration step to the expected sync order. Whole-diff audit also found the alert step-name allowlist omitted this step; preserve its exact diagnostic via a behavioral alert regression. Local original timeout cases passed on Node 22 and 24 and under c8; CI failures were not local host-load failures."
+  "2026-11-15T00:38:53.860Z",codex-agent,"Behavioral revert proofs ran only in disposable copies. Removing exec from the stuck CLI double with job control enabled yields two expected assertion failures (sync and closeout status null after the 30-second fixture deadline); fixed tests pass, and recorded fixture PIDs are killed in finally. Removing only the new failure-alert step-name allowlist entry fails one assertion: the issue body reports generic gated-sync rather than the registration step. Removing only each workflow registration admission guard yields one expected failure per workflow: extra.yml starts after the shared deadline. Five expected negative assertions total across four independent mutations; all fixed 24 focused Node tests pass afterward. The CI step-order defect is independently visible in all four downloaded failed job logs and the corrected assertion is linked in the selected gate. Primary sync/closeout job cap remains 60 minutes including import/setup; registration discovery budget 60 seconds, registration hard step limit two minutes, dispatch limit five minutes; sync alert can add ten minutes after the primary job."
+  "2026-11-15T00:46:32.860Z",codex-agent,"The complete linked workflow/version/inventory group passed 236/236 with zero failures, skips or cancellations via pinned pm test --run --only-index 25 --progress. Native Bun focused handoff/alert group passed 24/24. Supporting gates pass: typecheck, build, build:test, lint, docstrings (33 files, 315 declarations), duplication (34 authored modules, zero duplicated lines at the unchanged threshold), publish attestation, and privacy (9474 Git objects). Strict health with isolated global configuration passes all required checks; the default global configuration reports an installed extension/host version skew, so that environment warning is kept distinct. PM linked execution receipts report tracking_disabled under existing project policy; outcomes are documented here rather than enabling run-artifact tracking in the package tracker. Remaining selected import/closeout tests and final focused Node 26 coverage execution are running."
+  "2026-11-15T00:48:01.486Z",codex-agent,"Final local evidence for PR 246: pinned linked workflow group 236/236 passed; selected import/default-branch/credential and closeout arm/hold/revocation cases 5/5 passed, both with zero skips/cancellations. Final Node 26 focused handoff/alert suite under c8 passed 24/24 after cleanup PID hardening; native Bun focused suite passed 24/24. Typecheck, build, build:test, lint, docstrings (33 files / 315 declarations), duplication (34 authored modules / zero duplicated lines), publish attestation, ownership-inventory --check and isolated strict self-host health passed. Production four-dimensional coverage thresholds remain 100; the focused c8 execution is timeout-harness evidence, not a production coverage claim. Full npm/Bun release gates are deferred to CI under this task scope. Dist is ignored rather than committed; build completed. No local test timed out, failed or needed a load retry. Revert proofs above record five expected failures. Default-global extension/host skew is isolated from the required health verdict; actionlint is unavailable. Main history remains a byte-prefix of the branch; no existing history was rewritten. Leave the item in progress for orchestrator verification and release my claim. Finish changelog generation/check and commit with SteveBot identity; run the privacy gate again on the committed object store before pushing. CI run links and exact final head are reported on the PR and final handoff. No PM CLI/SDK defect found."
+files[15]{path,scope}:
   .github/workflows/pm-github-closeout.yml,project
   .github/workflows/pm-github-sync.yml,project
   docs/closeout-workflow-caller.yml,project
@@ -73,10 +78,11 @@ files[14]{path,scope}:
   test/closeout-workflow-decisions.ts,project
   test/closeout-workflow-publication.ts,project
   test/closeout-workflow.test.ts,project
+  test/daily-sync-alert.test.ts,project
   test/helpers/closeout-workflow.ts,project
   test/identity-inventory.test.ts,project
   test/import-gate.test.ts,project
-tests[24]:
+tests[27]:
   - command: node --test --test-concurrency=2 test/bot-pr-workflow.test.ts test/self-versioned-workflows.test.ts test/workflow-rule-names.test.ts
     scope: project
     timeout_seconds: 180
@@ -261,6 +267,30 @@ tests[24]:
     provenance:
       author: codex-followups-1114
       created_at: "2026-11-14T20:24:56.263Z"
+      source_kind: local_mutation
+      source_ref: fix/no-ci-polling-on-runners
+  - command: NPM_CONFIG_USERCONFIG=/dev/null node --test --test-concurrency=2 test/ci-handoff-workflow.test.ts test/bot-pr-workflow.test.ts test/self-versioned-workflows.test.ts test/workflow-rule-names.test.ts test/daily-sync-alert.test.ts test/identity-inventory.test.ts test/round-twelve.test.ts
+    scope: project
+    timeout_seconds: 1800
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-15T00:36:50.166Z"
+      source_kind: local_mutation
+      source_ref: fix/no-ci-polling-on-runners
+  - command: "NPM_CONFIG_USERCONFIG=/dev/null node --test --test-concurrency=2 --test-name-pattern=\"caller default branch guard is first|workflow credentials|earlier armed auto-merge|informational parked-run failure|previous auto-merge is revoked on workflow exit: maintenance\" test/import-gate.test.ts test/closeout-workflow.test.ts"
+    scope: project
+    timeout_seconds: 900
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-15T00:36:52.028Z"
+      source_kind: local_mutation
+      source_ref: fix/no-ci-polling-on-runners
+  - command: NPM_CONFIG_USERCONFIG=/dev/null bun test --timeout 120000 test/ci-handoff-workflow.test.ts test/daily-sync-alert.test.ts
+    scope: project
+    timeout_seconds: 300
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-15T00:39:10.587Z"
       source_kind: local_mutation
       source_ref: fix/no-ci-polling-on-runners
 docs[7]{path,scope}:

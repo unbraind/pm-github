@@ -19,7 +19,7 @@ function workflow(kind: string): Workflow {
   return parse(readFileSync(join(root, `.github/workflows/pm-github-${kind}.yml`), "utf8")) as Workflow;
 }
 
-/** Run discovery against a real Git head and receipt-only GitHub responses without wall-clock sleeps. */
+/** Run discovery against a real Git head with synthetic GitHub receipts and controlled lookup timing. */
 function fixture(kind: string, overrides: NodeJS.ProcessEnv, verify: (result: { status: number | null; stdout: string; stderr: string; output: Record<string, string>; summary: string; calls: string }) => void): void {
   const dir = mkdtempSync(join(tmpdir(), "ci-handoff-"));
   const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1",
@@ -29,9 +29,13 @@ function fixture(kind: string, overrides: NodeJS.ProcessEnv, verify: (result: { 
     PARKED_CI_RUN_URLS: '["https://github.com/acme/widgets/actions/runs/99"]',
     GITHUB_OUTPUT: join(dir, "output"), GITHUB_STEP_SUMMARY: join(dir, "summary"), RECEIPTS: join(dir, "receipts"),
     REAL_SLEEP: spawnSync("bash", ["-c", "command -v sleep"], { encoding: "utf8" }).stdout.trim(),
+    STALL_COMMAND: join(dir, "bin/stall"),
     ...overrides, PATH: join(dir, "bin") + ":" + process.env.PATH };
   try {
     mkdirSync(join(dir, "bin"));
+    // Model gh as one blocked executable. Job control makes an accidental
+    // descendant retain the capture pipe after timeout kills its parent.
+    writeFileSync(env.STALL_COMMAND, '#!/usr/bin/env bash\nprintf "%s" "$$" > "$RECEIPTS.stall-pid"\nexec "$REAL_SLEEP" 120\n', { mode: 0o755 });
     for (const args of [["init", "-q"], ["commit", "--allow-empty", "-qm", "Head"]]) {
       const result = spawnSync("git", args, { cwd: dir, env, encoding: "utf8" });
       assert.equal(result.status, 0, result.stderr);
@@ -48,8 +52,8 @@ if [[ "\${LOOKUP:-}" == deadline || "\${LOOKUP:-}" == stuck ]]; then
     printf '60' > "$RECEIPTS.clock"
     if [[ "\${LOOKUP:-}" == stuck ]]; then
       printf 'stuck-started\\n' >> "$RECEIPTS"
-      "$REAL_SLEEP" 120
-      printf 'stuck-finished\\n' >> "$RECEIPTS"
+      set -m
+      exec "$STALL_COMMAND"
     fi
     exit 0
   fi
@@ -74,9 +78,16 @@ else printf 'https://github.com/acme/widgets/actions/runs/12\\n'; fi
     const output = Object.fromEntries(optionalRead(env.GITHUB_OUTPUT).trim().split("\n").map(line => {
       const index = line.indexOf("="); return [line.slice(0, index), line.slice(index + 1)];
     }));
-    verify({ status: result.status, stdout: result.stdout, stderr: result.stderr, output,
+    verify({ status: result.status, stdout: result.stdout, stderr: result.error?.message ?? result.stderr, output,
       summary: optionalRead(env.GITHUB_STEP_SUMMARY), calls: optionalRead(env.RECEIPTS) });
-  } finally { rmSync(dir, { recursive: true, force: true }); }
+  } finally {
+    // A failing mutation must not leave the fixture's blocked process alive.
+    try {
+      const pid = Number(readFileSync(join(dir, "receipts.stall-pid"), "utf8"));
+      if (Number.isSafeInteger(pid) && pid > 1) process.kill(pid, "SIGKILL");
+    } catch { /* Already killed or never started. */ }
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 for (const kind of ["sync", "closeout"]) {

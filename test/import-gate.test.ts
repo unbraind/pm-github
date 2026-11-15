@@ -698,6 +698,7 @@ test("the caller default branch guard is first and preserves the remaining step 
     "Gate tracker and regenerated changelog", "Verify strict pm health",
     "Create automation app token", "Validate publication credentials",
     "Commit gated sync changes and open review PR", "Dispatch caller CI and report parked runs",
+    "Confirm caller CI registration and summarize handoff",
     "Record safe failure rules", "Reconcile sync failure tracking issue",
   ]);
   assert.match(steps[0]!, /RUN_REF: \$\{\{ github.ref \}\}/);
