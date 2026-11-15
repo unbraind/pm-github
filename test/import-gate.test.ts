@@ -1,3 +1,4 @@
+import { testTime } from "./support/time.ts";
 // Gated import pipeline: plan completeness + provenance idempotency verified
 // BEFORE any mutation, the fail-closed tracker privacy gate AFTER it, and the
 // full workflow sequence replayed on a REAL Git repository with a bare remote —
@@ -1428,7 +1429,7 @@ test("a no-op import discards a newly generated changelog absent from HEAD", asy
   assert.equal(run.published, false);
 });
 
-test("packed installed CLI repeats a completed gated import under native Bun within 45 seconds", { timeout: 180_000 }, async () => {
+test("packed installed CLI repeats a completed gated import under native Bun within 45 seconds", { timeout: testTime(180_000) }, async () => {
   const { root, base, bare } = initSyncRepo();
   try {
     const env = await prepareWorkflowFixture(root, base);
@@ -1448,7 +1449,7 @@ test("packed installed CLI repeats a completed gated import under native Bun wit
         assert.equal(result.timedOut, false);
         assert.equal(result.signal, null, `native Bun repeat ${repeat + 1} exceeded its unchanged 45s budget: ${result.stderr}`);
         assert.equal(result.code, 0, result.stderr);
-        assert.ok(Date.now() - started < 45_000);
+        assert.ok(Date.now() - started < testTime(45_000));
         assert.deepEqual(snapshot(), before);
         assert.deepEqual(remoteRefs(bare), ["refs/heads/main"]);
       }

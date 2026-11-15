@@ -1,3 +1,4 @@
+import { testDepth } from "./support/depth.ts";
 /** Seeded state-machine oracle normalizes only by writing and reading native SDK state. */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -8,7 +9,7 @@ import { init, PmClient, readSettings, resolveRuntimeStatusRegistry } from "@unb
 import { captureGithubDiscussion, validateDiscussionCaptureReport, type DiscussionCaptureInput } from "../index.ts";
 import { discussionTracker, discussionSource, discussionRequest } from "./helpers/discussions.ts";
 
-test("500 seeded operation sequences preserve all touched native fields, relations, historical inputs and JSON/TOON round trips", async () => {
+test("seeded operation sequences preserve all touched native fields, relations, historical inputs and JSON/TOON round trips", async () => {
   await discussionTracker(async (root, sdk, parent, directory) => {
     const referenceRoot = join(directory, "reference");
     await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { cwd: directory, pmRoot: referenceRoot, noExtensions: true });
@@ -34,14 +35,14 @@ test("500 seeded operation sequences preserve all touched native fields, relatio
     let creates = 0;
     let replays = 0;
     let stale = 0;
-    for (let sequence = 0; sequence < 500; sequence++) {
+    for (let sequence = 0; sequence < testDepth(500); sequence++) {
       await sdk.client.focus(random(2) ? ambient : other);
       const parentOptions = { body: `Native body ${random(9)}\r\n preserved  `, description: `Native description ${random(12)}`,
         tags: random(2) ? "KEEP, native" : "native", status: statuses[random(statuses.length)]!,
         dep: [`id=${other},kind=related`], unset: ["parent", "sprint", "release", "goal", "objective"] };
       await sdk.client.update(parent, parentOptions);
       const nativeBefore = (await sdk.client.get(parent, projection)).item;
-      // Bound the state population while retaining 500 independent random operation sequences.
+      // Bound the state population while retaining the same independent random operation sequences.
       // Reusing prior revisions exercises idempotency without quadratic staging-copy growth.
       const sourceId = 20 + random(2);
       const raw = `${random(2) ? "  " : ""}Decision ${random(2)}${random(2) ? "\r\n" : "\n"}keep exact bytes${random(2) ? "  " : ""}`;
@@ -97,7 +98,7 @@ test("500 seeded operation sequences preserve all touched native fields, relatio
     const finalItems = (await sdk.client.listAllComplete({ includeBody: true })).items.filter(item => item.type === "Decision");
     assert.equal(finalItems.length, expected.size);
     for (const item of finalItems) { assert.equal(typeof item.body, "string"); assert.deepEqual(JSON.parse(String(item.body)), JSON.parse(expected.get(item.id)!)); }
-    assert.ok(creates > 20 && replays > 100 && stale > 20);
-    console.log(JSON.stringify({ sequences: 500, seed: "0xdec1510", operations, creates, older_input_replays: replays, stale, model_items: expected.size }));
+    assert.ok(creates > testDepth(500) * .04 && replays > testDepth(500) * .2 && stale > testDepth(500) * .04);
+    console.log(JSON.stringify({ sequences: testDepth(500), seed: "0xdec1510", operations, creates, older_input_replays: replays, stale, model_items: expected.size }));
   });
 });

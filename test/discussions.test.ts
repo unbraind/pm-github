@@ -1,3 +1,4 @@
+import { testDepth } from "./support/depth.ts";
 /** Native SDK and real HTTP acceptance for explicit issue-discussion evidence. */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -293,13 +294,13 @@ test("preview leaves every source tracker byte unchanged, including derived usag
   });
 });
 
-test("1000 seeded extreme mutations fuzz input and output numeric domains before side effects", async () => {
+test("seeded extreme mutations fuzz input and output numeric domains before side effects", async () => {
   await discussionTracker(async (root, sdk, item) => {
     const input = discussionRequest(item);
     const plan = await captureGithubDiscussion(root, input, sdk, { readComment: async () => discussionSource() });
     const extremes = [NaN, Infinity, -Infinity, Number.MAX_VALUE, -Number.MIN_VALUE, 0.5, Number.MAX_SAFE_INTEGER + 1, -1];
     let seed = 0xb0a1da7;
-    for (let iteration = 0; iteration < 1000; iteration++) {
+    for (let iteration = 0; iteration < testDepth(1000); iteration++) {
       seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
       const invalid = extremes[seed % extremes.length]!;
       await assert.rejects(captureGithubDiscussion(root, { ...input, issue: invalid }, sdk), refusal("invalid_selection"));

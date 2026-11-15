@@ -1,3 +1,4 @@
+import { testTime } from "./support/time.ts";
 /** The acceptance watchdog refuses stalled processes and preserves durable bytes. */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -25,7 +26,7 @@ test("the acceptance watchdog passes normal exits and force-kills a CPU spin ign
   assert.match(stalled.stdout, /ready/);
   assert.equal(stalled.timedOut, true);
   assert.equal(stalled.signal, "SIGKILL");
-  assert.ok(stalled.seconds < 3);
+  assert.ok(stalled.seconds < testTime(3000) / 1000);
   assert.deepEqual(fs.readFileSync(tracker), before);
 });
 

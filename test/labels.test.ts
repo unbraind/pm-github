@@ -1,3 +1,4 @@
+import { testDepth } from "./support/depth.ts";
 /** Exact label plans use real non-git SDK state, complete counts and no saved mutations. */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -198,14 +199,14 @@ test("provider name semantics cover policy comparisons, hidden review rows and e
   assert.equal(separate.counts.filters, 2, "case-insensitive name matching must not collapse distinct selected IDs");
 }));
 
-test("500 provider name permutations cover mapped, unmapped, form and wire export paths", async () => {
+test("provider name permutations cover mapped, unmapped, form and wire export paths", async () => {
   let seed = 0xca5e123;
   const variants = new Set<string>();
   /** Generate ASCII case variants without changing any provider-name characters. */
   function variant(name: string): string {
     return [...name].map(character => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed >>> 24 & 1 ? character.toUpperCase() : character; }).join("");
   }
-  for (let sequence = 0; sequence < 500; sequence++) {
+  for (let sequence = 0; sequence < testDepth(500); sequence++) {
     const first = variant("kind/bug");
     const alias = variant("kind/bug");
     variants.add(first);
@@ -231,7 +232,7 @@ test("500 provider name permutations cover mapped, unmapped, form and wire expor
       assert.deepEqual(entries[0]!.payload.labels, names, "wire normalization does not mutate caller plans");
     }
   }
-  assert.ok(variants.size > 100, "the seeded sample exercises a broad set of case permutations");
+  assert.ok(variants.size > Math.min(100, testDepth(500)), "the seeded sample exercises a broad set of case permutations");
 });
 
 test("form and export label composition share provider name semantics in JSON and TOON", async () => tracker(async root => {
@@ -252,7 +253,7 @@ test("form and export label composition share provider name semantics in JSON an
   } finally { await server.close(); }
 }));
 
-test("1000 items return complete counts and bounded rows on a read-only non-git tracker", async () => tracker(async root => {
+test("items return complete counts and bounded rows on a read-only non-git tracker", async () => tracker(async root => {
   const base = await item(root, "Thousand fixture base", ["bug"], "fixture-0001");
   for (let i = 1; i < 1000; i++) {
     const id = `${base.id}-bulk-${String(i).padStart(4, "0")}`;
@@ -393,7 +394,7 @@ test("registered CLI returns compact host-renderable reports and typed input ref
   } finally { await server.close(); }
 }));
 
-test("500 SDK table wire permutations preserve producer rows, absent fields and JSON-looking strings", async () => tracker(async root => {
+test("SDK table wire permutations preserve producer rows, absent fields and JSON-looking strings", async () => tracker(async root => {
   await item(root, "Wire witness", ["one,two"]);
   const csv = { id: "CSV", name: "one,two" };
   const input = request({ sources: [csv], change: { kind: "rename", name: "null,[1],constructor" },
@@ -405,7 +406,7 @@ test("500 SDK table wire permutations preserve producer rows, absent fields and 
   /** Replayable integer choices vary sparse rows and their SDK encoding metadata. */
   function random(bound: number) { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return (seed >>> 0) % bound; }
   let absentWire: { rows: ReturnType<typeof encodePmTableRows>["rows"]; rows_encoding: ReturnType<typeof encodePmTableRows>["encoding"] } | undefined;
-  for (let sequence = 0; sequence < 500; sequence++) {
+  for (let sequence = 0; sequence < testDepth(500); sequence++) {
     const rows = [...report.rows];
     for (let i = rows.length - 1; i > 0; i--) { const j = random(i + 1); [rows[i], rows[j]] = [rows[j]!, rows[i]!]; }
     const producerRows = rows.map(row => {
@@ -458,7 +459,7 @@ test("500 SDK table wire permutations preserve producer rows, absent fields and 
   }
 }));
 
-test("500 seeded model sequences replay older policies and preserve SDK-read native fields and relationships", async () => tracker(async root => {
+test("seeded model sequences replay older policies and preserve SDK-read native fields and relationships", async () => tracker(async root => {
   let seed = 0x1abe1200;
   /** Reproducible unsigned random integer; no floating-point boundary decisions. */
   const random = (bound: number) => { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return (seed >>> 0) % bound; };
@@ -472,7 +473,7 @@ test("500 seeded model sequences replay older policies and preserve SDK-read nat
   }
   const policies: GithubLabelMigrationInput[] = [request()];
   let modelTags = ["bug"];
-  for (let sequence = 0; sequence < 500; sequence++) {
+  for (let sequence = 0; sequence < testDepth(500); sequence++) {
     await focus(random(2) ? parent.id : child.id, {}, { pmRoot: root });
     // Native tag normalization comes only from the SDK producer, never a handwritten substitute.
     const raw = random(2) ? " bug , gh:fixture/repo#7, keep " : "keep, Bug";

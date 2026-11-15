@@ -1,3 +1,4 @@
+import { testTime } from "./support/time.ts";
 import { comments as readComments } from "@unbrained/pm-cli/sdk";
 // Tests for the cross-process comment-sync lock (pm-github-503u).
 //
@@ -463,7 +464,7 @@ test("two in-process concurrent syncs of the same comments never duplicate", asy
 // GitHub comment id lands exactly once.
 test(
   "two concurrent processes importing the same comments never duplicate (pm-github-503u)",
-  { timeout: 180_000 },
+  { timeout: testTime(180_000) },
   async () => {
     const root = makeWorkspace();
     try {
@@ -552,7 +553,7 @@ test("isLockOwnerAlive rejects non-positive pids and treats EPERM as alive", () 
   }
 });
 
-test("a lock that cannot be stat'd contends within the wait budget instead of spinning", { timeout: 5_000 }, async () => {
+test("a lock that cannot be stat'd contends within the wait budget instead of spinning", { timeout: testTime(5_000) }, async () => {
   const root = mkdtempSync(join(tmpdir(), "pm-github-lock-spin-"));
   try {
     const lockPath = importCommentSyncLockPath(root, "pm-spin");
@@ -561,7 +562,7 @@ test("a lock that cannot be stat'd contends within the wait budget instead of sp
     const started = Date.now();
     const acq = await acquireImportLock(root, "pm-spin", { waitMs: 80 });
     assert.equal(acq.status, "contended");
-    assert.ok(Date.now() - started < 2000, "stat failure must not busy-spin past the wait budget");
+    assert.ok(Date.now() - started < testTime(2000), "stat failure must not busy-spin past the wait budget");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

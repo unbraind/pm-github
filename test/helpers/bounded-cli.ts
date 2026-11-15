@@ -1,3 +1,4 @@
+import { testTime } from "../support/time.ts";
 /** Execute installed-CLI acceptance with a wall-clock deadline and forced cleanup. */
 import { spawn } from "node:child_process";
 export interface BoundedCliResult {
@@ -15,7 +16,7 @@ export interface BoundedCliResult {
  * clock starts. Ordinary installed-consumer calls keep their full wall-clock budget.
  */
 export function boundedCli(command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv,
-  deadlineMs = 45_000, cleanupMs = 5_000, readyMarker?: string): Promise<BoundedCliResult> {
+  deadlineMs = testTime(45_000), cleanupMs = testTime(5_000), readyMarker?: string): Promise<BoundedCliResult> {
   const started = performance.now();
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd, env, detached: process.platform !== "win32" });
@@ -43,7 +44,7 @@ export function boundedCli(command: string, args: string[], cwd: string, env: No
       deadline = setTimeout(expire, deadlineMs);
     };
     // Startup is finite even if the controlled probe never emits its marker.
-    const startup = readyMarker === undefined ? undefined : setTimeout(expire, 45_000);
+    const startup = readyMarker === undefined ? undefined : setTimeout(expire, testTime(45_000));
     if (readyMarker === undefined) arm();
     // Decode the streams, not each chunk: a multibyte character split across
     // two chunks would otherwise become two U+FFFD replacement characters.

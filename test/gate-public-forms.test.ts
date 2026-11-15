@@ -1,3 +1,4 @@
+import { testTime } from "./support/time.ts";
 // Public technical-forms corpora for the privacy gate (gh:unbraind/pm-github#193):
 // the must-allow table proves every permitted form (procfs/sysfs interfaces,
 // RFC 2606/6761 reserved-domain fixture addresses, the SSH git transport
@@ -146,7 +147,7 @@ test("the delimiter check answers adversarial bracket chains in bounded time", (
     const hits = scanLineForRuleHits(line);
     const elapsed = performance.now() - started;
     assert.deepStrictEqual(hits, []);
-    assert.ok(elapsed < 200, `${line.length}-character adversarial line took ${elapsed.toFixed(1)} ms`);
+    assert.ok(elapsed < testTime(200), `${line.length}-character adversarial line took ${elapsed.toFixed(1)} ms`);
   }
 });
 
@@ -160,7 +161,7 @@ test("the email signature scans a long label run in linear time", () => {
     const hits = scanLineForRuleHits(line).filter(hit => hit.rule === "email-address");
     const elapsed = performance.now() - started;
     assert.deepStrictEqual(hits, []);
-    assert.ok(elapsed < 200, `${line.length}-character email-shaped line took ${elapsed.toFixed(1)} ms`);
+    assert.ok(elapsed < testTime(200), `${line.length}-character email-shaped line took ${elapsed.toFixed(1)} ms`);
   }
 });
 
@@ -207,5 +208,5 @@ test("a long chain of delimiter-started public paths fails closed in linear time
   const hits = scanLineForRuleHits(chain);
   const elapsed = performance.now() - started;
   assert.deepStrictEqual(hits.map((hit) => hit.rule), ["absolute-host-path"]);
-  assert.ok(elapsed < 1000, `${chain.length}-character delimiter chain took ${elapsed.toFixed(1)} ms`);
+  assert.ok(elapsed < testTime(1000), `${chain.length}-character delimiter chain took ${elapsed.toFixed(1)} ms`);
 });

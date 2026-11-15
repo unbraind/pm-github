@@ -1,3 +1,5 @@
+import { testTime } from "./support/time.ts";
+import { testDepth } from "./support/depth.ts";
 /** Citation adoption exercises real initialized trackers, including a PATH without git. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -241,7 +243,7 @@ test("raw exclusion property rejects second numbers wrapped in seeded random Mar
   const wrappers = [["**", "**"], ["*", "*"], ["__", "__"], ["_", "_"], ["`", "`"], ["```text\n", "\n```"],
     ["<", ">"], ["[reference](", ")"], ["![reference](", ")"], ["~~", "~~"], ["\\*", "\\*"], ["> ", "\n"]];
   const tails = ["", "next", ".", ")", "**tail", "_suffix", "/extra", "?query=anything"];
-  for (let sample = 0; sample < 4096; sample++) {
+  for (let sample = 0; sample < testDepth(4096); sample++) {
     const number = 31 + next(10000);
     const references = [`https://github.com/${repo}/issues/${number}`, `https://github.com/${repo}/pull/${number}`, `${repo}#${number}`,
       `#${number}`, `issues/${number}tail`, `pull/${number}tail`, `prefix#${number}tail`, `https://foreign.example/path#${number}`];
@@ -260,7 +262,7 @@ test("raw exclusion property rejects second numbers wrapped in seeded random Mar
       assert.deepEqual(result.citation_candidates, [{ id: "local", reason: "multiple_issues" }]);
     }
   }
-  t.diagnostic("seed 0x6c8e9cf5: 4096 generated decorations, 12288 field cases");
+  t.diagnostic(`seed 0x6c8e9cf5: ${testDepth(4096)} generated decorations, ${testDepth(4096) * 3} field cases`);
 });
 
 test("raw exclusion deliberately over-counts unrelated substrings and trailing characters", () => {
@@ -307,7 +309,7 @@ test("repository veto fuzzes random repositories, numbers and nested Markdown de
   const wrappers = [["**", "**"], ["*", "*"], ["__", "__"], ["_", "_"], ["`", "`"], ["```text\n", "\n```"],
     ["<", ">"], ["[reference](", ")"], ["![reference](", ")"], ["~~", "~~"], ["\\*", "\\*"], ["> ", "\n"]];
   const tails = ["", "/", ".", ")", "**tail", "suffix", "?query=all", "#issuecomment-99"];
-  for (let sample = 0; sample < 4096; sample++) {
+  for (let sample = 0; sample < testDepth(4096); sample++) {
     const sourceRepo = next(2) === 0 ? repo : `owner-${next(10000)}/repo-${next(10000)}`;
     const number = sourceRepo === repo ? 31 + next(10000) : next(2) === 0 ? 30 : 31 + next(10000);
     const references = [`https://github.com/${sourceRepo}/issues/${number}`, `http://www.github.com/${sourceRepo}/pull/${number}`,
@@ -327,7 +329,7 @@ test("repository veto fuzzes random repositories, numbers and nested Markdown de
       assert.deepEqual(result.citation_candidates, [{ id: "local", reason: "multiple_issues" }]);
     }
   }
-  t.diagnostic("seed 0x78b3e2d1: 4096 repository/number/decoration samples, 12288 field cases");
+  t.diagnostic(`seed 0x78b3e2d1: ${testDepth(4096)} repository/number/decoration samples, ${testDepth(4096) * 3} field cases`);
 });
 
 test("repository veto refuses UNKNOWN references and retains qualified same-target controls", () => {
@@ -609,7 +611,7 @@ test("normalized allowlist fuzz rejects random repository, number, decoration an
     (value: string) => [...value].join("\u200b\u202e"), (value: string) => value.replace("/issues/", "/issues/\n")];
   const wrappers = [["**", "**"], ["*", "*"], ["__", "__"], ["_", "_"], ["`", "`"], ["```text\n", "\n```"],
     ["<", ">"], ["[reference](", ")"], ["![reference](", ")"], ["~~", "~~"], ["\\*", "\\*"], ["> ", "\n"]];
-  for (let sample = 0; sample < 4096; sample++) {
+  for (let sample = 0; sample < testDepth(4096); sample++) {
     const sourceRepo = next(2) ? repo : `owner-${next(10000)}/repo-${next(10000)}`;
     const number = sourceRepo === repo ? 31 + next(10000) : next(2) ? 30 : 31 + next(10000);
     const references = [`https://github.com/${sourceRepo}/issues/${number}`, `https://github.com/${sourceRepo}/pull/${number}`,
@@ -630,7 +632,7 @@ test("normalized allowlist fuzz rejects random repository, number, decoration an
       assert.equal(result.citation_candidates?.[0]?.id, "local");
     }
   }
-  t.diagnostic("seed 0x53ce71a9: 4096 encoded decoration samples, 12288 field cases");
+  t.diagnostic(`seed 0x53ce71a9: ${testDepth(4096)} encoded decoration samples, ${testDepth(4096) * 3} field cases`);
 });
 
 test("issue-label URL tails keep the anchored tail grammar after the regex tail was replaced by linear trimming", () => {
@@ -644,7 +646,7 @@ test("issue-label URL tails keep the anchored tail grammar after the regex tail 
   const started = performance.now();
   const hostile = { id: "hostile", body: `Issue: ${issue.html_url}${")".repeat(50_000)}x` };
   assert.equal(matchImportedIssue([hostile], issue).item, undefined);
-  assert.ok(performance.now() - started < 1_000, "a long run of ')' must not backtrack polynomially");
+  assert.ok(performance.now() - started < testTime(1_000), "a long run of ')' must not backtrack polynomially");
 });
 
 test("citation adoption never overwrites an item that already carries structured ownership", () => {

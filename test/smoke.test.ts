@@ -1,3 +1,4 @@
+import { testTime } from "./support/time.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
@@ -320,7 +321,7 @@ test("parseNextLink rejects adversarial Link-header input without polynomial bac
   const double = performance.now() - startDouble;
 
   assert.ok(
-    single < 2000,
+    single < testTime(2000),
     `a linear scan of a 200001-character header must not approach the quadratic cost `
       + `(25141ms before the fix); took ${single.toFixed(2)}ms`,
   );

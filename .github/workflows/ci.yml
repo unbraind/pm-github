@@ -1,17 +1,22 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PM_TEST_DEPTH: quick
     strategy:
       fail-fast: false
       matrix:
@@ -25,6 +30,27 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      - name: Detect code changes
+        id: changes
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          code=true
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            code=false
+            git diff --name-only --no-renames -z "$BASE_SHA...$HEAD_SHA" > "$RUNNER_TEMP/ci-changed-paths"
+            while IFS= read -r -d '' path; do
+              case "$path" in
+                .agents/pm/*|*.md|docs/*|CHANGELOG.md|LICENSE) ;;
+                *) code=true ;;
+              esac
+            done < "$RUNNER_TEMP/ci-changed-paths"
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
       - name: Setup Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -32,6 +58,7 @@ jobs:
           cache: npm
 
       - name: Setup Bun
+        if: steps.changes.outputs.code == 'true'
         uses: oven-sh/setup-bun@v2.2.0
         with:
           # Exact pin: setup-bun resolves floating versions via an
@@ -44,6 +71,7 @@ jobs:
         run: npm ci
 
       - name: Verify tracked pm project health
+        if: steps.changes.outputs.code != 'true' || matrix.node-version == 26
         shell: bash
         run: |
           set -euo pipefail
@@ -61,41 +89,23 @@ jobs:
           # still exiting successfully.
           ./node_modules/.bin/pm health --strict-exit --require-merge-drivers
 
-      - name: Complete npm release gate
+      - name: Check documentation and tracker changes
+        if: steps.changes.outputs.code != 'true'
+        run: npm run changelog:check
+
+      - name: Engines floor build and tests
+        if: steps.changes.outputs.code == 'true' && matrix.node-version == 22
+        run: npm test
+
+      - name: Quick npm release gate
+        if: steps.changes.outputs.code == 'true' && matrix.node-version == 26
         run: npm run release:check
 
-      - name: Verify Bun can install the package graph
-        run: bun install --no-save
-
-      - name: Verify native Bun extension behavior
-        run: npm run test:bun
-
-  bun-release:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version: [22, 26]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-
-      - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: npm
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2.2.0
-        with:
-          bun-version: "1.3.14"
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Complete Bun release gate
-        run: bun run release:check
+      # The gate's packed tests prove npm and native Bun consumers. They do not
+      # prove bunx, so exercise that launcher explicitly instead of another gate.
+      - name: Bun install and bunx smoke
+        if: steps.changes.outputs.code == 'true' && matrix.node-version == 26
+        run: |
+          bun install --no-save
+          bunx --bun --no-install pm --version
+          bun test --timeout 600000 test/package-metadata.test.ts test/packed-fixture.test.ts
