@@ -19,10 +19,10 @@ source into documentation still selects code validation.
 | Closeout publication workflow scenarios | first 25/49 | first 25/49 | — | all 49 scenarios |
 | Closeout decision property matrix | first 25/186 | first 25/186 | — | all 186 cells |
 | Tests, including real packed npm and native Bun consumers | quick | quick via coverage | — | full in all four gates |
-| Docstrings, lint, zero duplication, privacy | — | yes | — | all four gates |
+| Docstrings, lint, zero duplication | — | yes | — | all four gates |
 | Exact all-source coverage, 100% lines/statements/branches/functions | — | quick | — | full in all four gates |
 | Production dependency audit | — | yes | — | all four gates |
-| Pack dry-run | — | yes | — | all four gates |
+| Pack dry-run | — | yes | yes | all four gates |
 | Changelog consistency | — | yes | yes | all four gates |
 | Release publish attestation verification | — | yes | — | all four gates |
 | Bun package-graph install | — | yes | — | both npm legs |
@@ -89,7 +89,7 @@ proves the installed launcher, not an ephemeral registry download. The opt-in
 it was not part of the old CI gate and remains opt-in.
 
 Latency regression assertions and child watchdog defaults accept
-`PM_TEST_TIME_SCALE` (finite values >= 1, default 1). This scales test allowances,
+`PM_TEST_TIME_SCALE` (finite positive values, default 1), rounded up to integer milliseconds and rejected before spawning when invalid. Positive factors below one retain the original baseline so fixed product deadlines still fit inside the harness. This scales test allowances,
 not the production HTTP timeout, lock wait, or dispatch deadline. Lower-bound
 assertions still prove real waiting. Synthetic timing replay pins scale 1 so its
 positive and negative controls remain independent of machine load. Performance
@@ -210,3 +210,7 @@ to the pre-fix review head (message interpolations on the same line count too).
 The helper's longer harness allowance cannot relax the installed import's
 separate fixed 45 s product assertion. The helper declaration in
 `test/support/time.ts` defines the scaler; it is not a call site.
+
+CodeQL ignores inert tracker data extensions while keeping executable tracker scripts eligible on PRs and main pushes.
+
+The documentation tier retains privacy auditing, package dry-run and publish-attestation checks; the auditor recognizes tracked shell shebangs regardless of file extension.

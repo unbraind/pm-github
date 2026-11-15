@@ -95,7 +95,10 @@ jobs:
 
       - name: Check documentation and tracker changes
         if: steps.changes.outputs.code != 'true'
-        run: npm run changelog:check
+        run: |
+          npm run changelog:check
+          npm run pack:dry-run
+          npm run verify:release-publish-attestation
 
       - name: Engines floor build and tests
         if: steps.changes.outputs.code == 'true' && matrix.node-version == 22

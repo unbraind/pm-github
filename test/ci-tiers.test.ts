@@ -33,6 +33,7 @@ test("PR detector keeps docs cheap and source deletions, renames and unusual nam
       ["source-to-docs", ["docs/source.md"], true, true, "pull_request"],
       ["dispatch", ["README.md"], false, true, "workflow_dispatch"],
     ] as const) {
+      if (process.platform === "win32" && paths.some(path => /[\r\n]/.test(path))) continue;
       git("reset", "--hard", base);
       git("clean", "-fdq");
       for (const file of paths) write(file);
