@@ -562,7 +562,7 @@ test("a lock that cannot be stat'd contends within the wait budget instead of sp
     const started = Date.now();
     const acq = await acquireImportLock(root, "pm-spin", { waitMs: 80 });
     assert.equal(acq.status, "contended");
-    assert.ok(Date.now() - started < testTime(2000), "stat failure must not busy-spin past the wait budget");
+    assert.ok(Date.now() - started < 2000, "stat failure must not busy-spin past the wait budget");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

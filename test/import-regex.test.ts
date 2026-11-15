@@ -1,4 +1,3 @@
-import { testTime } from "./support/time.ts";
 /** Compatibility and time bounds for regex consumers of imported GitHub text. */
 import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
@@ -72,7 +71,7 @@ test("ownership whitespace trigger: 200000 spaces finish under 50 ms", t => {
     assert.equal(result.item, undefined);
   }
   t.diagnostic(`ownership 200000 spaces (best of 3): ${elapsed.toFixed(3)} ms`);
-  assert.ok(elapsed < testTime(50), `ownership took ${elapsed.toFixed(3)} ms; scaled limit ${testTime(50)} ms`);
+  assert.ok(elapsed < 50, `ownership took ${elapsed.toFixed(3)} ms; limit 50 ms`);
 });
 
 test("locator punctuation trigger: 200000 parentheses finish under 50 ms", t => {
@@ -87,7 +86,7 @@ test("locator punctuation trigger: 200000 parentheses finish under 50 ms", t => 
     assert.equal(result.item, undefined);
   }
   t.diagnostic(`locator 200000 parentheses plus sentinel (best of 3): ${elapsed.toFixed(3)} ms`);
-  assert.ok(elapsed < testTime(50), `locator took ${elapsed.toFixed(3)} ms; scaled limit ${testTime(50)} ms`);
+  assert.ok(elapsed < 50, `locator took ${elapsed.toFixed(3)} ms; limit 50 ms`);
   assert.equal(trimLocatorPunctuation(url + ")".repeat(200_000)), url);
 });
 
@@ -102,7 +101,7 @@ test("citation URL punctuation trigger: 50000 exclamations plus sentinel finish 
     assert.equal(result.item, undefined);
   }
   t.diagnostic(`citation URL 50000 exclamations plus sentinel (best of 3): ${elapsed.toFixed(3)} ms`);
-  assert.ok(elapsed < testTime(50), `citation URL took ${elapsed.toFixed(3)} ms; scaled limit ${testTime(50)} ms`);
+  assert.ok(elapsed < 50, `citation URL took ${elapsed.toFixed(3)} ms; limit 50 ms`);
 });
 
 test("privacy phone whitespace parity and 20000-space trigger", t => {
@@ -127,7 +126,7 @@ test("privacy phone whitespace parity and 20000-space trigger", t => {
     assert.deepEqual(result, []);
   }
   t.diagnostic(`privacy 20000 spaces (best of 3): ${elapsed.toFixed(3)} ms`);
-  assert.ok(elapsed < testTime(50), `privacy took ${elapsed.toFixed(3)} ms; scaled limit ${testTime(50)} ms`);
+  assert.ok(elapsed < 50, `privacy took ${elapsed.toFixed(3)} ms; limit 50 ms`);
 });
 
 test("API-base slash trim parity and 20000-slash trigger", async t => {
@@ -145,7 +144,7 @@ test("API-base slash trim parity and 20000-slash trigger", async t => {
       assert.equal(result, base);
     }
     t.diagnostic(`API base 20000 slashes plus sentinel (best of 3): ${elapsed.toFixed(3)} ms`);
-    assert.ok(elapsed < testTime(50), `API base took ${elapsed.toFixed(3)} ms; scaled limit ${testTime(50)} ms`);
+    assert.ok(elapsed < 50, `API base took ${elapsed.toFixed(3)} ms; limit 50 ms`);
   });
 });
 
@@ -176,5 +175,5 @@ test("privacy key marker parity and 3000-prefix trigger", t => {
     assert.deepEqual(hits, []);
   }
   t.diagnostic(`privacy 3000 key prefixes (best of 3): ${elapsed.toFixed(3)} ms`);
-  assert.ok(elapsed < testTime(50), `privacy key marker took ${elapsed.toFixed(3)} ms; scaled limit ${testTime(50)} ms`);
+  assert.ok(elapsed < 50, `privacy key marker took ${elapsed.toFixed(3)} ms; limit 50 ms`);
 });

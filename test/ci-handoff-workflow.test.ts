@@ -138,7 +138,7 @@ for (const kind of ["sync", "closeout"]) {
           assert.match(r.calls, /stuck-started/);
           assert.doesNotMatch(r.calls, /budget/, "the real GNU timeout must execute");
           assert.ok(Date.now() - started >= 9_000, "lookup must actually remain stuck until killed");
-          assert.ok(Date.now() - started < testTime(25_000), "the stuck lookup must not consume the fixture deadline");
+          assert.ok(Date.now() - started < 25_000, "the stuck lookup must not consume the fixture deadline");
         }
       });
     });

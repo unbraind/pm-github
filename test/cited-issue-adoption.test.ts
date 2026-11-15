@@ -1,4 +1,3 @@
-import { testTime } from "./support/time.ts";
 import { testDepth } from "./support/depth.ts";
 /** Citation adoption exercises real initialized trackers, including a PATH without git. */
 import assert from "node:assert/strict";
@@ -646,7 +645,7 @@ test("issue-label URL tails keep the anchored tail grammar after the regex tail 
   const started = performance.now();
   const hostile = { id: "hostile", body: `Issue: ${issue.html_url}${")".repeat(50_000)}x` };
   assert.equal(matchImportedIssue([hostile], issue).item, undefined);
-  assert.ok(performance.now() - started < testTime(1_000), "a long run of ')' must not backtrack polynomially");
+  assert.ok(performance.now() - started < 1_000, "a long run of ')' must not backtrack polynomially");
 });
 
 test("citation adoption never overwrites an item that already carries structured ownership", () => {

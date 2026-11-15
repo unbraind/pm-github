@@ -173,3 +173,40 @@ error, not a change in source inventory. Testing took 1,035.706s and coverage
 aggregation about 233s. The installed bunx launcher and eight native Bun smoke
 tests passed. The 15-minute budget remains unmet; no full-depth post-merge result
 is claimed by these quick-tier receipts.
+
+
+## Round 2 timing audit
+
+All `testTime(` calls were inspected. Product assertions use fixed limits even
+when `PM_TEST_TIME_SCALE=3`; harness watchdogs may scale. Locations below refer
+to the pre-fix review head (message interpolations on the same line count too).
+
+| Original location | Decision |
+| --- | --- |
+| `test/ci-handoff-workflow.test.ts:77` | Keep scaled 30 s subprocess watchdog. |
+| `test/ci-handoff-workflow.test.ts:141` | Fixed 25 s lookup assertion. |
+| `test/import-lock.test.ts:467` | Keep scaled 180 s test timeout. |
+| `test/import-lock.test.ts:556` | Keep scaled 5 s test timeout. |
+| `test/import-lock.test.ts:565` | Fixed 2 s lock wait assertion. |
+| `test/http-boundary.test.ts:541` | Keep scaled 45 s test timeout around the fixed 30 s request deadline. |
+| `test/import-gate.test.ts:1455` | Keep scaled 180 s test timeout. |
+| `test/import-gate.test.ts:1475` | Fixed 45 s installed import assertion. |
+| `test/import-selection.test.ts:27` | Keep scaled 45 s subprocess watchdog. |
+| `test/import-regex.test.ts:75` | Fixed 50 ms ownership assertion and diagnostic (two calls removed). |
+| `test/import-regex.test.ts:90` | Fixed 50 ms locator assertion and diagnostic (two calls removed). |
+| `test/import-regex.test.ts:105` | Fixed 50 ms citation assertion and diagnostic (two calls removed). |
+| `test/import-regex.test.ts:130` | Fixed 50 ms privacy assertion and diagnostic (two calls removed). |
+| `test/import-regex.test.ts:148` | Fixed 50 ms API base assertion and diagnostic (two calls removed). |
+| `test/import-regex.test.ts:179` | Fixed 50 ms privacy marker assertion and diagnostic (two calls removed). |
+| `test/cited-issue-adoption.test.ts:649` | Fixed 1 s backtracking assertion. |
+| `test/smoke.test.ts:324` | Fixed 2 s header scan assertion. |
+| `test/bounded-cli.test.ts:29` | Fixed 3 s forced cleanup assertion. |
+| `test/gate-public-forms.test.ts:150` | Fixed 200 ms bracket scan assertion. |
+| `test/gate-public-forms.test.ts:164` | Fixed 200 ms email scan assertion. |
+| `test/gate-public-forms.test.ts:211` | Fixed 1 s delimiter scan assertion. |
+| `test/helpers/bounded-cli.ts:19` | Keep both scaled harness defaults: 45 s execution and 5 s cleanup. |
+| `test/helpers/bounded-cli.ts:47` | Keep scaled 45 s readiness watchdog. |
+
+The helper's longer harness allowance cannot relax the installed import's
+separate fixed 45 s product assertion. The helper declaration in
+`test/support/time.ts` defines the scaler; it is not a call site.

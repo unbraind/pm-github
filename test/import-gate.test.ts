@@ -1472,7 +1472,7 @@ workflowTest("packed installed CLI repeats a completed gated import under native
         assert.equal(result.timedOut, false);
         assert.equal(result.signal, null, `native Bun repeat ${repeat + 1} exceeded its unchanged 45s budget: ${result.stderr}`);
         assert.equal(result.code, 0, result.stderr);
-        assert.ok(Date.now() - started < testTime(45_000));
+        assert.ok(Date.now() - started < 45_000);
         assert.deepEqual(snapshot(), before);
         assert.deepEqual(remoteRefs(bare), ["refs/heads/main"]);
       }
