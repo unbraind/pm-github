@@ -55,6 +55,9 @@ jobs:
         run: npm ci
 
       - name: Verify tracked pm project health
+        # Tracked data validation plus an installation smoke check for this
+        # runner's merge drivers. Fresh clone-local registrations cannot prove
+        # developer checkout setup, merge receipts, or lossless reconciliation.
         run: ./node_modules/.bin/pm health --strict-exit --require-merge-drivers
 
       - name: Full npm release gate

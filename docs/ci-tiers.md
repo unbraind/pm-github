@@ -99,6 +99,11 @@ CodeQL keeps its weekly schedule, PR cancellation and a 30-minute job cap. On
 push and PR it ignores tracker data, Markdown, docs and the npm lockfile.
 No release workflow, reusable `pm-github-*.yml`, or release verifier is changed.
 
+Strict health validates checkout-visible tracker data; its merge-driver check
+only verifies installation in the current runner. It cannot certify driver
+registrations, runtime caches or merge receipts in another developer checkout,
+or establish lossless reconciliation from a fresh clone.
+
 ## Measurement receipts
 
 The latest successful main CI when work began was run
@@ -117,6 +122,24 @@ at 49.29s, label replay at 28.07s, native label model at 25.12s, and issue-form 
 at 24.70s. The executable reusable-workflow publication tests also cost up to
 64.05s each; they remain intact. Several timeout-contract tests deliberately
 wait about 30 seconds and are retained.
+
+The most recent completed quick run before the final locator-preserving fixture
+change was [43692426506](https://github.com/unbraind/pm-github/actions/runs/43692426506),
+at source `0e5ae434d13ec1e0db9866d0575411720ca32678`:
+
+| Required check | Created → completed | Queue | Execution |
+| --- | --- | --- | --- |
+| test (22) | 21m24s | 9m15s | 12m09s |
+| test (26) | 25m05s | 5m21s | 19m44s |
+
+Both passed. Node 26 reported 2,106 passing tests, no failures or cancellations,
+the two existing SDK compensation quarantines, and 100% in every coverage
+dimension across 34 authored modules. Testing took 892.125s and native coverage
+aggregation about 244s. The fastest completed bounded-corpus run was
+[43688644393](https://github.com/unbraind/pm-github/actions/runs/43688644393):
+12m24s / 15m43s wall for Node 22/26, with two seconds of queueing each.
+PR receipts identify the final pushed head separately; these are historical
+measurements, not an exact-head attestation for later changes.
 
 Local proof is restricted to typecheck, lint, changed tests, and at most one
 20-minute quick coverage attempt on the shared development host. Full depth is
