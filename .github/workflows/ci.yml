@@ -17,6 +17,7 @@ jobs:
     timeout-minutes: 30
     env:
       PM_TEST_DEPTH: quick
+      PM_TEST_WORKERS: "4"
     strategy:
       fail-fast: false
       matrix:
@@ -95,7 +96,10 @@ jobs:
 
       - name: Engines floor build and tests
         if: steps.changes.outputs.code == 'true' && matrix.node-version == 22
-        run: npm test
+        run: |
+          npm run build
+          npm run build:test
+          node --test --test-concurrency=4 test/*.test.ts
 
       - name: Quick npm release gate
         if: steps.changes.outputs.code == 'true' && matrix.node-version == 26

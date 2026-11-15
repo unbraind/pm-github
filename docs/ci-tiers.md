@@ -2,7 +2,8 @@
 
 Required checks remain `test (22)` and `test (26)`. PRs and dispatch run on
 GitHub-hosted Ubuntu with quick depth, cancellation of superseded PRs, and a
-30-minute timeout per job. No main push starts this tier. Tracker/docs-only
+30-minute timeout per job. Hosted quick tests use four workers to overlap
+IO-heavy CLI fixtures; local/default and full coverage retain two. No main push starts this tier. Tracker/docs-only
 PRs run only dependency installation, strict tracker health with required merge
 drivers, and changelog consistency in both required jobs. The detector compares
 PR endpoints with NUL-delimited paths and rename folding disabled, so moving
@@ -45,6 +46,13 @@ initialization, generation, per-case assertions and operation order are retained
 Fixed pagination, corpus-size, memory and exhaustive domain fixtures retain their
 original sizes. Coverage thresholds and source inventory are unchanged in both
 depths. Aggregate diversity assertions scale with the sampled corpus.
+
+Only the explicit combination `PM_TEST_DEPTH=quick PM_TEST_WORKERS=4` raises
+coverage test concurrency to four. Unknown overrides and all full-depth runs
+retain two workers. Hosted Node 22 uses the same build, test compilation and
+complete file glob as `npm test`, with four workers; there is no separate
+coverage, changelog or pack command. The existing embedded packed tests remain.
+No test files or assertions are omitted by the worker change.
 
 The original native Bun suite is a separate contract: `bun run release:check`
 executes the gate's Node scripts, so it cannot replace `test:bun`. The quick gate's
