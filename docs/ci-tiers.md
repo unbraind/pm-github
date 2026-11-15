@@ -214,3 +214,9 @@ separate fixed 45 s product assertion. The helper declaration in
 CodeQL ignores inert tracker data extensions while keeping executable tracker scripts eligible on PRs and main pushes.
 
 The documentation tier retains privacy auditing, package dry-run and publish-attestation checks; the auditor recognizes tracked shell shebangs regardless of file extension.
+
+## Review round E
+
+PRRT_kwDOTbN4pM63txS5 and PRRT_kwDOTbN4pM63txS6 are valid. Restrict cheap tracker formats to inert records and test nested TypeScript/shell programs. The failed test (26) log shows stale release heading versus generated Unreleased. Merge current main without rewriting history, regenerate via changelog:full; changelog:check passed. Targeted workflow tests, typecheck, lint, privacy and YAML passed.
+
+The cheap tier excludes only inert tracker record formats; executable tracker changes keep product gates. `test/ci-routing.test.ts` executes each detector with inert and executable tracker paths. Product deadlines, full-depth cases and coverage thresholds are unchanged.

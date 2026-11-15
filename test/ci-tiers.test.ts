@@ -26,6 +26,8 @@ test("PR detector keeps docs cheap and source deletions, renames and unusual nam
     for (const [name, paths, remove, expected, event] of [
       ["docs", ["README.md", "docs/nested/spec.json", ".agents/pm/tasks/a.toon", "LICENSE"], false, false, "pull_request"],
       ["code", ["test/new.test.ts"], false, true, "pull_request"],
+      ["tracker-script", [".agents/pm/scripts/check.ts"], false, true, "pull_request"],
+      ["tracker-shell", [".agents/pm/scripts/check.sh"], false, true, "pull_request"],
       ["lock", ["package-lock.json"], false, true, "pull_request"],
       ["workflow", [".github/workflows/ci.yml"], false, true, "pull_request"],
       ["unusual", ["docs/a\nb.md", "source\nfile.ts"], false, true, "pull_request"],

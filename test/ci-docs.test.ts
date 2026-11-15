@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { parseDocument } from 'yaml';
 
-test('documentation gate retains input-sensitive checks and propagates every failure', () => {
+test('documentation gate retains input-sensitive checks and propagates every failure', { skip: process.platform === 'win32' && 'The workflow gate runs in Ubuntu Bash' }, () => {
   const document = parseDocument(readFileSync('.github/workflows/ci.yml', 'utf8'), { uniqueKeys: true });
   assert.deepEqual(document.errors, []);
   const step = document.toJS().jobs.test.steps.find((step: { name: string }) => step.name === 'Check documentation and tracker changes');
