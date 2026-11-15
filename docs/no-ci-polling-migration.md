@@ -6,8 +6,10 @@ spent 44 seconds doing useful work and then 120 minutes polling caller CI.
 The #228/#229 implementation already replaced the completion loop with protected
 native auto-merge. This change completes registration receipts and caller outputs.
 
-Bump the reusable workflow pin through the existing #238 fleet sweep. No caller
-input, secret, permission, trigger or schedule change is required by this change.
+Bump the reusable workflow pin through the existing #238 fleet sweep, and in the
+same commit remove any caller-set `pm-github-version` input: a pin bump that keeps
+that input still installs the older extension it names. No other caller input,
+secret, permission, trigger or schedule change is required by this change.
 The optional App and existing GITHUB_TOKEN approval paths continue to work.
 
 After publishing the owned PR, dispatch all selected caller workflows for its

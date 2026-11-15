@@ -1193,8 +1193,9 @@ parked as `action_required`. The reusable outputs are `pr-url`, `ci-run-urls`
 and `parked-run-urls` (both run lists are JSON arrays), and `ci-confirmation`
 (`confirmed`, `timed_out`, or `disabled`). The hourly approval sweep or a
 maintainer approves parked native runs; protected native auto-merge or a later
-scheduled retry owns landing. Callers need only the workflow pin bump already
-covered by the #238 sweep; no input or permission change is required. See the
+scheduled retry owns landing. Callers need the workflow pin bump already
+covered by the #238 sweep, with any caller-set `pm-github-version` input removed in the
+same commit; no other input or permission change is required. See the
 [migration notes](docs/no-ci-polling-migration.md). The closeout armed flag records only an observed
 successful arm, so a failed arm stays revocable by the always() cleanup. A base advance after publication, or an unavailable
 auto-merge, waits for the next scheduled rebuild, which force-rebuilds the bot
