@@ -51,7 +51,7 @@ test("PR detector keeps docs cheap and source deletions, renames and unusual nam
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("the actual Node 22 shell supplies local CLI tools; removing PATH setup fails the fixture", () => {
+test("the actual Node 22 shell supplies local CLI tools; removing PATH setup fails the fixture", { skip: process.platform === "win32" && "The workflow shell runs in Ubuntu Bash" }, () => {
   const root = mkdtempSync(join(tmpdir(), "pm-ci-path-"));
   try {
     const tools = join(root, "tools");

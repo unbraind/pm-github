@@ -5,7 +5,8 @@ GitHub-hosted Ubuntu with quick depth, cancellation of superseded PRs, and a
 30-minute timeout per job. Hosted Node 22 tests use four workers to overlap
 IO-heavy CLI fixtures; Node 26 coverage, local/default and full runs retain two. No main push starts this tier. Tracker/docs-only
 PRs run only dependency installation, strict tracker health with required merge
-drivers, and changelog consistency in both required jobs. The detector compares
+drivers, privacy auditing, changelog consistency, package dry-run and release
+publish-attestation verification in both required jobs. The detector compares
 PR endpoints with NUL-delimited paths and rename folding disabled, so moving
 source into documentation still selects code validation.
 
@@ -21,10 +22,11 @@ source into documentation still selects code validation.
 | Tests, including real packed npm and native Bun consumers | quick | quick via coverage | — | full in all four gates |
 | Docstrings, lint, zero duplication | — | yes | — | all four gates |
 | Exact all-source coverage, 100% lines/statements/branches/functions | — | quick | — | full in all four gates |
+| Privacy audit | — | yes | yes | all four gates |
 | Production dependency audit | — | yes | — | all four gates |
 | Pack dry-run | — | yes | yes | all four gates |
 | Changelog consistency | — | yes | yes | all four gates |
-| Release publish attestation verification | — | yes | — | all four gates |
+| Release publish attestation verification | — | yes | yes | all four gates |
 | Bun package-graph install | — | yes | — | both npm legs |
 | bunx installed CLI launcher smoke | — | yes | — | PR smoke contract |
 | Native Bun package metadata / fixture lifecycle smoke | — | quick | — | via full native suite |
