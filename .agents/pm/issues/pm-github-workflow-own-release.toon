@@ -3,12 +3,17 @@ title: "Default reusable workflows to their own release (migration: drop pm-gith
 description: "Fix #238: derive the default extension from package.json at job.workflow_sha, preserve validated explicit holds with a two-version warning, and preflight registry existence before tracker writes. Migration: callers must drop pm-github-version so Dependabot workflow updates also select the extension version, including the curated identity fix in 2026.11.14."
 type: Issue
 pm_format_version: 2
-status: in_progress
+status: closed
 priority: 1
 tags[3]: changelog-unreleased,"gh:unbraind/pm-github#238",workflows
 created_at: "2026-11-14T09:04:23.981Z"
-updated_at: "2026-11-14T20:21:27.457Z"
+updated_at: "2026-11-16T20:29:06.879Z"
+closed_at: "2026-11-16T20:29:06.849Z"
+completed_at: "2026-11-16T20:29:06.849Z"
 author: codex-github238-1114
+resolution: Implemented and merged in #245 (74c5285).
+expected_result: The change described by this item is on main.
+actual_result: "Merged in #245 as 74c5285; checks successful at head 4bd7c31: CodeQL, bun-release (22), bun-release (26), codeql, semgrep-cloud-platform/scan, test (22), test (26)."
 comments[9]{created_at,author,text}:
   "2026-11-14T09:04:30.564Z",codex-github238-1114,"Plan: replace tag enumeration with a public package.json fetch at the reusable job workflow SHA, normalize exact numeric versions, honor explicit holds and warn with both versions, then check the selected exact registry release before any tracker write. Execute extracted workflow bash with real scratch pm trackers, cover the issue regression cases and behavioral reverts, document caller migration, and inventory public fleet callers through the contents API without changing them. Targeted gates follow the task brief; CI runs the full gate."
   "2026-11-14T09:12:12.957Z",codex-github238-1114,"Design verified against GitHub Actions job context documentation: job.workflow_sha identifies the reusable job commit for both tag and SHA pins. Both workflows fetch their own package.json at that SHA, validate and normalize its version, honor explicit exact holds, and warn with both versions on a mismatch. Exact public registry metadata is checked before checkout/setup or tracker writes. Live transport smoke: omitted input resolved 2026.11.14; explicit 2026.10.16 remained 2026.10.16 with both versions in the warning; 2099.1.1 returned a refusal with no exported install version. Migration is in the item description and README: callers should drop pm-github-version."
@@ -48,4 +53,5 @@ docs[3]{path,scope}:
   docs/identity-ownership-inventory.md,project
   docs/workflow-version-callers.md,project
   README.md,project
+close_reason: "Delivered by #245 \"Fix reusable workflows installing stale extension versions\" (merged as 74c5285). Checks successful at the PR head 4bd7c31: CodeQL, bun-release (22), bun-release (26), codeql, semgrep-cloud-platform/scan, test (22), test (26)."
 body: ""
