@@ -3,10 +3,14 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+import { workflowCorpus } from "./support/corpus.ts";
+
+const publicationCorpus = workflowCorpus(test, "closeout-publication");
+const publicationTest = publicationCorpus.test;
 import { get, update } from "@unbrained/pm-cli/sdk";
 import { bash, branch, cli, command, finish, fixture, repoRoot, setup, shell, sync, title, unpublished, workflow } from "./helpers/closeout-workflow.ts";
 
-test("closeout contract keeps sync safety helpers, exact pins, env bindings and least privilege", () => {
+publicationTest("closeout contract keeps sync safety helpers, exact pins, env bindings and least privilege", () => {
   assert.match(workflow, /^on:\n  workflow_call:/m);
   assert.match(workflow, /group: pm-github-closeout-\$\{\{ github.repository \}\}/);
   assert.match(workflow, /cancel-in-progress: false/);
@@ -59,7 +63,7 @@ test("closeout contract keeps sync safety helpers, exact pins, env bindings and 
   assert.doesNotMatch(caller, /issues: read/);
 });
 
-test("schedule without repository payload resolves trunk; clean closeout opens one PR and repeat edits it", async () => fixture(async f => {
+publicationTest("schedule without repository payload resolves trunk; clean closeout opens one PR and repeat edits it", async () => fixture(async f => {
   f.env.SUMMARY_ROWS = "true";
   const baseHead = f.git("rev-parse", "HEAD");
   const first = await f.run([...setup, ...finish]);
@@ -84,7 +88,7 @@ test("schedule without repository payload resolves trunk; clean closeout opens o
   assert.ok(receipts.includes(`--title ${title}`));
 }));
 
-test("scheduled closeout follows verified numeric pagination with declared checks and publishes delivery", async () => fixture(async f => {
+publicationTest("scheduled closeout follows verified numeric pagination with declared checks and publishes delivery", async () => fixture(async f => {
   Object.assign(f.env, { NUMERIC_PAGINATION: "true", PROTECTION_DENIED: "true", REQUIRED_CHECKS: "CI" });
   const result = await f.run([...setup, ...finish]);
   assert.equal(result.code, 0, result.out);
@@ -92,7 +96,7 @@ test("scheduled closeout follows verified numeric pagination with declared check
   assert.equal(existsSync(f.env.PR_STATE!), true);
 }));
 
-test("malicious tracker acceptance criteria fails the final privacy gate before any remote write", async () => fixture(async f => {
+publicationTest("malicious tracker acceptance criteria fails the final privacy gate before any remote write", async () => fixture(async f => {
   const prepared = await f.run(setup);
   assert.equal(prepared.code, 0, prepared.out);
   await update(f.id, { acceptanceCriteria: "ghp_" + "A".repeat(36) }, { pmRoot: f.pmRoot, noExtensions: true });
@@ -103,7 +107,7 @@ test("malicious tracker acceptance criteria fails the final privacy gate before 
   assert.equal(existsSync(f.env.PR_STATE!), false);
 }));
 
-test("zero closes discards caller drift and creates no remote branch or PR", async () => fixture(async f => {
+publicationTest("zero closes discards caller drift and creates no remote branch or PR", async () => fixture(async f => {
   f.env.NO_DELIVERY = "true";
   const result = await f.run([...setup, ...finish]);
   assert.equal(result.code, 0, result.out);
@@ -113,7 +117,7 @@ test("zero closes discards caller drift and creates no remote branch or PR", asy
   assert.equal(readFileSync(join(f.root, "CHANGELOG.md"), "utf8"), "Caller changelog before closeout\n");
 }));
 
-test("permission-limited read token fails closed with a clear diagnostic", async () => fixture(async f => {
+publicationTest("permission-limited read token fails closed with a clear diagnostic", async () => fixture(async f => {
   f.env.READ_DENIED = "true";
   const result = await f.run([...setup, ...finish]);
   assert.notEqual(result.code, 0);
@@ -128,7 +132,7 @@ test("permission-limited read token fails closed with a clear diagnostic", async
   assert.equal((await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item.status, "in_progress");
 }));
 
-test("SDK close validation keeps its full JSON receipt and reports the exact item and field", async () => fixture(async f => {
+publicationTest("SDK close validation keeps its full JSON receipt and reports the exact item and field", async () => fixture(async f => {
   const prepared = await f.run(setup);
   assert.equal(prepared.code, 0, prepared.out);
   await update(f.id, { tags: "requires-review" }, { pmRoot: f.pmRoot, noExtensions: true });
@@ -145,7 +149,7 @@ test("SDK close validation keeps its full JSON receipt and reports the exact ite
   unpublished(f.git);
 }));
 
-test("workflow refusal reporter emits one precise annotation and withholds private receipt values", async () => fixture(async f => {
+publicationTest("workflow refusal reporter emits one precise annotation and withholds private receipt values", async () => fixture(async f => {
   const prepared = await f.run(setup);
   assert.equal(prepared.code, 0, prepared.out);
   const report = join(f.base, "failure.json");
@@ -169,7 +173,7 @@ test("workflow refusal reporter emits one precise annotation and withholds priva
   }
 }));
 
-test("PR-write and dispatch restrictions fail clearly and never alter the default branch", async () => {
+publicationTest("PR-write and dispatch restrictions fail clearly and never alter the default branch", async () => {
   for (const denied of ["PR_DENIED", "DISPATCH_DENIED"]) await fixture(async f => {
     const head = f.git("rev-parse", "HEAD");
     f.env[denied] = "true";
@@ -180,7 +184,7 @@ test("PR-write and dispatch restrictions fail clearly and never alter the defaul
   });
 });
 
-test("default-branch guard refuses non-default refs and unresolved metadata before tracker edits", async () => {
+publicationTest("default-branch guard refuses non-default refs and unresolved metadata before tracker edits", async () => {
   for (const mode of ["wrong-ref", "unresolved", "payload-fallback"]) await fixture(async f => {
     if (mode === "wrong-ref") f.env.RUN_REF = "refs/heads/feature";
     else f.env.API_DENIED = "true";
@@ -191,7 +195,7 @@ test("default-branch guard refuses non-default refs and unresolved metadata befo
   });
 });
 
-test("contents-write denial rejects the leased push before PR creation", async () => fixture(async f => {
+publicationTest("contents-write denial rejects the leased push before PR creation", async () => fixture(async f => {
   writeFileSync(join(f.base, "remote.git/hooks/pre-receive"), "#!/usr/bin/env bash\nexit 1\n", { mode: 0o755 });
   const result = await f.run([...setup, ...finish]);
   assert.notEqual(result.code, 0);
@@ -200,7 +204,7 @@ test("contents-write denial rejects the leased push before PR creation", async (
   assert.equal(existsSync(f.env.PR_STATE!), false);
 }));
 
-test("zero closes refuses caller-only tracker drift as an empty closeout PR", async () => fixture(async f => {
+publicationTest("zero closes refuses caller-only tracker drift as an empty closeout PR", async () => fixture(async f => {
   f.env.NO_DELIVERY = "true";
   const prepared = await f.run(setup);
   assert.equal(prepared.code, 0, prepared.out);
@@ -211,7 +215,7 @@ test("zero closes refuses caller-only tracker drift as an empty closeout PR", as
   assert.equal(existsSync(f.env.PR_STATE!), false);
 }));
 
-test("behavioural revert: removing only the staged privacy scan publishes malicious tracker content", async () => fixture(async f => {
+publicationTest("behavioural revert: removing only the staged privacy scan publishes malicious tracker content", async () => fixture(async f => {
   const mutant = workflow.replace('pm github gate --diff "${RUNNER_TEMP}/pm-github-sync.patch" --json', ": # privacy scan removed");
   assert.notEqual(mutant, workflow);
   const prepared = await f.run(setup, mutant);
@@ -225,7 +229,7 @@ test("behavioural revert: removing only the staged privacy scan publishes malici
   assert.equal(existsSync(f.env.PR_STATE!), true);
 }));
 
-test("behavioural revert: removing only the no-op guard opens a PR with zero closes", async () => fixture(async f => {
+publicationTest("behavioural revert: removing only the no-op guard opens a PR with zero closes", async () => fixture(async f => {
   f.env.NO_DELIVERY = "true";
   const prepared = await f.run(setup);
   assert.equal(prepared.code, 0, prepared.out);
@@ -239,7 +243,7 @@ test("behavioural revert: removing only the no-op guard opens a PR with zero clo
   assert.equal((await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item.status, "in_progress");
 }));
 
-test("closeout inputs reject cross-repo writes, floating pins, command injection and a default bot branch", async () => fixture(async f => {
+publicationTest("closeout inputs reject cross-repo writes, floating pins, command injection and a default bot branch", async () => fixture(async f => {
   for (const [key, value] of [["REPOSITORY", "other/widgets"], ["PM_GITHUB_VERSION", "latest"],
     ["POST_CLOSEOUT_SCRIPT", "changelog:full; exit 0"], ["SYNC_BRANCH", "trunk"]]) {
     const saved = f.env[key];
@@ -256,7 +260,7 @@ test("closeout inputs reject cross-repo writes, floating pins, command injection
   assert.match(result.out, /bot branch cannot be the caller default branch/);
 }));
 
-test("an explicit lease refuses a competing bot-branch writer", async () => fixture(async f => {
+publicationTest("an explicit lease refuses a competing bot-branch writer", async () => fixture(async f => {
   const prepared = await f.run([...setup, ...finish.slice(0, 4)]);
   assert.equal(prepared.code, 0, prepared.out);
   f.git("push", "origin", `trunk:refs/heads/${branch}`);
@@ -269,7 +273,7 @@ test("an explicit lease refuses a competing bot-branch writer", async () => fixt
 }));
 
 for (const mode of ["unlinked", "foreign", "terminal", "local", "incomplete", "unlinked-incomplete"]) {
-  test(`unavailable evidence is scoped to local tracker refusals: ${mode}`, async () => fixture(async f => {
+  publicationTest(`unavailable evidence is scoped to local tracker refusals: ${mode}`, async () => fixture(async f => {
     f.env.CHECKS_DENIED = "true";
     if (mode.startsWith("unlinked")) f.env.NO_LINKS = "true";
     if (mode === "foreign") f.env.FOREIGN_LINK = "true";
@@ -287,7 +291,7 @@ for (const mode of ["unlinked", "foreign", "terminal", "local", "incomplete", "u
   }));
 }
 
-test("compact PR summary is privacy gated before the bot branch is published", async () => fixture(async f => {
+publicationTest("compact PR summary is privacy gated before the bot branch is published", async () => fixture(async f => {
   f.env.SUMMARY_ITEM = "ghp_" + "A".repeat(36);
   const result = await f.run([...setup, ...finish]);
   assert.notEqual(result.code, 0, result.out);
@@ -297,7 +301,7 @@ test("compact PR summary is privacy gated before the bot branch is published", a
 }));
 
 for (const mode of ["undeclared", "blank", "missing", "neutral", "skipped", "pending", "success", "metadata"]) {
-  test(`required-check metadata boundary ${mode} uses the real workflow and command`, async () => fixture(async f => {
+  publicationTest(`required-check metadata boundary ${mode} uses the real workflow and command`, async () => fixture(async f => {
     f.env.PROTECTION_DENIED = mode === "metadata" ? "false" : "true";
     // A declared policy never replaces a complete readable policy.
     f.env.REQUIRED_CHECKS = mode === "undeclared" ? "" : mode === "blank" ? " \n\t\r\n " : mode === "missing" || mode === "metadata" ? "CI\nmissing" : "CI";
@@ -333,7 +337,7 @@ for (const [scenario, names, input] of [
   ["empty lines and trimming", ["test (22)", "test (26)"], "\n  test (22) \r\n \t\n\t test (26)\t\n\n"],
   ["literal shell names", ["$(id)", "CI / 'single' and \"double\" quotes", "$(touch injected)", "CI \\ * ? [ab]"], "$(id)\nCI / 'single' and \"double\" quotes\n$(touch injected)\nCI \\ * ? [ab]"],
 ] as const) {
-  test(`newline required contexts ${scenario} survive the real workflow and command`, async () => fixture(async f => {
+  publicationTest(`newline required contexts ${scenario} survive the real workflow and command`, async () => fixture(async f => {
     f.env.PROTECTION_DENIED = "true";
     f.env.HEAD_NAMES = JSON.stringify(names);
     f.env.REQUIRED_CHECKS = input;
@@ -349,7 +353,7 @@ for (const [scenario, names, input] of [
 }
 
 
-test("ambiguous deliveries open a review-only PR listing every candidate and leave the item open", async () => fixture(async f => {
+publicationTest("ambiguous deliveries open a review-only PR listing every candidate and leave the item open", async () => fixture(async f => {
   f.env.AMBIGUOUS = "true";
   f.env.APP_DEADLINE = String(Math.floor(Date.now() / 1000) + 600);
   const result = await f.run([...setup, ...finish]);
@@ -366,7 +370,7 @@ test("ambiguous deliveries open a review-only PR listing every candidate and lea
 }));
 
 
-test("earlier armed auto-merge is disabled before a later hold updates the reused PR", async () => fixture(async f => {
+publicationTest("earlier armed auto-merge is disabled before a later hold updates the reused PR", async () => fixture(async f => {
   f.env.APP_DEADLINE = String(Math.floor(Date.now() / 1000) + 600);
   const first = await f.run([...setup, ...finish]);
   assert.equal(first.code, 0, first.out);
@@ -380,7 +384,7 @@ test("earlier armed auto-merge is disabled before a later hold updates the reuse
   assert.match(readFileSync(f.env.RECEIPTS!, "utf8"), /pr merge 7 -R acme\/widgets --disable-auto/);
 }));
 
-test("informational parked-run failure preserves armed auto-merge through always cleanup", async () => fixture(async f => {
+publicationTest("informational parked-run failure preserves armed auto-merge through always cleanup", async () => fixture(async f => {
   f.env.APP_DEADLINE = String(Math.floor(Date.now() / 1000) + 600);
   f.env.RUN_LIST_DENIED = "true";
   const result = await f.run([...setup, ...finish]);
@@ -395,7 +399,7 @@ test("informational parked-run failure preserves armed auto-merge through always
 }));
 
 for (const mode of ["guard", "setup", "evidence", "privacy", "no-op", "empty-ci", "dispatch", "maintenance", "disable-denied"]) {
-  test(`previous auto-merge is revoked on workflow exit: ${mode}`, async () => fixture(async f => {
+  publicationTest(`previous auto-merge is revoked on workflow exit: ${mode}`, async () => fixture(async f => {
     f.env.APP_DEADLINE = String(Math.floor(Date.now() / 1000) + 600);
     const first = await f.run([...setup, ...finish]);
     assert.equal(first.code, 0, first.out);
@@ -422,7 +426,7 @@ for (const mode of ["guard", "setup", "evidence", "privacy", "no-op", "empty-ci"
 }
 
 
-test("confirmed unmerged references cannot block publication of a unique merged delivery", async () => fixture(async f => {
+publicationTest("confirmed unmerged references cannot block publication of a unique merged delivery", async () => fixture(async f => {
   f.env.AMBIGUOUS = "true";
   f.env.UNMERGED_COMPETITOR = "true";
   const result = await f.run([...setup, ...finish]);
@@ -433,3 +437,5 @@ test("confirmed unmerged references cannot block publication of a unique merged 
   assert.doesNotMatch(body, /"action": "needs_review"|"code": "incomplete_merge"/);
   assert.match(body, /"not_merged": 1/);
 }));
+
+publicationCorpus.register();

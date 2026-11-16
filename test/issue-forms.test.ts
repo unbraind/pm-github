@@ -1,3 +1,4 @@
+import { testDepth } from "./support/depth.ts";
 /** Real SDK trackers and HTTP requests prove form preflight cannot write on refusal. */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -133,7 +134,7 @@ test("SDK-native form export reads a real tracker without pm or git executables"
   });
 }));
 
-test("500 random forms match a Map reference model for prototype and Unicode names with zero-write required refusals", async () => tracker(async (root, directory) => {
+test("random forms match a Map reference model for prototype and Unicode names with zero-write required refusals", async () => tracker(async (root, directory) => {
   const prototype = Object.getOwnPropertyDescriptors(Object.prototype);
   const pool = ["title", "body", "description", "toString", "constructor", "__proto__", "hasOwnProperty", "valueOf", "prototype", "café", "東京", "Δelta", "ordinary-name"];
   const item = (await create({ title: "Native title", body: "Native body", type: "Task" }, { pmRoot: root })).item;
@@ -149,7 +150,7 @@ test("500 random forms match a Map reference model for prototype and Unicode nam
   await withMockGithub((req, res) => jsonResponse(res, req.method === "GET" ? 200 : 201, req.method === "GET"
     ? { type: "file", path: selection.path, encoding: "base64", content: Buffer.from(yaml).toString("base64") } : { number: 1 }), async server => {
     const h = await harness;
-    for (let sequence = 0; sequence < 500; sequence++) {
+    for (let sequence = 0; sequence < testDepth(500); sequence++) {
       const ids = [...pool];
       for (let index = ids.length - 1; index > 0; index--) {
         const other = next() % (index + 1);
@@ -208,7 +209,7 @@ test("500 random forms match a Map reference model for prototype and Unicode nam
     }
   });
   assert.ok(missingRequiredCases > 0);
-  console.info(`prototype-form-property: 500 forms; ${missingRequiredCases} required-answer refusals; zero remote writes`);
+  console.info(`prototype-form-property: ${testDepth(500)} forms; ${missingRequiredCases} required-answer refusals; zero remote writes`);
   for (const option of pool) assert.ok(observedOptions.has(option), `unobserved option ${option}`);
   for (const id of pool) for (const required of [false, true]) for (const state of ["answered", "omitted", "blank"]) {
     assert.ok(observed.get(id)!.has(`${required}:${state}`), `${id}:${required}:${state}`);
@@ -239,7 +240,7 @@ test("strict boundary refuses unsupported constructs, YAML aliases, ambiguity an
 test("seeded boundary fuzz refuses extreme validators and emits only finite bounded counts", async () => {
   let seed = 0xf0222026;
   const extremes = [NaN, Infinity, -Infinity, Number.MAX_VALUE, Number.MIN_VALUE, -1, 32769, 1.5];
-  for (let sequence = 0; sequence < 500; sequence++) {
+  for (let sequence = 0; sequence < testDepth(500); sequence++) {
     seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
     const invalid = { ...definition, body: [{ ...definition.body[1], validations: { min_length: extremes[seed % extremes.length] } }] };
     assert.throws(() => compileIssueForm(request({ yaml: stringify(invalid) })), refused("unsupported_form"));
@@ -383,7 +384,7 @@ test("installed CLI emits compact TOON/JSON and typed incomplete-answer refusals
   });
 }));
 
-test("500 seeded model sequences preserve SDK state across checks, old-input replays and whitespace variants", async () => tracker(async (root, directory) => {
+test("seeded model sequences preserve SDK state across checks, old-input replays and whitespace variants", async () => tracker(async (root, directory) => {
   const sdk = { pmRoot: root, noExtensions: true };
   const referenceRoot = join(directory, "reference");
   const reference = { pmRoot: referenceRoot, noExtensions: true };
@@ -407,7 +408,7 @@ test("500 seeded model sequences preserve SDK state across checks, old-input rep
     const item = (await get(id, { depth: "full" }, { pmRoot })).item;
     return Object.fromEntries([...native, "deps"].map(field => [field, item[field]]));
   };
-  for (let sequence = 0; sequence < 500; sequence++) {
+  for (let sequence = 0; sequence < testDepth(500); sequence++) {
     const patch = { title: `Model ${next()}`, description: `  Context ${next()}  `, body: sequence % 2 ? `  One\r\nTwo ${next()}  ` : `One\nTwo ${next()}`,
       tags: sequence % 3 ? "CLI,SDK" : "CLI", acceptanceCriteria: `Criteria ${next()}`, parent: parentId, status: names[next() % names.length] };
     // The reference state machine applies only authoritative host operations.

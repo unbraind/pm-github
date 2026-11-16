@@ -1,3 +1,4 @@
+import { testDepth } from "./support/depth.ts";
 /** Planner/importer agreement is measured through SDK writes and read-back in disposable non-git trackers. */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -84,7 +85,7 @@ test("shared importer conversion covers legacy refresh deltas and every native m
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
-test("500 random label sets predict the importer's actual SDK tag changes and approval choices", async () => {
+test("random label sets predict the importer's actual SDK tag changes and approval choices", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pm-label-import-model-"));
   const root = join(directory, "tracker");
   try {
@@ -135,7 +136,7 @@ test("500 random label sets predict the importer's actual SDK tag changes and ap
         const second = words[random(words.length)]!;
         return ` ${first}${random(2) ? ` , ${second}, ${first.toLowerCase()}` : ""} `;
       }
-      for (let sequence = 0; sequence < 500; sequence++) {
+      for (let sequence = 0; sequence < testDepth(500); sequence++) {
         const names = Array.from({ length: 1 + random(4) }, name);
         if (sequence % 3 === 0) names.push(names[0]!.toUpperCase());
         const sources = names.map((name, index) => ({ id: `SOURCE_${index}`, name }));
@@ -168,7 +169,7 @@ test("500 random label sets predict the importer's actual SDK tag changes and ap
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
-test("500 native tag arrays keep literal identities and refresh decisions equal SDK import writes", async () => {
+test("native tag arrays keep literal identities and refresh decisions equal SDK import writes", async () => {
   const directory = mkdtempSync(join(tmpdir(), "pm-native-label-model-"));
   const root = join(directory, "tracker");
   try {
@@ -186,7 +187,7 @@ test("500 native tag arrays keep literal identities and refresh decisions equal 
       /** Deterministic choices include equal native sets and comma atoms with unequal CSV expansions. */
       function random(bound: number) { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return (seed >>> 0) % bound; }
       const words = ["one", "two", "Bug Fix", "kind/BUG", "scope:One", "constructor", "__proto__", "İ"];
-      for (let sequence = 0; sequence < 500; sequence++) {
+      for (let sequence = 0; sequence < testDepth(500); sequence++) {
         const first = sequence === 0 ? "one" : words[random(words.length)]!;
         const second = sequence === 0 ? "two" : words[random(words.length)]!;
         const name = `${first},${second}`;

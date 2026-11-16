@@ -1,3 +1,4 @@
+import { testTime } from "./support/time.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -23,7 +24,7 @@ const comments = JSON.parse(readFileSync(join(fixtureRoot, "pm-web-175-comments.
 
 /** Run setup commands in a real disposable project with explicit tracker routing. */
 function setup(root: string, command: string, args: string[]): string {
-  const result = spawnSync(command, args, { cwd: root, encoding: "utf8", timeout: 45000,
+  const result = spawnSync(command, args, { cwd: root, encoding: "utf8", timeout: testTime(45000),
     env: { ...process.env, PM_PATH: join(root, ".agents/pm"), PM_AUTHOR: "selection-acceptance" } });
   assert.equal(result.status, 0, result.stderr);
   return result.stdout;

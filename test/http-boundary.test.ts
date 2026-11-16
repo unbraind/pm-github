@@ -1,3 +1,4 @@
+import { testTime } from "./support/time.ts";
 // HTTP-boundary tests for the GitHub client stack.
 //
 // The whole point of this file: exercise the REAL request-building,
@@ -537,7 +538,7 @@ test("requestOnce rejects an unparseable redirect Location instead of following 
   });
 });
 
-test("requestOnce fails a request after 30s without a response", { timeout: 45_000 }, async () => {
+test("requestOnce fails a request after 30s without a response", { timeout: testTime(45_000) }, async () => {
   // Real silent headers and a never-ending response body both retain the
   // original 30-second deadline, including under native Bun.
   const server = createServer((req, res) => {

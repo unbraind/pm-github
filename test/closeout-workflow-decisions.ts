@@ -1,4 +1,5 @@
 /** Preserve the complete closeout selection matrix in a separately replayable workflow suite. */
+import { testDepth } from "./support/depth.ts";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -153,7 +154,9 @@ function expectedDecision(cell: DecisionCase): { chosen?: number; candidates: nu
   return { chosen, candidates, context, held: candidates.length > 0 && chosen === undefined };
 }
 
-for (const cell of decisionCases) {
+// This deterministic property corpus is generated as a Cartesian product,
+// rather than a literal seed loop. Keep the same prefix and every cell oracle.
+for (const cell of decisionCases.slice(0, testDepth(decisionCases.length))) {
   const { selection, competitor, peer, primaryClaim, competitorClaim } = cell;
   const expected = expectedDecision(cell);
   test(`item decision end to end: ${selection} / ${competitor} / ${peer} / primary=${primaryClaim} / competitor=${competitorClaim}`, async () => {

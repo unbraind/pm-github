@@ -30,7 +30,7 @@ Object.defineProperty(performance, 'now', { value() {
   return call % 2 === 0 ? 0 : durations[Math.floor(call / 2) % 3];
 } });
 `);
-    const env = { ...process.env };
+    const env: NodeJS.ProcessEnv = { ...process.env, PM_TEST_TIME_SCALE: "1" };
     delete env.NODE_TEST_CONTEXT;
     const result = spawnSync(nodeToolingExecutable(process.versions), ["--import", pathToFileURL(preload).href,
       "--test", "--test-reporter=tap", `--test-name-pattern=${pattern}`, "test/import-regex.test.ts"],

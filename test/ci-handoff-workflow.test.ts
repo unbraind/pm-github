@@ -1,3 +1,4 @@
+import { testTime } from "./support/time.ts";
 /** Exercise bounded registration discovery and exported receipts from the reusable workflow shell. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -73,7 +74,7 @@ else printf 'https://github.com/acme/widgets/actions/runs/12\\n'; fi
     // elapsed time; child lookups advance a deterministic shared clock receipt.
     const controlledClock = overrides.LOOKUP === "deadline" || overrides.LOOKUP === "stuck"
       ? `SECONDS=0\ntrap 'if [[ -f "$RECEIPTS.clock" ]]; then read -r SECONDS < "$RECEIPTS.clock" || :; fi' DEBUG\n` : "";
-    const result = spawnSync("bash", ["-c", controlledClock + shell], { cwd: dir, env, encoding: "utf8", timeout: 30_000 });
+    const result = spawnSync("bash", ["-c", controlledClock + shell], { cwd: dir, env, encoding: "utf8", timeout: testTime(30_000) });
     const optionalRead = (file: string) => { try { return readFileSync(file, "utf8"); } catch { return ""; } };
     const output = Object.fromEntries(optionalRead(env.GITHUB_OUTPUT).trim().split("\n").map(line => {
       const index = line.indexOf("="); return [line.slice(0, index), line.slice(index + 1)];
