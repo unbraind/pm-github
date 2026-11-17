@@ -2,12 +2,17 @@ id: pm-github-ci-v2
 title: Apply Fleet CI v2 quick PR and deep validation tiers
 description: Companion pm-cli-website-dyhg. Replace four exhaustive PR gates with preserved required quick checks and a full post-merge matrix; retain all existing contracts and unchanged coverage thresholds. Existing runner-held sync and packed-install issues have distinct scopes.
 type: Task
-status: in_progress
+status: closed
 priority: 2
 tags[3]: ci,"gh:unbraind/pm-github#249",performance
 created_at: "2026-11-15T05:41:47.478Z"
-updated_at: "2026-11-16T00:37:05.501Z"
+updated_at: "2026-11-16T20:29:14.779Z"
+closed_at: "2026-11-16T20:29:14.633Z"
+completed_at: "2026-11-16T20:29:14.633Z"
 author: codex-sol
+resolution: Implemented and merged in #249 (ca090ae).
+expected_result: The change described by this item is on main.
+actual_result: "Merged in #249 as ca090ae; checks successful at head 541dff0: CodeQL, codeql, semgrep-cloud-platform/scan, test (22), test (26)."
 comments[38]{created_at,author,text}:
   "2026-11-15T05:41:51.913Z",codex-sol,"Plan: preserve required test (22) and test (26), move exhaustive npm/Bun gates and native Bun suite to deep CI, retain strict tracker health and all release gate checks. CodeQL is not required. Release and reusable pm-github workflows are excluded from this task. Baseline successful main CI run 43646546806 took 1h29m25s. Related existing items: pm-github-r14n and pm-github-gaq8 remain independent fixture issues."
   "2026-11-15T05:46:17.564Z",codex-sol,"Implementation: PR tier keeps exact required names, hosted Ubuntu, 30-minute bounds, PR cancellation, and a docs/tracker cheap path. Deep retains four Node22/26 x npm/Bun gates plus both exhaustive native Bun suites, with full depth, scale 3, 120-minute bounds and 02:11 UTC schedule. Typecheck, lint and strict unique-key YAML parsing pass. Actionlint is unavailable. Baseline Node26 gate took 27m14s plus 28m34s native Bun; largest seeded models took 50.07s and 49.29s. Focused quick tests are running; an initial test-compilation typing issue was corrected."
@@ -246,4 +251,5 @@ tests[20]:
 docs[2]{path,scope}:
   docs/ci-tiers.md,project
   README.md,project
+close_reason: "Delivered by #249 \"CI: keep required PR checks quick and move exhaustive gates to deep CI\" (merged as ca090ae). Checks successful at the PR head 541dff0: CodeQL, codeql, semgrep-cloud-platform/scan, test (22), test (26)."
 body: ""
