@@ -1,11 +1,5 @@
 # Changelog
 
-## Unreleased
-
-### Dependencies
-
-- Bump the pm-toolchain group across 1 directory with 2 updates
-
 ## 2026.11.17 - 2026-11-17
 
 ### Other
