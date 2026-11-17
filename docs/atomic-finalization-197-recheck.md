@@ -1,5 +1,39 @@
 # Issue #197: lifecycle compensation recheck
 
+## Round BE recheck (2026-11-17)
+
+The proposed SDK 2026.11.14 upgrade remains blocked. The real three-case
+selection below reports one pass and two failures, with no skips on that pin:
+
+```sh
+node --test --test-concurrency=1 \
+  --test-name-pattern='real SDK atomic compensation restores|terminal failures remove replay plans' \
+  test/import-fidelity.test.ts test/refresh.test.ts
+```
+
+[Dependabot job 133908696350](https://github.com/unbraind/pm-github/actions/runs/44045091349/job/133908696350)
+fails with `cannot safely compensate incomplete step` for the unowned
+finalizer, matching the local run. A fresh-directory public SDK reproduction
+using the minimal shape in [the API analysis](atomic-finalization-sdk.md)
+confirms this matrix:
+
+| SDK | Original fields restored | Journal after ordinary failure |
+| --- | --- | --- |
+| 2026.10.25 | Yes | compensated |
+| 2026.11.13 | No | compensating |
+| 2026.11.14 | No | compensating |
+
+This is the intended 2026.10.26 ownership protection exposing the existing
+consumer integration bug, rather than a new 2026.11.14 regression. The public
+bulk mutation union still only provides create/update/close/release, and the
+transition callback is still an observer. No safe narrow compatibility change
+was found. The two assertions remain enabled and fail on 2026.11.14; the
+verified-pin waiver has not been expanded. The upgrade PR is a blocked draft,
+not a compensation fix. Upstream API work remains owned by
+[pm-cli#1656](https://github.com/unbraind/pm-cli/issues/1656).
+
+The separate dependency-only PR #257 is left unchanged.
+
 Issue #197 is **not fixed**. Main `300e115` includes PR #223, but lifecycle
 finalization still writes a separate `import` history event from the bulk
 transaction's `committing` observer. An ordinary failure after that write
