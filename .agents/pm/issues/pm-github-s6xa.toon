@@ -1,0 +1,11 @@
+id: pm-github-s6xa
+title: Reconcile imported GitHub assignees with strict tracker ownership
+description: A strict tracker can refuse source lifecycle finalization or an update after a GitHub assignee is mapped to a different ownership principal. Reproduced with a synthetic assigned issue and PM CLI 2026.11.17 while verifying progressive creation. Preserve local ownership enforcement and determine how source assignment should be represented on importer-owned mirrors.
+type: Issue
+status: open
+priority: 2
+tags[2]: follow-up,import
+created_at: "2026-11-17T22:52:34.042Z"
+updated_at: "2026-11-17T22:52:34.042Z"
+author: codex-sol
+body: ""

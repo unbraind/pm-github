@@ -1,0 +1,31 @@
+id: pm-github-wzvn
+title: Admit GitHub issue mirrors in strict trackers with deferred fields
+description: Imported GitHub issues must be admitted on strict-preset trackers without invented required fields.
+type: Issue
+status: in_progress
+priority: 1
+tags[4]: changelog-unreleased,"gh:unbraind/pm-github#237",import,sync
+created_at: "2026-11-17T18:48:46.783Z"
+updated_at: "2026-11-17T22:57:04.397Z"
+assignee: codex-sol
+claim_principal: codex-sol
+author: pi-glm
+comments[5]{created_at,author,text}:
+  "2026-11-17T18:49:13.074Z",pi-glm,"Root cause: the importer creates new Issues with title, type, description, body, tags, author, status and message only. Strict-preset trackers set create_mode_default to strict, so the SDK requires acceptance criteria, assignee, comment, deadline, dependency, doc, estimate, file, learning, note, priority and test. One refused create rolls back the atomic import. Design: admit new imported items with createMode progressive, and when the SDK records deferrals, defer unknown deadline, assignee, acceptance criteria and estimate with an honest import reason. Never invent those values. Updates keep their current options."
+  "2026-11-17T22:45:36.589Z",codex-sol,"Resumed the existing item. Atomic import forwards the create row through the public SDK bulk mutation API. The bundled development SDK types expose createMode, and the published PM CLI 2026.11.17 create contract also exposes defer and deferReason. Verifying the pinned failure and the persisted receipt with the real SDK."
+  "2026-11-17T22:47:23.771Z",codex-sol,Reproduced at a3a2e7c using a temporary copy of the pm-changelog settings. The real SDK refused the new Issue with the same twelve missing options and left no item. The fix passes progressive mode and explicit unknown-field deferrals only to create operations under strict tracker defaults. It records the reason in create history for older SDKs and preserves any source assignee.
+  "2026-11-17T22:52:32.476Z",codex-sol,The atomic SDK replaces the create history message with its transaction receipt. The importer therefore keeps the deferral reason in an item note for hosts that only support progressive mode. The native 2026.11.17 SDK also persists deferred_fields and pm validate reports them.
+  "2026-11-17T22:57:04.397Z",codex-sol,"Compatibility verified with published SDKs. The create option contract is public at the supported 2026.10.23 floor. SDK 2026.11.6 rejects unknown defer options, so the importer checks for defer and deferReason before sending them. The copied pm-changelog settings passed with an item note on 2026.11.6 and four native deferrals in pm validate on 2026.11.17. Under the same SDK and clock, the default tracker produced item and item-history bytes identical to a3a2e7c. Cross-principal assignee ownership is tracked in pm-github-s6xa."
+files[6]{path,scope}:
+  index.ts,project
+  package-lock.json,project
+  package.json,project
+  test/helpers/strict-import-sdk-loader.ts,project
+  test/helpers/strict-import-sdk-scenarios.ts,project
+  test/strict-import-admission.test.ts,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test test/strict-import-admission.test.ts,project,codex-sol,"2026-11-17T22:50:53.444Z",local_mutation,fix/strict-preset-import-admission
+docs[2]{path,scope}:
+  CHANGELOG.md,project
+  README.md,project
+body: ""

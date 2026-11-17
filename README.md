@@ -639,6 +639,19 @@ still require a Git worktree for the proposed-change privacy scan.
 
 `--atomic` derives its durable transaction identity from the repository, complete rendered issue state, and exact ordered mutation plan (including target item ids), and derives each create id from the stable `owner/repo#number` external key rather than fetch position. Every producer mode saves its complete plan before the SDK writes. An interrupted or partially compensated attempt replays that original plan and transaction ID before polling new input, even if content, workspace prefixes or resolved targets have changed. Once recovery finishes, a subsequent sync can plan new input. Released update-only refresh-plan mutation formats remain readable; recovery requires a saved passing privacy preflight and a fresh passing scan. Refresh also discovers retained plans after SDK commit before polling new source data. Plans with not-yet-created targets are reported in `deferred_imports`, with a resume command for the original import; refresh neither creates those items nor partially replays the transaction. Lost ownership on selected existing targets still refuses before replay, while scoped refreshes may continue on unrelated items. If delete compensation leaves an original create ID reserved by SDK history, recovery refuses with `github_import_plan_drift` and retains its plan: inspect `pm history`, explicitly restore the original live version with `pm restore`, then retry the same transaction. Native comment annotations run only after the item transaction commits and retain their cross-process deduplication lock. Package-owned plans, comment leases and webhook receipts/cursors publish complete fsynced state atomically; exclusive publication preserves an existing owner. A corrupt or unreadable original plan refuses with `github_import_plan_corrupt`: restore the verified original plan or reconcile its SDK journal while retaining native history, then retry. Unpublished staging files never become recovery identities.
 
+### Importing into strict trackers
+
+When the tracker defaults to strict creation, `pm github import` uses progressive
+creation for new GitHub mirrors. The item records why its delivery fields are
+pending triage. The importer keeps any source assignee it already maps and
+leaves unknown acceptance criteria, assignee, deadline, and estimate unset.
+Updates to existing items still follow the tracker's normal mutation policy.
+Other create errors still trigger compensation in an atomic import.
+
+Scheduled sync uses the calling repository's PM CLI. Use PM CLI 2026.11.17 or
+newer to see native `deferred_fields` entries in `pm validate`. A host SDK
+without native deferrals records the reason in an item note.
+
 ### Native comment sync (`--comments-mode`)
 
 For importer-created records, by default (`--comments-mode body`, or `--with-comments`), fetched GitHub issue comments are flattened into the item body as blockquoted markdown under a `### GitHub comments (N)` heading — the historical behavior, byte-identical across releases.
