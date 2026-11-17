@@ -2,11 +2,6 @@
 
 ## Unreleased
 
-### Fixed
-
-- Default reusable workflows to their own release (migration: drop pm-github-version); warn on explicit holds ([pm-github-workflow-own-release](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-workflow-own-release.toon))
-- The gated sync holds a runner for up to two hours while it waits for caller CI it competes with for the same pool ([pm-github-fxhd](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-fxhd.toon))
-
 ### Other
 
 - Apply Fleet CI v2 quick PR and deep validation tiers ([pm-github-ci-v2](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-ci-v2.toon))
@@ -16,6 +11,11 @@
 No changes.
 
 ## 2026.11.15 - 2026-11-15
+
+### Fixed
+
+- Default reusable workflows to their own release (migration: drop pm-github-version); warn on explicit holds ([pm-github-workflow-own-release](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-workflow-own-release.toon))
+- The gated sync holds a runner for up to two hours while it waits for caller CI it competes with for the same pool ([pm-github-fxhd](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-fxhd.toon))
 
 ### Other
 

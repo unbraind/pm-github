@@ -7,14 +7,15 @@ status: closed
 priority: 1
 tags[3]: changelog-unreleased,"gh:unbraind/pm-github#238",workflows
 created_at: "2026-11-14T09:04:23.981Z"
-updated_at: "2026-11-16T20:29:06.879Z"
+updated_at: "2026-11-17T05:36:47.319Z"
 closed_at: "2026-11-16T20:29:06.849Z"
 completed_at: "2026-11-16T20:29:06.849Z"
 author: codex-github238-1114
+release: 2026.11.15
 resolution: Implemented and merged in #245 (74c5285).
 expected_result: The change described by this item is on main.
 actual_result: "Merged in #245 as 74c5285; checks successful at head 4bd7c31: CodeQL, bun-release (22), bun-release (26), codeql, semgrep-cloud-platform/scan, test (22), test (26)."
-comments[9]{created_at,author,text}:
+comments[12]{created_at,author,text}:
   "2026-11-14T09:04:30.564Z",codex-github238-1114,"Plan: replace tag enumeration with a public package.json fetch at the reusable job workflow SHA, normalize exact numeric versions, honor explicit holds and warn with both versions, then check the selected exact registry release before any tracker write. Execute extracted workflow bash with real scratch pm trackers, cover the issue regression cases and behavioral reverts, document caller migration, and inventory public fleet callers through the contents API without changing them. Targeted gates follow the task brief; CI runs the full gate."
   "2026-11-14T09:12:12.957Z",codex-github238-1114,"Design verified against GitHub Actions job context documentation: job.workflow_sha identifies the reusable job commit for both tag and SHA pins. Both workflows fetch their own package.json at that SHA, validate and normalize its version, honor explicit exact holds, and warn with both versions on a mismatch. Exact public registry metadata is checked before checkout/setup or tracker writes. Live transport smoke: omitted input resolved 2026.11.14; explicit 2026.10.16 remained 2026.10.16 with both versions in the warning; 2099.1.1 returned a refusal with no exported install version. Migration is in the item description and README: callers should drop pm-github-version."
   "2026-11-14T09:12:15.097Z",codex-github238-1114,"Behavioral revert proofs ran in disposable copies, leaving the fixed checkout untouched. Reverting only default selection: 4/4 selected tests fail. Ignoring explicit holds: 2/2 fail. Removing the two-version warning: 2/2 fail. Removing registry preflight: 2/2 fail, including a real tracker mutation sentinel. Restoring the entire origin/main resolver: all 8 selected issue regressions fail (omitted, padded default, older hold, unavailable version across both workflows). Each refusal case snapshots every real tracker byte including native history; successes perform a real pinned-pm local fixture extension installation. Baseline focused run: 58/58; additional malformed metadata cases are in the linked final run."
@@ -24,13 +25,17 @@ comments[9]{created_at,author,text}:
   "2026-11-14T09:50:05.380Z",codex-github238-1114,"CI closeout at 2026-11-14 09:49 UTC after approximately 28 minutes of the 30-minute wait window: PR https://github.com/unbraind/pm-github/pull/245, implementation commit 0f58f1096c33a9fa3d0e9482d64c7a01fc23a16d. CI https://github.com/unbraind/pm-github/actions/runs/43580183069 still has test (22), test (26), bun-release (22), and bun-release (26) queued. CodeQL https://github.com/unbraind/pm-github/actions/runs/43580183044 completed successfully on that implementation head. Greptile and Semgrep checks succeeded; CodeRabbit/Sourcery skipped and cubic neutral are missing review approval. No review comments were returned and no threads were replied to, resolved or reacted to. This final evidence-only commit changes no implementation or test source; fresh final-head checks remain pending under the original wait cutoff. Once replacement checks register, cancel only the superseded queued CI run to avoid duplicate runner consumption. Orchestrator must verify the final-head full npm/Bun gates and unchanged 100/100/100/100 coverage; local strict-health environment skew remains recorded above. The item remains released and in_progress for orchestrator verification."
   "2026-11-14T20:19:11.380Z",codex-followups-1114,"Review follow-up for PR 245: the merged source shifted ownership anchors. Before regeneration, identity-inventory.test.ts reproduces four failures and one pass. Regenerate only with node scripts/identity-inventory.ts --write, run the complete inventory-related test files plus typecheck and lint, then carry the fix into PR 246. Targeted local gates follow the brief; full gates remain in CI."
   "2026-11-14T20:21:23.562Z",codex-followups-1114,"Generated fix changes one auxiliary workflow anchor from line 466 to 440. Before generation the inventory file caused 4/5 inventory tests to fail; after generation the complete test/identity-inventory.test.ts and test/round-twelve.test.ts run passes 37/37 with no skipped or failed tests via pinned pm test. npm run typecheck, npm run lint and npm run build:test pass. The existing stale-anchor and line-shift regressions remain intact; no generator or anchor hand edits. Full release certification remains in CI."
-files[5]{path,scope}:
+  "2026-11-17T05:35:20.854Z",codex-sol,"PRRT_kwDOTbN4pM64RGlz verified: git tag --contains 74c5285 --sort=creatordate returns v2026.11.15 first, followed by v2026.11.16. Both published fixes belong to 2026.11.15; set release explicitly without changing lifecycle timestamps. Regenerate with npm run changelog:full and compare the complete published section before any push."
+  "2026-11-17T05:36:15.886Z",codex-sol,"Push withheld under the exact published-section requirement. After release=2026.11.15 on both items and npm run changelog:full, no published bullet is lost (all three retained; no Dependencies block exists in this published section), but Fixed order changes: published is gated-sync then workflow-own-release; generated is workflow-own-release then gated-sync. pm-changelog compareItems sorts by completion timestamps, which this task forbids changing. Metadata candidate and generated diff remain local for review; no source/generator policy expansion or push for this finding."
+  "2026-11-17T05:36:47.285Z",codex-sol,"Candidate gates passed: npm run typecheck; npm run lint; npm run changelog:check (also via pm test). Snapshot comparison confirms created_at, closed_at, completed_at and status unchanged for both affected items. Publication is refused solely because generated Fixed bullet order differs from v2026.11.15; preserve this evidence and candidate locally without pushing."
+files[6]{path,scope}:
   .github/workflows/pm-github-closeout.yml,project
   .github/workflows/pm-github-sync.yml,project
+  CHANGELOG.md,project
   docs/scheduled-workflow-watch-1106.md,project
   test/identity-inventory.test.ts,project
   test/self-versioned-workflows.test.ts,project
-tests[2]:
+tests[3]:
   - command: node --test --test-concurrency=2 test/self-versioned-workflows.test.ts
     scope: project
     timeout_seconds: 600
@@ -49,6 +54,13 @@ tests[2]:
       created_at: "2026-11-14T20:19:18.462Z"
       source_kind: local_mutation
       source_ref: fix/workflow-installs-own-release
+  - command: "npm run changelog:check"
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-17T05:36:22.104Z"
+      source_kind: local_mutation
+      source_ref: chore/close-merged-items-2026-11-16
 docs[3]{path,scope}:
   docs/identity-ownership-inventory.md,project
   docs/workflow-version-callers.md,project
