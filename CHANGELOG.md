@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026.11.16 - 2026-11-16
+## Unreleased
 
 ### Fixed
 
@@ -10,6 +10,10 @@
 ### Other
 
 - Apply Fleet CI v2 quick PR and deep validation tiers ([pm-github-ci-v2](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-ci-v2.toon))
+
+## 2026.11.16 - 2026-11-16
+
+No changes.
 
 ## 2026.11.15 - 2026-11-15
 
