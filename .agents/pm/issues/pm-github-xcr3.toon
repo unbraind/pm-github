@@ -6,19 +6,23 @@ status: in_progress
 priority: 1
 tags[2]: changelog-unreleased,"gh:unbraind/pm-github#226"
 created_at: "2026-11-18T09:38:46.683Z"
-updated_at: "2026-11-18T09:59:09.389Z"
+updated_at: "2026-11-18T10:19:49.102Z"
 author: codex-sol
-comments[4]{created_at,author,text}:
+comments[7]{created_at,author,text}:
   "2026-11-18T09:39:06.130Z",codex-sol,"Both reusable workflows regenerate after the tracker writes, but inject a pending-release override for changelog:full. Run the declared caller script and its optional changelog:check before the existing privacy scan, then keep the regenerated changelog in the tracker commit. Preserve the no-tracker-change publication path."
   "2026-11-18T09:42:09.908Z",codex-sol,Confirmed tracker_changed in the audit-windows log for pm-brief#224 and the test (22) log for pm-context#222. The baseline closeout discard branch runs only when the workflow has no closeout proposal. Preserve that behavior and keep both changelogs with the corresponding tracker edits.
   "2026-11-18T09:53:26.995Z",codex-sol,"The closeout log for pm-context#222 compares committed Unreleased with the caller check's expected 2026.11.16 heading. Both scripts now use npm run --if-present with no generator arguments, then run the caller check before scope and privacy validation. Tagged and untagged placement cases passed. The candidate includes the regenerated Unreleased fix, caller upgrade documentation, and default-versus-wrapper coverage."
   "2026-11-18T09:59:01.555Z",codex-sol,"The commit Honor caller changelog policy in gated sync and closeout contains both workflow changes, the contract tests, the generated changelog entry, and the upgrade notes. Focused workflow publication and refusal tests passed 4/4. Typecheck, test typecheck, lint, docstrings, identity inventory, changelog:check, and the isolated candidate privacy scan passed. The full affected-file command is linked and running through pm test. The final commit is checked in an isolated clone before the branch push."
-files[6]{path,scope}:
+  "2026-11-18T10:09:16.341Z",codex-sol,"The production caller check can print a generated changelog diff. Move the check after the first full changed-path/privacy scan so the check sees scanned output, and keep the existing final pre-commit scan. This refinement keeps the publication veto before token minting and commit."
+  "2026-11-18T10:11:30.586Z",codex-sol,The follow-up uses a dedicated Check caller changelog policy step after initial privacy validation. The sync privacy fixture asserts that a refused changelog cannot reach the caller check. Restarted the linked affected-file run at the CI quick depth on the revised code.
+  "2026-11-18T10:19:45.122Z",codex-sol,"The follow-up commit Scan tracker changes before the caller changelog check keeps both scans in place. The revised workflow and caller-policy contract tests passed 11/11, including privacy refusal before the check, no remote write on caller policy failure, and combined tracker and changelog commits. Typecheck, test typecheck, lint, docstrings, workflow Bash syntax, identity inventory, and changelog:check passed. The linked 26-file CI-depth run is in progress."
+files[7]{path,scope}:
   .github/workflows/pm-github-closeout.yml,project
   .github/workflows/pm-github-sync.yml,project
   CHANGELOG.md,project
   test/changelog-placement.test.ts,project
   test/closeout-workflow-publication.ts,project
+  test/helpers/closeout-workflow.ts,project
   test/import-gate.test.ts,project
 tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
   node --test --test-concurrency=2 test/attestation-workflow-operands.test.ts test/bot-pr-workflow.test.ts test/changelog-placement.test.ts test/ci-codeql.test.ts test/ci-routing.test.ts test/ci-tiers.test.ts test/closeout-attribution.test.ts test/closeout-revision.test.ts test/closeout-selection.test.ts test/closeout-workflow.test.ts test/closeout.test.ts test/compatibility-floor.test.ts test/daily-sync-alert.test.ts test/daily-sync-idempotency.test.ts test/daily-sync-privacy.test.ts test/dependabot-merge.test.ts test/gate.test.ts test/generate-changelog.test.ts test/import-conflict-report.test.ts test/import-gate.test.ts test/refresh.test.ts test/review-round1.test.ts test/round-twelve.test.ts test/self-versioned-workflows.test.ts test/workflow-diagnostic-class.test.ts test/workflow-rule-names.test.ts,project,7200,codex-sol,"2026-11-18T09:43:54.597Z",local_mutation,fix/sync-changelog-matches-caller-check

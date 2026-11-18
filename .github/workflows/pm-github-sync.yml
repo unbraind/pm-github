@@ -515,16 +515,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          (
-            cd "${NPM_PROJECT_PATH}"
-            if [[ -n "${POST_IMPORT_SCRIPT}" ]]; then
-              npm run --if-present "${POST_IMPORT_SCRIPT}"
-            fi
-            if ! npm run --if-present changelog:check; then
-              echo "::error::Caller changelog policy failed (npm run changelog:check). The declared post-import script must produce the changelog this check expects."
-              exit 1
-            fi
-          )
+          if [[ -n "${POST_IMPORT_SCRIPT}" ]]; then
+            (cd "${NPM_PROJECT_PATH}" && npm run --if-present "${POST_IMPORT_SCRIPT}")
+          fi
 
       # Check every changed path immediately after the caller script. Extension
       # setup files stay outside the patch and are restored before publication.
@@ -534,6 +527,16 @@ jobs:
           set -euo pipefail
           source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
           gate_sync_change
+
+      # The caller check can log a diff. Scan the proposed changes before it runs.
+      - name: Check caller changelog policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! (cd "${NPM_PROJECT_PATH}" && npm run --if-present changelog:check); then
+            echo "::error::Caller changelog policy failed (npm run changelog:check). Verify that the declared post-script produces the expected changelog."
+            exit 1
+          fi
 
       # No caller code runs while runtime setup is temporarily active for health.
       # Check the baseline first and restore even on failure, before any later gate.
@@ -949,7 +952,7 @@ jobs:
           # Step names are fixed by this reusable workflow; sanitize API metadata.
           failed_step="$(jq -r '[.[] | select(.name | test("(^| / )gated-sync$")) | .steps[] | select(.conclusion == "failure") | .name][0] // "gated-sync"' <<< "${jobs}")"
           case "${failed_step}" in
-            "Require caller default branch"|"Resolve pm-github release version"|"Validate sync inputs"|"Checkout caller default branch"|"Validate npm project directory"|"Setup Node.js"|"Prepare sync branch from default branch"|"Install dependencies"|"Resolve sync commit scope"|"Require clean setup artifacts"|"Install pinned pm-github extension"|"Configure PM merge drivers"|"Isolate workflow setup artifacts"|"Verify gate is available"|"Validate GitHub access"|"Revalidate GitHub blockers (report only)"|"Preview GitHub to pm plan"|"Gated GitHub to pm import"|"Verify repeat import is a no-op"|"Run caller post-import script"|"Gate tracker and regenerated changelog"|"Verify strict pm health"|"Create automation app token"|"Validate publication credentials"|"Commit gated sync changes and open review PR"|"Dispatch caller CI and report parked runs"|"Confirm caller CI registration and summarize handoff"|"Record safe failure rules") ;;
+            "Require caller default branch"|"Resolve pm-github release version"|"Validate sync inputs"|"Checkout caller default branch"|"Validate npm project directory"|"Setup Node.js"|"Prepare sync branch from default branch"|"Install dependencies"|"Resolve sync commit scope"|"Require clean setup artifacts"|"Install pinned pm-github extension"|"Configure PM merge drivers"|"Isolate workflow setup artifacts"|"Verify gate is available"|"Validate GitHub access"|"Revalidate GitHub blockers (report only)"|"Preview GitHub to pm plan"|"Gated GitHub to pm import"|"Verify repeat import is a no-op"|"Run caller post-import script"|"Gate tracker and regenerated changelog"|"Check caller changelog policy"|"Verify strict pm health"|"Create automation app token"|"Validate publication credentials"|"Commit gated sync changes and open review PR"|"Dispatch caller CI and report parked runs"|"Confirm caller CI registration and summarize handoff"|"Record safe failure rules") ;;
             *) failed_step="gated-sync" ;;
           esac
           FAILURE_RULES="$(printf '%s' "${FAILURE_RULES}" | tr ',' '\n' | grep -Ex 'github-token-classic|github-token-fine-grained|npm-token|aws-access-key-id|slack-token|slack-webhook|openai-legacy-key|openai-api-key|openai-project-key|openai-service-account-key|anthropic-api-key|bearer-token|private-key-block|email-address|phone-number|absolute-host-path|windows-host-path|home-username|high-entropy-assignment' | sort -u | paste -sd, - || true)"

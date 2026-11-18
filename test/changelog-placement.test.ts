@@ -28,11 +28,16 @@ test("placement report retains the final regex-hardening validation snapshot", (
   assert.doesNotMatch(report, /964\/964|11040\/11040|300\/300|3520\/3520/);
 });
 
-/** Execute the production post-script block, preserving npm's argument forwarding. */
+/** Execute the production post-script and caller policy steps with real npm. */
 function postScript(kind: string, root: string, script = "changelog:full") {
   const workflow = readFileSync(join(source, `.github/workflows/pm-github-${kind}.yml`), "utf8");
-  const step = workflow.split(`      - name: Run caller post-${kind === "sync" ? "import" : "closeout"} script\n`)[1]!.split("      - name: ")[0]!;
-  const shell = step.split("        run: |\n")[1]!.split("\n").filter(line => line.startsWith("          ")).map(line => line.slice(10)).join("\n");
+  const steps = workflow.split("      - name: ");
+  const names = [`Run caller post-${kind === "sync" ? "import" : "closeout"} script`, "Check caller changelog policy"];
+  const shell = names.map(name => {
+    const step = steps.find(candidate => candidate.startsWith(name + "\n"));
+    assert.ok(step, name);
+    return step.split("        run: |\n")[1]!.split("\n").filter(line => line.startsWith("          ")).map(line => line.slice(10)).join("\n");
+  }).join("\n");
   return spawnSync("bash", ["-c", shell], { cwd: root, encoding: "utf8", env: { ...process.env,
     NPM_PROJECT_PATH: root, POST_IMPORT_SCRIPT: script, POST_CLOSEOUT_SCRIPT: script,
   } });

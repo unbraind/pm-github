@@ -22,7 +22,7 @@ publicationTest("closeout contract keeps sync safety helpers, exact pins, env bi
     if (!step.includes("run:")) continue;
     assert.doesNotMatch(shell(name), /\$\{\{/);
   }
-  for (const name of ["Validate npm project directory", "Install dependencies", "Require clean setup artifacts", "Isolate workflow setup artifacts", "Gate tracker and regenerated changelog", "Verify strict pm health"]) {
+  for (const name of ["Validate npm project directory", "Install dependencies", "Require clean setup artifacts", "Isolate workflow setup artifacts", "Gate tracker and regenerated changelog", "Check caller changelog policy", "Verify strict pm health"]) {
     assert.equal(shell(name), shell(name, sync), name);
   }
   // Sync adds rule receipts and installation-failure cleanup. Compare the
@@ -282,11 +282,12 @@ publicationTest("closeout inputs reject cross-repo writes, floating pins, comman
 }));
 
 publicationTest("an explicit lease refuses a competing bot-branch writer", async () => fixture(async f => {
-  const prepared = await f.run([...setup, ...finish.slice(0, 4)]);
+  const split = finish.indexOf("Validate publication credentials");
+  const prepared = await f.run([...setup, ...finish.slice(0, split)]);
   assert.equal(prepared.code, 0, prepared.out);
   f.git("push", "origin", `trunk:refs/heads/${branch}`);
   const competingHead = f.git("rev-parse", "trunk");
-  const result = await f.run(finish.slice(4));
+  const result = await f.run(finish.slice(split));
   assert.notEqual(result.code, 0);
   assert.match(result.out, /stale info|rejected/);
   assert.equal(f.git("ls-remote", "origin", `refs/heads/${branch}`).split(/\s/)[0], competingHead);

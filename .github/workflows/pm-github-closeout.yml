@@ -459,16 +459,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          (
-            cd "${NPM_PROJECT_PATH}"
-            if [[ -n "${POST_CLOSEOUT_SCRIPT}" ]]; then
-              npm run --if-present "${POST_CLOSEOUT_SCRIPT}"
-            fi
-            if ! npm run --if-present changelog:check; then
-              echo "::error::Caller changelog policy failed (npm run changelog:check). The declared post-closeout script must produce the changelog this check expects."
-              exit 1
-            fi
-          )
+          if [[ -n "${POST_CLOSEOUT_SCRIPT}" ]]; then
+            (cd "${NPM_PROJECT_PATH}" && npm run --if-present "${POST_CLOSEOUT_SCRIPT}")
+          fi
 
       # Check every changed path immediately after the caller script. Extension
       # setup files stay outside the patch and are restored before publication.
@@ -478,6 +471,16 @@ jobs:
           set -euo pipefail
           source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
           gate_sync_change
+
+      # The caller check can log a diff. Scan the proposed changes before it runs.
+      - name: Check caller changelog policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! (cd "${NPM_PROJECT_PATH}" && npm run --if-present changelog:check); then
+            echo "::error::Caller changelog policy failed (npm run changelog:check). Verify that the declared post-script produces the expected changelog."
+            exit 1
+          fi
 
       # No caller code runs while runtime setup is temporarily active for health.
       # Check the baseline first and restore even on failure, before any later gate.
