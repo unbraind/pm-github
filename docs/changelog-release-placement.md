@@ -79,7 +79,9 @@ the recent window and preserve their actual positive cycle durations.
 
 ## Changes and boundaries
 
-Both reusable workflows pass `-- --no-pending-release` to `changelog:full`.
+The October 2026 fix added `-- --no-pending-release` to `changelog:full` in both workflows.
+The workflows now run the caller's declared post-script and optional
+`changelog:check` under the caller's release policy. See [pm-github#226](https://github.com/unbraind/pm-github/issues/226).
 No package version is bumped, and real released tag windows remain available.
 Custom post-script names receive their existing argument list; custom wrappers
 must implement the same non-release policy and forward arguments to their

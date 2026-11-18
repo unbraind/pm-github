@@ -1730,12 +1730,13 @@ workflowTest("scheduled blocker report warns on clearance, preserves items, and 
 });
 
 
-workflowTest("post-import changelog findings and script failures block publication", async () => {
-  for (const script of ["generate-secret", "fail-script"]) {
+workflowTest("post-import changelog findings and script or caller policy failures block publication", async () => {
+  for (const scenario of ["generate-secret", "fail-script", "fail-check"]) {
     const { root, base, bare, git } = initSyncRepo();
     try {
       fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ scripts: {
         "generate-secret": "node generate-secret.cjs", "fail-script": "node -e 'process.exit(19)'",
+        ...(scenario === "fail-check" ? { "changelog:full": "node generate-secret.cjs", "changelog:check": "node -e 'process.exit(23)'" } : {}),
       } }));
       fs.writeFileSync(path.join(root, "generate-secret.cjs"),
         'require("node:fs").writeFileSync("CHANGELOG.md", process.env.SYNTHETIC_SECRET + "\\n");\n');
@@ -1749,12 +1750,19 @@ workflowTest("post-import changelog findings and script failures block publicati
         else handle(req, res, url, server);
       }, async () => {
         const result = await executeWorkflow(workflowShell(WORKFLOW_IMPORT_SEQUENCE), root, { ...env,
-          PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE, POST_IMPORT_SCRIPT: script, SYNTHETIC_SECRET: GH_TOKEN });
+          PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE,
+          POST_IMPORT_SCRIPT: scenario === "fail-check" ? "changelog:full" : scenario,
+          SYNTHETIC_SECRET: scenario === "fail-check" ? "Public changelog" : GH_TOKEN,
+        });
         assert.notEqual(result.code, 0);
-        if (script === "generate-secret") {
+        if (scenario === "generate-secret") {
           assert.match(result.stdout + result.stderr, /github-token-classic/);
           assert.ok(fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8").includes(GH_TOKEN));
           assert.ok(!result.stdout.includes(GH_TOKEN) && !result.stderr.includes(GH_TOKEN));
+        } else if (scenario === "fail-check") {
+          assert.equal(result.code, 1);
+          assert.match(result.stdout, /::error::Caller changelog policy failed \(npm run changelog:check\)/);
+          assert.equal(fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8"), "Public changelog\n");
         } else assert.equal(result.code, 19);
         assert.deepEqual(remoteRefs(bare), ["refs/heads/main"]);
         assert.ok(!fs.existsSync(env.REVIEW_RECEIPT!));

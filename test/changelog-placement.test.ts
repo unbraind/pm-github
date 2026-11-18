@@ -56,7 +56,7 @@ function evidence(id: string): CloseoutApi {
 
 for (const kind of ["closeout", "sync"]) {
   for (const tagged of [false, true]) {
-    test(`${kind}: post-release delivery stays Unreleased with ${tagged ? "a real release tag" : "an untagged old package version"}`, async () => {
+    test(`${kind}: regenerated output passes the caller policy ${tagged ? "after" : "before"} a release tag`, async () => {
       const root = mkdtempSync(join(tmpdir(), "placement-caller-"));
       const pmRoot = join(root, ".agents/pm");
       const env = { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture",
@@ -68,6 +68,8 @@ for (const kind of ["closeout", "sync"]) {
         mkdirSync(join(root, "node_modules/.bin"), { recursive: true });
         writeFileSync(join(root, "package.json"), JSON.stringify({ version: "2026.9.2", scripts: {
           "changelog:full": `node ${JSON.stringify(generator)} --stdin --pm-root .agents/pm --mode replace --output CHANGELOG.md --all-release-tags --include-empty --release-version-from-package --date-from-version`,
+          "changelog:check": "npm run changelog:full -- --check",
+          "changelog:automation": "npm run changelog:full",
           custom: 'node -e "require(\'node:fs\').writeFileSync(\'custom.txt\', JSON.stringify(process.argv.slice(1)))"',
         } }));
         // The CLI's stdin mode avoids spawning an unrelated pm installation.
@@ -92,20 +94,27 @@ for (const kind of ["closeout", "sync"]) {
         pkg.scripts["changelog:full"] = pkg.scripts["changelog:full"]!.replace("--stdin", `--pm-bin ${JSON.stringify(cli)} --pm-arg=--output-limit --pm-arg=unbounded --pm-arg=--output-budget --pm-arg=unbounded`);
         writeFileSync(join(root, "package.json"), JSON.stringify(pkg));
         const result = postScript(kind, root);
-        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.status, 0, result.stdout + result.stderr);
+        assert.match(result.stdout, /> changelog:check/);
         const changelog = readFileSync(join(root, "CHANGELOG.md"), "utf8");
-        assert.match(changelog.split(/^## /m).find(section => section.startsWith("Unreleased")) ?? "", /October delivery/);
-        const released = changelog.split(/^## /m).filter(section => section.startsWith("2026.9.2"));
-        for (const section of released) assert.doesNotMatch(section, /October delivery/);
+        const sections = changelog.split(/^## /m);
+        const release = sections.find(section => section.startsWith("2026.9.2")) ?? "";
         if (tagged) {
-          assert.equal(released.length, 1, "the intentionally empty historical release must remain visible");
-          assert.match(released[0]!, /No changes\./);
-        }
+          assert.match(sections.find(section => section.startsWith("Unreleased")) ?? "", /October delivery/);
+          assert.match(release, /No changes\./);
+        } else assert.match(release, /October delivery/);
         assert.equal((await get(item.item.id, {}, { pmRoot, noExtensions: true })).item.status, kind === "closeout" ? "closed" : "open");
-        assert.equal(postScript(kind, root, "custom").status, 0);
-        assert.equal(readFileSync(join(root, "custom.txt"), "utf8"), "[]");
-        assert.equal(postScript(kind, root, "").status, 0);
-        assert.equal(postScript(kind, root, "missing").status, 0);
+        if (!tagged) {
+          const wrapper = postScript(kind, root, "changelog:automation");
+          assert.equal(wrapper.status, 0, wrapper.stdout + wrapper.stderr);
+          assert.equal(readFileSync(join(root, "CHANGELOG.md"), "utf8"), changelog);
+          delete pkg.scripts["changelog:check"];
+          writeFileSync(join(root, "package.json"), JSON.stringify(pkg));
+          assert.equal(postScript(kind, root, "custom").status, 0);
+          assert.equal(readFileSync(join(root, "custom.txt"), "utf8"), "[]");
+          assert.equal(postScript(kind, root, "").status, 0);
+          assert.equal(postScript(kind, root, "missing").status, 0);
+        }
       } finally { rmSync(root, { recursive: true, force: true }); }
     });
   }

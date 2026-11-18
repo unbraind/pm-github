@@ -79,6 +79,9 @@ publicationTest("schedule without repository payload resolves trunk; clean close
   assert.doesNotMatch(body, /"code": "other_repository"/);
   assert.doesNotMatch(body, /"checks"|"reason"/);
   assert.match(f.git("show", `${published}:CHANGELOG.md`), /Verified delivery/);
+  const paths = f.git("diff-tree", "--no-commit-id", "--name-only", "-r", published).split("\n");
+  assert.ok(paths.includes("CHANGELOG.md"));
+  assert.ok(paths.includes(`.agents/pm/tasks/${f.id}.toon`));
   const second = await f.run([...setup, ...finish]);
   assert.equal(second.code, 0, second.out);
   const receipts = readFileSync(f.env.RECEIPTS!, "utf8");
@@ -86,6 +89,24 @@ publicationTest("schedule without repository payload resolves trunk; clean close
   assert.equal(receipts.split("\n").filter(line => line.startsWith("pr edit 7 ")).length, 1);
   assert.equal(receipts.split("\n").filter(line => line.startsWith("workflow run ci.yml ")).length, 2);
   assert.ok(receipts.includes(`--title ${title}`));
+}));
+
+publicationTest("a failing caller changelog check blocks closeout publication", async () => fixture(async f => {
+  const manifest = join(f.root, "tools/oracle/package.json");
+  const pkg = JSON.parse(readFileSync(manifest, "utf8")) as { scripts: Record<string, string> };
+  pkg.scripts["changelog:check"] = "node -e 'process.exit(23)'";
+  writeFileSync(manifest, JSON.stringify(pkg));
+  f.git("add", "--", "tools/oracle/package.json");
+  f.git("commit", "-qm", "Configure caller changelog check");
+  f.git("push", "origin", "trunk");
+  const baseHead = f.git("rev-parse", "HEAD");
+  const result = await f.run([...setup, ...finish]);
+  assert.equal(result.code, 1, result.out);
+  assert.match(result.out, /::error::Caller changelog policy failed \(npm run changelog:check\)/);
+  assert.match(readFileSync(join(f.root, "CHANGELOG.md"), "utf8"), /Verified delivery/);
+  assert.equal(f.git("rev-parse", "HEAD"), baseHead);
+  unpublished(f.git);
+  assert.equal(existsSync(f.env.PR_STATE!), false);
 }));
 
 publicationTest("scheduled closeout follows verified numeric pagination with declared checks and publishes delivery", async () => fixture(async f => {
