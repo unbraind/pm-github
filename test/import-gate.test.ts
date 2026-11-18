@@ -862,9 +862,9 @@ function workflowShell(names: readonly string[]): string {
     const block = /        run: \|\n([\s\S]*)/.exec(step);
     if (block) {
       const body = block[1]!.split("\n").filter(line => line.startsWith("          ")).map(line => line.slice(10)).join("\n");
-      // Actions runs each step in its own shell; the health cleanup trap must
-      // finish before the subsequent publication step, including on failure.
-      return name === "Verify strict pm health" ? `(\n${body}\n)` : body;
+      // Bound the policy step's no-change exit and the health cleanup trap
+      // to their own shells, as Actions does.
+      return ["Check caller changelog policy", "Verify strict pm health"].includes(name) ? `(\n${body}\n)` : body;
     }
     const single = /        run: (.+)/.exec(step);
     assert.ok(single, `${name} needs executable shell`);
@@ -1405,7 +1405,10 @@ async function replayNoChangeSequence(prListOverrides: NodeJS.ProcessEnv, change
     assert.equal(git(["commit", "-qam", "restrict enabled extensions"]).status, 0);
     if (changelogState) {
       fs.writeFileSync(path.join(root, "generate-changelog.cjs"), 'require("node:fs").writeFileSync("CHANGELOG.md", "# Fresh changelog\\n");\n');
-      fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ scripts: { "changelog:full": "node generate-changelog.cjs" } }));
+      fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ scripts: {
+        "changelog:full": "node generate-changelog.cjs",
+        ...(changelogState === "stale" ? { "changelog:check": "node -e 'process.exit(23)'" } : {}),
+      } }));
       if (changelogState === "stale") fs.writeFileSync(path.join(root, "CHANGELOG.md"), "# Stale changelog\n");
       assert.equal(git(["add", "--", "generate-changelog.cjs", "package.json", ...(changelogState === "stale" ? ["CHANGELOG.md"] : [])]).status, 0);
       assert.equal(git(["commit", "-qm", "caller changelog regeneration fixture"]).status, 0);
@@ -1455,10 +1458,11 @@ workflowTest("a no-change run with only a fork PR sharing the branch name closes
   assert.deepEqual(run.refs, ["refs/heads/main"]);
 });
 
-workflowTest("a no-op import discards stale changelog drift and leaves a clean checkout without publication", async () => {
+workflowTest("a no-op import skips a failing caller check, discards changelog drift and closes a stale review", async () => {
   for (const ownPr of [undefined, "1"]) {
     const run = await replayNoChangeSequence({ OWN_OPEN_PR: ownPr }, "stale");
     assert.equal(run.code, 0, run.stderr + "\n" + run.stdout);
+    assert.doesNotMatch(run.stdout, /> changelog:check/);
     assert.match(run.stdout, /::notice::.*changelog differs from a fresh regeneration.*changelog:check owns that/);
     assert.equal(run.changelog, "# Stale changelog\n", "restore the committed caller changelog");
     assert.equal(run.status, "", "both index and working tree are clean");

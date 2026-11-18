@@ -1,7 +1,7 @@
 /** Real tracker and Git regressions for the reusable workflows' changelog policy. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -28,18 +28,28 @@ test("placement report retains the final regex-hardening validation snapshot", (
   assert.doesNotMatch(report, /964\/964|11040\/11040|300\/300|3520\/3520/);
 });
 
+test("wrapper guidance preserves caller changelog policy", () => {
+  const report = readFileSync(join(source, "docs/changelog-release-placement.md"), "utf8").replace(/\s+/g, " ");
+  assert.match(report, /wrappers must generate output that agrees with the caller's \x60changelog:check\x60/);
+  const readme = readFileSync(join(source, "README.md"), "utf8").replace(/\s+/g, " ");
+  assert.match(readme, /remove the \x60changelog:automation\x60 wrapper and its input override only if the wrapper solely delegates to \x60changelog:full\x60/);
+  assert.match(readme, /adds flags or sets environment variables, keep the wrapper and override or move that policy into \x60changelog:full\x60/);
+});
+
 /** Execute the production post-script and caller policy steps with real npm. */
 function postScript(kind: string, root: string, script = "changelog:full") {
   const workflow = readFileSync(join(source, `.github/workflows/pm-github-${kind}.yml`), "utf8");
   const steps = workflow.split("      - name: ");
-  const names = [`Run caller post-${kind === "sync" ? "import" : "closeout"} script`, "Check caller changelog policy"];
+  const names = ["Resolve sync commit scope", `Run caller post-${kind === "sync" ? "import" : "closeout"} script`, "Check caller changelog policy"];
   const shell = names.map(name => {
     const step = steps.find(candidate => candidate.startsWith(name + "\n"));
     assert.ok(step, name);
     return step.split("        run: |\n")[1]!.split("\n").filter(line => line.startsWith("          ")).map(line => line.slice(10)).join("\n");
   }).join("\n");
   return spawnSync("bash", ["-c", shell], { cwd: root, encoding: "utf8", env: { ...process.env,
-    NPM_PROJECT_PATH: root, POST_IMPORT_SCRIPT: script, POST_CLOSEOUT_SCRIPT: script,
+    GITHUB_WORKSPACE: root, GITHUB_ENV: join(root, ".git/workflow-env"), RUNNER_TEMP: join(root, ".git"),
+    PM_PATH: join(root, ".agents/pm"), NPM_PROJECT_PATH: root, POST_IMPORT_SCRIPT: script,
+    POST_CLOSEOUT_SCRIPT: script, CLOSEOUT_CLOSED: "1",
   } });
 }
 
@@ -70,7 +80,8 @@ for (const kind of ["closeout", "sync"]) {
       try {
         assert.equal(spawnSync("git", ["init", "-q", "-b", "main"], { cwd: root }).status, 0);
         assert.equal(spawnSync(cli, ["--pm-path", pmRoot, "init", "--defaults", "--agent-guidance", "skip"], { cwd: root }).status, 0);
-        mkdirSync(join(root, "node_modules/.bin"), { recursive: true });
+        mkdirSync(join(root, "node_modules/@unbrained"), { recursive: true });
+        symlinkSync(join(source, "node_modules/@unbrained/pm-cli"), join(root, "node_modules/@unbrained/pm-cli"), "junction");
         writeFileSync(join(root, "package.json"), JSON.stringify({ version: "2026.9.2", scripts: {
           "changelog:full": `node ${JSON.stringify(generator)} --stdin --pm-root .agents/pm --mode replace --output CHANGELOG.md --all-release-tags --include-empty --release-version-from-package --date-from-version`,
           "changelog:check": "npm run changelog:full -- --check",
@@ -98,14 +109,19 @@ for (const kind of ["closeout", "sync"]) {
         const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { scripts: Record<string, string> };
         pkg.scripts["changelog:full"] = pkg.scripts["changelog:full"]!.replace("--stdin", `--pm-bin ${JSON.stringify(cli)} --pm-arg=--output-limit --pm-arg=unbounded --pm-arg=--output-budget --pm-arg=unbounded`);
         writeFileSync(join(root, "package.json"), JSON.stringify(pkg));
+        // The workflow privacy gate stages the tracker before the caller check.
+        assert.equal(spawnSync("git", ["add", "--", ".agents/pm"], { cwd: root, env }).status, 0);
         const result = postScript(kind, root);
         assert.equal(result.status, 0, result.stdout + result.stderr);
         assert.match(result.stdout, /> changelog:check/);
         const changelog = readFileSync(join(root, "CHANGELOG.md"), "utf8");
-        const sections = changelog.split(/^## /m);
-        const release = sections.find(section => section.startsWith("2026.9.2")) ?? "";
+        const sections = changelog.split(/^## /m).slice(1);
+        const releases = sections.filter(section => /^\d{4}\.\d+\.\d+\b/.test(section));
+        const release = releases.find(section => section.startsWith("2026.9.2")) ?? "";
         if (tagged) {
           assert.match(sections.find(section => section.startsWith("Unreleased")) ?? "", /October delivery/);
+          assert.equal(releases.length, 1, "the fixture has exactly one historical release");
+          for (const section of releases) assert.doesNotMatch(section, /October delivery/);
           assert.match(release, /No changes\./);
         } else assert.match(release, /October delivery/);
         assert.equal((await get(item.item.id, {}, { pmRoot, noExtensions: true })).item.status, kind === "closeout" ? "closed" : "open");

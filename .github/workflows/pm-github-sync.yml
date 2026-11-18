@@ -528,11 +528,16 @@ jobs:
           source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
           gate_sync_change
 
-      # The caller check can log a diff. Scan the proposed changes before it runs.
+      # The caller check can log a diff. Run it after the privacy scan and only
+      # when publication is needed, so no-op runs can clean up stale review PRs.
       - name: Check caller changelog policy
         shell: bash
         run: |
           set -euo pipefail
+          source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
+          if git diff --cached --quiet -- "${sync_scope[0]}" "${sync_scope[@]:2}"; then
+            exit 0
+          fi
           if ! (cd "${NPM_PROJECT_PATH}" && npm run --if-present changelog:check); then
             echo "::error::Caller changelog policy failed (npm run changelog:check). Verify that the declared post-script produces the expected changelog."
             exit 1

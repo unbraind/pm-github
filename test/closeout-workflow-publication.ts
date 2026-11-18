@@ -8,7 +8,7 @@ import { workflowCorpus } from "./support/corpus.ts";
 const publicationCorpus = workflowCorpus(test, "closeout-publication");
 const publicationTest = publicationCorpus.test;
 import { get, update } from "@unbrained/pm-cli/sdk";
-import { bash, branch, cli, command, finish, fixture, repoRoot, setup, shell, sync, title, unpublished, workflow } from "./helpers/closeout-workflow.ts";
+import { bash, branch, cli, command, finish, fixture, repoRoot, setup, shell, sync, title, unpublished, workflow, type WorkflowFixture } from "./helpers/closeout-workflow.ts";
 
 publicationTest("closeout contract keeps sync safety helpers, exact pins, env bindings and least privilege", () => {
   assert.match(workflow, /^on:\n  workflow_call:/m);
@@ -22,9 +22,13 @@ publicationTest("closeout contract keeps sync safety helpers, exact pins, env bi
     if (!step.includes("run:")) continue;
     assert.doesNotMatch(shell(name), /\$\{\{/);
   }
-  for (const name of ["Validate npm project directory", "Install dependencies", "Require clean setup artifacts", "Isolate workflow setup artifacts", "Gate tracker and regenerated changelog", "Check caller changelog policy", "Verify strict pm health"]) {
+  for (const name of ["Validate npm project directory", "Install dependencies", "Require clean setup artifacts", "Isolate workflow setup artifacts", "Gate tracker and regenerated changelog", "Verify strict pm health"]) {
     assert.equal(shell(name), shell(name, sync), name);
   }
+  const policy = "Check caller changelog policy";
+  const noDeliveries = '[[ "${CLOSEOUT_CLOSED}" == 0 && "${CLOSEOUT_REVIEW:-0}" == 0 ]] || ';
+  assert.ok(shell(policy).includes(noDeliveries));
+  assert.equal(shell(policy).replace(noDeliveries, ""), shell(policy, sync));
   // Sync adds rule receipts and installation-failure cleanup. Compare the
   // unchanged publication boundaries directly, rather than diagnostic wrappers.
   const scopes = [shell("Resolve sync commit scope"), shell("Resolve sync commit scope", sync)];
@@ -91,14 +95,19 @@ publicationTest("schedule without repository payload resolves trunk; clean close
   assert.ok(receipts.includes(`--title ${title}`));
 }));
 
-publicationTest("a failing caller changelog check blocks closeout publication", async () => fixture(async f => {
-  const manifest = join(f.root, "tools/oracle/package.json");
+/** Install a caller policy that would fail whenever the workflow runs it. */
+function installFailingChangelogCheck({ root, git }: WorkflowFixture): void {
+  const manifest = join(root, "tools/oracle/package.json");
   const pkg = JSON.parse(readFileSync(manifest, "utf8")) as { scripts: Record<string, string> };
   pkg.scripts["changelog:check"] = "node -e 'process.exit(23)'";
   writeFileSync(manifest, JSON.stringify(pkg));
-  f.git("add", "--", "tools/oracle/package.json");
-  f.git("commit", "-qm", "Configure caller changelog check");
-  f.git("push", "origin", "trunk");
+  git("add", "--", "tools/oracle/package.json");
+  git("commit", "-qm", "Configure caller changelog check");
+  git("push", "origin", "trunk");
+}
+
+publicationTest("a failing caller changelog check blocks closeout publication", async () => fixture(async f => {
+  installFailingChangelogCheck(f);
   const baseHead = f.git("rev-parse", "HEAD");
   const result = await f.run([...setup, ...finish]);
   assert.equal(result.code, 1, result.out);
@@ -128,13 +137,20 @@ publicationTest("malicious tracker acceptance criteria fails the final privacy g
   assert.equal(existsSync(f.env.PR_STATE!), false);
 }));
 
-publicationTest("zero closes discards caller drift and creates no remote branch or PR", async () => fixture(async f => {
+publicationTest("a no-op closeout skips a failing caller check, discards changelog drift and closes a stale review", async () => fixture(async f => {
+  installFailingChangelogCheck(f);
   f.env.NO_DELIVERY = "true";
+  writeFileSync(f.env.PR_STATE!, "");
   const result = await f.run([...setup, ...finish]);
   assert.equal(result.code, 0, result.out);
+  assert.doesNotMatch(result.out, /> changelog:check/);
   assert.match(result.out, /no branch or PR/);
+  assert.match(result.out, /changelog differs from a fresh regeneration/);
   unpublished(f.git);
   assert.equal(existsSync(f.env.PR_STATE!), false);
+  const calls = readFileSync(f.env.RECEIPTS!, "utf8");
+  assert.match(calls, /^pr close 7 /m);
+  assert.doesNotMatch(calls, /^pr (create|edit) |^workflow run /m);
   assert.equal(readFileSync(join(f.root, "CHANGELOG.md"), "utf8"), "Caller changelog before closeout\n");
 }));
 
@@ -255,7 +271,12 @@ publicationTest("behavioural revert: removing only the no-op guard opens a PR wi
   const prepared = await f.run(setup);
   assert.equal(prepared.code, 0, prepared.out);
   await update(f.id, { title: "Caller observation without delivery" }, { pmRoot: f.pmRoot, noExtensions: true });
-  const mutant = workflow.replace('if [[ "${CLOSEOUT_CLOSED}" == 0 && "${CLOSEOUT_REVIEW:-0}" == 0 ]] || git diff --cached --quiet -- "${sync_scope[0]}" "${sync_scope[@]:2}"; then', "if false; then");
+  const publication = workflow.indexOf("      - name: Commit gated closeout changes and open review PR");
+  assert.ok(publication >= 0);
+  const mutant = workflow.slice(0, publication) + workflow.slice(publication).replace(
+    'if [[ "${CLOSEOUT_CLOSED}" == 0 && "${CLOSEOUT_REVIEW:-0}" == 0 ]] || git diff --cached --quiet -- "${sync_scope[0]}" "${sync_scope[@]:2}"; then',
+    "if false; then",
+  );
   assert.notEqual(mutant, workflow);
   const result = await f.run(finish, mutant);
   assert.equal(result.code, 0, result.out);

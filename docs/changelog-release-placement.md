@@ -80,12 +80,13 @@ the recent window and preserve their actual positive cycle durations.
 ## Changes and boundaries
 
 The October 2026 fix added `-- --no-pending-release` to `changelog:full` in both workflows.
-The workflows now run the caller's declared post-script and optional
-`changelog:check` under the caller's release policy. See [pm-github#226](https://github.com/unbraind/pm-github/issues/226).
+The workflows now run the caller's declared post-script under the caller's
+release policy and run the optional `changelog:check` when publishing tracker
+changes. See [pm-github#226](https://github.com/unbraind/pm-github/issues/226).
 No package version is bumped, and real released tag windows remain available.
-Custom post-script names receive their existing argument list; custom wrappers
-must implement the same non-release policy and forward arguments to their
-changelog generator. Empty and missing scripts retain their existing behavior.
+Custom post-script names receive the caller's existing argument list. Custom
+wrappers must generate output that agrees with the caller's `changelog:check`
+when it is defined. Empty and missing scripts retain their existing behavior.
 
 The importer also recognizes a leading `GitHub issue URL` or `GitHub issue: URL`
 in a native owner's description. Such an owner gets GitHub source metadata and
