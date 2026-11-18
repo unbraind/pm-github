@@ -161,7 +161,8 @@ for (const cell of decisionCases.slice(0, testDepth(decisionCases.length))) {
   const expected = expectedDecision(cell);
   test(`item decision end to end: ${selection} / ${competitor} / ${peer} / primary=${primaryClaim} / competitor=${competitorClaim}`, async () => {
     const f = await decisionFixture(cell);
-    const result = await f.run(["Prepare sync branch from default branch", "Close delivered tracker items", "Commit gated closeout changes and open review PR"]);
+    const result = await f.run(["Prepare sync branch from default branch", "Close delivered tracker items", "Gate tracker and regenerated changelog",
+      "Check caller changelog policy", "Commit gated closeout changes and open review PR"]);
     const report = JSON.parse(readFileSync(join(f.base, "pm-github-closeout.json"), "utf8")) as Awaited<ReturnType<typeof runCloseout>>;
     const item = (await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item;
     assert.equal(f.env.PEER_RETAG_APPLIED === "true", peer === "retag mid-run");

@@ -32,7 +32,7 @@ test("wrapper guidance preserves caller changelog policy", () => {
   const report = readFileSync(join(source, "docs/changelog-release-placement.md"), "utf8").replace(/\s+/g, " ");
   assert.match(report, /wrappers must generate output that agrees with the caller's \x60changelog:check\x60/);
   const readme = readFileSync(join(source, "README.md"), "utf8").replace(/\s+/g, " ");
-  assert.match(readme, /remove the \x60changelog:automation\x60 wrapper and its input override only if the wrapper solely delegates to \x60changelog:full\x60/);
+  assert.match(readme, /remove the \x60changelog:automation\x60 wrapper and its input override only if the wrapper solely delegates to \x60changelog:full\x60 and neither \x60prechangelog:automation\x60 nor \x60postchangelog:automation\x60 is defined/);
   assert.match(readme, /adds flags or sets environment variables, keep the wrapper and override or move that policy into \x60changelog:full\x60/);
 });
 

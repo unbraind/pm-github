@@ -347,6 +347,40 @@ jobs:
             printf '::error::Changed path outside sync commit scope: %q\n' "$1"
             return 1
           }
+          changelog_policy_hash() {
+            local index_hash worktree_hash
+            index_hash="$(git ls-files --stage -z -- "${sync_scope[@]}" | sha256sum)" || return 1
+            # Hash raw bytes in addition to index entries so clean filters cannot
+            # hide changes from the policy, and new paths and deletions are visible.
+            worktree_hash="$(
+              {
+                printf 'CHANGELOG.md\0'
+                git ls-files --cached --others --exclude-standard -z -- "${sync_scope[0]}" "${sync_scope[@]:2}"
+              } | LC_ALL=C sort -zu | node -e '
+                const { createHash } = require("node:crypto");
+                const { lstatSync, readFileSync, readlinkSync } = require("node:fs");
+                const paths = readFileSync(0);
+                const hash = createHash("sha256");
+                for (let start = 0, end; (end = paths.indexOf(0, start)) !== -1; start = end + 1) {
+                  const path = paths.subarray(start, end);
+                  const stat = lstatSync(path, { throwIfNoEntry: false });
+                  hash.update(path).update("\0").update(String(stat?.mode ?? 0)).update("\0");
+                  if (stat?.isFile()) hash.update(createHash("sha256").update(readFileSync(path)).digest());
+                  if (stat?.isSymbolicLink()) hash.update(createHash("sha256").update(readlinkSync(path, { encoding: "buffer" })).digest());
+                }
+                process.stdout.write(hash.digest("hex"));
+              '
+            )" || return 1
+            printf '%s\n%s\n' "${index_hash%% *}" "${worktree_hash}"
+          }
+          verify_changelog_policy() {
+            local current
+            if ! current="$(changelog_policy_hash)" || \
+               ! cmp -s -- "${RUNNER_TEMP}/pm-github-changelog-policy.hash" <(printf '%s\n' "${current}"); then
+              echo "::error::Cannot publish: CHANGELOG.md or tracker files changed after the caller changelog policy check, or its snapshot is unavailable."
+              return 1
+            fi
+          }
           gate_sync_change() {
             check_sync_scope
             git ls-files -z --modified --deleted --others --exclude-standard -- "${sync_scope[0]}" "${sync_scope[@]:2}" > "${RUNNER_TEMP}/pm-github-sync-stage-paths"
@@ -479,13 +513,21 @@ jobs:
         run: |
           set -euo pipefail
           source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
+          before="$(changelog_policy_hash)"
           if [[ "${CLOSEOUT_CLOSED}" == 0 && "${CLOSEOUT_REVIEW:-0}" == 0 ]] || git diff --cached --quiet -- "${sync_scope[0]}" "${sync_scope[@]:2}"; then
+            printf '%s\n' "${before}" > "${RUNNER_TEMP}/pm-github-changelog-policy.hash"
             exit 0
           fi
           if ! (cd "${NPM_PROJECT_PATH}" && npm run --if-present changelog:check); then
             echo "::error::Caller changelog policy failed (npm run changelog:check). Verify that the declared post-script produces the expected changelog."
             exit 1
           fi
+          after="$(changelog_policy_hash)"
+          if [[ "${before}" != "${after}" ]]; then
+            echo "::error::Caller changelog policy modified CHANGELOG.md or tracker files. Make changelog:check and its npm lifecycle hooks read-only."
+            exit 1
+          fi
+          printf '%s\n' "${after}" > "${RUNNER_TEMP}/pm-github-changelog-policy.hash"
 
       # No caller code runs while runtime setup is temporarily active for health.
       # Check the baseline first and restore even on failure, before any later gate.
@@ -548,6 +590,7 @@ jobs:
           set -euo pipefail
           trap 'echo "::error::Closeout publication refused; token requires contents:write and pull-requests:write, and repository settings must allow Actions to create PRs."' ERR
           source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
+          verify_changelog_policy
           gate_sync_change
           # gh pr list --head matches branch names, and a fork can open a PR
           # from a branch with the same name, so filter the results to PRs whose
@@ -617,9 +660,11 @@ jobs:
           # Re-enumerate all status paths, re-stage and re-scan immediately before
           # committing. --only prevents any unrelated staged path from leaking
           # even if the scope check is bypassed. NUL paths preserve odd filenames.
+          verify_changelog_policy
           gate_sync_change
           restore_sync_setup
           check_sync_scope
+          verify_changelog_policy
           git --literal-pathspecs commit --only --pathspec-from-file="${RUNNER_TEMP}/pm-github-sync-commit-paths" --pathspec-file-nul -m "chore(pm): close items delivered by merged pull requests"
           gh auth setup-git
           git push --force-with-lease="refs/heads/${SYNC_BRANCH}:${SYNC_LEASE}" origin "HEAD:refs/heads/${SYNC_BRANCH}"

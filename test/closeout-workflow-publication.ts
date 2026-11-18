@@ -35,7 +35,7 @@ publicationTest("closeout contract keeps sync safety helpers, exact pins, env bi
   assert.equal(scopes[0]!.split("report_workflow_failure()")[0], scopes[1]!.split("report_workflow_failure()")[0]);
   assert.equal(scopes[0]!.split("mapfile -t sync_scope")[1]!.split("restore_sync_setup()")[0],
     scopes[1]!.split("mapfile -t sync_scope")[1]!.split("restore_sync_setup()")[0]);
-  for (const name of ["restore_sync_setup", "restore_workflow_setup_artifacts", "check_sync_setup_clean", "check_sync_scope", "check_sync_path"]) {
+  for (const name of ["restore_sync_setup", "restore_workflow_setup_artifacts", "check_sync_setup_clean", "check_sync_scope", "check_sync_path", "changelog_policy_hash", "verify_changelog_policy"]) {
     const pattern = new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?^\\}`, "m");
     const shared = scopes.map(source => pattern.exec(source)?.[0]);
     assert.ok(shared[0], name);
@@ -95,11 +95,11 @@ publicationTest("schedule without repository payload resolves trunk; clean close
   assert.ok(receipts.includes(`--title ${title}`));
 }));
 
-/** Install a caller policy that would fail whenever the workflow runs it. */
-function installFailingChangelogCheck({ root, git }: WorkflowFixture): void {
+/** Configure the caller's real npm policy and any lifecycle hooks. */
+function installChangelogCheck({ root, git }: WorkflowFixture, scripts: Record<string, string>): void {
   const manifest = join(root, "tools/oracle/package.json");
   const pkg = JSON.parse(readFileSync(manifest, "utf8")) as { scripts: Record<string, string> };
-  pkg.scripts["changelog:check"] = "node -e 'process.exit(23)'";
+  Object.assign(pkg.scripts, scripts);
   writeFileSync(manifest, JSON.stringify(pkg));
   git("add", "--", "tools/oracle/package.json");
   git("commit", "-qm", "Configure caller changelog check");
@@ -107,12 +107,28 @@ function installFailingChangelogCheck({ root, git }: WorkflowFixture): void {
 }
 
 publicationTest("a failing caller changelog check blocks closeout publication", async () => fixture(async f => {
-  installFailingChangelogCheck(f);
+  installChangelogCheck(f, { "changelog:check": "node -e 'process.exit(23)'" });
   const baseHead = f.git("rev-parse", "HEAD");
   const result = await f.run([...setup, ...finish]);
   assert.equal(result.code, 1, result.out);
   assert.match(result.out, /::error::Caller changelog policy failed \(npm run changelog:check\)/);
   assert.match(readFileSync(join(f.root, "CHANGELOG.md"), "utf8"), /Verified delivery/);
+  assert.equal(f.git("rev-parse", "HEAD"), baseHead);
+  unpublished(f.git);
+  assert.equal(existsSync(f.env.PR_STATE!), false);
+}));
+
+publicationTest("a successful closeout changelog check cannot publish a post-hook tracker change", async () => fixture(async f => {
+  const trackerFile = `../../.agents/pm/tasks/${f.id}.toon`;
+  installChangelogCheck(f, {
+    "changelog:check": "node -e ''",
+    "postchangelog:check": `node -e 'require("node:fs").appendFileSync(process.argv[1], "\\n")' ${trackerFile}`,
+  });
+  const baseHead = f.git("rev-parse", "HEAD");
+  const result = await f.run([...setup, ...finish]);
+  assert.equal(result.code, 1, result.out);
+  assert.match(result.out, /^> (?:\S+ )?postchangelog:check$/m);
+  assert.match(result.out, /Caller changelog policy modified CHANGELOG.md or tracker files/);
   assert.equal(f.git("rev-parse", "HEAD"), baseHead);
   unpublished(f.git);
   assert.equal(existsSync(f.env.PR_STATE!), false);
@@ -138,12 +154,14 @@ publicationTest("malicious tracker acceptance criteria fails the final privacy g
 }));
 
 publicationTest("a no-op closeout skips a failing caller check, discards changelog drift and closes a stale review", async () => fixture(async f => {
-  installFailingChangelogCheck(f);
+  installChangelogCheck(f, { "changelog:check": "node -e 'process.exit(23)'" });
+  const changelog = join(f.root, "CHANGELOG.md");
+  const original = readFileSync(changelog);
   f.env.NO_DELIVERY = "true";
   writeFileSync(f.env.PR_STATE!, "");
   const result = await f.run([...setup, ...finish]);
   assert.equal(result.code, 0, result.out);
-  assert.doesNotMatch(result.out, /> changelog:check/);
+  assert.doesNotMatch(result.out, /^> (?:\S+ )?changelog:check$/m);
   assert.match(result.out, /no branch or PR/);
   assert.match(result.out, /changelog differs from a fresh regeneration/);
   unpublished(f.git);
@@ -151,7 +169,8 @@ publicationTest("a no-op closeout skips a failing caller check, discards changel
   const calls = readFileSync(f.env.RECEIPTS!, "utf8");
   assert.match(calls, /^pr close 7 /m);
   assert.doesNotMatch(calls, /^pr (create|edit) |^workflow run /m);
-  assert.equal(readFileSync(join(f.root, "CHANGELOG.md"), "utf8"), "Caller changelog before closeout\n");
+  assert.deepEqual(readFileSync(changelog), original);
+  assert.equal(f.git("diff", "--cached", "--name-only"), "");
 }));
 
 publicationTest("permission-limited read token fails closed with a clear diagnostic", async () => fixture(async f => {

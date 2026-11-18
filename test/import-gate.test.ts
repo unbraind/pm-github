@@ -1736,13 +1736,17 @@ workflowTest("scheduled blocker report warns on clearance, preserves items, and 
 
 
 test("post-import changelog findings and script or caller policy failures block publication", async () => {
-  for (const scenario of ["generate-secret", "fail-script", "fail-check"]) {
+  for (const scenario of ["generate-secret", "fail-script", "fail-check", "post-check"]) {
     const { root, base, bare, git } = initSyncRepo();
     try {
+      const runsCheck = scenario === "fail-check" || scenario === "post-check";
       fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ scripts: {
         "generate-secret": "node generate-secret.cjs", "fail-script": "node -e 'process.exit(19)'",
-        ...(scenario === "fail-check" ? { "changelog:full": "node generate-secret.cjs" } : {}),
+        ...(runsCheck ? { "changelog:full": "node generate-secret.cjs" } : {}),
         "changelog:check": scenario === "fail-check" ? "node -e 'process.exit(23)'" : "node -e 'console.log(\"caller check ran\")'",
+        ...(scenario === "post-check" ? {
+          "postchangelog:check": "node -e 'require(\"node:fs\").appendFileSync(\"CHANGELOG.md\", \"Unchecked change\\n\")'",
+        } : {}),
       } }));
       fs.writeFileSync(path.join(root, "generate-secret.cjs"),
         'require("node:fs").writeFileSync("CHANGELOG.md", process.env.SYNTHETIC_SECRET + "\\n");\n');
@@ -1757,8 +1761,8 @@ test("post-import changelog findings and script or caller policy failures block 
       }, async () => {
         const result = await executeWorkflow(workflowShell(WORKFLOW_IMPORT_SEQUENCE), root, { ...env,
           PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE,
-          POST_IMPORT_SCRIPT: scenario === "fail-check" ? "changelog:full" : scenario,
-          SYNTHETIC_SECRET: scenario === "fail-check" ? "Public changelog" : GH_TOKEN,
+          POST_IMPORT_SCRIPT: runsCheck ? "changelog:full" : scenario,
+          SYNTHETIC_SECRET: runsCheck ? "Public changelog" : GH_TOKEN,
         });
         assert.notEqual(result.code, 0);
         if (scenario === "generate-secret") {
@@ -1770,6 +1774,12 @@ test("post-import changelog findings and script or caller policy failures block 
           assert.equal(result.code, 1);
           assert.match(result.stdout, /::error::Caller changelog policy failed \(npm run changelog:check\)/);
           assert.equal(fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8"), "Public changelog\n");
+        } else if (scenario === "post-check") {
+          assert.equal(result.code, 1);
+          assert.match(result.stdout, /^> (?:\S+ )?postchangelog:check$/m);
+          assert.match(result.stdout, /Caller changelog policy modified CHANGELOG.md or tracker files/);
+          assert.equal(git(["show", ":CHANGELOG.md"]).stdout, "Public changelog\n");
+          assert.equal(fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8"), "Public changelog\nUnchecked change\n");
         } else assert.equal(result.code, 19);
         assert.deepEqual(remoteRefs(bare), ["refs/heads/main"]);
         assert.ok(!fs.existsSync(env.REVIEW_RECEIPT!));
@@ -1823,7 +1833,7 @@ if (mode === "multiple") writeFileSync("second.txt", "changed\\n");
   }
 });
 
-workflowTest("publication rechecks late changes and rescans the exact working content it commits", async () => {
+workflowTest("publication refuses late changes outside scope or to policy-checked content", async () => {
   for (const mode of ["staged", "unstaged", "untracked", "credential", "tracker-secret", "attributes", "registry"] as const) {
     const { root, base, bare, git } = initSyncRepo();
     try {
@@ -1841,14 +1851,18 @@ workflowTest("publication rechecks late changes and rescans the exact working co
         // Insert immediately BEFORE the final status check and scan, after link
         // generation, so both the early gate and the commit-step entry pass.
         const lateShell = workflowShell(WORKFLOW_IMPORT_SEQUENCE).replace(
-          'gate_sync_change\nrestore_sync_setup\ncheck_sync_scope\ngit --literal-pathspecs commit --only',
-          mutate + 'gate_sync_change\nrestore_sync_setup\ncheck_sync_scope\ngit --literal-pathspecs commit --only');
+          'verify_changelog_policy\ngate_sync_change\nrestore_sync_setup',
+          mutate + 'verify_changelog_policy\ngate_sync_change\nrestore_sync_setup');
         assert.ok(lateShell.includes(mutate), "late injection must execute before the commit gate");
         const result = await executeWorkflow(lateShell, root, { ...env,
           PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE, LATE_PATH: filename,
           LATE_CONTENT: mode === "credential" || mode === "tracker-secret" ? GH_TOKEN : "changed\n" });
         assert.notEqual(result.code, 0, `${mode}: ${result.stdout}\n${result.stderr}`);
-        if (mode === "tracker-secret") assert.match(result.stdout + result.stderr, /github-token-classic/);
+        if (mode === "tracker-secret") {
+          assert.match(result.stdout + result.stderr, /CHANGELOG.md or tracker files changed after the caller changelog policy check/);
+          assert.ok(!result.stdout.includes(GH_TOKEN) && !result.stderr.includes(GH_TOKEN));
+          assert.equal(git(["diff", "--cached", "--name-only", "--", "CHANGELOG.md"]).stdout, "");
+        }
         else assert.ok(result.stdout.includes(filename), result.stdout);
         assert.deepEqual(remoteRefs(bare), ["refs/heads/main"]);
       });

@@ -1286,10 +1286,15 @@ Optional inputs:
 | `ci-workflows` | `ci.yml codeql.yml` | Explicit whitespace-separated filename override in the caller's `.github/workflows`. Missing/non-dispatchable workflows are reported; zero dispatchable workflows fails. Empty disables dispatch and auto-merge. See the CI and landing contract above. |
 
 Both workflows run the caller's declared post-script without adding arguments.
+The caller's `changelog:check` and its npm lifecycle hooks must leave
+`CHANGELOG.md` and the tracker files unchanged through staging and commit.
 After upgrading, callers can remove the `changelog:automation` wrapper and its
-input override only if the wrapper solely delegates to `changelog:full`.
+input override only if the wrapper solely delegates to `changelog:full` and
+neither `prechangelog:automation` nor `postchangelog:automation` is defined.
 If the wrapper adds flags or sets environment variables, keep the wrapper and
-override or move that policy into `changelog:full`.
+override or move that policy into `changelog:full`. If it has lifecycle hooks,
+keep the wrapper and override or preserve the hook behavior in the
+`changelog:full` lifecycle before removing them.
 
 A fleet repo owns the schedule and calls it with a pinned release SHA (see [`docs/sync-workflow-caller.yml`](docs/sync-workflow-caller.yml)):
 
