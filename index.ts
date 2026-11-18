@@ -1468,6 +1468,18 @@ export function deriveAtomicItemId(
 }
 
 const sdkCreateOptions = new Set<string>(TOOL_CREATE_OPTION_CONTRACT_SOURCE.map(option => option.param));
+const githubImportDeferralOptions = {
+  deadline: "deadline",
+  acceptance_criteria: "ac",
+  estimated_minutes: "estimate",
+  assignee: "assignee",
+} as const;
+
+/** Derive the unknown delivery fields for a new mirror from its source projection. */
+function githubImportDeferredFields(entry: Pick<PreparedGithubImport, "assignee">) {
+  return (Object.keys(githubImportDeferralOptions) as (keyof typeof githubImportDeferralOptions)[])
+    .filter(field => field !== "assignee" || !entry.assignee);
+}
 
 /** Admit imported records under strict defaults while preserving their missing-field evidence. */
 function githubImportCreateOptions(
@@ -1484,7 +1496,7 @@ function githubImportCreateOptions(
   }
   return {
     ...progressive,
-    defer: ["deadline", "ac", "estimate", ...(entry.assignee ? [] : ["assignee"])],
+    defer: githubImportDeferredFields(entry).map(field => githubImportDeferralOptions[field]),
     deferReason,
   };
 }
@@ -3840,6 +3852,19 @@ export async function runImport(
     );
   }
 
+  const strictCreate = workspace.settings.governance.create_mode_default === "strict";
+  const deferredMirrors = strictCreate ? gatePlan!.filter(entry => !entry.match?.id) : [];
+  if (strictCreate) {
+    console.error(`pm github import preflight: strict creation policy — ${deferredMirrors.length} issue(s) will be admitted with deferrals.`);
+  }
+  const curationReceipt = opts.gate && deferredMirrors.length > 0 ? {
+    needs_curation: deferredMirrors.map(entry => ({
+      item: deriveAtomicItemId(repo, entry.issueNumber, workspace.settings.id_prefix, sdkNormalizeItemId),
+      issue: entry.issueNumber,
+      fields: githubImportDeferredFields(entry),
+    })),
+  } : {};
+
   // Preview output omits unscanned PR-title quotes and private provider close text.
   const fidelityPlan = () => gatePlan!.map(entry => {
     const source = entry.fidelity!;
@@ -3856,7 +3881,7 @@ export async function runImport(
       ...(entry.citation_candidates ? { citation_candidates: entry.citation_candidates } : {}) };
   });
   const adoptionCount = gatePlan!.filter(entry => entry.identity?.via === "citation").length;
-  const planFields = { ...identityConflictFields, ...(opts.gate || adoptionCount > 0 || citationCandidates.length > 0 ? { plan: fidelityPlan() } : {}), ...citationReceipt };
+  const planFields = { ...identityConflictFields, ...curationReceipt, ...(opts.gate || adoptionCount > 0 || citationCandidates.length > 0 ? { plan: fidelityPlan() } : {}), ...citationReceipt };
   const gatePlanFields = { ...planFields, ...(opts.gate ? { gate: { completeness: gateCompleteness, idempotency: gateIdempotency, scan: opts.dryRun ? "plan" : "post-write" } } : {}) };
 
   if (opts.atomic) {

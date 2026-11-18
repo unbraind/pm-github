@@ -52,7 +52,7 @@ async function itemId(pmRoot: string, number: number) {
 }
 
 for (const atomic of [true, false]) {
-  test(`strict ${atomic ? "atomic" : "plain"} import persists only genuine unknowns on new items`, async () => tracker("strict", async pmRoot => {
+  test(`strict ${atomic ? "atomic" : "plain"} import persists only genuine unknowns on new items`, async t => tracker("strict", async pmRoot => {
     const assigned: GhIssue = { ...issue(1), assignee: { login: "pm-github" } };
     await run(pmRoot, [assigned], atomic);
     const existing = await itemId(pmRoot, 1);
@@ -64,11 +64,21 @@ for (const atomic of [true, false]) {
     assert.equal(before.assignee, "pm-github");
 
     const next = [{ ...assigned, title: "Updated source title" }, issue(2)];
+    const log = t.mock.method(console, "error", () => {});
     const preview = await run(pmRoot, next, atomic, true);
+    const preflight = (message: unknown) => typeof message === "string" && message.includes("pm github import preflight:");
+    assert.deepEqual(log.mock.calls.flatMap(call => call.arguments.filter(preflight)), [
+      "pm github import preflight: strict creation policy — 1 issue(s) will be admitted with deferrals.",
+    ]);
+    const expectedCuration = [{
+      item: await itemId(pmRoot, 2), issue: 2, fields: ["deadline", "acceptance_criteria", "estimated_minutes", "assignee"],
+    }];
+    assert.deepEqual(Reflect.get(preview, "needs_curation"), expectedCuration);
     assert.ok("wouldImport" in preview && preview.wouldImport === 1);
     assert.ok("wouldUpdate" in preview && preview.wouldUpdate === 1);
     const result = await run(pmRoot, next, atomic);
     assert.ok("imported" in result && result.imported === 1 && result.updated === 1);
+    assert.deepEqual(Reflect.get(result, "needs_curation"), expectedCuration);
     const after = (await get(existing, {}, { pmRoot })).item;
     assert.equal(after.title, next[0]!.title);
     assert.deepEqual(Reflect.get(after, "deferred_fields"), beforeDeferred);
@@ -83,8 +93,13 @@ for (const atomic of [true, false]) {
   }));
 }
 
-test("default atomic import keeps a byte-identical repeat", async () => tracker("default", async pmRoot => {
-  await run(pmRoot, [issue(1)], true);
+test("default atomic import keeps a byte-identical repeat without curation output", async t => tracker("default", async pmRoot => {
+  const log = t.mock.method(console, "error", () => {});
+  const preview = await run(pmRoot, [issue(1)], true, true);
+  const result = await run(pmRoot, [issue(1)], true);
+  assert.equal(Reflect.get(preview, "needs_curation"), undefined);
+  assert.equal(Reflect.get(result, "needs_curation"), undefined);
+  assert.doesNotMatch(log.mock.calls.map(call => call.arguments.join(" ")).join("\n"), /pm github import preflight:/);
   const id = await itemId(pmRoot, 1);
   const receipts = [getItemPath(pmRoot, "Issue", id), getHistoryPath(pmRoot, id)];
   const before = receipts.map(path => readFileSync(path, "utf8"));

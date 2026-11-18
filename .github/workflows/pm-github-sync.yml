@@ -473,6 +473,13 @@ jobs:
             exit 1
           fi
 
+          # Preserve the successful apply receipt before the repeat import replaces its JSON.
+          jq -r '
+            .needs_curation // [] | select(length > 0) |
+            "### Needs curation\n",
+            (.[] | "- `\(.item)` · GitHub issue #\(.issue) · \(.fields | join(", "))")
+          ' "${RUNNER_TEMP}/pm-github-import.json" > "${RUNNER_TEMP}/pm-github-import-curation.md"
+
       - name: Verify repeat import is a no-op
         env:
           GH_TOKEN: ${{ github.token }}
@@ -648,6 +655,7 @@ jobs:
           gh auth setup-git
           git push --force-with-lease="refs/heads/${SYNC_BRANCH}:${SYNC_LEASE}" origin "HEAD:refs/heads/${SYNC_BRANCH}"
           body_file="${RUNNER_TEMP}/pm-github-sync-pr.md"
+          curation_file="${RUNNER_TEMP}/pm-github-import-curation.md"
           {
             printf '%s\n\n' "Automated pm-github issue synchronization for ${REPOSITORY}."
             printf '%s\n\n' "The import ran with \`--gate\`: the plan was verified for completeness and provenance idempotency before the write, and the proposed tracker change passed the fail-closed privacy gate before anything was committed. \`${DEFAULT_BRANCH}\` is never pushed directly."
@@ -657,12 +665,19 @@ jobs:
               printf '\n%s\n\n' "Import conflicts for review:"
               cat "${RUNNER_TEMP}/pm-github-import-conflicts.md"
             fi
+            if [[ -s "${curation_file}" ]]; then
+              printf '\n'
+              cat "${curation_file}"
+            fi
           } > "${body_file}"
           pr_number="$(own_open_pr)"
           if [[ -z "${pr_number}" ]]; then
             gh pr create -R "${REPOSITORY}" --base "${DEFAULT_BRANCH}" --head "${SYNC_BRANCH}" --title "chore(pm): sync GitHub issues (gated)" --body-file "${body_file}"
           else
             gh pr edit "${pr_number}" -R "${REPOSITORY}" --body-file "${body_file}"
+          fi
+          if [[ -s "${curation_file}" ]]; then
+            cat "${curation_file}" >> "${GITHUB_STEP_SUMMARY}"
           fi
           pr_number="$(own_open_pr)"
           [[ "${pr_number}" =~ ^[0-9]+$ ]] || { echo "::error::Cannot resolve the owned automation PR number."; exit 1; }

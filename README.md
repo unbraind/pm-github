@@ -642,11 +642,20 @@ still require a Git worktree for the proposed-change privacy scan.
 ### Importing into strict trackers
 
 When the tracker defaults to strict creation, `pm github import` uses progressive
-creation for new GitHub mirrors. The item records why its delivery fields are
-pending triage. The importer keeps any source assignee it already maps and
-leaves unknown acceptance criteria, assignee, deadline, and estimate unset.
+creation for new GitHub mirrors and explicitly defers unknown acceptance
+criteria, assignee, deadline, and estimate. This supersedes per-issue refusal
+because an issue could otherwise stay unmirrored indefinitely while its delivery
+fields await triage. Import preflight reports the strict policy and how many
+issues will be admitted with deferrals. A gated sync lists each newly deferred
+mirror, its GitHub issue number, and its deferred fields under **Needs curation**
+in the sync PR body and job summary.
+
+The importer supplies a mapped source assignee subject to the tracker's
+ownership checks. If a strict tracker refuses that assignee, the atomic import
+fails and compensation rolls back linked updates from the same batch. This
+limitation is tracked in [pm-github-s6xa](.agents/pm/issues/pm-github-s6xa.toon).
 Updates to existing items still follow the tracker's normal mutation policy.
-Other create errors still trigger compensation in an atomic import.
+Other create errors also trigger compensation in an atomic import.
 
 Scheduled sync uses the calling repository's PM CLI. Use PM CLI 2026.11.17 or
 newer to see native `deferred_fields` entries in `pm validate`. A host SDK

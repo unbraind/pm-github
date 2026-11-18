@@ -6,9 +6,11 @@ status: in_progress
 priority: 1
 tags[4]: changelog-unreleased,"gh:unbraind/pm-github#237",import,sync
 created_at: "2026-11-17T18:48:46.783Z"
-updated_at: "2026-11-17T23:32:34.677Z"
+updated_at: "2026-11-18T01:17:37.476Z"
+assignee: codex-sol
+claim_principal: codex-sol
 author: pi-glm
-comments[9]{created_at,author,text}:
+comments[10]{created_at,author,text}:
   "2026-11-17T18:49:13.074Z",pi-glm,"Root cause: the importer creates new Issues with title, type, description, body, tags, author, status and message only. Strict-preset trackers set create_mode_default to strict, so the SDK requires acceptance criteria, assignee, comment, deadline, dependency, doc, estimate, file, learning, note, priority and test. One refused create rolls back the atomic import. Design: admit new imported items with createMode progressive, and when the SDK records deferrals, defer unknown deadline, assignee, acceptance criteria and estimate with an honest import reason. Never invent those values. Updates keep their current options."
   "2026-11-17T22:45:36.589Z",codex-sol,"Resumed the existing item. Atomic import forwards the create row through the public SDK bulk mutation API. The bundled development SDK types expose createMode, and the published PM CLI 2026.11.17 create contract also exposes defer and deferReason. Verifying the pinned failure and the persisted receipt with the real SDK."
   "2026-11-17T22:47:23.771Z",codex-sol,Reproduced at a3a2e7c using a temporary copy of the pm-changelog settings. The real SDK refused the new Issue with the same twelve missing options and left no item. The fix passes progressive mode and explicit unknown-field deferrals only to create operations under strict tracker defaults. It records the reason in create history for older SDKs and preserves any source assignee.
@@ -18,16 +20,21 @@ comments[9]{created_at,author,text}:
   "2026-11-17T23:18:55.776Z",codex-sol,"Code and fixtures are in f4986eb. Passed npm run typecheck, npm run build, npm run build:test, npm run lint, npm run docstring, npm run changelog:check and npm run privacy. The targeted node --test run passed across 75 import and affected test files with PM_TEST_DEPTH=quick. The linked node --test test/strict-import-admission.test.ts passed through pm test and separately on Node 22 and Bun. A gated state-all fixture preserved a closed source issue and its completion date. Strict health passed in an isolated clone with its merge drivers installed. Release the claim for review."
   "2026-11-17T23:31:45.968Z",codex-sol,PR 260 Node 22 CI exposed four stale ownership inventory assertions after index.ts shifted. The targeted file filter missed this generated inventory dependency. Regenerated docs/identity-ownership-inventory.md with the repository script and added the inventory test to the linked gates.
   "2026-11-17T23:32:33.782Z",codex-sol,"Ownership inventory generation and check passed. Both linked tests passed through pm test. Node 22 passed all 39 inventory, ownership regression and strict admission tests. The follow-up only refreshes the generated anchors and the tracker evidence."
-files[6]{path,scope}:
+  "2026-11-18T01:15:01.709Z",codex-sol,Round BN keeps progressive admission so GitHub issues remain mirrored while delivery fields await triage. Add a preflight count and carry the successful gated apply receipt into the sync review and job summary. Document the existing ownership compensation and scale the subprocess harness.
+files[8]{path,scope}:
+  .github/workflows/pm-github-sync.yml,project
   index.ts,project
   package-lock.json,project
   package.json,project
   test/helpers/strict-import-sdk-loader.ts,project
   test/helpers/strict-import-sdk-scenarios.ts,project
+  test/import-gate.test.ts,project
   test/strict-import-admission.test.ts,project
-tests[2]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+tests[4]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
   node --test test/strict-import-admission.test.ts,project,codex-sol,"2026-11-17T22:50:53.444Z",local_mutation,fix/strict-preset-import-admission
   node --test test/identity-inventory.test.ts,project,codex-sol,"2026-11-17T23:31:44.903Z",local_mutation,fix/strict-preset-import-admission
+  npm test,project,codex-sol,"2026-11-18T01:17:31.405Z",local_mutation,fix/strict-preset-import-admission
+  "npm run typecheck && npm run lint && npm run docstring && npm run privacy && node scripts/identity-inventory.ts --check && npm run changelog:check",project,codex-sol,"2026-11-18T01:17:37.299Z",local_mutation,fix/strict-preset-import-admission
 docs[3]{path,scope}:
   CHANGELOG.md,project
   docs/identity-ownership-inventory.md,project
