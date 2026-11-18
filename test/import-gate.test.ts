@@ -196,7 +196,7 @@ function githubHandler(
  *
  * @returns The worktree root, the bare remote path, and a git helper bound to the worktree.
  */
-function initSyncRepo(): { root: string; bare: string; base: string; git: (args: readonly string[]) => { stdout: string; status: number | null } } {
+function initSyncRepo(preset?: "strict"): { root: string; bare: string; base: string; git: (args: readonly string[]) => { stdout: string; status: number | null } } {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), "pm-github-import-gate-"));
   const bare = path.join(base, "remote.git");
   const root = path.join(base, "work");
@@ -208,7 +208,7 @@ function initSyncRepo(): { root: string; bare: string; base: string; git: (args:
   assert.strictEqual(git(["init", "-b", "main"]).status, 0, "git init failed");
   // Inside a Git work tree the tracker lives at the repository-local path,
   // exactly like a fleet checkout.
-  const init = spawnSync(PM_BIN, ["--path", path.join(root, ".agents", "pm"), "init", "test"], PM_SPAWN_OPTS);
+  const init = spawnSync(PM_BIN, ["--path", path.join(root, ".agents", "pm"), "init", "test", ...(preset ? ["--preset", preset] : [])], PM_SPAWN_OPTS);
   assert.strictEqual(init.status, 0, `pm init failed: ${init.error?.message ?? init.stderr}`);
   assert.strictEqual(git(["config", "user.name", "Sync Fixture"]).status, 0);
   assert.strictEqual(git(["config", "user.email", "fixture@example.invalid"]).status, 0);
@@ -990,7 +990,8 @@ esac
     NPM_PROJECT_PATH: root, GITHUB_WORKSPACE: root,
     POST_IMPORT_SCRIPT: "changelog:full", CI_WORKFLOWS: "ci.yml", SYNC_PR_NUMBER: "1",
     PM_SYNC_TRACKER: ".agents/pm", PM_GITHUB_VERSION: "2026.10.4", DEFAULT_BRANCH: "main", SYNC_BRANCH, SYNC_LEASE: "", RUNNER_TEMP: base,
-    GITHUB_ENV: path.join(base, "job-env"), REVIEW_RECEIPT: path.join(base, "review.md"), REVIEW_ACTIONS: path.join(base, "review-actions") };
+    GITHUB_ENV: path.join(base, "job-env"), GITHUB_STEP_SUMMARY: path.join(base, "job-summary"),
+    REVIEW_RECEIPT: path.join(base, "review.md"), REVIEW_ACTIONS: path.join(base, "review-actions") };
   const candidate = await workflowCandidate(env);
   // Keep the original per-fixture locator as well as separate installed state;
   // only packing is shared, so SDK/package-manager caches remain independent.
@@ -1222,6 +1223,29 @@ workflowTest("the executable reusable workflow never publishes each adversarial 
   }
 });
 
+workflowTest("strict gated sync reports new deferred mirrors in the review and summary after the repeat import", async () => {
+  const { root, base, git } = initSyncRepo("strict");
+  try {
+    const env = await prepareWorkflowFixture(root, base);
+    assert.equal(git(["switch", "-c", SYNC_BRANCH]).status, 0);
+    const handle = githubHandler([issue(1, "First mirror", null), issue(2, "Second mirror", null)]);
+    await withMockGithub((req, res, url, server) => {
+      if (req.url === "/repos/acme/widgets") jsonResponse(res, 200, { private: false });
+      else handle(req, res, url, server);
+    }, async server => {
+      const result = await executeWorkflow(workflowShell(WORKFLOW_IMPORT_SEQUENCE), root, { ...env, PM_GITHUB_API_BASE: server.baseUrl });
+      assert.equal(result.code, 0, result.stderr + "\n" + result.stdout);
+      const items = fs.readdirSync(path.join(root, ".agents/pm/issues")).filter(file => file.endsWith(".toon"));
+      assert.equal(items.length, 2);
+      const section = "### Needs curation\n\n" + items.map((file, index) =>
+        `- \`${file.slice(0, -5)}\` · GitHub issue #${index + 1} · deadline, acceptance_criteria, estimated_minutes, assignee\n`).join("");
+      const review = fs.readFileSync(env.REVIEW_RECEIPT!, "utf8");
+      assert.ok(review.endsWith(section), review);
+      assert.equal(fs.readFileSync(env.GITHUB_STEP_SUMMARY!, "utf8"), section);
+    });
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
 workflowTest("the executable reusable workflow pushes only a clean import and creates or updates linked reviews", async () => {
   const { root, base, bare, git } = initSyncRepo();
   try {
@@ -1251,6 +1275,8 @@ fs.writeFileSync("CHANGELOG.md", "# Changelog\\n- " + items[0] + "\\n");
       assert.equal(result.code, 0, result.stderr + "\n" + result.stdout);
       assert.deepEqual(remoteRefs(bare), ["refs/heads/" + SYNC_BRANCH, "refs/heads/main"].sort());
       const review = fs.readFileSync(env.REVIEW_RECEIPT!, "utf8");
+      assert.doesNotMatch(review, /Needs curation/);
+      assert.ok(!fs.existsSync(env.GITHUB_STEP_SUMMARY!));
       assert.match(review, /https:\/\/github\.com\/acme\/widgets\/blob\/main\/\.agents\/pm\/issues\/[^)]+\.toon/);
       // While the PR is open the main link may not resolve yet, so each item
       // also links its proposed version on the sync branch.

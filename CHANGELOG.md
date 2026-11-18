@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Admit GitHub issue mirrors in strict trackers with deferred fields ([pm-github-wzvn](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-wzvn.toon))
+
 ## 2026.11.17 - 2026-11-17
 
 ### Other

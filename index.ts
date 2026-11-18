@@ -73,6 +73,7 @@ import {
   normalizeItemId as sdkNormalizeItemId,
   readSettings as sdkReadSettings,
   resolvePmRoot as sdkResolvePmRoot,
+  TOOL_CREATE_OPTION_CONTRACT_SOURCE,
   toImportTags,
   getHistoryPath as sdkGetHistoryPath,
   readHistorySnapshot as sdkReadHistorySnapshot,
@@ -1466,6 +1467,40 @@ export function deriveAtomicItemId(
   return normalizeItemId(`github-${repoToken}-${issueNumber}`, idPrefix);
 }
 
+const sdkCreateOptions = new Set<string>(TOOL_CREATE_OPTION_CONTRACT_SOURCE.map(option => option.param));
+const githubImportDeferralOptions = {
+  deadline: "deadline",
+  acceptance_criteria: "ac",
+  estimated_minutes: "estimate",
+  assignee: "assignee",
+} as const;
+
+/** Derive the unknown delivery fields for a new mirror from its source projection. */
+function githubImportDeferredFields(entry: Pick<PreparedGithubImport, "assignee">) {
+  return (Object.keys(githubImportDeferralOptions) as (keyof typeof githubImportDeferralOptions)[])
+    .filter(field => field !== "assignee" || !entry.assignee);
+}
+
+/** Admit imported records under strict defaults while preserving their missing-field evidence. */
+function githubImportCreateOptions(
+  createMode: string | undefined,
+  entry: Pick<PreparedGithubImport, "issueNumber" | "assignee">,
+  message: string,
+): Record<string, unknown> {
+  if (createMode !== "strict") return { message };
+  const deferReason = `Imported from GitHub issue #${entry.issueNumber}. Required fields can be filled after triage.`;
+  const progressive = { message, createMode: "progressive" };
+  // Older runtimes refuse unrecognized options instead of ignoring them.
+  if (!sdkCreateOptions.has("defer") || !sdkCreateOptions.has("deferReason")) {
+    return { ...progressive, note: [deferReason] };
+  }
+  return {
+    ...progressive,
+    defer: githubImportDeferredFields(entry).map(field => githubImportDeferralOptions[field]),
+    deferReason,
+  };
+}
+
 /** Map one rendered import entry to its reversible SDK mutation sequence. */
 export function buildAtomicImportMutations(
   repo: string,
@@ -1474,6 +1509,7 @@ export function buildAtomicImportMutations(
   normalizeItemId: (input: string, prefix: string) => string,
   updateOnly = false,
   statuses?: GithubStatusRegistry,
+  createMode?: string,
 ): { itemId: string; mutations: BulkItemMutation[] } {
   if (updateOnly && !entry.match?.id) throw new CommandError("Refresh refuses an unlinked target; no item may be created.");
   const closing = canonicalGithubStatus(entry.status, statuses) === canonicalGithubStatus("closed", statuses);
@@ -1517,7 +1553,8 @@ export function buildAtomicImportMutations(
     const mutations: BulkItemMutation[] = [{
       op: "create",
       id: managedItemId,
-      options: { ...sharedOptions, author: "pm-github", status: createStatus, message: `pm-github import create ${repo.toLowerCase()}#${entry.issueNumber}` },
+      options: { ...sharedOptions, author: "pm-github", status: createStatus,
+        ...githubImportCreateOptions(createMode, entry, `pm-github import create ${repo.toLowerCase()}#${entry.issueNumber}`) },
     }, {
       op: "update",
       id: managedItemId,
@@ -1902,7 +1939,8 @@ export async function importGithubAtomic(
   // by the stable GitHub issue number so a retry whose API page/order changed
   // supplies the exact same plan as well as the same transaction id.
   for (const entry of [...entries].sort((a, b) => a.issueNumber - b.issueNumber)) {
-    const planned = buildAtomicImportMutations(repo, entry, idPrefix, normalizeItemId, opts.updateOnly, workspace.statuses);
+    const planned = buildAtomicImportMutations(repo, entry, idPrefix, normalizeItemId, opts.updateOnly, workspace.statuses,
+      workspace.settings.governance.create_mode_default);
     itemIds.set(entry.issueNumber, planned.itemId);
     mutations.push(...planned.mutations);
   }
@@ -3814,6 +3852,19 @@ export async function runImport(
     );
   }
 
+  const strictCreate = workspace.settings.governance.create_mode_default === "strict";
+  const deferredMirrors = strictCreate ? gatePlan!.filter(entry => !entry.match?.id) : [];
+  if (strictCreate) {
+    console.error(`pm github import preflight: strict creation policy — ${deferredMirrors.length} issue(s) will be admitted with deferrals.`);
+  }
+  const curationReceipt = opts.gate && deferredMirrors.length > 0 ? {
+    needs_curation: deferredMirrors.map(entry => ({
+      item: deriveAtomicItemId(repo, entry.issueNumber, workspace.settings.id_prefix, sdkNormalizeItemId),
+      issue: entry.issueNumber,
+      fields: githubImportDeferredFields(entry),
+    })),
+  } : {};
+
   // Preview output omits unscanned PR-title quotes and private provider close text.
   const fidelityPlan = () => gatePlan!.map(entry => {
     const source = entry.fidelity!;
@@ -3830,7 +3881,7 @@ export async function runImport(
       ...(entry.citation_candidates ? { citation_candidates: entry.citation_candidates } : {}) };
   });
   const adoptionCount = gatePlan!.filter(entry => entry.identity?.via === "citation").length;
-  const planFields = { ...identityConflictFields, ...(opts.gate || adoptionCount > 0 || citationCandidates.length > 0 ? { plan: fidelityPlan() } : {}), ...citationReceipt };
+  const planFields = { ...identityConflictFields, ...curationReceipt, ...(opts.gate || adoptionCount > 0 || citationCandidates.length > 0 ? { plan: fidelityPlan() } : {}), ...citationReceipt };
   const gatePlanFields = { ...planFields, ...(opts.gate ? { gate: { completeness: gateCompleteness, idempotency: gateIdempotency, scan: opts.dryRun ? "plan" : "post-write" } } : {}) };
 
   if (opts.atomic) {
@@ -4079,7 +4130,7 @@ export async function runImport(
     const destination = deriveAtomicItemId(repo, issue.number, workspace.settings.id_prefix, sdkNormalizeItemId);
     const created = await ownedPmRun(destination, "create", {
       title, type: opts.itemType, author: "pm-github", status: createStatus, description, body, ...importTagOptions(prepared),
-      message: `Imported from GitHub #${issue.number}`,
+      ...githubImportCreateOptions(workspace.settings.governance.create_mode_default, prepared, `Imported from GitHub #${issue.number}`),
       ...(canonicalGithubStatus(status, workspace.statuses) === canonicalGithubStatus("canceled", workspace.statuses) ? { closeReason: prepared.fidelity!.github_close_reason } : {}),
       ...(assignee ? { assignee } : {}), ...(milestone ? { sprint: milestone } : {}),
     });

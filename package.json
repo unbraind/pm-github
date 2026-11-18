@@ -59,6 +59,7 @@
     "eslint": "10.14.0",
     "jscpd": "5.4.3",
     "pm-changelog": "2026.11.5",
+    "pm-cli-deferrals": "npm:@unbrained/pm-cli@2026.11.17",
     "pm-ops": "2026.11.14",
     "typescript": "7.0.2"
   },

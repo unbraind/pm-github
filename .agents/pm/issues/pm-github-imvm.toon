@@ -1,0 +1,13 @@
+id: pm-github-imvm
+title: Adapt GitHub ownership hook delegation to the SDK actor contract
+description: Typechecking the package with PM CLI 2026.11.17 fails in import-ownership.ts because the before-mutation hook context exposes actor.author while the SDK dispatcher requires a top-level author input. Preserve the original actor and preview semantics when delegating guards across SDK versions. The strict import regression exercises the newer SDK separately while the existing development pin stays in place.
+type: Issue
+status: open
+priority: 2
+tags[2]: follow-up,sdk
+created_at: "2026-11-17T23:08:11.989Z"
+updated_at: "2026-11-17T23:09:29.834Z"
+author: codex-sol
+files[1]{path,scope}:
+  import-ownership.ts,project
+body: ""
