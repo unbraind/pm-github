@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Honor caller changelog policy in gated sync and closeout ([pm-github-xcr3](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-xcr3.toon))
+
 ## 2026.11.18 - 2026-11-18
 
 ### Fixed

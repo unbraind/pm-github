@@ -6,7 +6,7 @@ import { testTime } from "./support/time.ts";
 // the adversarial cases prove a malicious issue body, comment, email, or host
 // path fails the gated import step so nothing is ever committed or pushed to
 // the remote. The positive case proves the whole sequence: plan → gated import
-// → caller changelog → final gate → strict health → commit/push → CI dispatch
+// → caller changelog → privacy gate → caller policy → strict health → commit/push → CI dispatch
 // → a second gated run that is a no-op for item
 // identity via the provenance tag.
 //
@@ -697,7 +697,7 @@ test("the caller default branch guard is first and preserves the remaining step 
     "Configure PM merge drivers", "Isolate workflow setup artifacts", "Verify gate is available", "Validate GitHub access",
     "Revalidate GitHub blockers (report only)", "Preview GitHub to pm plan",
     "Gated GitHub to pm import", "Verify repeat import is a no-op", "Run caller post-import script",
-    "Gate tracker and regenerated changelog", "Verify strict pm health",
+    "Gate tracker and regenerated changelog", "Check caller changelog policy", "Verify strict pm health",
     "Create automation app token", "Validate publication credentials",
     "Commit gated sync changes and open review PR", "Dispatch caller CI and report parked runs",
     "Confirm caller CI registration and summarize handoff",
@@ -810,10 +810,11 @@ test("the gated import runs after validate/plan and before health, commit, and p
   assert.ok(install < validate, "the pinned extension is installed before it is used");
   assert.ok(validate < plan && plan < gated, "validate and dry-run plan precede the gated import");
   const postImport = stepOffset("Run caller post-import script");
-  const finalGate = stepOffset("Gate tracker and regenerated changelog");
+  const privacyGate = stepOffset("Gate tracker and regenerated changelog");
+  const callerCheck = stepOffset("Check caller changelog policy");
   const dispatch = stepOffset("Dispatch caller CI and report parked runs");
-  assert.ok(gated < postImport && postImport < finalGate && finalGate < health && health < commit && commit < dispatch,
-    "post-import output is gated before health/publication and CI follows the PR");
+  assert.ok(gated < postImport && postImport < privacyGate && privacyGate < callerCheck && callerCheck < health && health < commit && commit < dispatch,
+    "post-import output is scanned before the caller check can log a diff, and CI follows the PR");
   assert.match(workflow, /import "\$\{REPOSITORY\}" --state all --atomic --gate/);
   assert.match(workflow, /pm health --strict-exit/);
   // No staged catch-all that could commit unscanned content.
@@ -861,9 +862,9 @@ function workflowShell(names: readonly string[]): string {
     const block = /        run: \|\n([\s\S]*)/.exec(step);
     if (block) {
       const body = block[1]!.split("\n").filter(line => line.startsWith("          ")).map(line => line.slice(10)).join("\n");
-      // Actions runs each step in its own shell; the health cleanup trap must
-      // finish before the subsequent publication step, including on failure.
-      return name === "Verify strict pm health" ? `(\n${body}\n)` : body;
+      // Bound the policy step's no-change exit and the health cleanup trap
+      // to their own shells, as Actions does.
+      return ["Check caller changelog policy", "Verify strict pm health"].includes(name) ? `(\n${body}\n)` : body;
     }
     const single = /        run: (.+)/.exec(step);
     assert.ok(single, `${name} needs executable shell`);
@@ -1011,7 +1012,7 @@ esac
 }
 
 const WORKFLOW_IMPORT_SEQUENCE = ["Resolve sync commit scope", "Validate GitHub access", "Revalidate GitHub blockers (report only)", "Preview GitHub to pm plan", "Gated GitHub to pm import",
-  "Verify repeat import is a no-op", "Run caller post-import script", "Gate tracker and regenerated changelog",
+  "Verify repeat import is a no-op", "Run caller post-import script", "Gate tracker and regenerated changelog", "Check caller changelog policy",
   "Verify strict pm health", "Validate publication credentials", "Commit gated sync changes and open review PR", "Dispatch caller CI and report parked runs"] as const;
 
 // Core unit tests above run in both tiers; exhaustive shell scenarios keep
@@ -1404,7 +1405,10 @@ async function replayNoChangeSequence(prListOverrides: NodeJS.ProcessEnv, change
     assert.equal(git(["commit", "-qam", "restrict enabled extensions"]).status, 0);
     if (changelogState) {
       fs.writeFileSync(path.join(root, "generate-changelog.cjs"), 'require("node:fs").writeFileSync("CHANGELOG.md", "# Fresh changelog\\n");\n');
-      fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ scripts: { "changelog:full": "node generate-changelog.cjs" } }));
+      fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ scripts: {
+        "changelog:full": "node generate-changelog.cjs",
+        ...(changelogState === "stale" ? { "changelog:check": "node -e 'process.exit(23)'" } : {}),
+      } }));
       if (changelogState === "stale") fs.writeFileSync(path.join(root, "CHANGELOG.md"), "# Stale changelog\n");
       assert.equal(git(["add", "--", "generate-changelog.cjs", "package.json", ...(changelogState === "stale" ? ["CHANGELOG.md"] : [])]).status, 0);
       assert.equal(git(["commit", "-qm", "caller changelog regeneration fixture"]).status, 0);
@@ -1454,10 +1458,11 @@ workflowTest("a no-change run with only a fork PR sharing the branch name closes
   assert.deepEqual(run.refs, ["refs/heads/main"]);
 });
 
-workflowTest("a no-op import discards stale changelog drift and leaves a clean checkout without publication", async () => {
+workflowTest("a no-op import skips a failing caller check, discards changelog drift and closes a stale review", async () => {
   for (const ownPr of [undefined, "1"]) {
     const run = await replayNoChangeSequence({ OWN_OPEN_PR: ownPr }, "stale");
     assert.equal(run.code, 0, run.stderr + "\n" + run.stdout);
+    assert.doesNotMatch(run.stdout, /> changelog:check/);
     assert.match(run.stdout, /::notice::.*changelog differs from a fresh regeneration.*changelog:check owns that/);
     assert.equal(run.changelog, "# Stale changelog\n", "restore the committed caller changelog");
     assert.equal(run.status, "", "both index and working tree are clean");
@@ -1730,12 +1735,18 @@ workflowTest("scheduled blocker report warns on clearance, preserves items, and 
 });
 
 
-workflowTest("post-import changelog findings and script failures block publication", async () => {
-  for (const script of ["generate-secret", "fail-script"]) {
+test("post-import changelog findings and script or caller policy failures block publication", async () => {
+  for (const scenario of ["generate-secret", "fail-script", "fail-check", "post-check"]) {
     const { root, base, bare, git } = initSyncRepo();
     try {
+      const runsCheck = scenario === "fail-check" || scenario === "post-check";
       fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ scripts: {
         "generate-secret": "node generate-secret.cjs", "fail-script": "node -e 'process.exit(19)'",
+        ...(runsCheck ? { "changelog:full": "node generate-secret.cjs" } : {}),
+        "changelog:check": scenario === "fail-check" ? "node -e 'process.exit(23)'" : "node -e 'console.log(\"caller check ran\")'",
+        ...(scenario === "post-check" ? {
+          "postchangelog:check": "node -e 'require(\"node:fs\").appendFileSync(\"CHANGELOG.md\", \"Unchecked change\\n\")'",
+        } : {}),
       } }));
       fs.writeFileSync(path.join(root, "generate-secret.cjs"),
         'require("node:fs").writeFileSync("CHANGELOG.md", process.env.SYNTHETIC_SECRET + "\\n");\n');
@@ -1749,12 +1760,26 @@ workflowTest("post-import changelog findings and script failures block publicati
         else handle(req, res, url, server);
       }, async () => {
         const result = await executeWorkflow(workflowShell(WORKFLOW_IMPORT_SEQUENCE), root, { ...env,
-          PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE, POST_IMPORT_SCRIPT: script, SYNTHETIC_SECRET: GH_TOKEN });
+          PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE,
+          POST_IMPORT_SCRIPT: runsCheck ? "changelog:full" : scenario,
+          SYNTHETIC_SECRET: runsCheck ? "Public changelog" : GH_TOKEN,
+        });
         assert.notEqual(result.code, 0);
-        if (script === "generate-secret") {
+        if (scenario === "generate-secret") {
           assert.match(result.stdout + result.stderr, /github-token-classic/);
           assert.ok(fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8").includes(GH_TOKEN));
           assert.ok(!result.stdout.includes(GH_TOKEN) && !result.stderr.includes(GH_TOKEN));
+          assert.doesNotMatch(result.stdout, /caller check ran/);
+        } else if (scenario === "fail-check") {
+          assert.equal(result.code, 1);
+          assert.match(result.stdout, /::error::Caller changelog policy failed \(npm run changelog:check\)/);
+          assert.equal(fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8"), "Public changelog\n");
+        } else if (scenario === "post-check") {
+          assert.equal(result.code, 1);
+          assert.match(result.stdout, /^> (?:\S+ )?postchangelog:check$/m);
+          assert.match(result.stdout, /Caller changelog policy modified CHANGELOG.md or tracker files/);
+          assert.equal(git(["show", ":CHANGELOG.md"]).stdout, "Public changelog\n");
+          assert.equal(fs.readFileSync(path.join(root, "CHANGELOG.md"), "utf8"), "Public changelog\nUnchecked change\n");
         } else assert.equal(result.code, 19);
         assert.deepEqual(remoteRefs(bare), ["refs/heads/main"]);
         assert.ok(!fs.existsSync(env.REVIEW_RECEIPT!));
@@ -1808,7 +1833,7 @@ if (mode === "multiple") writeFileSync("second.txt", "changed\\n");
   }
 });
 
-workflowTest("publication rechecks late changes and rescans the exact working content it commits", async () => {
+workflowTest("publication refuses late changes outside scope or to policy-checked content", async () => {
   for (const mode of ["staged", "unstaged", "untracked", "credential", "tracker-secret", "attributes", "registry"] as const) {
     const { root, base, bare, git } = initSyncRepo();
     try {
@@ -1826,14 +1851,18 @@ workflowTest("publication rechecks late changes and rescans the exact working co
         // Insert immediately BEFORE the final status check and scan, after link
         // generation, so both the early gate and the commit-step entry pass.
         const lateShell = workflowShell(WORKFLOW_IMPORT_SEQUENCE).replace(
-          'gate_sync_change\nrestore_sync_setup\ncheck_sync_scope\ngit --literal-pathspecs commit --only',
-          mutate + 'gate_sync_change\nrestore_sync_setup\ncheck_sync_scope\ngit --literal-pathspecs commit --only');
+          'verify_changelog_policy\ngate_sync_change\nrestore_sync_setup',
+          mutate + 'verify_changelog_policy\ngate_sync_change\nrestore_sync_setup');
         assert.ok(lateShell.includes(mutate), "late injection must execute before the commit gate");
         const result = await executeWorkflow(lateShell, root, { ...env,
           PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE, LATE_PATH: filename,
           LATE_CONTENT: mode === "credential" || mode === "tracker-secret" ? GH_TOKEN : "changed\n" });
         assert.notEqual(result.code, 0, `${mode}: ${result.stdout}\n${result.stderr}`);
-        if (mode === "tracker-secret") assert.match(result.stdout + result.stderr, /github-token-classic/);
+        if (mode === "tracker-secret") {
+          assert.match(result.stdout + result.stderr, /CHANGELOG.md or tracker files changed after the caller changelog policy check/);
+          assert.ok(!result.stdout.includes(GH_TOKEN) && !result.stderr.includes(GH_TOKEN));
+          assert.equal(git(["diff", "--cached", "--name-only", "--", "CHANGELOG.md"]).stdout, "");
+        }
         else assert.ok(result.stdout.includes(filename), result.stdout);
         assert.deepEqual(remoteRefs(bare), ["refs/heads/main"]);
       });

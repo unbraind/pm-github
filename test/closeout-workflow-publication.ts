@@ -1,6 +1,7 @@
 /** Execute reusable closeout publication against real SDK trackers and isolated Git remotes. */
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { workflowCorpus } from "./support/corpus.ts";
@@ -8,7 +9,7 @@ import { workflowCorpus } from "./support/corpus.ts";
 const publicationCorpus = workflowCorpus(test, "closeout-publication");
 const publicationTest = publicationCorpus.test;
 import { get, update } from "@unbrained/pm-cli/sdk";
-import { bash, branch, cli, command, finish, fixture, repoRoot, setup, shell, sync, title, unpublished, workflow } from "./helpers/closeout-workflow.ts";
+import { bash, branch, cli, command, finish, fixture, repoRoot, setup, shell, sync, title, unpublished, workflow, type WorkflowFixture } from "./helpers/closeout-workflow.ts";
 
 publicationTest("closeout contract keeps sync safety helpers, exact pins, env bindings and least privilege", () => {
   assert.match(workflow, /^on:\n  workflow_call:/m);
@@ -25,13 +26,17 @@ publicationTest("closeout contract keeps sync safety helpers, exact pins, env bi
   for (const name of ["Validate npm project directory", "Install dependencies", "Require clean setup artifacts", "Isolate workflow setup artifacts", "Gate tracker and regenerated changelog", "Verify strict pm health"]) {
     assert.equal(shell(name), shell(name, sync), name);
   }
+  const policy = "Check caller changelog policy";
+  const noDeliveries = '[[ "${CLOSEOUT_CLOSED}" == 0 && "${CLOSEOUT_REVIEW:-0}" == 0 ]] || ';
+  assert.ok(shell(policy).includes(noDeliveries));
+  assert.equal(shell(policy).replace(noDeliveries, ""), shell(policy, sync));
   // Sync adds rule receipts and installation-failure cleanup. Compare the
   // unchanged publication boundaries directly, rather than diagnostic wrappers.
   const scopes = [shell("Resolve sync commit scope"), shell("Resolve sync commit scope", sync)];
   assert.equal(scopes[0]!.split("report_workflow_failure()")[0], scopes[1]!.split("report_workflow_failure()")[0]);
   assert.equal(scopes[0]!.split("mapfile -t sync_scope")[1]!.split("restore_sync_setup()")[0],
     scopes[1]!.split("mapfile -t sync_scope")[1]!.split("restore_sync_setup()")[0]);
-  for (const name of ["restore_sync_setup", "restore_workflow_setup_artifacts", "check_sync_setup_clean", "check_sync_scope", "check_sync_path"]) {
+  for (const name of ["restore_sync_setup", "restore_workflow_setup_artifacts", "check_sync_setup_clean", "check_sync_scope", "check_sync_path", "changelog_policy_hash", "verify_changelog_policy"]) {
     const pattern = new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?^\\}`, "m");
     const shared = scopes.map(source => pattern.exec(source)?.[0]);
     assert.ok(shared[0], name);
@@ -63,6 +68,44 @@ publicationTest("closeout contract keeps sync safety helpers, exact pins, env bi
   assert.doesNotMatch(caller, /issues: read/);
 });
 
+publicationTest("sync and closeout commit only the policy-verified tree with caller hooks disabled", async t => {
+  for (const [kind, source] of [["sync", sync], ["closeout", workflow]] as const) {
+    const root = mkdtempSync(join(tmpdir(), "publication-commit-"));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const git = (...args: string[]) => command(root, "git", args);
+    git("init", "-q");
+    git("config", "user.name", "Fixture");
+    git("config", "user.email", "fixture@example.test");
+    git("config", "commit.gpgsign", "false");
+    git("config", "core.hooksPath", ".git/caller-hooks");
+    mkdirSync(join(root, ".git/caller-hooks"));
+    mkdirSync(join(root, "tracker"));
+    for (const name of ["pre-commit", "prepare-commit-msg", "commit-msg", "post-commit"]) {
+      writeFileSync(join(root, ".git/caller-hooks", name),
+        '#!/bin/sh\nprintf "caller hook ran\\n" > hook-ran\nprintf "unchecked\\n" > CHANGELOG.md\ngit add -- CHANGELOG.md\n',
+        { mode: 0o755 });
+    }
+    writeFileSync(join(root, "CHANGELOG.md"), "verified changelog\n");
+    writeFileSync(join(root, "tracker/item.toon"), "verified tracker\n");
+    git("add", "--", "CHANGELOG.md", "tracker/item.toon");
+    writeFileSync(join(root, "pm-github-sync-commit-paths"), "CHANGELOG.md\0tracker/item.toon\0");
+    const publication = shell(`Commit gated ${kind} changes and open review PR`, source);
+    const boundary = publication.slice(publication.lastIndexOf("\nverify_changelog_policy\n") + 1, publication.indexOf("\ngh auth setup-git"));
+    const result = await bash('sync_scope=(tracker CHANGELOG.md)\nverify_changelog_policy() { :; }\n' + boundary, root,
+      { ...process.env, RUNNER_TEMP: root });
+    assert.equal(result.code, 0, result.out);
+    assert.equal(existsSync(join(root, "hook-ran")), false, kind);
+    assert.equal(git("show", "HEAD:CHANGELOG.md"), "verified changelog");
+    assert.equal(git("show", "HEAD:tracker/item.toon"), "verified tracker");
+
+    writeFileSync(join(root, "CHANGELOG.md"), "unstaged changelog\n");
+    const drift = await bash('sync_scope=(tracker CHANGELOG.md)\nverify_changelog_policy() { :; }\n' + boundary, root,
+      { ...process.env, RUNNER_TEMP: root });
+    assert.notEqual(drift.code, 0, drift.out);
+    assert.match(drift.out, /committed changelog or tracker differs from the verified index/);
+  }
+});
+
 publicationTest("schedule without repository payload resolves trunk; clean closeout opens one PR and repeat edits it", async () => fixture(async f => {
   f.env.SUMMARY_ROWS = "true";
   const baseHead = f.git("rev-parse", "HEAD");
@@ -79,6 +122,9 @@ publicationTest("schedule without repository payload resolves trunk; clean close
   assert.doesNotMatch(body, /"code": "other_repository"/);
   assert.doesNotMatch(body, /"checks"|"reason"/);
   assert.match(f.git("show", `${published}:CHANGELOG.md`), /Verified delivery/);
+  const paths = f.git("diff-tree", "--no-commit-id", "--name-only", "-r", published).split("\n");
+  assert.ok(paths.includes("CHANGELOG.md"));
+  assert.ok(paths.includes(`.agents/pm/tasks/${f.id}.toon`));
   const second = await f.run([...setup, ...finish]);
   assert.equal(second.code, 0, second.out);
   const receipts = readFileSync(f.env.RECEIPTS!, "utf8");
@@ -86,6 +132,45 @@ publicationTest("schedule without repository payload resolves trunk; clean close
   assert.equal(receipts.split("\n").filter(line => line.startsWith("pr edit 7 ")).length, 1);
   assert.equal(receipts.split("\n").filter(line => line.startsWith("workflow run ci.yml ")).length, 2);
   assert.ok(receipts.includes(`--title ${title}`));
+}));
+
+/** Configure the caller's real npm policy and any lifecycle hooks. */
+function installChangelogCheck({ root, git }: WorkflowFixture, scripts: Record<string, string>): void {
+  const manifest = join(root, "tools/oracle/package.json");
+  const pkg = JSON.parse(readFileSync(manifest, "utf8")) as { scripts: Record<string, string> };
+  Object.assign(pkg.scripts, scripts);
+  writeFileSync(manifest, JSON.stringify(pkg));
+  git("add", "--", "tools/oracle/package.json");
+  git("commit", "-qm", "Configure caller changelog check");
+  git("push", "origin", "trunk");
+}
+
+publicationTest("a failing caller changelog check blocks closeout publication", async () => fixture(async f => {
+  installChangelogCheck(f, { "changelog:check": "node -e 'process.exit(23)'" });
+  const baseHead = f.git("rev-parse", "HEAD");
+  const result = await f.run([...setup, ...finish]);
+  assert.equal(result.code, 1, result.out);
+  assert.match(result.out, /::error::Caller changelog policy failed \(npm run changelog:check\)/);
+  assert.match(readFileSync(join(f.root, "CHANGELOG.md"), "utf8"), /Verified delivery/);
+  assert.equal(f.git("rev-parse", "HEAD"), baseHead);
+  unpublished(f.git);
+  assert.equal(existsSync(f.env.PR_STATE!), false);
+}));
+
+publicationTest("a successful closeout changelog check cannot publish a post-hook tracker change", async () => fixture(async f => {
+  const trackerFile = `../../.agents/pm/tasks/${f.id}.toon`;
+  installChangelogCheck(f, {
+    "changelog:check": "node -e ''",
+    "postchangelog:check": `node -e 'require("node:fs").appendFileSync(process.argv[1], "\\n")' ${trackerFile}`,
+  });
+  const baseHead = f.git("rev-parse", "HEAD");
+  const result = await f.run([...setup, ...finish]);
+  assert.equal(result.code, 1, result.out);
+  assert.match(result.out, /^> (?:\S+ )?postchangelog:check$/m);
+  assert.match(result.out, /Caller changelog policy modified CHANGELOG.md or tracker files/);
+  assert.equal(f.git("rev-parse", "HEAD"), baseHead);
+  unpublished(f.git);
+  assert.equal(existsSync(f.env.PR_STATE!), false);
 }));
 
 publicationTest("scheduled closeout follows verified numeric pagination with declared checks and publishes delivery", async () => fixture(async f => {
@@ -107,14 +192,24 @@ publicationTest("malicious tracker acceptance criteria fails the final privacy g
   assert.equal(existsSync(f.env.PR_STATE!), false);
 }));
 
-publicationTest("zero closes discards caller drift and creates no remote branch or PR", async () => fixture(async f => {
+publicationTest("a no-op closeout skips a failing caller check, discards changelog drift and closes a stale review", async () => fixture(async f => {
+  installChangelogCheck(f, { "changelog:check": "node -e 'process.exit(23)'" });
+  const changelog = join(f.root, "CHANGELOG.md");
+  const original = readFileSync(changelog);
   f.env.NO_DELIVERY = "true";
+  writeFileSync(f.env.PR_STATE!, "");
   const result = await f.run([...setup, ...finish]);
   assert.equal(result.code, 0, result.out);
+  assert.doesNotMatch(result.out, /^> (?:\S+ )?changelog:check$/m);
   assert.match(result.out, /no branch or PR/);
+  assert.match(result.out, /changelog differs from a fresh regeneration/);
   unpublished(f.git);
   assert.equal(existsSync(f.env.PR_STATE!), false);
-  assert.equal(readFileSync(join(f.root, "CHANGELOG.md"), "utf8"), "Caller changelog before closeout\n");
+  const calls = readFileSync(f.env.RECEIPTS!, "utf8");
+  assert.match(calls, /^pr close 7 /m);
+  assert.doesNotMatch(calls, /^pr (create|edit) |^workflow run /m);
+  assert.deepEqual(readFileSync(changelog), original);
+  assert.equal(f.git("diff", "--cached", "--name-only"), "");
 }));
 
 publicationTest("permission-limited read token fails closed with a clear diagnostic", async () => fixture(async f => {
@@ -234,7 +329,12 @@ publicationTest("behavioural revert: removing only the no-op guard opens a PR wi
   const prepared = await f.run(setup);
   assert.equal(prepared.code, 0, prepared.out);
   await update(f.id, { title: "Caller observation without delivery" }, { pmRoot: f.pmRoot, noExtensions: true });
-  const mutant = workflow.replace('if [[ "${CLOSEOUT_CLOSED}" == 0 && "${CLOSEOUT_REVIEW:-0}" == 0 ]] || git diff --cached --quiet -- "${sync_scope[0]}" "${sync_scope[@]:2}"; then', "if false; then");
+  const publication = workflow.indexOf("      - name: Commit gated closeout changes and open review PR");
+  assert.ok(publication >= 0);
+  const mutant = workflow.slice(0, publication) + workflow.slice(publication).replace(
+    'if [[ "${CLOSEOUT_CLOSED}" == 0 && "${CLOSEOUT_REVIEW:-0}" == 0 ]] || git diff --cached --quiet -- "${sync_scope[0]}" "${sync_scope[@]:2}"; then',
+    "if false; then",
+  );
   assert.notEqual(mutant, workflow);
   const result = await f.run(finish, mutant);
   assert.equal(result.code, 0, result.out);
@@ -261,11 +361,12 @@ publicationTest("closeout inputs reject cross-repo writes, floating pins, comman
 }));
 
 publicationTest("an explicit lease refuses a competing bot-branch writer", async () => fixture(async f => {
-  const prepared = await f.run([...setup, ...finish.slice(0, 4)]);
+  const split = finish.indexOf("Validate publication credentials");
+  const prepared = await f.run([...setup, ...finish.slice(0, split)]);
   assert.equal(prepared.code, 0, prepared.out);
   f.git("push", "origin", `trunk:refs/heads/${branch}`);
   const competingHead = f.git("rev-parse", "trunk");
-  const result = await f.run(finish.slice(4));
+  const result = await f.run(finish.slice(split));
   assert.notEqual(result.code, 0);
   assert.match(result.out, /stale info|rejected/);
   assert.equal(f.git("ls-remote", "origin", `refs/heads/${branch}`).split(/\s/)[0], competingHead);
