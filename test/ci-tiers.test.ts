@@ -21,7 +21,7 @@ test("PR detector keeps docs cheap and source deletions, renames and unusual nam
     git("init", "-q");
     write("source.ts");
     git("add", "source.ts");
-    git("-c", "user.name=SteveBot", "-c", "user.email=1153461+unbraind@users.noreply.github.com", "commit", "-qm", "Fixture");
+    git("-c", "user.name=unbrained", "-c", "user.email=1153461+unbraind@users.noreply.github.com", "commit", "-qm", "Fixture");
     const base = git("rev-parse", "HEAD");
     for (const [name, paths, remove, expected, event] of [
       ["docs", ["README.md", "docs/nested/spec.json", ".agents/pm/tasks/a.toon", "LICENSE"], false, false, "pull_request"],
@@ -41,7 +41,7 @@ test("PR detector keeps docs cheap and source deletions, renames and unusual nam
       for (const file of paths) write(file);
       if (remove) rmSync(join(root, "source.ts"));
       git("add", ".");
-      git("-c", "user.name=SteveBot", "-c", "user.email=1153461+unbraind@users.noreply.github.com", "commit", "-qm", name);
+      git("-c", "user.name=unbrained", "-c", "user.email=1153461+unbraind@users.noreply.github.com", "commit", "-qm", name);
       const output = join(root, "output");
       const result = spawnSync("bash", ["-c", detector], { cwd: root, encoding: "utf8", env: { ...process.env,
         GITHUB_EVENT_NAME: event, BASE_SHA: base, HEAD_SHA: git("rev-parse", "HEAD"), RUNNER_TEMP: root, GITHUB_OUTPUT: output } });

@@ -1,0 +1,24 @@
+id: pm-github-identity-unbrained
+title: Use the unbrained commit identity
+description: "Apply the 2026-11-19 owner decision to tracked fixtures, documentation, and PM history. Verify identity mapping and package gates."
+type: Chore
+status: open
+priority: 2
+tags: []
+created_at: "2026-11-19T11:33:03.450Z"
+updated_at: "2026-11-19T11:59:40.095Z"
+author: codex-sol
+comments[3]{created_at,author,text}:
+  "2026-11-19T11:33:14.813Z",codex-sol,The owner selected unbrained as the fleet commit name and retained the existing noreply address. Verify package checks and reseal affected PM histories.
+  "2026-11-19T11:52:45.078Z",codex-sol,The grouped local test command reached its timeout during two review identity suites. The interrupted suites are being repeated with a longer allowance.
+  "2026-11-19T11:59:35.788Z",codex-sol,"Local tests, typecheck, tracker health, and changelog checks completed. History redaction verified for 5 items with zero hash mismatches. Historical Git attribution matched per commit after mapping 20 approved-address records to the fleet name."
+files[3]{path,scope}:
+  .mailmap,project
+  test/ci-tiers.test.ts,project
+  test/generate-changelog.test.ts,project
+tests[4]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  npm run typecheck,project,600,codex-sol,"2026-11-19T11:41:32.824Z",local_mutation,chore/commit-identity-unbrained
+  node --test --test-concurrency=2 test/ci-tiers.test.ts test/daily-sync-privacy.test.ts test/generate-changelog.test.ts test/identity-inventory.test.ts test/identity.test.ts test/privacy-gate.test.ts test/reference-import-identity.test.ts test/review-import-identity.test.ts test/review-round3-identity.test.ts,project,600,codex-sol,"2026-11-19T11:41:45.487Z",local_mutation,chore/commit-identity-unbrained
+  node --test --test-concurrency=2 test/review-import-identity.test.ts test/review-round3-identity.test.ts,project,1500,codex-sol,"2026-11-19T11:52:49.959Z",local_mutation,chore/commit-identity-unbrained
+  npm run privacy,project,600,codex-sol,"2026-11-19T11:53:57.404Z",local_mutation,chore/commit-identity-unbrained
+body: ""
