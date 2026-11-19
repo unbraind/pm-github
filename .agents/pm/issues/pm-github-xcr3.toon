@@ -6,11 +6,9 @@ status: in_progress
 priority: 1
 tags[2]: changelog-unreleased,"gh:unbraind/pm-github#226"
 created_at: "2026-11-18T09:38:46.683Z"
-updated_at: "2026-11-19T00:40:28.639Z"
-assignee: codex-sol
-claim_principal: codex-sol
+updated_at: "2026-11-19T00:43:09.417Z"
 author: codex-sol
-comments[12]:
+comments[13]:
   - created_at: "2026-11-18T09:39:06.130Z"
     author: codex-sol
     text: "Both reusable workflows regenerate after the tracker writes, but inject a pending-release override for changelog:full. Run the declared caller script and its optional changelog:check before the existing privacy scan, then keep the regenerated changelog in the tracker commit. Preserve the no-tracker-change publication path."
@@ -48,6 +46,9 @@ comments[12]:
   - created_at: "2026-11-19T00:40:24.275Z"
     author: codex-sol
     text: Confirmed PRRT_kwDOTbN4pM65Q0VA in a real Git fixture at the starting revision. Sync and closeout now disable caller commit hooks and compare the committed changelog and tracker entries against the verified index tree before publication.
+  - created_at: "2026-11-19T00:43:05.979Z"
+    author: codex-sol
+    text: "Round CZ review mapping: PRRT_kwDOTbN4pM65Q0VA is fixed by a45acc6. The real Git fixture failed on the original sync boundary and now passes for sync and closeout, including rejection if the committed tree differs from the verified index. Typecheck, lint, docstring, privacy, identity inventory and changelog check passed locally; the full workflow suites are running."
 files[9]{path,scope}:
   .github/workflows/pm-github-closeout.yml,project
   .github/workflows/pm-github-sync.yml,project
