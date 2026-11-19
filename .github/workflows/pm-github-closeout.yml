@@ -665,7 +665,12 @@ jobs:
           restore_sync_setup
           check_sync_scope
           verify_changelog_policy
-          git --literal-pathspecs commit --only --pathspec-from-file="${RUNNER_TEMP}/pm-github-sync-commit-paths" --pathspec-file-nul -m "chore(pm): close items delivered by merged pull requests"
+          policy_tree="$(git write-tree)"
+          git -c core.hooksPath=/dev/null --literal-pathspecs commit --no-verify --only --pathspec-from-file="${RUNNER_TEMP}/pm-github-sync-commit-paths" --pathspec-file-nul -m "chore(pm): close items delivered by merged pull requests"
+          if ! git diff --quiet --no-ext-diff "${policy_tree}" HEAD -- "${sync_scope[@]}"; then
+            echo "::error::Cannot publish: committed changelog or tracker differs from the verified index."
+            exit 1
+          fi
           gh auth setup-git
           git push --force-with-lease="refs/heads/${SYNC_BRANCH}:${SYNC_LEASE}" origin "HEAD:refs/heads/${SYNC_BRANCH}"
           body_file="${RUNNER_TEMP}/pm-github-sync-pr.md"

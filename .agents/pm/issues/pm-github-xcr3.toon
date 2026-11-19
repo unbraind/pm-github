@@ -6,9 +6,11 @@ status: in_progress
 priority: 1
 tags[2]: changelog-unreleased,"gh:unbraind/pm-github#226"
 created_at: "2026-11-18T09:38:46.683Z"
-updated_at: "2026-11-18T23:31:14.879Z"
+updated_at: "2026-11-19T00:40:28.639Z"
+assignee: codex-sol
+claim_principal: codex-sol
 author: codex-sol
-comments[10]:
+comments[12]:
   - created_at: "2026-11-18T09:39:06.130Z"
     author: codex-sol
     text: "Both reusable workflows regenerate after the tracker writes, but inject a pending-release override for changelog:full. Run the declared caller script and its optional changelog:check before the existing privacy scan, then keep the regenerated changelog in the tracker commit. Preserve the no-tracker-change publication path."
@@ -40,6 +42,12 @@ comments[10]:
   - created_at: "2026-11-18T23:31:14.004Z"
     author: codex-sol
     text: "Round CU merged origin/main at ead4981 and regenerated CHANGELOG.md with npm run changelog:full after fetching tags. The single 2026.11.18 section matches v2026.11.18 byte for byte, and this item stays under Unreleased. The tracker had no conflicts. pm validate passed with advisory warnings and zero history drift. Node 26.13.0 passed typecheck, build, test build, lint, docstrings, identity inventory, privacy, changelog:check, and 106/106 sync, closeout and changelog placement tests at CI quick depth. The earlier default-depth run was stopped after 114 assertions passed."
+  - created_at: "2026-11-19T00:35:35.522Z"
+    author: codex-sol
+    text: "Round CZ: verify the staged changelog and commit-hook ordering, then cover the commit boundary in both workflows."
+  - created_at: "2026-11-19T00:40:24.275Z"
+    author: codex-sol
+    text: Confirmed PRRT_kwDOTbN4pM65Q0VA in a real Git fixture at the starting revision. Sync and closeout now disable caller commit hooks and compare the committed changelog and tracker entries against the verified index tree before publication.
 files[9]{path,scope}:
   .github/workflows/pm-github-closeout.yml,project
   .github/workflows/pm-github-sync.yml,project
@@ -50,7 +58,7 @@ files[9]{path,scope}:
   test/closeout-workflow.test.ts,project
   test/helpers/closeout-workflow.ts,project
   test/import-gate.test.ts,project
-tests[9]:
+tests[10]:
   - command: node --test --test-concurrency=2 test/attestation-workflow-operands.test.ts test/bot-pr-workflow.test.ts test/changelog-placement.test.ts test/ci-codeql.test.ts test/ci-routing.test.ts test/ci-tiers.test.ts test/closeout-attribution.test.ts test/closeout-revision.test.ts test/closeout-selection.test.ts test/closeout-workflow.test.ts test/closeout.test.ts test/compatibility-floor.test.ts test/daily-sync-alert.test.ts test/daily-sync-idempotency.test.ts test/daily-sync-privacy.test.ts test/dependabot-merge.test.ts test/gate.test.ts test/generate-changelog.test.ts test/import-conflict-report.test.ts test/import-gate.test.ts test/refresh.test.ts test/review-round1.test.ts test/round-twelve.test.ts test/self-versioned-workflows.test.ts test/workflow-diagnostic-class.test.ts test/workflow-rule-names.test.ts
     scope: project
     timeout_seconds: 7200
@@ -115,6 +123,13 @@ tests[9]:
     provenance:
       author: codex-sol
       created_at: "2026-11-18T23:19:57.342Z"
+      source_kind: local_mutation
+      source_ref: fix/sync-changelog-matches-caller-check
+  - command: node --test --test-concurrency=2 test/import-gate.test.ts test/closeout-workflow.test.ts test/self-versioned-workflows.test.ts test/workflow-diagnostic-class.test.ts test/workflow-rule-names.test.ts test/daily-sync-alert.test.ts test/bot-pr-workflow.test.ts test/import-conflict-report.test.ts
+    scope: project
+    provenance:
+      author: codex-sol
+      created_at: "2026-11-19T00:40:28.475Z"
       source_kind: local_mutation
       source_ref: fix/sync-changelog-matches-caller-check
 docs[3]{path,scope}:

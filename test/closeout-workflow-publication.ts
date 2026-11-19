@@ -1,6 +1,7 @@
 /** Execute reusable closeout publication against real SDK trackers and isolated Git remotes. */
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { workflowCorpus } from "./support/corpus.ts";
@@ -65,6 +66,44 @@ publicationTest("closeout contract keeps sync safety helpers, exact pins, env bi
   assert.match(caller, /required-checks: \|\n        test \(22\)\n        test \(26\)/);
   assert.match(workflow, /REQUIRED_CHECKS: \$\{\{ inputs.required-checks \}\}/);
   assert.doesNotMatch(caller, /issues: read/);
+});
+
+publicationTest("sync and closeout commit only the policy-verified tree with caller hooks disabled", async t => {
+  for (const [kind, source] of [["sync", sync], ["closeout", workflow]] as const) {
+    const root = mkdtempSync(join(tmpdir(), "publication-commit-"));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const git = (...args: string[]) => command(root, "git", args);
+    git("init", "-q");
+    git("config", "user.name", "Fixture");
+    git("config", "user.email", "fixture@example.test");
+    git("config", "commit.gpgsign", "false");
+    git("config", "core.hooksPath", ".git/caller-hooks");
+    mkdirSync(join(root, ".git/caller-hooks"));
+    mkdirSync(join(root, "tracker"));
+    for (const name of ["pre-commit", "prepare-commit-msg", "commit-msg", "post-commit"]) {
+      writeFileSync(join(root, ".git/caller-hooks", name),
+        '#!/bin/sh\nprintf "caller hook ran\\n" > hook-ran\nprintf "unchecked\\n" > CHANGELOG.md\ngit add -- CHANGELOG.md\n',
+        { mode: 0o755 });
+    }
+    writeFileSync(join(root, "CHANGELOG.md"), "verified changelog\n");
+    writeFileSync(join(root, "tracker/item.toon"), "verified tracker\n");
+    git("add", "--", "CHANGELOG.md", "tracker/item.toon");
+    writeFileSync(join(root, "pm-github-sync-commit-paths"), "CHANGELOG.md\0tracker/item.toon\0");
+    const publication = shell(`Commit gated ${kind} changes and open review PR`, source);
+    const boundary = publication.slice(publication.lastIndexOf("\nverify_changelog_policy\n") + 1, publication.indexOf("\ngh auth setup-git"));
+    const result = await bash('sync_scope=(tracker CHANGELOG.md)\nverify_changelog_policy() { :; }\n' + boundary, root,
+      { ...process.env, RUNNER_TEMP: root });
+    assert.equal(result.code, 0, result.out);
+    assert.equal(existsSync(join(root, "hook-ran")), false, kind);
+    assert.equal(git("show", "HEAD:CHANGELOG.md"), "verified changelog");
+    assert.equal(git("show", "HEAD:tracker/item.toon"), "verified tracker");
+
+    writeFileSync(join(root, "CHANGELOG.md"), "unstaged changelog\n");
+    const drift = await bash('sync_scope=(tracker CHANGELOG.md)\nverify_changelog_policy() { :; }\n' + boundary, root,
+      { ...process.env, RUNNER_TEMP: root });
+    assert.notEqual(drift.code, 0, drift.out);
+    assert.match(drift.out, /committed changelog or tracker differs from the verified index/);
+  }
 });
 
 publicationTest("schedule without repository payload resolves trunk; clean closeout opens one PR and repeat edits it", async () => fixture(async f => {
