@@ -87,7 +87,7 @@ test("canonical changelog keeps released dependency notes beside pending PM work
     const released = "## 2026.11.12 - 2026-11-12\n\n### Dependencies\n\n- Bump fixture dependency ([#1](https://github.com/unbraind/pm-github/pull/1))\n";
     fs.writeFileSync(path.join(root, "CHANGELOG.md"), "# Changelog\n\n" + released);
     assert.equal(spawnSync("git", ["add", "package.json", "CHANGELOG.md"], { cwd: root }).status, 0);
-    assert.equal(spawnSync("git", ["-c", "user.name=SteveBot", "-c", "user.email=1153461+unbraind@users.noreply.github.com", "commit", "-m", "chore(deps-dev): bump fixture dependency (#1)"], { cwd: root }).status, 0);
+    assert.equal(spawnSync("git", ["-c", "user.name=unbrained", "-c", "user.email=1153461+unbraind@users.noreply.github.com", "commit", "-m", "chore(deps-dev): bump fixture dependency (#1)"], { cwd: root }).status, 0);
     const pmRoot = path.join(root, ".agents/pm"), cli = path.resolve("node_modules/.bin/pm");
     assert.equal(spawnSync(cli, ["--pm-path", pmRoot, "init", "--defaults", "--agent-guidance", "skip"], { cwd: root }).status, 0);
     await create({ title: "Pending whole-value ownership", status: "in_progress", tags: "changelog-unreleased" }, { cwd: root, pmRoot, noExtensions: true });
