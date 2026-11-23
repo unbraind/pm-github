@@ -15,6 +15,7 @@ export const sync = readFileSync(join(repoRoot, ".github/workflows/pm-github-syn
 export const cli = join(repoRoot, "node_modules/.bin/pm");
 export const branch = "pm-github/closeout";
 export const title = "chore(pm): close items delivered by merged pull requests";
+export const reviewTitle = "chore(pm): record merged-PR closeout review candidates";
 const version = (JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as { version: string }).version;
 const packedRoot = mkdtempSync(join(tmpdir(), "closeout-package-"));
 let archive: string;

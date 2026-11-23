@@ -1,0 +1,29 @@
+id: pm-github-j3pn
+title: Closeout PR title and summary must match the plan's actions
+description: "The merged-PR closeout workflow always titles its PR 'chore(pm): close items delivered by merged pull requests' and its summary claims verified closure, even when the plan holds no close action (example: unbraind/pm-web#354 held only skip, refuse and needs_review entries). When the plan has no close actions, the PR title and summary must be review-only ('record merged-PR closeout review candidates'), state that no items were closed, and give per-action counts; closure wording appears only when at least one close action exists. The PR body counts every action (close, skip, refuse, needs_review) derived from the same plan JSON the run wrote."
+type: Issue
+status: in_progress
+priority: 2
+tags[1]: "gh:unbraind/pm-github#270"
+created_at: "2026-11-23T01:16:28.322Z"
+updated_at: "2026-11-23T05:02:53.282Z"
+assignee: codex
+claim_principal: codex
+author: codex
+comments[2]{created_at,author,text}:
+  "2026-11-23T01:16:49.452Z",codex,"Claimed. Design: derive a per-action count block (close, refuse, skip, needs_review) from the same closeout plan JSON the run wrote, in the single jq projection that builds the published summary file; select the PR title and the summary sentence from those counts so a plan with zero close actions publishes the review-only title 'chore(pm): record merged-PR closeout review candidates' and a summary that states no items were closed. The commit message, PR create and PR edit use the same derived title. Searching the repo for every derivation of title, body, commit message and step summary: the reusable closeout workflow (commit message, PR title x2, summary sentence, body counts), README closeout section, and the workflow test helper title constant. No other closeout PR text exists (the sync workflow's PR and step summaries never claim closures)."
+  "2026-11-23T01:42:21.074Z",codex,"Implemented. The closeout workflow's single jq projection of the run's plan JSON now also emits per-action counts (close, refuse, skip, needs_review); a bash function closeout_publication_text derives the PR title, the PR summary sentence and the commit message from those counts, so a plan without a close action publishes 'chore(pm): record merged-PR closeout review candidates' with a summary that states no items were closed and prints the per-action counts, while any close action keeps the exact previous closure wording. README closeout section and the workflow test helper document both titles. New test file test/closeout-publication-text.test.ts holds the two issue fixtures (review-only plan and closing plan, end to end through the real workflow bash) and a 254-case property corpus (explicit edge plans plus 250 seeded random mixes) that extracts the real jq filter and the real bash function from the workflow and asserts title, summary sentence, per-action counts and routine-skip counts always agree with an independent oracle over the same plan. Revert proof: with only .github/workflows/pm-github-closeout.yml reverted to origin/main (all other changes in place), both new fixture/property tests fail (review-only title not selected, counts missing), and the passing tests were re-run after restoring the fix. Touched/referencing test files pass at quick depth: closeout-publication-text (3), closeout-workflow-publication + closeout-workflow-decisions (51), bot-pr-workflow + self-versioned-workflows + ci-handoff-workflow + ci-routing (196); typecheck, lint, docstring and duplication gates pass."
+files[5]{path,scope}:
+  .github/workflows/pm-github-closeout.yml,project
+  README.md,project
+  test/closeout-publication-text.test.ts,project
+  test/closeout-workflow-publication.ts,project
+  test/helpers/closeout-workflow.ts,project
+tests[3]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test --test-concurrency=2 test/closeout-publication-text.test.ts,project,codex,"2026-11-23T01:42:09.828Z",local_mutation,fix/closeout-title-matches-plan-actions
+  PM_TEST_DEPTH=quick node --test --test-concurrency=2 test/closeout-workflow-publication.ts test/closeout-workflow-decisions.ts,project,codex,"2026-11-23T01:42:11.620Z",local_mutation,fix/closeout-title-matches-plan-actions
+  PM_TEST_DEPTH=quick node --test --test-concurrency=2 test/bot-pr-workflow.test.ts test/self-versioned-workflows.test.ts test/ci-handoff-workflow.test.ts test/ci-routing.test.ts,project,codex,"2026-11-23T01:42:13.395Z",local_mutation,fix/closeout-title-matches-plan-actions
+docs[2]{path,scope,note}:
+  "https://github.com/unbraind/pm-github/issues/270",project,source issue
+  "https://github.com/unbraind/pm-web/pull/354",project,review-only closeout PR example
+body: ""
