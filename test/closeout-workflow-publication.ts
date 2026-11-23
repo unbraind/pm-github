@@ -91,7 +91,9 @@ publicationTest("sync and closeout commit only the policy-verified tree with cal
     writeFileSync(join(root, "pm-github-sync-commit-paths"), "CHANGELOG.md\0tracker/item.toon\0");
     const publication = shell(`Commit gated ${kind} changes and open review PR`, source);
     const boundary = publication.slice(publication.lastIndexOf("\nverify_changelog_policy\n") + 1, publication.indexOf("\ngh auth setup-git"));
-    const result = await bash('sync_scope=(tracker CHANGELOG.md)\nverify_changelog_policy() { :; }\n' + boundary, root,
+    // The closeout slice starts after the plan-derived title, so supply it as the
+    // workflow environment would; the sync boundary keeps its literal message.
+    const result = await bash('closeout_title="fixture publication title"\nsync_scope=(tracker CHANGELOG.md)\nverify_changelog_policy() { :; }\n' + boundary, root,
       { ...process.env, RUNNER_TEMP: root });
     assert.equal(result.code, 0, result.out);
     assert.equal(existsSync(join(root, "hook-ran")), false, kind);
@@ -99,7 +101,7 @@ publicationTest("sync and closeout commit only the policy-verified tree with cal
     assert.equal(git("show", "HEAD:tracker/item.toon"), "verified tracker");
 
     writeFileSync(join(root, "CHANGELOG.md"), "unstaged changelog\n");
-    const drift = await bash('sync_scope=(tracker CHANGELOG.md)\nverify_changelog_policy() { :; }\n' + boundary, root,
+    const drift = await bash('closeout_title="fixture publication title"\nsync_scope=(tracker CHANGELOG.md)\nverify_changelog_policy() { :; }\n' + boundary, root,
       { ...process.env, RUNNER_TEMP: root });
     assert.notEqual(drift.code, 0, drift.out);
     assert.match(drift.out, /committed changelog or tracker differs from the verified index/);
