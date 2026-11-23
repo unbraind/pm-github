@@ -1,3 +1,4 @@
+import { seedExistingItem } from "./helpers/import-mirror.ts";
 import { testDepth } from "./support/depth.ts";
 /** Exact label plans use real non-git SDK state, complete counts and no saved mutations. */
 import assert from "node:assert/strict";
@@ -7,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { encode, decode } from "@toon-format/toon";
-import { init, create, update, get, getItemPath, serializeItemDocument, toImportTags, schemaAddStatus, focus, listAllComplete, certifyCompleteListResult, commitImportedItem, readSettings, encodePmTableRows } from "@unbrained/pm-cli/sdk";
+import { init, create, update, get, getItemPath, serializeItemDocument, toImportTags, schemaAddStatus, focus, listAllComplete, certifyCompleteListResult, encodePmTableRows } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension, { planGithubLabelMigration, readGithubLabelCatalog, validateGithubLabelMigrationReport,
   applyLabelMap, buildExportPlan, applyExportPlan, compileIssueForm,
@@ -142,9 +143,7 @@ test("importer CSV tag semantics cover preview, approval, destination expansion 
     assert.deepEqual(validateGithubLabelMigrationReport(json ? JSON.parse(JSON.stringify(cli)) : decode(encode(cli))), report);
   }
   const legacy = await item(root, "Earlier SDK array producer", []);
-  await commitImportedItem({ pmRoot: root, id: legacy.id, itemPath: getItemPath(root, "Task", legacy.id),
-    document: { metadata: { ...legacy, tags: [" ONE,TWO ", "one"] }, body: "" }, settings: await readSettings(root),
-    author: "fixture", message: "Earlier SDK array representation", conflictWarningPrefix: "fixture" });
+  await seedExistingItem(root, legacy.id, { metadata: { ...legacy, tags: [" ONE,TWO ", "one"] }, body: "" }, "Earlier SDK array representation");
   const raw = (await get(legacy.id, {}, { pmRoot: root })).item;
   assert.ok(raw.tags!.includes("one,two"), "the SDK reads earlier array-producer data without CSV splitting it");
   const legacyReport = await planGithubLabelMigration(root, input, { readCatalog });

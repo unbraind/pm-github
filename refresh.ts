@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import { listAllComplete, certifyCompleteListResult, previewItemMutations, resolvePmRoot } from "@unbrained/pm-cli/sdk";
 import {
-  CommandError, EXIT_CODE, decodeCompletePmItems, githubGraphQLResponse, importGithubAtomic,
+  CommandError, EXIT_CODE, decodeCompletePmItems, githubGraphQLResponse, githubImportSdkMutations, importGithubAtomic,
   listUnfinishedGithubImports, listRetainedGithubImportPlans, parseImportOptions, prepareGithubImport, readGithubImportPlan,
   resolveGitHubToken, resumeGithubImport, assertGithubImportReplayPreflight, validateGithubImportFidelity, validateGithubImportPlan,
   type GhIssue, type PmItem, type PreparedGithubImport,
@@ -233,8 +233,9 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
       if (record.repo.toLowerCase() !== repo) {
         throw new CommandError(`Refresh cannot replay GitHub transaction ${journal.transactionId} for ${record.repo} while refreshing ${repo}. Re-run refresh for ${record.repo} first; nothing was refreshed.`);
       }
+      const mutations = githubImportSdkMutations(record);
       try {
-        await previewItemMutations({ pmRoot, transactionId: record.transactionId, author: "pm-github", mutations: record.mutations });
+        await previewItemMutations({ pmRoot, transactionId: record.transactionId, author: "pm-github", mutations });
       } catch {
         throw new CommandError(`Refresh cannot replay unfinished GitHub transaction ${journal.transactionId}: its persisted plan cannot resume the durable journal; nothing was refreshed.`);
       }

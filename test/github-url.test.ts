@@ -1,10 +1,11 @@
+import { seedExistingItem } from "./helpers/import-mirror.ts";
 /** Markdown extraction and refresh aliases use real SDK trackers and the real HTTP transport. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { join, delimiter } from "node:path";
 import { tmpdir } from "node:os";
-import { init, create, get, comments, commitImportedItem, readSettings, getItemPath } from "@unbrained/pm-cli/sdk";
+import { init, create, get, comments, getItemPath } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension, { parseBlockerReferences, buildBlockerClearedComment, appendBlockerComments, type BlockersReport } from "../index.ts";
 import { githubUrlTokens, parseGithubIssueUrl } from "../github-url.ts";
@@ -120,9 +121,7 @@ for (const url of ["https://github.com/o/r/issues/nope", "https://github.com/o/r
 async function linked(root: string, alias: string, number: number, kind: "issues" | "pull") {
   const item = (await create({ title: "Curated alias", type: "Chore", description: "Curated description" }, { pmRoot: root })).item;
   const url = `https://github.com/o/r/${kind}/${number}`;
-  await commitImportedItem({ pmRoot: root, id: item.id, itemPath: getItemPath(root, "Chore", item.id), settings: await readSettings(root),
-    document: { metadata: { ...item, [alias]: url, github_repo: "o/r", github_number: number }, body: "Curated body" },
-    author: "fixture", message: "Released alias fixture", conflictWarningPrefix: "fixture" });
+  await seedExistingItem(root, item.id, { metadata: { ...item, [alias]: url, github_repo: "o/r", github_number: number }, body: "Curated body" }, "Released alias fixture");
   const saved = (await get(item.id, {}, { pmRoot: root })).item;
   assert.equal(saved[alias], url);
   return saved;

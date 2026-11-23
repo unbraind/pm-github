@@ -1,5 +1,5 @@
 /** Recorded consumer regressions exercised through real temporary PM trackers. */
-import { createImportMirror } from "./helpers/import-mirror.ts";
+import { createImportMirror, seedExistingItem } from "./helpers/import-mirror.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
@@ -44,9 +44,7 @@ async function listItems(pmRoot: string) {
 /** Seed identity metadata through the real SDK without adding import provenance tags. */
 async function identityItem(pmRoot: string, fields: Record<string, unknown>) {
   const item = (await create({ title: "Existing local item", type: "Task", status: "in_progress" }, { pmRoot })).item;
-  await commitImportedItem({ pmRoot, id: item.id, itemPath: getItemPath(pmRoot, "Task", item.id),
-    document: { metadata: { ...item, ...fields }, body: "Local context" }, settings: await readSettings(pmRoot),
-    author: "fixture", message: "Seed identity fixture", conflictWarningPrefix: "fixture" });
+  await seedExistingItem(pmRoot, item.id, { metadata: { ...item, ...fields }, body: "Local context" }, "Seed identity fixture");
   return (await get(item.id, {}, { pmRoot })).item;
 }
 /** Replay recorded REST responses through the normal HTTP importer without SDK mocks. */
@@ -138,11 +136,15 @@ for (const atomic of [false, true]) {
     const issue = recorded("pm-linear-134");
     const owner = { id: "fixture-owner", description: "[linear] linear_id=fixture-provider-id linear_url=https://linear.app/fixture/issue/ENG-134", title: "Provider owner", type: "Task", status: "in_progress", priority: 2 as const,
       created_at: "2026-08-01T00:00:00Z", updated_at: "2026-08-02T00:00:00Z", tags: ["linear"] };
-    const committed = await commitImportedItem({ pmRoot, id: owner.id, itemPath: getItemPath(pmRoot, "Task", owner.id),
+    const seed = { pmRoot, id: owner.id, itemPath: getItemPath(pmRoot, "Task", owner.id),
       document: { metadata: owner, body: "Keep provider context" }, settings: await readSettings(pmRoot),
-      author: "fixture", message: "Recorded provider owner", conflictWarningPrefix: "fixture" });
+      author: "fixture", message: "Recorded provider owner", conflictWarningPrefix: "fixture" };
+    const committed = await commitImportedItem(seed);
     assert.equal(committed.committed, true);
     const before = (await get(owner.id, {}, { pmRoot })).item;
+    assert.deepEqual(await commitImportedItem({ ...seed, document: { ...seed.document, body: "Replacement refused" } }),
+      { committed: false, conflictWarning: `fixture:${owner.id}` });
+    assert.deepEqual((await get(owner.id, {}, { pmRoot })).item, before);
     await importing(pmRoot, issue, atomic);
     const items = (await listItems(pmRoot));
     assert.equal(items.length, 1);
@@ -643,10 +645,8 @@ for (const atomic of [false, true]) {
       const issue = { ...recorded("pm-csv-72"), title: "Upstream revised title" };
       const created = (await createImportMirror({ title: "Old imported title", type: "Issue", status: "open",
         tags: "gh:unbraind/pm-csv#72", description: `GH issue #72: ${issue.html_url}` }, { pmRoot })).item;
-      await commitImportedItem({ pmRoot, id: created.id, itemPath: getItemPath(pmRoot, "Issue", created.id),
-        document: { metadata: { ...created, ...(copied === "label" ? { tags: [...created.tags!, "linear:documentation"] } : {}) },
-          body: copied === "body" ? "Documentation example: [jira]" : "Ordinary copied body" },
-        settings: await readSettings(pmRoot), author: "fixture", message: "Seed legacy GitHub import", conflictWarningPrefix: "fixture" });
+      await seedExistingItem(pmRoot, created.id, { metadata: { ...created, ...(copied === "label" ? { tags: [...created.tags!, "linear:documentation"] } : {}) },
+          body: copied === "body" ? "Documentation example: [jira]" : "Ordinary copied body" }, "Seed legacy GitHub import");
       assert.equal((await get(created.id, {}, { pmRoot })).item.github_link_only, undefined);
       for (let attempt = 0; attempt < 2; attempt++) {
         await importing(pmRoot, issue, atomic);

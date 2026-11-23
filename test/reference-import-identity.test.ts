@@ -1,3 +1,4 @@
+import { seedExistingItem } from "./helpers/import-mirror.ts";
 /** Reference tags never transfer curated content ownership; all storage is real SDK storage. */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -5,7 +6,7 @@ import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { init, create, get, getItemPath, getHistoryPath, listAllComplete, commitImportedItem, readSettings } from "@unbrained/pm-cli/sdk";
+import { init, create, get, getItemPath, getHistoryPath, listAllComplete } from "@unbrained/pm-cli/sdk";
 import { runImport, parseImportOptions, type GhIssue } from "../index.ts";
 import { selectRefreshTargets } from "../refresh.ts";
 import { exploreGithubIdentities } from "../identity.ts";
@@ -72,11 +73,9 @@ test("released legacy snapshot resyncs with zero changes beside shared reference
   // These are the exact native fields emitted by the released importer, not a plan made by the new code.
   const local = (await create({ title: issue.title, type: "Issue", status: "open", tags: `${tag},source-label`,
     description: `GH issue #7: ${issue.html_url} · created ${issue.created_at} · updated ${issue.updated_at}`, body: issue.body! }, { pmRoot: root })).item;
-  await commitImportedItem({ pmRoot: root, id: local.id, itemPath: getItemPath(root, "Issue", local.id), settings: await readSettings(root),
-    document: { metadata: { ...local, github_number: 7, github_url: issue.html_url, github_link_only: false,
+  await seedExistingItem(root, local.id, { metadata: { ...local, github_number: 7, github_url: issue.html_url, github_link_only: false,
       github_state: "open", github_state_reason: "unspecified", github_created_at: issue.created_at, github_updated_at: issue.updated_at,
-      github_closed_at: "", github_close_reason: "", github_release: "", created_at: issue.created_at }, body: issue.body! },
-    author: "fixture", message: "Released importer snapshot", conflictWarningPrefix: "fixture" });
+      github_closed_at: "", github_close_reason: "", github_release: "", created_at: issue.created_at }, body: issue.body! }, "Released importer snapshot");
   await create({ title: "Reference to old import", type: "Chore", tags: tag }, { pmRoot: root });
   const before = await bytes(root, local.id);
   const result = await sync(root);
@@ -88,8 +87,7 @@ test("released legacy snapshot resyncs with zero changes beside shared reference
 
 for (const git of [true, false]) test(`explicit local link merges lifecycle while preserving curated content (git=${git})`, async () => tracker(git, async root => {
   const local = (await create({ title: "Curated title", type: "Chore", description: "Keep description", body: "Keep body", tags: "keep" }, { pmRoot: root })).item;
-  await commitImportedItem({ pmRoot: root, id: local.id, itemPath: getItemPath(root, "Chore", local.id), settings: await readSettings(root),
-    document: { metadata: { ...local, github_url: issue.html_url }, body: "Keep body" }, author: "fixture", message: "Explicit link", conflictWarningPrefix: "fixture" });
+  await seedExistingItem(root, local.id, { metadata: { ...local, github_url: issue.html_url }, body: "Keep body" }, "Explicit link");
   const source = { ...issue, state: "closed" as const, state_reason: "completed" as const, closed_at: "2027-01-01T00:00:00Z", updated_at: "2027-01-01T00:00:00Z" };
   const result = await sync(root, source, true, git);
   const actual = (await get(local.id, {}, { pmRoot: root })).item;
@@ -113,8 +111,7 @@ for (const fields of [
   { github_link_only: true, description: "GH issue #7: https://github.com/O/R/issues/7" },
 ]) test(`legacy explicit provenance resolves its original item: ${Object.keys(fields).join(",")}`, async () => tracker(true, async root => {
   const local = (await create({ title: "Legacy curated owner", type: "Chore", tags: tag }, { pmRoot: root })).item;
-  await commitImportedItem({ pmRoot: root, id: local.id, itemPath: getItemPath(root, "Chore", local.id), settings: await readSettings(root),
-    document: { metadata: { ...local, ...fields }, body: "Retain legacy context" }, author: "fixture", message: "Legacy link snapshot", conflictWarningPrefix: "fixture" });
+  await seedExistingItem(root, local.id, { metadata: { ...local, ...fields }, body: "Retain legacy context" }, "Legacy link snapshot");
   const result = await sync(root);
   assert.equal(result.imported, 0);
   assert.equal((await listAllComplete({}, { pmRoot: root })).items.length, 1);
@@ -127,8 +124,7 @@ for (const fields of [
 
 test("references on an already linked owner permit another import without rebinding", async () => tracker(true, async root => {
   const local = (await create({ title: "Owner", type: "Chore", tags: `${tag},gh:o/r#99` }, { pmRoot: root })).item;
-  await commitImportedItem({ pmRoot: root, id: local.id, itemPath: getItemPath(root, "Chore", local.id), settings: await readSettings(root),
-    document: { metadata: { ...local, github_url: issue.html_url, github_number: 7, github_link_only: false }, body: "Local" }, author: "fixture", message: "Linked owner with references", conflictWarningPrefix: "fixture" });
+  await seedExistingItem(root, local.id, { metadata: { ...local, github_url: issue.html_url, github_number: 7, github_link_only: false }, body: "Local" }, "Linked owner with references");
   const source = { ...issue, number: 99, html_url: "https://github.com/o/r/issues/99" };
   const before = await get(local.id, {}, { pmRoot: root });
   const history = readFileSync(getHistoryPath(root, local.id), "utf8");
@@ -159,8 +155,7 @@ test("seeded curated-link previews agree with the actual SDK lifecycle projectio
     const active = (seed & 16) !== 0;
     await tracker(true, async root => {
       const local = (await create({ title: `Curated ${seed}`, type: active ? "Chore" : "Task", status: active ? "in_progress" : "open", tags: `native-${seed}` }, { pmRoot: root })).item;
-      await commitImportedItem({ pmRoot: root, id: local.id, itemPath: getItemPath(root, local.type!, local.id), settings: await readSettings(root),
-        document: { metadata: { ...local, github_url: issue.html_url }, body: "Native body" }, author: "fixture", message: "Seed curated projection", conflictWarningPrefix: "fixture" });
+      await seedExistingItem(root, local.id, { metadata: { ...local, github_url: issue.html_url }, body: "Native body" }, "Seed curated projection");
       const source = { ...issue, title: `Source ${seed}`, state: closed ? "closed" as const : "open" as const,
         state_reason: closed ? "completed" as const : null, closed_at: closed ? "2027-01-01T00:00:00Z" : null, updated_at: "2027-01-01T00:00:00Z" };
       const preview = (await captureStderr(() => runImport(repo, root, parseImportOptions({ atomic: true, gate: true, "dry-run": true }), {

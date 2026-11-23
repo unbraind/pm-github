@@ -1,0 +1,36 @@
+id: pm-github-sdk-1122
+title: Adopt pm-cli 2026.11.22 host-aligned SDK behaviour
+description: Fleet migration tracked by pm-cli-website-spus. Consolidates SDK host adoption across the ownership hook work in pm-github-imvm and the atomic lifecycle compensation work in pm-github-quay.
+type: Chore
+status: in_progress
+priority: 2
+tags[3]: changelog-unreleased,"gh:unbraind/pm-github#197",sdk
+created_at: "2026-11-22T20:08:57.037Z"
+updated_at: "2026-11-23T00:42:20.771Z"
+author: codex-agent
+acceptance_criteria: Pin the current first-party development toolchain and adopt host mutation context; use a transaction-owned finalize row and pass the two real compensation regressions; preserve refusal and compatible replay; verify release gates and open a migration PR.
+comments[1]{created_at,author,text}:
+  "2026-11-23T00:42:19.531Z",codex-agent,"The dependency-only baseline ran all 2,330 tests with two Node workers in 54 minutes. It recorded 2,169 passes, 161 failures and zero skips. Typecheck reported TS2345 at the ownership hook delegation. The runtime baseline used emitted JavaScript to exercise the remaining failures.\n\n| First failing TAP case | Count | Earlier behavior | SDK 2026.11.22 behavior | Repair |\n| --- | ---: | --- | --- | --- |\n| 811, registered preflight warns only for mutations lacking a token | 2 | The test harness was shipped at the private dist file used by the fixtures. | The published SDK resolves the harness through its public package export and bundled entry point. | Resolve `@unbrained/pm-cli/sdk/testing` in both child-process fixtures. |\n| 821, scoped sync and labelled export apply preserve receipts after partial remote failure | 13 | Direct harness calls accepted undeclared flags and arrays for scalar flags. | The host rejects undeclared `--apply` on `github sync` and array-valued `--status-map` for Projects. | Use native sync defaults and the documented scalar mapping. Assert both old forms are refused. |\n| 850, a gated non-atomic import fails closed when a planned write fails | 50 | Delegation reused a single mutation context as input. | The host builds guard context from the history author and dry-run state. | Delegate with the host actor's author in the original scope, pass through the dry-run context, and prove actor parity and refusal on real writes. |\n| 1151, Refresh excludes PRs in every explicit URL alias (GitHubURL) | 93 | Fixture setup overwrote existing items through `commitImportedItem`. | The SDK takes a fenced create lease and refuses an already occupied identity. | Seed existing fixtures with fenced SDK mutations, retain their assertions, and verify the overwrite refusal. |\n| 1303, real SDK atomic compensation restores an imported source lifecycle and removes new items after finalization | 2 | The importer finalized lifecycle beside the batch in its committing observer. | The SDK rejects compensation of unowned history and now supports owned `finalize` rows. | Journal exact source fields in owned rows and replay existing plans verbatim. A recovery fixture stages original nullable legacy metadata with the original SDK rows. |\n| 2299, GitHub import admission against the progressive-only PM SDK | 1 | The project's dev pin doubled as the progressive-only fixture. | The latest SDK persists strict admission deferrals. | Install the historical 2026.11.6 fixture separately and retain both admission assertions. |\n\nThe 161 baseline failure IDs in the table's order are 811 and 1781. Then 821, 1660–1669, 1680 and 1772. Then 850–851, 856, 858, 864, 1350–1354, 1356, 1358, 1362–1365, 1371, 1386, 1391–1393, 1396–1398, 1451, 1459, 1643–1644, 1651, 1690, 1975–1976, 2002–2012, 2050, 2070, 2092–2093, 2158 and 2160–2161. Then 1151–1155, 1243–1247, 1252–1256, 1258–1262, 1280–1281, 1288–1292, 1317–1320, 1323–1326, 1457–1458, 1511, 1839–1846, 1849, 1862, 1872–1873, 1875, 1907–1923, 1928–1929, 1931, 1935, 1941–1958, 1962 and 1967–1968. Then 1303 and 1880. The legacy admission fixture failed at 2299.\n\nReverting only the import planner failed both original compensation assertions and the no-Git later-row regression. Reverting only the guard delegation failed the actor regression. Restoring the fixes passed all five selected tests. Two focused concurrency cases keep native creation and completion dates intact when a peer updates them during the transaction.\n\nThe packed consumer also passed at the declared 2026.10.23 floor. The latest toolchain is pinned to PM CLI 2026.11.22, pm-changelog 2026.11.20 and pm-ops 2026.11.22. The progressive-only SDK is an isolated fixture install.\n\nVerification completed with two workers. Full npm release:check passed 2,336 tests, zero failures or skips. Bun 1.3.14 release:check at repository quick depth passed 2,123 tests, zero failures or skips. Both gates measured 100 percent across 32 authored modules. Each covered 15,589 statements, 15,589 lines and 526 functions. npm covered 6,730 branches and Bun quick covered 6,729. Both passed build, typecheck, lint, docstrings, duplication, privacy, production audit, the 87-file package dry run, changelog freshness and publish attestation. The linked PM command and all five regenerated ownership-inventory checks passed.\n\nThe first Bun attempt inherited npm exec's ignore-scripts option, disabling the caller post-hook required by a closeout safety fixture. Direct Bun 1.3.14 invocation passed that fixture and the final gate. The legacy nullable fixture stages authentic legacy rows, and the content-only refresh case preserves a later peer observation without a side write. The full test phase ran for about 73 minutes.\n\nBoth compensation assertions from draft PR 259 passed. The migration supersedes that draft once integrated. Exact-head CI is available from the branch run list at https://github.com/unbraind/pm-github/actions?query=branch%3Adeps%2Fadopt-pm-cli-host-alignment-1122"
+files[15]{path,scope}:
+  import-fidelity.ts,project
+  import-ownership.ts,project
+  index.ts,project
+  package-lock.json,project
+  package.json,project
+  refresh.ts,project
+  test/coverage-boundaries.test.ts,project
+  test/coverage-edges.test.ts,project
+  test/fixtures/refresh-crash.ts,project
+  test/import-fidelity.test.ts,project
+  test/ownership-consistency.test.ts,project
+  test/project-sync.test.ts,project
+  test/refresh.test.ts,project
+  test/sdk-adoption.test.ts,project
+  test/strict-import-admission.test.ts,project
+tests[1]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  node --test --test-concurrency=2 test/sdk-adoption.test.ts test/import-fidelity.test.ts test/refresh.test.ts test/strict-import-admission.test.ts,project,codex-agent,"2026-11-22T20:26:39.999Z",local_mutation,deps/adopt-pm-cli-host-alignment-1122
+docs[3]{path,scope}:
+  docs/atomic-finalization-sdk.md,project
+  docs/identity-ownership-inventory.md,project
+  README.md,project
+body: ""

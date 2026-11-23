@@ -322,7 +322,7 @@ for (const command of ["sync", "export"] as const) for (const shape of shapes) {
       jsonResponse(response, 200, { ...source, state: "closed" });
     }, async () => {
       const harness = await extensionHarness;
-      await assert.rejects(() => harness.runCommand({ command: `github ${command}`, options: { repo, ids: id, apply: true }, pmRoot: root, global: { json: true } }), error => refusal(error, shape));
+      await assert.rejects(() => harness.runCommand({ command: `github ${command}`, options: { repo, ids: id, ...(command === "export" ? { apply: true } : {}) }, pmRoot: root, global: { json: true } }), error => refusal(error, shape));
     });
     assert.deepEqual(writes, []);
     assert.deepEqual(await bytes(root, id), before);
@@ -337,7 +337,7 @@ for (const command of ["sync", "export"] as const) test(`Outbound ownership ${co
     jsonResponse(response, 200, { ...source, state: "closed" });
   }, async () => {
     const harness = await extensionHarness;
-    await harness.runCommand({ command: `github ${command}`, options: { repo, ids: id, apply: true }, pmRoot: root, global: { json: true } });
+    await harness.runCommand({ command: `github ${command}`, options: { repo, ids: id, ...(command === "export" ? { apply: true } : {}) }, pmRoot: root, global: { json: true } });
   });
   assert.deepEqual(writes, ["PATCH /repos/o/r/issues/7"]);
 }));

@@ -1,5 +1,5 @@
 /** Canonical comparisons must agree with real SDK writers and packed CLI consumers. */
-import { createImportMirror } from "./helpers/import-mirror.ts";
+import { createImportMirror, seedExistingItem } from "./helpers/import-mirror.ts";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import test from "node:test";
 import { decode } from "@toon-format/toon";
-import { normalizeItemId, certifyCompleteListResult, commitImportedItem, create, get, getItemPath, getHistoryPath, listAllComplete, mutateItem, parseTags, toImportTags, decodePmTableRows, readHistoryEntries, verifyHistoryEntries, type PmTableCellEncoding, type PmEncodedTableRows, readSettings, schemaAddStatus, schemaAddType } from "@unbrained/pm-cli/sdk";
+import { normalizeItemId, certifyCompleteListResult, create, get, getHistoryPath, listAllComplete, mutateItem, parseTags, toImportTags, decodePmTableRows, readHistoryEntries, verifyHistoryEntries, type PmTableCellEncoding, type PmEncodedTableRows, readSettings, schemaAddStatus, schemaAddType } from "@unbrained/pm-cli/sdk";
 import { deriveAtomicItemId, decodeCompletePmItems, parseImportOptions, runImport, githubLabelsToTags, planGithubLabelMigration, type GhIssue } from "../index.ts";
 import { normalizeImportValue, readImportTypeNames, serializeImportTags } from "../import-fidelity.ts";
 import { boundedCli } from "./helpers/bounded-cli.ts";
@@ -129,8 +129,7 @@ for (const atomic of [false, true]) test(`additive provider links preserve liter
     initialize(root);
     const original = ["gh:fixture/project#1", "area,api", '["json"]'];
     const local = (await create({ title: "Provider owner", type: "Task", tags: JSON.stringify(original), body: "Provider context" }, { pmRoot: root, noExtensions: true })).item;
-    await commitImportedItem({ pmRoot: root, id: local.id, itemPath: getItemPath(root, "Task", local.id), settings: await readSettings(root),
-      document: { metadata: { ...local, github_url: "https://github.com/fixture/project/issues/1", github_link_only: true }, body: "Provider context" }, author: "fixture", message: "Seed existing provider link", conflictWarningPrefix: "fixture" });
+    await seedExistingItem(root, local.id, { metadata: { ...local, github_url: "https://github.com/fixture/project/issues/1", github_link_only: true }, body: "Provider context" }, "Seed existing provider link");
     const labels = ["source,extra", '["array"]'];
     await withMockGithub((request, response) => jsonResponse(response, 200, request.url === "/graphql"
       ? { data: { repository: { issue: { timelineItems: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } } } } }

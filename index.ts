@@ -37,7 +37,7 @@ import { compileIssueForm, completeIssueForm, readRepositoryIssueForm, refuseIss
 export { compileIssueForm, completeIssueForm, readRepositoryIssueForm } from "./issue-forms.ts";
 export type { IssueFormInput, IssueFormSelection, IssueFormContract, IssueFormReport, IssueFormCompletion, IssueFormRefusalCode, FormField, FormRepair, IssueFormReader } from "./issue-forms.ts";
 import {
-  AmbiguousCitationError, type LegacyGithubIdentityConflict, indexByImportIdentity, importerCreatedItem, buildImportFidelity, fetchImportTimeline, importFidelityFields, matchImportedIssue, normalizeImportValue, persistImportFidelity, readImportReleases, selectImportContextIndex, serializeImportTags, validateImportLifetime,
+  AmbiguousCitationError, type LegacyGithubIdentityConflict, indexByImportIdentity, importerCreatedItem, buildImportFidelity, fetchImportTimeline, githubLifecycleFields, importFidelityFields, matchImportedIssue, normalizeImportValue, persistImportFidelity, readImportReleases, selectImportContextIndex, serializeImportTags, validateImportLifetime,
   type AmbiguousCitationPlan, type CitationCandidate, type ImportFidelity,
 } from "./import-fidelity.ts";
 import { refreshChanges, runRefresh } from "./refresh.ts";
@@ -73,6 +73,7 @@ import {
   normalizeItemId as sdkNormalizeItemId,
   readSettings as sdkReadSettings,
   resolvePmRoot as sdkResolvePmRoot,
+  resolvePmCliVersion,
   TOOL_CREATE_OPTION_CONTRACT_SOURCE,
   toImportTags,
   getHistoryPath as sdkGetHistoryPath,
@@ -1322,6 +1323,40 @@ function pmJsonMaxBuffer(): number {
 }
 
 const ATOMIC_IMPORT_PREFIX = "github-import-";
+const sdkVersion = resolvePmCliVersion(import.meta.resolve("@unbrained/pm-cli/sdk"));
+const sdkVersionDate = String(sdkVersion).split(".").map(part => part.padStart(2, "0")).join("");
+const sdkOwnsFinalization = Number(sdkVersionDate) >= 20261122;
+
+/** Serialized finalize row supported by SDKs from 2026.11.22 onward. */
+interface GithubFinalizeMutation {
+  op: "finalize";
+  id: string;
+  set: Record<string, string | number | boolean>;
+  unset: string[];
+}
+
+/** Keep persisted rows readable when compiling the package against its minimum SDK. */
+type GithubImportMutation = BulkItemMutation | GithubFinalizeMutation;
+
+/** Pass exact rows to commit and recovery preview only on a host that supports their format. @internal */
+export function githubImportSdkMutations(plan: Pick<GithubImportPlanRecord, "mutations" | "finalization">): CommitItemMutationsOptions["mutations"] {
+  if (plan.finalization === "transaction" && !sdkOwnsFinalization) {
+    throw new CommandError("Replaying this GitHub import plan requires PM CLI 2026.11.22 or newer.");
+  }
+  return plan.mutations as CommitItemMutationsOptions["mutations"];
+}
+
+/** Plan exact source metadata from the same projection used by native plain writes. */
+function buildGithubFinalizeMutation(entry: PreparedGithubImport, id: string, statuses: GithubStatusRegistry, updateOnly: boolean): GithubFinalizeMutation {
+  const fields = githubLifecycleFields(entry.fidelity!, Boolean(entry.linkOnly), statuses, entry.preserveContent ? entry.match : undefined);
+  const row: GithubFinalizeMutation = { op: "finalize", id, set: {}, unset: [] };
+  for (const [field, value] of Object.entries(fields)) {
+    if (updateOnly && normalizeImportValue(field, ownValue(entry.match, field), undefined, statuses) === normalizeImportValue(field, value, undefined, statuses)) continue;
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") row.set[field] = value;
+    else row.unset.push(field);
+  }
+  return row;
+}
 let cachedCommitItemMutations: CommitItemMutations | undefined;
 
 /** Fully rendered desired state for one GitHub issue import. */
@@ -1423,7 +1458,7 @@ async function resolveAtomicSdkFunctions(opts: AtomicImportOptions): Promise<{
 export function deriveAtomicTransactionId(
   repo: string,
   entries: readonly PreparedGithubImport[],
-  mutations: readonly BulkItemMutation[],
+  mutations: readonly GithubImportMutation[],
   contextVersions: readonly string[] = [],
 ): string {
   const canonical = [...entries]
@@ -1661,6 +1696,8 @@ export interface GithubImportPlanRecord {
   linkDeps?: boolean;
   /** Absent on released refresh plans; those plans are update-only. */
   updateOnly?: boolean;
+  /** Current plans own source metadata in native finalize rows, even if no row is needed. */
+  finalization?: "transaction";
   /** Original target mapping, including deterministic targets not yet created. */
   itemIds?: readonly (readonly [number, string])[];
   /** Stable transaction id the plan belongs to. */
@@ -1670,7 +1707,7 @@ export interface GithubImportPlanRecord {
   /** Original complete prepared entries, reused for finalization and reporting. */
   entries: readonly PreparedGithubImport[];
   /** Original ordered mutation steps; a resumed journal validates them verbatim. */
-  mutations: readonly BulkItemMutation[];
+  mutations: readonly GithubImportMutation[];
 }
 
 /** Durable SDK journals live per tracker under `transactions/sdk`. */
@@ -1694,7 +1731,7 @@ interface SdkTransactionJournal {
 export function journalStepItemIds(stepIds: readonly unknown[]): string[] {
   const ids = new Set<string>();
   for (const step of stepIds) {
-    const id = typeof step === "string" ? /^\d+-(?:create|update|close|release)-(.+)-[0-9a-f]{12}$/.exec(step)?.[1] : undefined;
+    const id = typeof step === "string" ? /^\d+-(?:create|update|close|release|finalize)-(.+)-[0-9a-f]{12}$/.exec(step)?.[1] : undefined;
     if (id !== undefined) ids.add(id);
   }
   return [...ids];
@@ -1780,39 +1817,49 @@ async function commitGithubImportTransactionUnchecked(config: {
   pmRoot: string;
   repo: string;
   entries: readonly PreparedGithubImport[];
-  mutations: readonly BulkItemMutation[];
+  mutations: readonly GithubImportMutation[];
+  finalization?: GithubImportPlanRecord["finalization"];
   transactionId: string;
   itemIds: Map<number, string>;
   opts: AtomicImportOptions;
   commit: CommitItemMutations;
 }): Promise<GithubImportCommitResult> {
-  const { pmRoot, entries, mutations, transactionId, itemIds, opts, commit } = config;
-  /** Finalize before the SDK commits, and repair source metadata on recovered journals. */
-  const finalize = async (): Promise<void> => {
+  const { pmRoot, entries, mutations, finalization, transactionId, itemIds, opts, commit } = config;
+  const ownsFinalization = finalization === "transaction";
+  /** Released journals must replay their exact original rows and finalization path. */
+  const finalizeLegacy = async (): Promise<void> => {
     for (const entry of entries) {
-      if (entry.fidelity) await persistImportFidelity(pmRoot, itemIds.get(entry.issueNumber)!, entry.fidelity, Boolean(entry.linkOnly), opts.updateOnly, undefined, entry.preserveContent,
-        githubImportTarget(config.repo, entry, itemIds.get(entry.issueNumber)!));
+      const id = itemIds.get(entry.issueNumber)!;
+      if (entry.fidelity) {
+        await persistImportFidelity(pmRoot, id, entry.fidelity, Boolean(entry.linkOnly), opts.updateOnly, undefined, entry.preserveContent,
+          githubImportTarget(config.repo, entry, id));
+      }
     }
   };
+  const sdkMutations = githubImportSdkMutations(config);
   let committed = false;
   try {
     const result = await commit({
       pmRoot,
       transactionId,
       author: opts.atomicAuthor ?? "pm-github",
-      mutations,
+      mutations: sdkMutations,
       // This option selects how CREATE steps are compensated. The SDK's
       // commitItemMutations contract independently snapshots and version-
       // restores every UPDATE and CLOSE step (covered by the mixed rollback
       // integration test below this implementation).
       createCompensation: "delete",
       onTransition: async context => {
-        if (context.transition === "committing") await finalize();
+        if (!ownsFinalization && context.transition === "committing") await finalizeLegacy();
         await opts.onTransition?.(context);
       },
     });
     committed = true;
-    await finalize();
+    if (ownsFinalization) {
+      for (const entry of entries) if (entry.fidelity) {
+        await readGithubImportOwner(pmRoot, githubImportTarget(config.repo, entry, itemIds.get(entry.issueNumber)!));
+      }
+    } else await finalizeLegacy();
     let commentFailures = 0;
     for (const entry of entries) if (entry.syncAnnotations) {
       commentFailures += (await syncGithubCommentsToAnnotations(itemIds.get(entry.issueNumber)!, entry.comments, pmRoot, entry.issueNumber, githubImportTarget(config.repo, entry, itemIds.get(entry.issueNumber)!))).failed;
@@ -1842,7 +1889,7 @@ async function commitGithubImportTransactionUnchecked(config: {
     const sdkCode = errorContext && typeof errorContext === "object" && "code" in errorContext ? errorContext.code : undefined;
     const reservedIdentity = sdkCode === "item_identity_reserved";
     const mismatchedPlan = sdkCode === "transaction_plan_mismatch";
-    // A committed journal can still need source finalization. Annotation failures
+    // A committed legacy journal can still need source finalization. Annotation failures
     // are reported separately and never retain a committed item plan for replay.
     // Only known compensation or a failure before journal creation permits cleanup;
     // an unreadable journal cannot establish that recovery has finished.
@@ -1898,7 +1945,7 @@ async function commitGithubImportTransaction(config: Parameters<typeof commitGit
 
 /** Carry a verified first-link decision without letting it override an existing GitHub owner. */
 export function githubImportTarget(repo: string, entry: PreparedGithubImport, id: string, allowCreate = false): GithubOwnedTarget {
-  return { id, repo, number: entry.issueNumber, allowCreate, mirrorContent: !entry.linkOnly && !entry.preserveContent,
+  return { id, repo, number: entry.issueNumber, allowCreate, mirrorContent: !entry.linkOnly && !entry.preserveContent, preserveContent: entry.preserveContent,
     ...(entry.match?.id === id && entry.identity?.via && entry.identity.via !== "new" && githubOwnedIdentityKeys(entry.match).length === 0 ? {
       initialLink: (item: PmItem) => matchImportedIssue([item], {
         number: entry.issueNumber, html_url: entry.fidelity!.github_url, body: entry.sourceBody ?? entry.body,
@@ -1933,7 +1980,7 @@ export async function importGithubAtomic(
     // back to the canonical prefix; the mutation still validates the tracker.
   }
 
-  const mutations: BulkItemMutation[] = [];
+  const mutations: GithubImportMutation[] = [];
   const itemIds = new Map<number, string>();
   // The transaction journal fingerprints the ordered step plan. Canonicalize
   // by the stable GitHub issue number so a retry whose API page/order changed
@@ -1943,6 +1990,10 @@ export async function importGithubAtomic(
       workspace.settings.governance.create_mode_default);
     itemIds.set(entry.issueNumber, planned.itemId);
     mutations.push(...planned.mutations);
+    if (sdkOwnsFinalization && entry.fidelity) {
+      const row = buildGithubFinalizeMutation(entry, planned.itemId, workspace.statuses, Boolean(opts.updateOnly));
+      if (Object.keys(row.set).length || row.unset.length) mutations.push(row);
+    }
   }
   for (const entry of entries) {
     const id = itemIds.get(entry.issueNumber)!;
@@ -1957,14 +2008,15 @@ export async function importGithubAtomic(
   }
   const transactionId = deriveAtomicTransactionId(repo, entries, mutations, await importContextVersions(pmRoot, entries, workspace.statuses));
   // Save all producer modes, before any SDK mutation, with their original targets.
-  if (opts.updateOnly) for (const entry of entries) validateGithubImportFidelity(entry, repo, `GitHub transaction ${transactionId}`);
-  const payload = { transactionId, repo: repo.toLowerCase(), entries, mutations, updateOnly: Boolean(opts.updateOnly), ...(opts.linkDeps ? { linkDeps: true, dependencyIssues: opts.dependencyIssues } : {}), itemIds: [...itemIds] };
+  if (opts.updateOnly || sdkOwnsFinalization) for (const entry of entries) validateGithubImportFidelity(entry, repo, `GitHub transaction ${transactionId}`);
+  const payload = { transactionId, repo: repo.toLowerCase(), entries, mutations, updateOnly: Boolean(opts.updateOnly),
+    ...(sdkOwnsFinalization ? { finalization: "transaction" as const } : {}), ...(opts.linkDeps ? { linkDeps: true, dependencyIssues: opts.dependencyIssues } : {}), itemIds: [...itemIds] };
   const preflight = scanGithubImportPreflight(pmRoot, entries, mutations, payload);
   if (preflight.verdict !== "pass") throw githubImportPreflightRefusal(preflight);
   const plan = { ...payload, preflight };
   validateGithubImportPlan(plan);
   await persistGithubImportPlan(pmRoot, plan, opts.onPlanStaged);
-  const result = await commitGithubImportTransaction({ pmRoot, repo, entries, mutations, transactionId, itemIds, opts, commit });
+  const result = await commitGithubImportTransaction({ pmRoot, repo, entries, mutations, finalization: plan.finalization, transactionId, itemIds, opts, commit });
   await removeGithubImportPlan(pmRoot, transactionId);
   failClosedOnPlanDivergence(opts.gate === true, 0, 0, result.commentWriteFailures ?? 0);
   return result;
@@ -2014,6 +2066,7 @@ export function validateGithubImportPlan(record: GithubImportPlanRecord, items?:
     typeof record.repo !== "string" || !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(record.repo) ||
     !Array.isArray(record.entries) || !record.entries.length || !Array.isArray(record.mutations) || !record.mutations.length ||
     (record.updateOnly !== undefined && typeof record.updateOnly !== "boolean") ||
+    (record.finalization !== undefined && record.finalization !== "transaction") ||
     (record.linkDeps !== undefined && typeof record.linkDeps !== "boolean")) {
     throw new CommandError(
       `Refresh cannot replay unfinished GitHub transaction ${typeof record?.transactionId === "string" ? record.transactionId : "<unknown>"}: its persisted plan is invalid.`,
@@ -2038,7 +2091,9 @@ export function validateGithubImportPlan(record: GithubImportPlanRecord, items?:
     validateGithubImportFidelity(entry, record.repo, `Refresh cannot replay unfinished GitHub transaction ${record.transactionId}`, items);
     if (!fullImport) itemIds.set(entry.issueNumber, entry.match!.id!);
   }
-  if (record.mutations.some(mutation => !(fullImport ? ["create", "update", "close"].includes(mutation?.op) : mutation?.op === "update") || ![...itemIds.values()].includes(mutation.id))) {
+  const allowedOps = new Set(fullImport ? ["create", "update", "close"] : ["update"]);
+  if (record.finalization === "transaction") allowedOps.add("finalize");
+  if (record.mutations.some(mutation => !allowedOps.has(mutation?.op) || ![...itemIds.values()].includes(mutation.id))) {
     throw new CommandError(`Refresh cannot replay unfinished GitHub transaction ${record.transactionId}: its persisted mutation targets are invalid.`);
   }
   return itemIds;
@@ -2062,7 +2117,7 @@ export async function resumeGithubImport(
   assertGithubImportReplayPreflight(pmRoot, record);
   const { commitItemMutations: commit } = await resolveAtomicSdkFunctions(opts);
   const result = await commitGithubImportTransaction({
-    pmRoot, repo: record.repo, entries: record.entries, mutations: record.mutations,
+    pmRoot, repo: record.repo, entries: record.entries, mutations: record.mutations, finalization: record.finalization,
     transactionId: record.transactionId, itemIds, opts: { ...opts, updateOnly: record.updateOnly !== false, linkDeps: record.linkDeps, dependencyIssues: record.dependencyIssues }, commit,
   });
   await removeGithubImportPlan(pmRoot, record.transactionId);
@@ -3611,7 +3666,7 @@ function importGatePlannedItems(planned: readonly PreparedGithubImport[]): Track
 }
 
 /** Scan both the content projection and exact SDK write payload with the shared privacy gate. */
-export function scanGithubImportPreflight(pmRoot: string, entries: readonly PreparedGithubImport[], mutations: readonly BulkItemMutation[] = [], persisted: unknown = { entries, mutations }): ImportGateReceipt {
+export function scanGithubImportPreflight(pmRoot: string, entries: readonly PreparedGithubImport[], mutations: readonly GithubImportMutation[] = [], persisted: unknown = { entries, mutations }): ImportGateReceipt {
   const report = runCommandTrackerGate({ pmRoot, planOnly: true, plannedItems: [
     ...importGatePlannedItems(entries)!,
     { itemId: "github-recovery-plan", fields: { recovery_plan: persisted } },

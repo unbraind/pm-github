@@ -1,4 +1,4 @@
-/** Exercise import entry points against the published SDK that persists native deferrals. */
+/** Exercise import entry points against published SDKs with and without native deferrals. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { get, getItemPath, getHistoryPath, init, normalizeItemId, readSettings, validate } from "@unbrained/pm-cli/sdk";
-import { deriveAtomicItemId, importGithubAtomic, parseImportOptions, runImport, type GhIssue, type PreparedGithubImport } from "../../index.ts";
+import { deriveAtomicItemId, importGithubAtomic, parseImportOptions, resumeGithubImport, runImport, scanGithubImportPreflight, type GhIssue, type PreparedGithubImport } from "../../index.ts";
 import { jsonResponse, withEnv, withMockGithub } from "./mock-github-server.ts";
 
 const repo = "fixture/project";
@@ -134,4 +134,20 @@ test("another create failure compensates an already admitted strict create", asy
   assert.ok(transitions.includes("step_compensated"));
   await assert.rejects(get(await itemId(pmRoot, 1), {}, { pmRoot }), /was deleted/);
   await assert.rejects(get(await itemId(pmRoot, 2), {}, { pmRoot }), /not found/i);
+}));
+
+test("progressive-only SDK refuses a current finalize plan before mutating the item", async () => tracker("default", async pmRoot => {
+  await run(pmRoot, [issue(1)], true);
+  const id = await itemId(pmRoot, 1);
+  const match = (await get(id, {}, { pmRoot })).item;
+  const item = getItemPath(pmRoot, "Issue", id);
+  const history = getHistoryPath(pmRoot, id);
+  const before = [item, history].map(path => readFileSync(path, "utf8"));
+  const entries = [{ issueNumber: 1, title: match.title!, itemType: "Issue", status: "open", description: match.description!,
+    body: "Source description", tags: [`gh:${repo}#1`], comments: [], syncAnnotations: false, match }];
+  const mutations = [{ op: "finalize" as const, id, set: { github_number: 1 }, unset: [] }];
+  const record = { transactionId: "github-import-current-plan", repo, entries, mutations, updateOnly: true, finalization: "transaction" as const };
+  await assert.rejects(resumeGithubImport(pmRoot, { ...record, preflight: scanGithubImportPreflight(pmRoot, entries, mutations, record) }),
+    /requires PM CLI 2026.11.22 or newer/);
+  assert.deepEqual([item, history].map(path => readFileSync(path, "utf8")), before);
 }));
