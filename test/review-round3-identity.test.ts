@@ -1,3 +1,4 @@
+import { seedExistingItem } from "./helpers/import-mirror.ts";
 /** Round-three regressions use real SDK trackers; only GitHub transport is supplied. */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -5,7 +6,7 @@ import { mkdtempSync, rmSync, readFileSync, readdirSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join, delimiter, relative } from "node:path";
 import { spawnSync } from "node:child_process";
-import { init, create, get, comments, listAllComplete, commitImportedItem, getItemPath, readSettings, WorkspaceTransactionInterruptedError } from "@unbrained/pm-cli/sdk";
+import { init, create, get, comments, listAllComplete, WorkspaceTransactionInterruptedError } from "@unbrained/pm-cli/sdk";
 import { runImport, parseImportOptions, importGithubAtomic, readGithubImportPlan, listUnfinishedGithubImports, planSync, buildExportPlan, parseBlockerReferences, exploreGithubIdentities, prepareGithubImport, scanGithubImportPreflight, type GhIssue } from "../index.ts";
 import { importIdentityKeys, legacyGithubIdentityConflict } from "../import-fidelity.ts";
 import { normalizeGithubRepository, parseGithubIssueUrl, parseGithubUrl } from "../github-url.ts";
@@ -25,8 +26,7 @@ async function tracker(run: (root: string) => Promise<void>, git = false) {
 /** Seed released metadata through the public SDK without mocking native persistence. */
 async function local(root: string, fields: Record<string, unknown>) {
   const item = (await create({ title: "Curated Chore", type: "Chore", description: "Curated description", body: "Curated body", tags: "keep" }, { pmRoot: root })).item;
-  await commitImportedItem({ pmRoot: root, id: item.id, itemPath: getItemPath(root, "Chore", item.id), settings: await readSettings(root),
-    document: { metadata: { ...item, ...fields }, body: "Curated body" }, author: "fixture", message: "Released identity fixture", conflictWarningPrefix: "fixture" });
+  await seedExistingItem(root, item.id, { metadata: { ...item, ...fields }, body: "Curated body" }, "Released identity fixture");
   return (await get(item.id, {}, { pmRoot: root })).item;
 }
 /** Capture every document, history and journal, excluding only transient locks. */

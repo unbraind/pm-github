@@ -1,3 +1,4 @@
+import { seedExistingItem } from "./helpers/import-mirror.ts";
 /** HTTP-boundary acceptance for merged-PR closeout with real SDK tracker mutations. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -5,7 +6,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { create, close, update, get, config, acquireLock, commitImportedItem, getItemPath, readSettings, PmCliError } from "@unbrained/pm-cli/sdk";
+import { create, close, update, get, config, acquireLock, PmCliError } from "@unbrained/pm-cli/sdk";
 import extension, { fetchJSON, githubApiBase, parseNextLink } from "../index.ts";
 import { CloseoutUsageError, closeoutFailureReason, compactCloseoutReport, checkCloseoutHead, declaresDelivery, extractCloseoutItems, runCloseout, type CloseoutApi } from "../closeout.ts";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
@@ -708,8 +709,7 @@ test("legacy type casing preserves the Epic closeout exclusion", async () => tra
   const sdk = { pmRoot: root, noExtensions: true };
   for (const type of ["epic", "EPIC"]) {
     const created = (await create({ title: "Legacy container", type: "Epic", status: "in_progress", acceptanceCriteria: "Verified delivery" }, sdk)).item;
-    await commitImportedItem({ pmRoot: root, id: created.id, itemPath: getItemPath(root, "Epic", created.id), settings: await readSettings(root),
-      document: { metadata: { ...created, type }, body: "" }, author: "fixture", message: "Seed readable legacy type spelling", conflictWarningPrefix: "fixture" });
+    await seedExistingItem(root, created.id, { metadata: { ...created, type }, body: "" }, "Seed readable legacy type spelling");
     const body = `Closes https://github.com/${repo}/blob/main/.agents/pm/epics/${created.id}.toon`;
     await withMockGithub(fixture(body), async () => {
       const report = await runCloseout(root, repo, { pr: "42", apply: true }, api());

@@ -138,7 +138,9 @@ test("scoped sync and labelled export apply preserve receipts after partial remo
     }, async () => {
       const preview = await captureStderr(() => command(root, "github sync", { repo: "acme/widgets", ids: first.item.id, "allow-reference-tags": true, "dry-run": true }));
       assert.ok(preview.result.result);
-      const synced = await captureStderr(() => command(root, "github sync", { repo: "acme/widgets", ids: first.item.id, "allow-reference-tags": true, apply: true }));
+      const target = { repo: "acme/widgets", ids: first.item.id, "allow-reference-tags": true };
+      await assert.rejects(command(root, "github sync", { ...target, apply: true }), { code: "unknown_option" });
+      const synced = await captureStderr(() => command(root, "github sync", target));
       assert.ok(synced.result.result);
       const exported = await captureStderr(() => command(root, "github export", { repo: "acme/widgets", ids: `${first.item.id},${second.item.id}`, "allow-reference-tags": true, apply: true, "label-map": "bug=defect" }));
       assert.match(exported.stderr.join("\n"), /1 item\(s\) failed/);

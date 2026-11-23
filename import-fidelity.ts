@@ -595,6 +595,15 @@ export function normalizeImportValue(field: string, value: unknown, types = defa
   return value;
 }
 
+/** Project the same source lifecycle in plain writes and transaction finalization. */
+export function githubLifecycleFields(fidelity: ImportFidelity, linkOnly: boolean, statuses?: GithubStatusRegistry, curated?: PmItem, sourceAssignee?: string) {
+  return {
+    ...importFidelityFields(fidelity, linkOnly, curated),
+    ...(!linkOnly && !curated && sourceAssignee ? { assignee: sourceAssignee } : {}),
+    ...(!linkOnly ? { status: normalizeStatusInput(mapState(fidelity.github_state, fidelity.github_state_reason), statuses) } : {}),
+  };
+}
+
 /**
  * Finalize source metadata through the SDK's fenced item/history mutation boundary.
  * High-level create/update reserve native timestamps. This import adapter appends a real
@@ -615,9 +624,7 @@ export async function persistImportFidelity(pmPath: string, id: string, fidelity
       const source = parseGithubIssueUrl(fidelity.github_url)!;
       assertGithubImportOwner({ ...document.metadata, body: document.body }, { ...ownership, id, repo: source.repo, number: fidelity.github_number });
       const before = canonicalDocument(document);
-      const fields = { ...importFidelityFields(fidelity, linkOnly, preserveContent ? document.metadata : undefined),
-        ...(!linkOnly && !preserveContent && sourceAssignee ? { assignee: sourceAssignee } : {}),
-        ...(!linkOnly ? { status: normalizeStatusInput(mapState(fidelity.github_state, fidelity.github_state_reason), workspace.statuses) } : {}) };
+      const fields = githubLifecycleFields(fidelity, linkOnly, workspace.statuses, preserveContent ? document.metadata : undefined, sourceAssignee);
       for (const [field, value] of Object.entries(fields)) {
         const current = ownValue(document.metadata, field);
         if (Object.is(current, value) || (normalizeFields && JSON.stringify(normalizeImportValue(field, current, undefined, workspace.statuses)) === JSON.stringify(normalizeImportValue(field, value, undefined, workspace.statuses)))) continue;

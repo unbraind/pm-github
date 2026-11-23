@@ -198,8 +198,11 @@ test("project import applies configured terminal aliases with SDK lifecycle fide
   const nodes = [draft("linked"), draft("created")];
   await withMockGithub(board(nodes), async () => {
     const ext = await harness;
-    await withEnv({ GITHUB_TOKEN: "fixture", GH_TOKEN: undefined }, () => ext.runCommand({ command: "github project import", args: ["acme/5"],
-      options: { "status-map": ["settled=Done"] }, pmRoot: root, global: { json: true } }));
+    const request = { command: "github project import", args: ["acme/5"], pmRoot: root, global: { json: true } };
+    await withEnv({ GITHUB_TOKEN: "fixture", GH_TOKEN: undefined }, async () => {
+      await assert.rejects(ext.runCommand({ ...request, options: { "status-map": ["settled=Done"] } }), { code: "extension_flag_value_invalid" });
+      await ext.runCommand({ ...request, options: { "status-map": "settled=Done" } });
+    });
     const written = items(root);
     assert.equal(written.length, 2);
     assert.ok(written.some(item => item.id === id));
@@ -215,7 +218,7 @@ test("project import applies configured terminal aliases with SDK lifecycle fide
     }
     const histories = written.map(item => fs.readFileSync(getHistoryPath(root, item.id), "utf8"));
     for (const history of histories) assert.match(history, /GitHub project/);
-    const preview = await sync(root, { pull: true, "status-map": ["SETTLED=Done"] });
+    const preview = await sync(root, { pull: true, "status-map": "SETTLED=Done" });
     assert.deepEqual(preview.result, { dryRun: true, project: "acme/5", push: undefined, pull: { actionable: 0, statusSkipped: 0 } });
     for (const [index, item] of written.entries()) assert.equal(fs.readFileSync(getHistoryPath(root, item.id), "utf8"), histories[index]);
   });
@@ -344,7 +347,7 @@ test("project sync validates the token and reference before contacting GitHub", 
   await assert.rejects(ext.runCommand({ command: "github project sync", args: ["invalid"], pmRoot: root }), /Usage:/);
   nodeScenario(`
     import assert from 'node:assert/strict';
-    import { createExtensionTestHarness } from ${JSON.stringify(new URL("../node_modules/@unbrained/pm-cli/dist/sdk/testing.js", import.meta.url).href)};
+    import { createExtensionTestHarness } from ${JSON.stringify(import.meta.resolve("@unbrained/pm-cli/sdk/testing"))};
     import extension from ${JSON.stringify(new URL("../index.ts", import.meta.url).href)};
     const ext = await createExtensionTestHarness(extension, { capabilities: ['commands', 'importers', 'schema', 'hooks', 'preflight', 'search'] });
     await assert.rejects(ext.runCommand({ command: 'github project sync', args: ['acme/5'], pmRoot: ${JSON.stringify(root)} }), /needs a GitHub token/);

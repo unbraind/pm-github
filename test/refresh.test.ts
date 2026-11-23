@@ -1,5 +1,5 @@
 /** Refresh acceptance uses actual initialized trackers and the real HTTP transport. */
-import { createImportMirror } from "./helpers/import-mirror.ts";
+import { createImportMirror, seedExistingItem } from "./helpers/import-mirror.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, mkdirSync, cpSync, copyFileSync, symlinkSync, writeFileSync, existsSync, renameSync } from "node:fs";
@@ -335,9 +335,7 @@ test("field-linked GitHub and cross-provider owners refresh without replacing lo
   const localItems: Array<{ id: string; created_at: string }> = [];
   for (const [number, linkOnly] of [[1, false], [2, true]] as const) {
     const local = (await create({ title: "Local owner", type: "Task", status: "in_progress", body: "provider context" }, { pmRoot })).item;
-    await commitImportedItem({ pmRoot, id: local.id, itemPath: getItemPath(pmRoot, "Task", local.id), settings,
-      document: { metadata: { ...local, github_url: `https://github.com/fixture/repo/issues/${number}`, github_link_only: linkOnly }, body: "provider context" },
-      author: "fixture", message: "Seed explicit existing link", conflictWarningPrefix: "fixture" });
+    await seedExistingItem(pmRoot, local.id, { metadata: { ...local, github_url: `https://github.com/fixture/repo/issues/${number}`, github_link_only: linkOnly }, body: "provider context" }, "Seed explicit existing link");
     localItems.push(local);
   }
   await withMockGithub(transport({ i1: node(), i2: node(2, "CLOSED", "COMPLETED") }), async () => {
@@ -495,8 +493,8 @@ for (const boundary of ["step_applied", "committing"]) {
 }
 
 /** Leave a real SDK journal applying and return its complete original plan. */
-function interruptedPlan(pmRoot: string, number = 1): GithubImportPlanRecord {
-  const crash = spawnSync(process.execPath, [join(packageRoot, "test/fixtures/refresh-crash.ts"), pmRoot, "committing", String(number)], { cwd: packageRoot, encoding: "utf8" });
+function interruptedPlan(pmRoot: string, number = 1, mode = "current"): GithubImportPlanRecord {
+  const crash = spawnSync(process.execPath, [join(packageRoot, "test/fixtures/refresh-crash.ts"), pmRoot, "committing", String(number), mode], { cwd: packageRoot, encoding: "utf8" });
   assert.equal(crash.status, 9, crash.stderr);
   rmSync(join(pmRoot, "locks"), { recursive: true, force: true });
   const plans = readdirSync(join(pmRoot, "transactions/pm-github")).map(file =>
@@ -513,7 +511,7 @@ test("every recovery plan is validated before any journal writes", async () => t
   const original = readFileSync(file, "utf8");
   const record = JSON.parse(original) as GithubImportPlanRecord;
   for (const invalid of [null, {}, { ...record, repo: "invalid" }, { ...record, repo: null }, { ...record, entries: [] },
-    { ...record, entries: [{}] }, { ...record, mutations: [] }, { ...record, mutations: [null] },
+    { ...record, entries: [{}] }, { ...record, finalization: "invalid" }, { ...record, finalization: undefined }, { ...record, mutations: [] }, { ...record, mutations: [null] },
     { ...record, mutations: record.mutations.map(mutation => ({ ...mutation, options: { title: "Mismatched saved payload" } })) },
     { ...record, mutations: [{ op: "update", id: "unlinked" }] }, { ...record, mutations: [{ op: "create", id: record.entries[0]!.match!.id }] }]) {
     if (invalid === null) rmSync(file); else writeFileSync(file, JSON.stringify(invalid));
@@ -566,10 +564,8 @@ for (const atomic of [false, true]) {
   test(`fresh refresh validates every finalization projection before the first write (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
     await createImportMirror({ title: "Stale first", tags: "gh:fixture/repo#1" }, { pmRoot });
     const local = (await createImportMirror({ title: "Closed second", tags: "gh:fixture/repo#2", type: "Task" }, { pmRoot })).item;
-    await commitImportedItem({ pmRoot, id: local.id, itemPath: getItemPath(pmRoot, "Task", local.id), settings: await readSettings(pmRoot),
-      document: { metadata: { ...local, status: "closed", created_at: "2025-01-01T00:00:00Z",
-        closed_at: "2025-02-01T00:00:00Z", completed_at: "2025-02-01T00:00:00Z" }, body: "" },
-      author: "fixture", message: "Seed historical closure", conflictWarningPrefix: "fixture" });
+    await seedExistingItem(pmRoot, local.id, { metadata: { ...local, status: "closed", created_at: "2025-01-01T00:00:00Z",
+        closed_at: "2025-02-01T00:00:00Z", completed_at: "2025-02-01T00:00:00Z" }, body: "" }, "Seed historical closure");
     const second = { ...node(2, "CLOSED", "COMPLETED"), closedAt: null } as unknown as ReturnType<typeof node>;
     await withMockGithub(transport({ i1: node(), i2: second }), async () => {
       const before = snapshot(pmRoot);
@@ -580,7 +576,7 @@ for (const atomic of [false, true]) {
 }
 
 test("persisted fidelity accepts empty and nullable source values and legacy entries", async () => tracker(async (_directory, pmRoot) => {
-  const record = interruptedPlan(pmRoot);
+  const record = interruptedPlan(pmRoot, 1, "legacy-nullable");
   const entry = record.entries[0]!;
   const expected = new Map([[entry.issueNumber, entry.match!.id!]]);
   for (const value of ["", null]) {
@@ -597,10 +593,8 @@ test("persisted fidelity accepts empty and nullable source values and legacy ent
   const open = { ...entry, fidelity: { ...entry.fidelity!, github_state: "open", github_closed_at: "" } };
   assert.deepEqual(validateGithubImportPlan({ ...record, entries: [open] }, []), expected);
   assert.deepEqual(validateGithubImportPlan({ ...record, entries: [{ ...entry, linkOnly: true }] }), expected);
-  const nullable = { ...record, entries: [{ ...entry, fidelity: { ...entry.fidelity!,
-    github_state_reason: null, github_close_reason: null, github_release: null } }] } as unknown as GithubImportPlanRecord;
-  // Replay real SDK state too: nullable non-date source values need no coercion.
-  await resumeGithubImport(pmRoot, nullable);
+  // Replay the original legacy SDK rows and the nullable source values saved with them.
+  await resumeGithubImport(pmRoot, record);
   const item = (await get(entry.match!.id!, {}, { pmRoot })).item;
   assert.equal(item.github_state_reason, null);
   assert.equal(item.github_close_reason, null);
@@ -612,9 +606,7 @@ test("recovery refuses a different repository even when the selected item overla
   const record = interruptedPlan(pmRoot);
   const id = record.entries[0]!.match!.id!;
   const local = (await get(id, {}, { pmRoot })).item;
-  await commitImportedItem({ pmRoot, id, itemPath: getItemPath(pmRoot, local.type!, id), settings: await readSettings(pmRoot),
-    document: { metadata: { ...local, title: local.title!, description: "GH issue #1: https://github.com/fixture/other/issues/1", type: local.type!, status: local.status!, priority: local.priority ?? 2, created_at: local.created_at!, updated_at: local.updated_at!, tags: (local.tags ?? []).map(tag => tag === "gh:fixture/repo#1" ? "gh:fixture/other#1" : tag), github_repo: "fixture/other", github_url: "https://github.com/fixture/other/issues/1", github_number: 1 }, body: local.body ?? "" },
-    author: "fixture", message: "Seed changed explicit repository", conflictWarningPrefix: "fixture" });
+  await seedExistingItem(pmRoot, id, { metadata: { ...local, title: local.title!, description: "GH issue #1: https://github.com/fixture/other/issues/1", type: local.type!, status: local.status!, priority: local.priority ?? 2, created_at: local.created_at!, updated_at: local.updated_at!, tags: (local.tags ?? []).map(tag => tag === "gh:fixture/repo#1" ? "gh:fixture/other#1" : tag), github_repo: "fixture/other", github_url: "https://github.com/fixture/other/issues/1", github_number: 1 }, body: local.body ?? "" }, "Seed changed explicit repository");
   const before = snapshot(pmRoot);
   await assert.rejects(() => runRefresh("fixture/other", pmRoot, {}), new RegExp(`${record.transactionId}.*fixture/repo.*fixture/other`));
   assert.deepEqual(snapshot(pmRoot), before);

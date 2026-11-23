@@ -5,7 +5,10 @@
  * journal commits. Invoked as a child process by
  * test/refresh.test.ts; exits 9 to emulate a hard crash without compensation.
  */
-import { importGithubAtomic, parseImportOptions, prepareGithubImport } from "../../index.ts";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { commitItemMutations, normalizeItemId, readSettings } from "@unbrained/pm-cli/sdk";
+import { buildAtomicImportMutations, importGithubAtomic, parseImportOptions, prepareGithubImport, scanGithubImportPreflight } from "../../index.ts";
 import { createImportMirror } from "../helpers/import-mirror.ts";
 
 const pmRoot = process.argv[2]!;
@@ -17,13 +20,26 @@ const issue = { number, title: "New upstream title", body: null, state: "closed"
 const entry = (await prepareGithubImport(issue, "fixture/repo", parseImportOptions({ atomic: true }), "fixture", linked, undefined,
   { items: [linked], releases: [], timeline: async () => [] }))!;
 console.log(`crash fixture: linked ${linked.id}, entering atomic refresh`);
-await importGithubAtomic(pmRoot, "fixture/repo", [entry], {
-  updateOnly: true,
-  onTransition: context => {
-    if (context.transition === boundary) {
-      console.log(`crash fixture: ${boundary} transition reached, exiting 9`);
-      process.exit(9);
-    }
-  },
-});
+/** Hold a real SDK journal before normal completion, as a process crash would. */
+function interrupt({ transition }: { transition: string }): void {
+  if (transition === boundary) {
+    console.log(`crash fixture: ${boundary} transition reached, exiting 9`);
+    process.exit(9);
+  }
+}
+
+if (process.argv[5] === "legacy-nullable") {
+  const repo = "fixture/repo";
+  const transactionId = "github-import-legacy-nullable";
+  const { mutations } = buildAtomicImportMutations(repo, entry, (await readSettings(pmRoot)).id_prefix, normalizeItemId, true);
+  const entries = [{ ...entry, fidelity: { ...entry.fidelity!, github_state_reason: null, github_close_reason: null, github_release: null } }];
+  const record = { transactionId, repo, entries, mutations };
+  const preflight = scanGithubImportPreflight(pmRoot, entries as unknown as typeof entry[], mutations, record);
+  const plans = join(pmRoot, "transactions", "pm-github");
+  mkdirSync(plans, { recursive: true });
+  writeFileSync(join(plans, `${transactionId}.json`), JSON.stringify({ ...record, preflight }));
+  await commitItemMutations({ pmRoot, transactionId, author: "pm-github", mutations, createCompensation: "delete", onTransition: interrupt });
+} else {
+  await importGithubAtomic(pmRoot, "fixture/repo", [entry], { updateOnly: true, onTransition: interrupt });
+}
 throw new Error("crash fixture: the interrupted refresh unexpectedly completed");

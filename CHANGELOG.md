@@ -1,6 +1,12 @@
 # Changelog
 
-## 2026.11.19 - 2026-11-19
+## Unreleased
+
+### Other
+
+- Adopt pm-cli 2026.11.22 host-aligned SDK behaviour ([pm-github-sdk-1122](https://github.com/unbraind/pm-github/blob/main/.agents/pm/chores/pm-github-sdk-1122.toon))
+
+## 2026.11.19 - 2026-11-20
 
 ### Fixed
 
@@ -37,8 +43,8 @@ No changes.
 
 ### Fixed
 
-- Exclude PR owners in every supported explicit URL field during refresh ([pm-github-pr-url-alias-followup](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-pr-url-alias-followup.toon))
 - Keep GitHub reference tags separate from import identity (BREAKING: PM CLI 2026.10.23 minimum) ([pm-github-reference-identity](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-reference-identity.toon))
+- Exclude PR owners in every supported explicit URL field during refresh ([pm-github-pr-url-alias-followup](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-pr-url-alias-followup.toon))
 
 ## 2026.11.12 - 2026-11-12
 
@@ -705,18 +711,18 @@ No changes.
 
 ### Other
 
-- Provenance scheme: gh:owner/repo\#N tag (lowercased), reused as-is ([pm-github-ggt3](https://github.com/unbraind/pm-github/blob/main/.agents/pm/decisions/pm-github-ggt3.toon))
-- Export defaults to dry-run; real writes need --apply AND --repo ([pm-github-epdt](https://github.com/unbraind/pm-github/blob/main/.agents/pm/decisions/pm-github-epdt.toon))
 - Search provider maps remote matches to LOCAL items only ([pm-github-o7jl](https://github.com/unbraind/pm-github/blob/main/.agents/pm/decisions/pm-github-o7jl.toon))
+- Export defaults to dry-run; real writes need --apply AND --repo ([pm-github-epdt](https://github.com/unbraind/pm-github/blob/main/.agents/pm/decisions/pm-github-epdt.toon))
+- Provenance scheme: gh:owner/repo\#N tag (lowercased), reused as-is ([pm-github-ggt3](https://github.com/unbraind/pm-github/blob/main/.agents/pm/decisions/pm-github-ggt3.toon))
 - Unit tests + functional verification + README + decisions ([pm-github-f3xf](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-f3xf.toon))
 - Export: dry-run default + upsert existing issues by provenance ([pm-github-fv0x](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-fv0x.toon))
 - github search provider (search capability) ([pm-github-5sbx](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-5sbx.toon))
 - github validate diagnostics command ([pm-github-rroh](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-rroh.toon))
-- pm github sync: push pm status -\> GitHub close/reopen, guarded by token+--repo+--dry-run ([pm-github-yted](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-yted.toon))
-- renderers capability: register 'github' output format (pm items as GitHub-issue markdown) ([pm-github-vvov](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-vvov.toon))
-- Rate-limit/backoff handling (Retry-After / X-RateLimit-Reset) + useful afterCommand hook ([pm-github-rx1q](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-rx1q.toon))
-- Import issue comments via --with-comments (append to item body) ([pm-github-kvl1](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-kvl1.toon))
 - Tests + functional verification against real public repo (idempotent re-import) ([pm-github-2u0d](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-2u0d.toon))
+- Rate-limit/backoff handling (Retry-After / X-RateLimit-Reset) + useful afterCommand hook ([pm-github-rx1q](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-rx1q.toon))
+- renderers capability: register 'github' output format (pm items as GitHub-issue markdown) ([pm-github-vvov](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-vvov.toon))
+- pm github sync: push pm status -\> GitHub close/reopen, guarded by token+--repo+--dry-run ([pm-github-yted](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-yted.toon))
+- Import issue comments via --with-comments (append to item body) ([pm-github-kvl1](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-kvl1.toon))
 - Production-readiness audit 2026-05-28 ([pm-github-0y40](https://github.com/unbraind/pm-github/blob/main/.agents/pm/tasks/pm-github-0y40.toon))
 
 ## 2026.6.2 - 2026-06-02

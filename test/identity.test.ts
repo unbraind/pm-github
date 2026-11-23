@@ -1,3 +1,4 @@
+import { seedExistingItem } from "./helpers/import-mirror.ts";
 /** Identity exploration uses real SDK storage in non-git directories, including durable audit. */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -7,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
-  init, create, update, get, commitImportedItem, getItemPath, readSettings,
+  init, create, update, get, runWithReproducibleProcessEnvironment, getItemPath,
   readHistorySnapshot, getHistoryPath, WorkspaceTransactionInterruptedError, type ItemMetadata,
 } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
@@ -37,12 +38,10 @@ async function tracker(run: (root: string) => Promise<void>) {
     });
   } finally { rmSync(directory, { recursive: true, force: true }); }
 }
-/** Seed provider metadata through the host import primitive with genuine append-only history. */
+/** Seed provider metadata through the host's fenced mutation with genuine append-only history. */
 async function item(root: string, fields: Record<string, unknown>, body = "") {
   const created = (await create({ title: "Identity fixture", type: "Task" }, { pmRoot: root })).item;
-  await commitImportedItem({ pmRoot: root, id: created.id, itemPath: getItemPath(root, "Task", created.id),
-    document: { metadata: { ...created, ...fields }, body }, settings: await readSettings(root),
-    author: "fixture", message: "Seed provider identity", conflictWarningPrefix: "fixture" });
+  await seedExistingItem(root, created.id, { metadata: { ...created, ...fields }, body }, "Seed provider identity");
   return created.id;
 }
 /** Verify typed expected refusals without depending on diagnostic prose. */
@@ -208,13 +207,9 @@ test("recover an interrupted audited detach and refuse an edit made before locke
   await applyGithubIdentityRepair(root, { ...proposed, author: "fixture" });
   assert.deepEqual(snapshot(root), stable);
   const current = (await get(detach, {}, { pmRoot: root })).item as ItemMetadata & { body: string };
-  await commitImportedItem({ pmRoot: root, id: detach, itemPath: getItemPath(root, "Task", detach),
-    document: { metadata: { ...current, external_ref: key }, body: current.body! }, settings: await readSettings(root),
-    author: "fixture", message: "Reintroduce source reference", conflictWarningPrefix: "fixture" });
+  await seedExistingItem(root, detach, { metadata: { ...current, external_ref: key }, body: current.body! }, "Reintroduce source reference");
   await assert.rejects(applyGithubIdentityRepair(root, { ...proposed, author: "fixture" }), code("stale_approval"));
-  await commitImportedItem({ pmRoot: root, id: detach, itemPath: getItemPath(root, "Task", detach),
-    document: { metadata: current, body: current.body! }, settings: await readSettings(root),
-    author: "fixture", message: "Restore synthetic baseline", conflictWarningPrefix: "fixture" });
+  await seedExistingItem(root, detach, { metadata: current, body: current.body! }, "Restore synthetic baseline");
   await update(detach, { addTags: [key] }, { pmRoot: root });
   await assert.rejects(applyGithubIdentityRepair(root, { ...proposed, author: "fixture" }), code("stale_approval"));
   const next = await planGithubIdentityRepair(root, key, owner, detach);
@@ -271,12 +266,10 @@ test("forged audit plans with nonexistent owners never authorize recovery writes
   const forged = { identity: key, owner: "nonexistent-owner", detach, approval,
     revision: (await get(detach, {}, { pmRoot: root })).item.updated_at!,
     changes: [{ field: "tags", before: [key, "keep"], after: ["unapproved"] }] };
-  await update(detach, { comment: [`GitHub identity repair ${Buffer.from(JSON.stringify(forged)).toString("base64url")}`],
-    message: `bulk-item-transaction github-identity-${approval} fixture apply` }, { pmRoot: root });
-  const current = (await get(detach, {}, { pmRoot: root })).item as ItemMetadata & { body: string };
-  await commitImportedItem({ pmRoot: root, id: detach, itemPath: getItemPath(root, "Task", detach),
-    document: { metadata: { ...current, updated_at: forged.revision }, body: current.body }, settings: await readSettings(root),
-    author: "fixture", message: "Seed forged revision", conflictWarningPrefix: "fixture" });
+  await runWithReproducibleProcessEnvironment({ PM_CLOCK: forged.revision, PM_SEED: "identity-recovery-fixture", PM_CLOCK_TICK_MS: "0" }, () =>
+    update(detach, { comment: [`GitHub identity repair ${Buffer.from(JSON.stringify(forged)).toString("base64url")}`],
+      message: `bulk-item-transaction github-identity-${approval} fixture apply` }, { pmRoot: root }));
+  assert.equal((await get(detach, {}, { pmRoot: root })).item.updated_at, forged.revision);
   const before = snapshot(root);
   await assert.rejects(applyGithubIdentityRepair(root, { ...forged, author: "fixture" }), code("stale_approval"));
   assert.deepEqual(snapshot(root), before);

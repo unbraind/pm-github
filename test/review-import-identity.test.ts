@@ -1,3 +1,4 @@
+import { seedExistingItem } from "./helpers/import-mirror.ts";
 /** Review regressions use real isolated SDK trackers; only GitHub transport is supplied. */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -5,7 +6,7 @@ import { mkdtempSync, rmSync, readFileSync, readdirSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join, delimiter } from "node:path";
 import { spawnSync } from "node:child_process";
-import { init, create, update, get, comments, commitImportedItem, readSettings, getItemPath, getHistoryPath, WorkspaceTransactionInterruptedError, listAllComplete } from "@unbrained/pm-cli/sdk";
+import { init, create, update, get, comments, getItemPath, getHistoryPath, WorkspaceTransactionInterruptedError, listAllComplete } from "@unbrained/pm-cli/sdk";
 import extension, { runImport, parseImportOptions, importGithubAtomic, readGithubImportPlan, resumeGithubImport, listUnfinishedGithubImports, planSync, buildExportPlan, type GhIssue, type GhComment } from "../index.ts";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import { importIdentityKeys } from "../import-fidelity.ts";
@@ -28,8 +29,7 @@ async function tracker(run: (root: string) => Promise<void>, git = true) {
 /** Seed explicit provenance through the public SDK without relinquishing curated content. */
 async function linked(root: string, fields: Record<string, unknown> = {}) {
   const item = (await create({ title: "Curated Chore", type: "Chore", description: "Curated description", body: "Curated body", tags: "keep" }, { pmRoot: root })).item;
-  await commitImportedItem({ pmRoot: root, id: item.id, itemPath: getItemPath(root, "Chore", item.id), settings: await readSettings(root),
-    document: { metadata: { ...item, github_url: issue.html_url, ...fields }, body: "Curated body" }, author: "fixture", message: "Explicit linked fixture", conflictWarningPrefix: "fixture" });
+  await seedExistingItem(root, item.id, { metadata: { ...item, github_url: issue.html_url, ...fields }, body: "Curated body" }, "Explicit linked fixture");
   return (await get(item.id, {}, { pmRoot: root })).item;
 }
 /** Read the native item and immutable history together. */
@@ -198,7 +198,10 @@ test("sync and applied export send writes only to explicit owners", async () => 
     assert.equal(server.requests.filter(request => request.method === "POST").length, 1, "explicitly exporting an unlinked item creates its own upstream issue");
     await linked(root);
     const before = server.requests.length;
-    for (const command of ["github sync", "github export"]) await assert.rejects(() => harness.runCommand({ command, options: { repo, ids: owner.id, apply: true }, pmRoot: root, global: { json: true } }), { code: "github_import_owner_conflict" });
+    for (const command of ["github sync", "github export"]) {
+      const options = { repo, ids: owner.id, ...(command === "github export" ? { apply: true } : {}) };
+      await assert.rejects(() => harness.runCommand({ command, options, pmRoot: root, global: { json: true } }), { code: "github_import_owner_conflict" });
+    }
     assert.equal(server.requests.length, before, "an unselected competing owner must refuse before any remote request");
   }));
 }, false));
