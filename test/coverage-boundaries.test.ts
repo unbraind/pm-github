@@ -108,7 +108,7 @@ test("registered preflight warns only for mutations lacking a token", async t =>
   } };
   nodeScenario(`
     import assert from 'node:assert/strict';
-    import { createExtensionTestHarness } from ${JSON.stringify(new URL("../node_modules/@unbrained/pm-cli/dist/sdk/testing.js", import.meta.url).href)};
+    import { createExtensionTestHarness } from ${JSON.stringify(import.meta.resolve("@unbrained/pm-cli/sdk/testing"))};
     import extension from ${JSON.stringify(INDEX_URL)};
     import { captureStderr } from ${JSON.stringify(new URL("./helpers/mock-github-server.ts", import.meta.url).href)};
     const ext = await createExtensionTestHarness(extension, { capabilities: ['commands', 'importers', 'schema', 'hooks', 'preflight', 'search'] });

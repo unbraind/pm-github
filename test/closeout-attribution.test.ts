@@ -1,3 +1,4 @@
+import { seedExistingItem } from "./helpers/import-mirror.ts";
 /** Real PR shapes distinguish a reported gap from explicit delivery attribution. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -5,7 +6,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
-import { runWithReproducibleProcessEnvironment, create, get, update, commitImportedItem, getItemPath, readSettings } from "@unbrained/pm-cli/sdk";
+import { runWithReproducibleProcessEnvironment, create, get, update } from "@unbrained/pm-cli/sdk";
 import { runCloseout, type CloseoutApi } from "../closeout.ts";
 import { withEnv } from "./helpers/mock-github-server.ts";
 
@@ -27,8 +28,7 @@ async function scenario(linked: boolean, bodies?: string[], facts: Partial<Recor
     const item = (await create({ title: "Enforce statement coverage", type: "Issue", author: "fixture" }, sdk)).item;
     await update(item.id, { status: "in_progress" }, sdk);
     if (linked) {
-      await commitImportedItem({ pmRoot: root, id: item.id, itemPath: getItemPath(root, "Issue", item.id), settings: await readSettings(root),
-        document: { metadata: { ...item, status: "in_progress", pr_url: url(19) }, body: "" }, author: "fixture", message: "Link delivery PR", conflictWarningPrefix: "fixture" });
+      await seedExistingItem(root, item.id, { metadata: { ...item, status: "in_progress", pr_url: url(19) }, body: "" }, "Link delivery PR");
     }
     const api: CloseoutApi = { base: "https://api.github.com", next: () => undefined, get: async endpoint => {
       const n = Number(endpoint.split("/").at(-1));

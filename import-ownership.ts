@@ -42,6 +42,8 @@ export interface GithubOwnedTarget {
   allowCreate?: boolean;
   /** Full content updates require durable creation provenance, even on replay. */
   mirrorContent?: boolean;
+  /** A source update may fill a missing completion but must preserve local completion. */
+  preserveContent?: boolean;
   /** Minimum-SDK revision fencing is evaluated inside the native item lock. */
   expectedHash?: string;
   initialLink?: (item: PmItem) => boolean;
@@ -277,7 +279,14 @@ async function withGithubOwnershipHooks<T>(pmRoot: string, name: string, delegat
       onRead: [{ layer: "project", name: delegateName, run: async context => { await onRead(context); } }],
       onWrite: [{ layer: "project", name: delegateName, run: async context => { await onWrite(context); } }],
       onIndex: [{ layer: "project", name: delegateName, run: async context => { await onIndex(context); } }],
-      beforeMutation: [{ layer: "project", name, run: async context => { await prior(context); return check(context); } }],
+      beforeMutation: [{ layer: "project", name, run: async context => {
+        // The current SDK derives the actor from the history author and the
+        // caller's identity scope. The original scope is bound above.
+        const actor = "actor" in context ? context.actor as { author: string } : undefined;
+        const input = { ...context, author: actor?.author ?? "unknown" };
+        await prior(input);
+        return check(context);
+      } }],
     });
     return run();
   });
@@ -288,7 +297,7 @@ async function withGithubImportOwnersUnderLease<T>(pmRoot: string, targets: read
   const active = ownershipScope.getStore();
   if (active?.active && active.root === pmRoot && targets.every(target => active.targets.some(outer => outer.id === target.id &&
     outer.repo.toLowerCase() === target.repo.toLowerCase() && outer.number === target.number &&
-    (!target.mirrorContent || outer.mirrorContent) && (!target.expectedHash || target.expectedHash === outer.expectedHash) && !target.related?.length))) return run();
+    (!target.mirrorContent || outer.mirrorContent) && (!target.preserveContent || outer.preserveContent) && (!target.expectedHash || target.expectedHash === outer.expectedHash) && !target.related?.length))) return run();
   const { pmRoot: root } = await readGithubWorkspace(pmRoot);
   const corpus = await readGithubOwnerItems(root);
   const observed = ownershipWork.getStore(); if (observed && observed !== work) observed.corpusReads = (observed.corpusReads ?? 0) + 1;
@@ -305,6 +314,16 @@ async function withGithubImportOwnersUnderLease<T>(pmRoot: string, targets: read
       try {
         if (target.expectedHash && context.before && hashDocument(context.before) !== target.expectedHash) {
           return { allow: false, code: "item_revision_conflict", message: `GitHub import target ${target.id} changed after its ownership read (expected revision ${target.expectedHash}, current ${hashDocument(context.before)}).`, remediation: "Read the current item and retry against its intended ownership and revision." };
+        }
+        // Exact finalize rows are planned before the transaction starts. Check
+        // their effective lifecycle against the live document under its lock.
+        const before = context.before?.metadata, after = context.after?.metadata;
+        if (context.operation === "import" && after && (
+          (after.closed_at && Date.parse(after.closed_at) < Date.parse(after.created_at)) ||
+          (target.preserveContent && before?.completed_at && before.completed_at !== after.completed_at)
+        )) {
+          return { allow: false, code: "item_revision_conflict", message: `Source lifecycle for ${target.id} conflicts with its current native dates.`,
+            remediation: "Read the current ownership and lifecycle, then retry with a fresh GitHub import plan." };
         }
         if (context.after && context.after.metadata.id !== target.id) throw new GithubImportOwnershipError(target.id, `${target.repo.toLowerCase()}#${target.number}`, ["mutation changed or removed the target id"]);
         const peers = await readGithubOwnerItems(root).then(items => {
