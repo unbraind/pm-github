@@ -1096,11 +1096,13 @@ identifies the item and required fields without exposing raw exception prose.
 [`.github/workflows/pm-github-closeout.yml`](.github/workflows/pm-github-closeout.yml)
 is a reusable `workflow_call` that opens or updates **one** PR titled
 `chore(pm): close items delivered by merged pull requests` from `pm-github/closeout`
-when the plan closed at least one item. A plan whose actions are all routine
-skips, refusals or review candidates opens the same PR with the review-only
-title `chore(pm): record merged-PR closeout review candidates`, and its summary
-states that no items were closed with the per-action counts (close, skip,
-refuse, needs_review) derived from the plan JSON the run wrote.
+when the plan closed at least one item. A plan that closes nothing but holds at
+least one `needs_review` candidate opens the same PR with the review-only title
+`chore(pm): record merged-PR closeout review candidates`, and its summary states
+that no items were closed. Both forms report the per-action counts (close, skip,
+refuse, needs_review) derived from the plan JSON the run wrote. A plan with only
+routine skips or refusals (no close and no `needs_review` action) publishes no PR,
+and the run closes any stale closeout PR it owns.
 Copy [the caller template](docs/closeout-workflow-caller.yml) into the caller's
 workflows directory and replace `RELEASE_COMMIT_SHA` with a reviewed release
 commit and `vRELEASE_VERSION` with its matching release tag containing
