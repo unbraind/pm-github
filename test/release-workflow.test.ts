@@ -62,6 +62,7 @@ test('package changelog entry points retain dependency updates', () => {
     assert.ok(script.split(/\s+/u).includes('--dependency-updates'), name);
   }
   assert.match(manifest.scripts['changelog:check'] ?? '', /^npm run changelog:full(?:\s|$)/u);
+  assert.match(manifest.scripts['changelog:full'] ?? '', /^node scripts\/generate-changelog\.ts(?:\s|$)/u, 'changelog:full must run the flagged generator');
   assert.ok(readFileSync('scripts/generate-changelog.ts', 'utf8').split(/\s+/u).includes('"--dependency-updates",'), 'generate-changelog');
 });
 
