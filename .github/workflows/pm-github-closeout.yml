@@ -484,7 +484,15 @@ jobs:
           review_file="${PM_SYNC_TRACKER}/closeout-review.json"
           review_count="$(jq '([.plan[] | select(.action == "needs_review")] | length) + ([.plan[] | select(.action == "refuse")] | length)' "${RUNNER_TEMP}/pm-github-closeout.json")"
           if [[ "${review_count}" != 0 ]]; then
-            jq '({needs_review: ([.plan[] | select(.action == "needs_review") | {item, action, candidates} + (if .missing_evidence then {missing_evidence} else {} end)] | unique_by(.item))}) + (if ([.plan[] | select(.action == "refuse")] | length) > 0 then {refused: ([.plan[] | select(.action == "refuse") | {item, action, pr, reason} + (if .missing_evidence then {missing_evidence} else {} end)] | unique_by(.item))} else {} end)' "${RUNNER_TEMP}/pm-github-closeout.json" > "${review_file}"
+            jq '
+              ([.plan[] | select(.action == "refuse")
+                | {item, action, pr: (first(.missing_evidence[]? | select(.code == "close_refused") | .pr) // .pr), reason}
+                  + (if .candidates then {candidates} else {} end)
+                  + (if .missing_evidence then {missing_evidence} else {} end)] | unique_by(.item)) as $refused
+              | {needs_review: ([.plan[] | select(.action == "needs_review")
+                  | {item, action, candidates} + (if .missing_evidence then {missing_evidence} else {} end)] | unique_by(.item))}
+                + (if ($refused | length) > 0 then {refused: $refused} else {} end)
+            ' "${RUNNER_TEMP}/pm-github-closeout.json" > "${review_file}"
           elif [[ -f "${review_file}" ]]; then
             rm -- "${review_file}"
           fi

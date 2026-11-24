@@ -1,0 +1,24 @@
+id: pm-github-refused-close-attribution
+title: Preserve the attempted PR in published closeout refusals
+description: The closeout review artifact can name an earlier candidate when an explicit delivery tag selects a different PR and policy refuses the close.
+type: Issue
+pm_format_version: 2
+status: in_progress
+priority: 2
+tags[1]: closeout
+created_at: "2026-11-24T06:45:18.774Z"
+updated_at: "2026-11-24T07:00:34.419Z"
+author: codex-agent
+acceptance_criteria: A refused delivery selected explicitly from two candidates names the attempted PR and preserves candidate and missing evidence. A single-candidate refusal keeps its original PR.
+repro_steps: "Give one item merged candidates 42 and 43, select 43 using delivery-pr, and require an absent field on close. Run the workflow fixture and inspect closeout-review.json."
+comments[2]{created_at,author,text}:
+  "2026-11-24T06:45:30.937Z",codex-agent,Follow-up to pm-github-jx5q for review thread PRRT_kwDOTbN4pM67Jdvs. The candidate rows should keep their original identities. The workflow projection will use the attempted PR recorded in close_refused evidence and retain the candidate list before deduplication.
+  "2026-11-24T07:00:24.118Z",codex-agent,"The review artifact derives pr from close_refused evidence before deduplicating by item, and retains candidates and missing_evidence. The two linked publication fixtures passed directly and through pm test. In a disposable checkout with only the workflow change reverted, the single candidate still passed and the explicit delivery case failed with saved PR 42 versus expected PR 43."
+files[2]{path,scope}:
+  .github/workflows/pm-github-closeout.yml,project
+  test/closeout-workflow-publication.ts,project
+tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref},updated_by,updated_at}:
+  node --test --test-concurrency=1 --test-name-pattern='a policy-refused close publishes' test/closeout-workflow.test.ts,project,420,codex-agent,"2026-11-24T06:48:38.456Z",local_mutation,fix/scheduled-sync-closeout-1123,codex-agent,"2026-11-24T06:50:39.704Z"
+docs[1]{path,scope}:
+  docs/strict-closeout-proof.md,project
+body: ""

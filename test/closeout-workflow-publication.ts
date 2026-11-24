@@ -482,7 +482,13 @@ publicationTest("ambiguous deliveries open a review-only PR listing every candid
 }));
 
 
-publicationTest("a policy-refused close keeps the item open, records a refuse action and publishes the review", async () => fixture(async f => {
+/** Publish a policy refusal and verify the attribution saved for the attempted close. */
+async function verifyPublishedPolicyRefusal(f: WorkflowFixture, selectedPr: number, candidates: readonly number[]): Promise<void> {
+  if (candidates.length > 1) {
+    f.env.AMBIGUOUS = "true";
+    await update(f.id, { tags: `delivery-pr:https://github.com/acme/widgets/pull/${selectedPr}` }, { pmRoot: f.pmRoot, noExtensions: true });
+    f.git("add", "--", `.agents/pm/tasks/${f.id}.toon`, `.agents/pm/history/${f.id}.jsonl`);
+  }
   const policy = { id: "completeness-task", description: "Closing without recorded steps leaves no evidence", effect: "refuse",
     subject: { types: ["Task"], operations: ["close"] }, rule: { kind: "require_fields", fields: ["repro_steps"] } };
   for (const args of [["policy-put", policy.id, "--definition", JSON.stringify(policy)], ["policy-mode", "refuse"]] as const) {
@@ -500,21 +506,33 @@ publicationTest("a policy-refused close keeps the item open, records a refuse ac
   const body = readFileSync(f.env.PR_BODY!, "utf8");
   assert.match(body, /"action": "refuse"/);
   assert.match(body, /"code": "close_refused"/);
-  assert.match(body, /refuse 1/);
+  assert.match(body, new RegExp(`refuse ${candidates.length}\\b`));
   assert.match(body, /Automatic merge is disabled because the plan holds items for review \(delivery attribution or policy-refused closes\)/);
   assert.match(result.out, /automatic landing is disabled/);
   assert.doesNotMatch(readFileSync(f.env.RECEIPTS!, "utf8"), /--auto --squash/);
   const published = f.git("show", `refs/remotes/origin/${branch}:.agents/pm/closeout-review.json`);
-  const review = JSON.parse(published) as { needs_review: unknown[]; refused: { item: string; action: string; pr: number; reason: string; missing_evidence: { code: string }[] }[] };
+  const review = JSON.parse(published) as { needs_review: unknown[]; refused: {
+    item: string; action: string; pr: number; candidates?: number[]; reason: string;
+    missing_evidence: { pr: number; code: string; reason: string }[];
+  }[] };
   assert.deepEqual(review.needs_review, []);
   assert.equal(review.refused.length, 1);
-  assert.equal(review.refused[0]!.item, f.id);
-  assert.equal(review.refused[0]!.action, "refuse");
-  assert.equal(review.refused[0]!.pr, 42);
-  assert.match(review.refused[0]!.reason, /workflow_policy_refused/);
-  assert.match(review.refused[0]!.reason, /repro_steps/);
-  assert.equal(review.refused[0]!.missing_evidence[0]!.code, "close_refused");
-}));
+  const [refusal] = review.refused;
+  assert.ok(refusal);
+  assert.equal(refusal.item, f.id);
+  assert.equal(refusal.action, "refuse");
+  assert.equal(refusal.pr, selectedPr);
+  assert.deepEqual(refusal.candidates ?? [refusal.pr], candidates);
+  assert.match(refusal.reason, /workflow_policy_refused/);
+  assert.match(refusal.reason, /repro_steps/);
+  assert.deepEqual(refusal.missing_evidence, [{ pr: selectedPr, code: "close_refused", reason: refusal.reason }]);
+}
+
+publicationTest("a policy-refused close publishes PR #42 with its candidate evidence", async () =>
+  fixture(f => verifyPublishedPolicyRefusal(f, 42, [42])));
+// Always exercise the attempted-PR regression, including in the quick workflow corpus.
+test("a policy-refused close publishes PR #43 with its candidate evidence", async () =>
+  fixture(f => verifyPublishedPolicyRefusal(f, 43, [42, 43])));
 
 publicationTest("earlier armed auto-merge is disabled before a later hold updates the reused PR", async () => fixture(async f => {
   f.env.APP_DEADLINE = String(Math.floor(Date.now() / 1000) + 600);
