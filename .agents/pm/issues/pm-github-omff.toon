@@ -1,0 +1,15 @@
+id: pm-github-omff
+title: Importing a closed GitHub issue into a close-policy tracker fails the atomic transaction with an unsafe compensation error
+description: "Reproduced with the pinned extension against a real tracker copy: importing a repository whose closed issues mirror into a tracker whose workflow policies refuse closes without structured fields (for example completeness policies requiring repro_steps, expected_result or resolution) makes the importer's close mutation fail with workflow_policy_refused inside the atomic bulk transaction. The transaction then dies mid-step and compensation refuses ('cannot safely compensate incomplete step'), masking the underlying policy refusal: the scheduled sync for such a tracker has failed daily with only the compensation error, and no mirror is ever published. The create path already admits mirrors with deferred fields and a needs-curation receipt; the close path has no analogous handling. Design direction: defer the terminal close for policy-refused mirrors (keep the mirror open with the recorded GitHub state and a curation receipt naming the missing fields), and surface the real policy refusal in the failure diagnostic instead of the compensation error. Follow-up of the scheduled-failure triage (2026-11-23); tracked alongside the closeout refusal fix."
+type: Issue
+status: open
+priority: 1
+tags: []
+created_at: "2026-11-23T20:42:52.875Z"
+updated_at: "2026-11-23T20:43:05.277Z"
+author: pi-glm
+comments[1]{created_at,author,text}:
+  "2026-11-23T20:43:02.871Z",pi-glm,"Reproduction evidence (2026-11-23): a scratch copy of the caller's tracker with the pinned extension reproduced the exact scheduled failure: 22 mirror creates complete, then the transaction aborts at the in-flight create step and compensation refuses with 'cannot safely compensate incomplete step 45-create-ops-github-db3225403a4b-314'. The workspace history records the masked underlying error one second earlier: a policy_refused event for the closed issue mirror with policies completeness-issue (missing repro_steps, expected_result) and fleet-closed-resolution (missing resolution), operation import. The refusal is deterministic: every scheduled run fails the same way and no branch is published."
+files[1]{path,scope}:
+  index.ts,project
+body: ""
