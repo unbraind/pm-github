@@ -17,7 +17,7 @@ export interface CloseoutApi {
 export interface CloseoutRow {
   item: string;
   pr: number;
-  action: "close" | "skip" | "needs_review";
+  action: "close" | "skip" | "needs_review" | "refuse";
   candidates?: number[];
   missing_evidence?: { pr: number; code: CloseoutCode; reason: string }[];
   reason: string;
@@ -27,7 +27,7 @@ export interface CloseoutRow {
 /** Stable decisions used by automation and compact skip counts. */
 export type CloseoutCode = "already_terminal" | "other_repository" | "duplicate_selection" | "explicit_skip"
   | "github_import_owner_conflict" | "github_identity_conflict"
-  | "needs_review" | "unknown_item" | "epic" | "active_children" | "not_delivery" | "close_failed"
+  | "needs_review" | "unknown_item" | "epic" | "active_children" | "not_delivery" | "close_failed" | "close_refused"
   | "head_checks_passed" | "head_checks_failed" | "head_evidence_unavailable" | "required_checks_unverified" | "not_merged" | "incomplete_merge";
 
 /** Explicit delivery may close local items, but never an issue owned by a different repository. */
@@ -517,7 +517,8 @@ export function checkEvidence(gate: CheckGate): string {
 
 /** The final item outcome controls reporting; superseded PR evidence is informational. */
 type ItemDecision = { kind: "chosen"; row: CloseoutRow }
-  | { kind: "blocking_hold"; reason: string; missing: NonNullable<CloseoutRow["missing_evidence"]> };
+  | { kind: "blocking_hold"; reason: string; missing: NonNullable<CloseoutRow["missing_evidence"]> }
+  | { kind: "refused"; reason: string; missing: NonNullable<CloseoutRow["missing_evidence"]> };
 
 /** Project one item decision onto all its candidates, including incomplete competitors. */
 function reportItemDecision(rows: CloseoutRow[], decision: ItemDecision): void {
@@ -527,6 +528,9 @@ function reportItemDecision(rows: CloseoutRow[], decision: ItemDecision): void {
       if (row === decision.row) continue;
       Object.assign(row, { action: "skip", code: "duplicate_selection",
         reason: "Another merged PR uniquely supplies the delivery evidence for this item." });
+    } else if (decision.kind === "refused") {
+      Object.assign(row, { action: "refuse", code: "close_refused", reason: decision.reason, candidates });
+      if (decision.missing.length > 0) row.missing_evidence = decision.missing;
     } else {
       Object.assign(row, { action: "needs_review", code: "needs_review", reason: decision.reason, candidates });
       if (decision.missing.length > 0) row.missing_evidence = decision.missing;
@@ -781,6 +785,15 @@ async function closeoutAttempt(pmPath: string, repo: string | undefined, options
           }
           reportItemDecision(plan.filter(row => row.item === entry.row.item && row.code !== "not_delivery"), { kind: "blocking_hold",
             reason: "Item revision changed again after one delivery re-selection; hold for review.", missing: [] });
+          continue;
+        }
+        // A deterministic close-policy refusal is per-item, locally actionable data; it keeps the item
+        // open and must not discard the remaining plan's closes or the branch publication.
+        if (error instanceof PmCliError && error.code === "workflow_policy_refused") {
+          const reason = closeoutFailureReason(error);
+          reportItemDecision(plan.filter(row => row.item === entry.row.item && row.code !== "not_delivery"), { kind: "refused", reason,
+            missing: [{ pr: entry.row.pr, code: "close_refused", reason }] });
+          handled.add(entry.row.item);
           continue;
         }
         failed++;

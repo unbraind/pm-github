@@ -1,0 +1,15 @@
+id: pm-github-jx5q
+title: A single close-policy refusal fails the whole scheduled closeout run
+description: "The reusable gated closeout aborts with exit 1 when the SDK refuses one item close for a local policy (for example a completeness policy that requires repro_steps on Issue items), so no branch is published and every other delivered item stays open until the refusal is cleared. Evidence: the pm-ops daily closeout has failed since 2026-11-15 with 'Closeout refused item ops-d8k3, PR #112: SDK close refused: workflow_policy_refused. Supply required fields: repro_steps. No branch was published.' while its plan also holds two genuinely delivered items whose closes are discarded. A policy refusal is deterministic, per-item and locally actionable, so the run should record it as a refuse action on that item, keep the item open, continue closing the remaining plan and publish the branch, instead of failing the whole run."
+type: Issue
+status: in_progress
+priority: 1
+tags: []
+created_at: "2026-11-23T20:31:26.978Z"
+updated_at: "2026-11-23T20:31:37.223Z"
+assignee: pi-glm
+claim_principal: pi-glm
+author: pi-glm
+comments[1]{created_at,author,text}:
+  "2026-11-23T20:31:37.222Z",pi-glm,"Class 3 decision (scheduled-failure triage 2026-11-23): the pm-ops closeout plan has three close candidates. Two are genuinely delivered and get truthful reproduction steps recorded as a tracker data fix in pm-ops; the third (ops-d8k3, delivered claim from a tracking-only pull request against a still-live defect) is correctly refused by the completeness policy and must stay open. Because the pinned closeout exits 1 on any refusal, that one correct refusal currently discards the other closes and keeps the workflow red. Design: in the apply loop, an SDK close refusal with code workflow_policy_refused is recorded as one item decision projected onto all its candidate rows (action refuse, code close_refused, the sanitized reason from closeoutFailureReason); the item stays open, failed is not incremented, and the remaining plan continues. The workflow's review artifact gains a refused array so an all-refused run still publishes a review PR listing the refusals. Other close failures keep the existing fatal behavior."
+body: ""
