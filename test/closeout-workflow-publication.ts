@@ -229,7 +229,7 @@ publicationTest("permission-limited read token fails closed with a clear diagnos
   assert.equal((await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item.status, "in_progress");
 }));
 
-publicationTest("SDK close validation keeps its full JSON receipt and reports the exact item and field", async () => fixture(async f => {
+publicationTest("SDK close validation reports the exact item and field in the published refusal", async () => fixture(async f => {
   const prepared = await f.run(setup);
   assert.equal(prepared.code, 0, prepared.out);
   await update(f.id, { tags: "requires-review" }, { pmRoot: f.pmRoot, noExtensions: true });
@@ -238,12 +238,21 @@ publicationTest("SDK close validation keeps its full JSON receipt and reports th
   command(f.root, cli, ["--path", f.pmRoot, "schema", "policy-put", policy.id, "--definition", JSON.stringify(policy)], f.env);
   command(f.root, cli, ["--path", f.pmRoot, "schema", "policy-mode", "refuse"], f.env);
   const result = await f.run(finish);
-  assert.equal(result.code, 1, result.out);
-  assert.match(result.out, /::error::Closeout refused item .*PR #42:.*Supply required fields: reviewer/);
-  assert.equal(result.out.match(/::error::/g)?.length, 1);
-  assert.ok(!result.out.includes("Private policy prose"));
-  assert.equal((JSON.parse(readFileSync(join(f.base, "pm-github-closeout.json"), "utf8")) as { failed: number }).failed, 1);
-  unpublished(f.git);
+  assert.equal(result.code, 0, result.out);
+  const report = JSON.parse(readFileSync(join(f.base, "pm-github-closeout.json"), "utf8")) as { failed: number; plan: { item: string; action: string; code: string; reason: string }[] };
+  assert.equal(report.failed, 0);
+  assert.equal(report.plan[0]!.item, f.id);
+  assert.equal(report.plan[0]!.action, "refuse");
+  assert.equal(report.plan[0]!.code, "close_refused");
+  assert.match(report.plan[0]!.reason, /workflow_policy_refused/);
+  assert.match(report.plan[0]!.reason, /reviewer/);
+  assert.ok(!JSON.stringify(report).includes("Private policy prose"));
+  const review = JSON.parse(f.git("show", `refs/remotes/origin/${branch}:.agents/pm/closeout-review.json`)) as { refused: { item: string; action: string; reason: string; missing_evidence: { code: string }[] }[] };
+  assert.equal(review.refused[0]!.item, f.id);
+  assert.equal(review.refused[0]!.action, "refuse");
+  assert.match(review.refused[0]!.reason, /reviewer/);
+  assert.equal(review.refused[0]!.missing_evidence[0]!.code, "close_refused");
+  assert.equal((await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item.status, "in_progress");
 }));
 
 publicationTest("workflow refusal reporter emits one precise annotation and withholds private receipt values", async () => fixture(async f => {
@@ -473,6 +482,40 @@ publicationTest("ambiguous deliveries open a review-only PR listing every candid
 }));
 
 
+publicationTest("a policy-refused close keeps the item open, records a refuse action and publishes the review", async () => fixture(async f => {
+  const policy = { id: "completeness-task", description: "Closing without recorded steps leaves no evidence", effect: "refuse",
+    subject: { types: ["Task"], operations: ["close"] }, rule: { kind: "require_fields", fields: ["repro_steps"] } };
+  for (const args of [["policy-put", policy.id, "--definition", JSON.stringify(policy)], ["policy-mode", "refuse"]] as const) {
+    command(f.root, cli, ["--pm-path", f.pmRoot, "schema", ...args], f.env);
+  }
+  f.git("add", "--", ".agents/pm/schema/policies.json", ".agents/pm/settings.json");
+  f.git("commit", "-qm", "Add close completeness policy");
+  f.git("push", "-q", "origin", "trunk");
+  const before = readFileSync(join(f.pmRoot, "tasks", `${f.id}.toon`), "utf8");
+  const result = await f.run([...setup, ...finish]);
+  assert.equal(result.code, 0, result.out);
+  assert.equal((await get(f.id, {}, { pmRoot: f.pmRoot, noExtensions: true })).item.status, "in_progress");
+  assert.equal(readFileSync(join(f.pmRoot, "tasks", `${f.id}.toon`), "utf8"), before);
+  assert.equal(existsSync(f.env.PR_STATE!), true);
+  const body = readFileSync(f.env.PR_BODY!, "utf8");
+  assert.match(body, /"action": "refuse"/);
+  assert.match(body, /"code": "close_refused"/);
+  assert.match(body, /refuse 1/);
+  assert.match(body, /Automatic merge is disabled because the plan holds items for review \(delivery attribution or policy-refused closes\)/);
+  assert.match(result.out, /automatic landing is disabled/);
+  assert.doesNotMatch(readFileSync(f.env.RECEIPTS!, "utf8"), /--auto --squash/);
+  const published = f.git("show", `refs/remotes/origin/${branch}:.agents/pm/closeout-review.json`);
+  const review = JSON.parse(published) as { needs_review: unknown[]; refused: { item: string; action: string; pr: number; reason: string; missing_evidence: { code: string }[] }[] };
+  assert.deepEqual(review.needs_review, []);
+  assert.equal(review.refused.length, 1);
+  assert.equal(review.refused[0]!.item, f.id);
+  assert.equal(review.refused[0]!.action, "refuse");
+  assert.equal(review.refused[0]!.pr, 42);
+  assert.match(review.refused[0]!.reason, /workflow_policy_refused/);
+  assert.match(review.refused[0]!.reason, /repro_steps/);
+  assert.equal(review.refused[0]!.missing_evidence[0]!.code, "close_refused");
+}));
+
 publicationTest("earlier armed auto-merge is disabled before a later hold updates the reused PR", async () => fixture(async f => {
   f.env.APP_DEADLINE = String(Math.floor(Date.now() / 1000) + 600);
   const first = await f.run([...setup, ...finish]);
@@ -483,7 +526,7 @@ publicationTest("earlier armed auto-merge is disabled before a later hold update
   assert.equal(second.code, 0, second.out);
   assert.equal(existsSync(f.env.AUTO_STATE!), false);
   assert.equal(existsSync(f.env.ARMED_EDIT!), false, "held branch must be disarmed before updating its PR");
-  assert.match(readFileSync(f.env.PR_BODY!, "utf8"), /Automatic merge is disabled because delivery attribution needs_review/);
+  assert.match(readFileSync(f.env.PR_BODY!, "utf8"), /Automatic merge is disabled because the plan holds items for review \(delivery attribution or policy-refused closes\)/);
   assert.match(readFileSync(f.env.RECEIPTS!, "utf8"), /pr merge 7 -R acme\/widgets --disable-auto/);
 }));
 

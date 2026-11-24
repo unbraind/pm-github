@@ -479,10 +479,12 @@ jobs:
             exit 1
           fi
           # Persist only safe attribution facts so an all-held run can still open a review PR.
+          # A close-policy refusal is per-item actionable data, so it joins the same review
+          # artifact: the item stays open and the refusal must stay visible after publication.
           review_file="${PM_SYNC_TRACKER}/closeout-review.json"
-          review_count="$(jq '[.plan[] | select(.action == "needs_review")] | length' "${RUNNER_TEMP}/pm-github-closeout.json")"
+          review_count="$(jq '([.plan[] | select(.action == "needs_review")] | length) + ([.plan[] | select(.action == "refuse")] | length)' "${RUNNER_TEMP}/pm-github-closeout.json")"
           if [[ "${review_count}" != 0 ]]; then
-            jq '{needs_review: ([.plan[] | select(.action == "needs_review") | {item, action, candidates} + (if .missing_evidence then {missing_evidence} else {} end)] | unique_by(.item))}' "${RUNNER_TEMP}/pm-github-closeout.json" > "${review_file}"
+            jq '({needs_review: ([.plan[] | select(.action == "needs_review") | {item, action, candidates} + (if .missing_evidence then {missing_evidence} else {} end)] | unique_by(.item))}) + (if ([.plan[] | select(.action == "refuse")] | length) > 0 then {refused: ([.plan[] | select(.action == "refuse") | {item, action, pr, reason} + (if .missing_evidence then {missing_evidence} else {} end)] | unique_by(.item))} else {} end)' "${RUNNER_TEMP}/pm-github-closeout.json" > "${review_file}"
           elif [[ -f "${review_file}" ]]; then
             rm -- "${review_file}"
           fi
@@ -640,7 +642,7 @@ jobs:
             fi
           done < <(git diff --cached --name-only -- "${sync_scope[0]}" "${sync_scope[@]:2}")
           if [[ "${CLOSEOUT_REVIEW:-0}" != 0 ]]; then
-            printf -- '- [Delivery attribution needing review](https://github.com/%s/blob/%s/%s/closeout-review.json)\n' "${REPOSITORY}" "${SYNC_BRANCH}" "${PM_SYNC_TRACKER}" >> "${links_file}"
+            printf -- '- [Closeout review: attribution needing review or refused closes](https://github.com/%s/blob/%s/%s/closeout-review.json)\n' "${REPOSITORY}" "${SYNC_BRANCH}" "${PM_SYNC_TRACKER}" >> "${links_file}"
           fi
           if [[ ! -s "${links_file}" ]]; then
             echo "::error::Closeout changed tracker state but no item link could be generated."
@@ -707,7 +709,7 @@ jobs:
             printf '%s\n\n' "Automated pm-github merged-PR closeout for ${REPOSITORY}."
             printf '%s\n\n' "${closeout_summary}"
             if [[ "${CLOSEOUT_REVIEW:-0}" != 0 ]]; then
-              printf '%s\n\n' "Automatic merge is disabled because delivery attribution needs_review; every candidate and evidence gap requires human review before landing. Any previous auto-merge request was explicitly disabled before this run."
+              printf '%s\n\n' "Automatic merge is disabled because the plan holds items for review (delivery attribution or policy-refused closes); every candidate, evidence gap and refusal requires human review before landing. Any previous auto-merge request was explicitly disabled before this run."
             fi
             printf '%s\n\n' "Tracker items changed:"
             cat "${links_file}"
@@ -856,7 +858,7 @@ jobs:
           printf 'CI_DISPATCH_STARTED_AT=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${GITHUB_ENV}"
           dispatch_checks
           if [[ "${CLOSEOUT_REVIEW:-0}" != 0 ]]; then
-            echo "::notice::Delivery attribution needs review; caller checks were dispatched and automatic landing is disabled."
+            echo "::notice::The closeout plan holds items for review (attribution or refused closes); caller checks were dispatched and automatic landing is disabled."
           fi
           # Capture the arm status before any later command: a reported fallback
           # must not fail the step, and only an observed success may record it.

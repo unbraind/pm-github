@@ -104,6 +104,7 @@ Candidate evidence and item decisions have different roles. `CheckGate` retains 
 | Chosen, with complete passing evidence | Chosen PR | `close` / `head_checks_passed` | Closed item and its chosen provenance |
 | Chosen, with complete passing evidence | Every other candidate, regardless of evidence gaps | `skip` / `duplicate_selection` (superseded informational) | Routine skip count, without a refusal or review hold |
 | Blocking hold | Every candidate | `needs_review` / `needs_review`, all candidate numbers and applicable evidence gaps | Open item and review artifact |
+| Close-policy refusal (`workflow_policy_refused`) | Every candidate | `refuse` / `close_refused`, the sanitized SDK reason and missing-field evidence | Open item; the refusal is published in the review artifact and PR summary while the remaining plan still closes |
 
 A failed chosen check cannot designate a winner or hide its peers. A close refusal or second revision conflict also projects a hold across the whole item group. Standalone proven mentions remain `not_delivery`; they do not claim delivery. Confirmed unmerged and otherwise ineligible references keep their existing routine decisions. Re-selection replaces the old item decision before publication.
 

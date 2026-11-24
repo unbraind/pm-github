@@ -144,7 +144,7 @@ other_repository: 10, duplicate_selection: 5}`. Explicit exclusions use
 `explicit_skip`. Only checks for actionable rows are shown. Use `--full` for every
 plan row and selected PR check. Global `--json` always returns the full shape
 `{command, repo, dry_run, plan, checks, closed, failed}`. Each full plan row is
-`{item, pr, action: "close" | "skip", code, reason}`. Codes distinguish
+`{item, pr, action: "close" | "skip" | "needs_review" | "refuse", code, reason}`. Codes distinguish
 `head_evidence_unavailable`, `incomplete_merge`, `head_checks_failed`, and
 `head_checks_passed` without parsing explanations. `checks` reports each PR's rule,
 verdict, explanation and successful check names. `head_checks_passed` remains the success
@@ -154,7 +154,14 @@ closes; `closed` counts writes only with `--apply`. `--dry-run` overrides
 `--apply`. All API planning finishes before the first SDK close. Individual SDK
 refusals become skip rows containing a diagnostic code (or a generic failure
 class), without raw error prose, paths or lock-owner identities. Remaining
-closes continue; `failed` counts refused writes and `closed` counts successful
+closes continue. A deterministic close-policy refusal (the SDK refusing with
+`workflow_policy_refused`, for example a completeness policy that requires
+fields on the item) becomes a `refuse` row with code `close_refused`, projected
+onto every candidate of that item: the item stays open, the refusal does not
+count into `failed`, and the run keeps closing the remaining plan and
+publishing its branch; the reusable workflow's review artifact lists the
+refusal so it stays visible. Other close failures still count into `failed`,
+and `closed` counts successful
 writes. After processing everything, any failed close produces a `CommandError`
 with exit code 1 and the complete JSON report in its message. Eligibility skips
 alone do not fail the command. Inspect the report before retrying.

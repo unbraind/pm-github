@@ -526,7 +526,7 @@ for (const kind of ["sync", "closeout"]) {
 
 test("sync and closeout share PR maintenance apart from the closeout attribution hold", () => {
   const hold = 'if [[ "${CLOSEOUT_REVIEW:-0}" != 0 ]]; then\n'
-    + '  echo "::notice::Delivery attribution needs review; caller checks were dispatched and automatic landing is disabled."\n'
+    + '  echo "::notice::The closeout plan holds items for review (attribution or refused closes); caller checks were dispatched and automatic landing is disabled."\n'
     + 'fi\n';
   const closeout = maintenance("closeout");
   assert.equal(closeout.split(hold).length, 2);
@@ -585,7 +585,7 @@ for (const kind of ["sync", "closeout"]) {
       f.env.PARKED_URL = "https://github.com/acme/widgets/actions/runs/123";
       const r = f.execute(kind);
       assert.equal(r.status, 0, String(r.stderr));
-      assert.match(String(r.stdout), /Delivery attribution needs review/);
+      assert.match(String(r.stdout), /The closeout plan holds items for review/);
       assert.match(f.receipts(), /workflow run/);
       assert.match(f.receipts(), /PARKED_CI_RUN_URLS=\["https:/);
       assert.doesNotMatch(f.receipts(), /pr merge|CLOSEOUT_AUTOMERGE_ALLOWED=true/);

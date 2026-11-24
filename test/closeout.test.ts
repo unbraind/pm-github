@@ -205,14 +205,41 @@ test("apply continues after lock and policy refusals and counts only successful 
     await withEnv({ PM_LOCK_WAIT_MS: "0" }, () => withMockGithub(fixture(ids.map(id => link(id)).join("\n")), async () => {
       const result = await closeout(root, { pr: "42", apply: true });
       assert.equal(result.closed, 2);
-      assert.equal(result.failed, 2);
-      assert.deepEqual(result.plan.map(row => row.action), ["needs_review", "close", "needs_review", "close"]);
+      assert.equal(result.failed, 1);
+      assert.deepEqual(result.plan.map(row => row.action), ["needs_review", "close", "refuse", "close"]);
       assert.equal(result.plan[0]!.reason, "SDK close refused: lock_conflict.");
       assert.match(result.plan[2]!.reason, /workflow_policy/);
+      assert.equal(result.plan[2]!.code, "close_refused");
       assert.ok(!JSON.stringify(result).includes("private-lock-owner") && !JSON.stringify(result).includes("Private policy") && !JSON.stringify(result).includes(root));
       for (const [index, id] of ids.entries()) assert.equal((await get(id, {}, sdk)).item.status, index % 2 === 0 ? "in_progress" : "closed");
     }));
   } finally { await unlock(); }
+}));
+
+test("a close-policy refusal records a refuse action and does not fail the remaining run", async () => tracker(async (root, ids) => {
+  const sdk = { pmRoot: root, noExtensions: true };
+  const policy = { id: "completeness-issue", description: "Closing without recorded steps leaves no evidence", effect: "refuse",
+    subject: { tags: ["requires-review"], operations: ["close"] }, rule: { kind: "require_fields", fields: ["repro_steps"] } };
+  for (const args of [["policy-put", policy.id, "--definition", JSON.stringify(policy)], ["policy-mode", "refuse"]]) {
+    const result = spawnSync(cli, ["--pm-path", root, "schema", ...args], { cwd: root, encoding: "utf8", env: { ...process.env, PM_AUTHOR: "fixture" } });
+    assert.equal(result.status, 0, result.stderr);
+  }
+  await update(ids[0]!, { tags: "requires-review" }, sdk);
+  await withMockGithub(fixture([link(ids[0]!), link(ids[1]!)].join("\n")), async () => {
+    const result = await closeout(root, { pr: "42", apply: true });
+    assert.equal(result.failed, 0);
+    assert.equal(result.closed, 1);
+    assert.deepEqual(result.plan.map(row => [row.action, row.code]), [["refuse", "close_refused"], ["close", "head_checks_passed"]]);
+    assert.match(result.plan[0]!.reason, /workflow_policy_refused/);
+    assert.match(result.plan[0]!.reason, /repro_steps/);
+    assert.deepEqual(result.plan[0]!.missing_evidence, [{ pr: 42, code: "close_refused", reason: result.plan[0]!.reason }]);
+    assert.equal(result.plan[0]!.item, ids[0]);
+    assert.equal((await get(ids[0]!, {}, sdk)).item.status, "in_progress");
+    assert.equal((await get(ids[1]!, {}, sdk)).item.status, "closed");
+    const compact = compactCloseoutReport(result);
+    assert.deepEqual(compact.plan.map(row => row.action), ["refuse", "close"]);
+    assert.equal(compact.failed, 0);
+  });
 }));
 
 test("failure reasons discard arbitrary prose and malformed diagnostic codes", () => {
