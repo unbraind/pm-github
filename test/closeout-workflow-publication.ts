@@ -69,13 +69,14 @@ publicationTest("closeout contract keeps sync safety helpers, exact pins, env bi
 });
 
 for (const [kind, source, script] of [["sync", sync, "POST_IMPORT_SCRIPT"], ["closeout", workflow, "POST_CLOSEOUT_SCRIPT"]] as const) {
+  const validate = shell(`Validate ${kind} inputs`, source);
+  const env = { ...process.env, REPOSITORY: "acme/widgets", CALLING_REPOSITORY: "acme/widgets",
+    PM_GITHUB_VERSION: "2026.11.24", DEFAULT_BRANCH: "main",
+    SYNC_BRANCH: kind === "sync" ? "automation/fixture" : branch, [script]: "self-host:write" };
+
   test(`${kind} generated artifact declarations are literal root files and require an npm script`, async () => {
     assert.match(source, /generated-paths:\n\s+description:[^\n]+\n\s+type: string\n\s+required: false\n\s+default: ""/);
     assert.match(source, /GENERATED_PATHS: \$\{\{ inputs\.generated-paths \}\}/);
-    const validate = shell(`Validate ${kind} inputs`, source);
-    const env = { ...process.env, REPOSITORY: "acme/widgets", CALLING_REPOSITORY: "acme/widgets",
-      PM_GITHUB_VERSION: "2026.11.24", DEFAULT_BRANCH: "main",
-      SYNC_BRANCH: kind === "sync" ? "automation/fixture" : branch, [script]: "self-host:write" };
     const forbidden = [".github/workflows/x.yml", "nested/artifact", "../artifact", "/artifact", ".gitattributes",
       ":(glob)*", "out.*", "-flag", "package.json", "package-lock.json", "npm-shrinkwrap.json", "bun.lockb",
       "pnpm-lock.yaml", "Pipfile.lock", "packages.lock.json", "gradle.lockfile", "go.sum", "CHANGELOG.md"];
@@ -91,6 +92,33 @@ for (const [kind, source, script] of [["sync", sync, "POST_IMPORT_SCRIPT"], ["cl
       const result = await bash(validate, repoRoot, { ...env, GENERATED_PATHS: paths });
       assert.equal(result.code, 0, result.out);
     }
+  });
+
+  test(`${kind} generated artifact declarations refuse dependency lockfiles in mixed lists`, async () => {
+    const lockfiles = [
+      "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "Yarn.lock", "bun.lock", "bun.lockb",
+      "conda_lock.yml", "packages.lock.json", "gradle.lockfile", "Cargo.lock", "Gemfile.lock",
+      "Package.resolved", "Cartfile.resolved", "go.sum", "go.work.sum", "cabal.project.freeze",
+      "opam.locked", "widget.opam.locked",
+      "pylock.toml", "pylock.docs-build.toml", "Manifest.toml", "JuliaManifest.toml",
+      "Manifest-v1.11.toml", "JuliaManifest-v12.34.toml",
+    ];
+    const failures = [];
+    for (const lockfile of lockfiles) {
+      const mixedCase = lockfile.replace(/[a-z]/gi, (letter, index: number) =>
+        index % 2 === 0 ? letter.toUpperCase() : letter.toLowerCase());
+      for (const filename of new Set([lockfile, lockfile.toLowerCase(), lockfile.toUpperCase(), mixedCase])) {
+        const paths = `selfhost.bundle\t${filename}\nsource.snapshot`;
+        const result = await bash(validate, repoRoot, { ...env, GENERATED_PATHS: paths });
+        if (result.code !== 1 || !result.out.includes("must exclude CHANGELOG.md, package.json and dependency lockfiles")) {
+          failures.push({ filename, ...result });
+        }
+      }
+    }
+    assert.deepEqual(failures, []);
+    const allowed = "selfhost.bundle references.resolved build.sum pylock.docs.json Manifest-v1.draft.toml";
+    const result = await bash(validate, repoRoot, { ...env, GENERATED_PATHS: allowed });
+    assert.equal(result.code, 0, result.out);
   });
 }
 
