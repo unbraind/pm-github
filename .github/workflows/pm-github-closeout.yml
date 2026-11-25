@@ -211,7 +211,7 @@ jobs:
           [[ "${SYNC_BRANCH}" != "${DEFAULT_BRANCH}" ]] || { echo "::error::The closeout bot branch cannot be the caller default branch."; exit 1; }
           [[ -z "${POST_CLOSEOUT_SCRIPT:-}" || "${POST_CLOSEOUT_SCRIPT:-}" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.:-]*$ ]] || { echo "::error::post-closeout-script must be an npm script name, not a shell command."; exit 1; }
           IFS=$' \t\n' read -r -d '' -a generated_paths < <(printf '%s\0' "${GENERATED_PATHS:-}")
-          if (( ${#generated_paths[@]} > 0 )) && [[ -z "${POST_CLOSEOUT_SCRIPT:-}" ]]; then
+          if [[ -n "${generated_paths[0]:-}" && -z "${POST_CLOSEOUT_SCRIPT:-}" ]]; then
             echo "::error::generated-paths requires a caller npm post-script."
             exit 1
           fi
@@ -323,7 +323,7 @@ jobs:
           done
           sync_scope+=("${generated_scope[@]}")
           check_generated_paths_clean() {
-            (( ${#generated_paths[@]} > 0 )) || return 0
+            [[ -n "${generated_paths[0]:-}" ]] || return 0
             local changed generated_path
             for generated_path in "${generated_paths[@]}"; do
               if [[ -L "${generated_path}" || ( -e "${generated_path}" && ! -f "${generated_path}" ) ]]; then
