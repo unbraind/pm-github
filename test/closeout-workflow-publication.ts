@@ -1,6 +1,6 @@
 /** Execute reusable closeout publication against real SDK trackers and isolated Git remotes. */
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -36,7 +36,7 @@ publicationTest("closeout contract keeps sync safety helpers, exact pins, env bi
   assert.equal(scopes[0]!.split("report_workflow_failure()")[0], scopes[1]!.split("report_workflow_failure()")[0]);
   assert.equal(scopes[0]!.split("mapfile -t sync_scope")[1]!.split("restore_sync_setup()")[0],
     scopes[1]!.split("mapfile -t sync_scope")[1]!.split("restore_sync_setup()")[0]);
-  for (const name of ["restore_sync_setup", "restore_workflow_setup_artifacts", "check_sync_setup_clean", "check_sync_scope", "check_sync_path", "changelog_policy_hash", "verify_changelog_policy"]) {
+  for (const name of ["check_generated_paths_clean", "restore_sync_setup", "restore_workflow_setup_artifacts", "check_sync_setup_clean", "check_sync_scope", "check_sync_path", "changelog_policy_hash", "verify_changelog_policy", "stage_sync_paths", "run_generated_post_script"]) {
     const pattern = new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?^\\}`, "m");
     const shared = scopes.map(source => pattern.exec(source)?.[0]);
     assert.ok(shared[0], name);
@@ -67,6 +67,60 @@ publicationTest("closeout contract keeps sync safety helpers, exact pins, env bi
   assert.match(workflow, /REQUIRED_CHECKS: \$\{\{ inputs.required-checks \}\}/);
   assert.doesNotMatch(caller, /issues: read/);
 });
+
+for (const [kind, source, script] of [["sync", sync, "POST_IMPORT_SCRIPT"], ["closeout", workflow, "POST_CLOSEOUT_SCRIPT"]] as const) {
+  const validate = shell(`Validate ${kind} inputs`, source);
+  const env = { ...process.env, REPOSITORY: "acme/widgets", CALLING_REPOSITORY: "acme/widgets",
+    PM_GITHUB_VERSION: "2026.11.24", DEFAULT_BRANCH: "main",
+    SYNC_BRANCH: kind === "sync" ? "automation/fixture" : branch, [script]: "self-host:write" };
+
+  test(`${kind} generated artifact declarations are literal root files and require an npm script`, async () => {
+    assert.match(source, /generated-paths:\n\s+description:[^\n]+\n\s+type: string\n\s+required: false\n\s+default: ""/);
+    assert.match(source, /GENERATED_PATHS: \$\{\{ inputs\.generated-paths \}\}/);
+    const forbidden = [".github/workflows/x.yml", "nested/artifact", "../artifact", "/artifact", ".gitattributes",
+      ":(glob)*", "out.*", "-flag", "package.json", "package-lock.json", "npm-shrinkwrap.json", "bun.lockb",
+      "pnpm-lock.yaml", "Pipfile.lock", "packages.lock.json", "gradle.lockfile", "go.sum", "CHANGELOG.md"];
+    for (const paths of forbidden) {
+      const result = await bash(validate, repoRoot, { ...env, GENERATED_PATHS: paths });
+      assert.equal(result.code, 1, paths);
+      assert.match(result.out, /generated-paths must/);
+    }
+    const missing = await bash(validate, repoRoot, { ...env, [script]: "", GENERATED_PATHS: "selfhost.bundle" });
+    assert.equal(missing.code, 1, missing.out);
+    assert.match(missing.out, /generated-paths requires a caller npm post-script/);
+    for (const paths of ["", " \t\n", "selfhost.bundle\nsource.snapshot"]) {
+      const result = await bash(validate, repoRoot, { ...env, GENERATED_PATHS: paths });
+      assert.equal(result.code, 0, result.out);
+    }
+  });
+
+  test(`${kind} generated artifact declarations refuse dependency lockfiles in mixed lists`, async () => {
+    const lockfiles = [
+      "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "Yarn.lock", "bun.lock", "bun.lockb",
+      "conda_lock.yml", "packages.lock.json", "gradle.lockfile", "Cargo.lock", "Gemfile.lock",
+      "Package.resolved", "Cartfile.resolved", "go.sum", "go.work.sum", "cabal.project.freeze",
+      "opam.locked", "widget.opam.locked",
+      "pylock.toml", "pylock.docs-build.toml", "Manifest.toml", "JuliaManifest.toml",
+      "Manifest-v1.11.toml", "JuliaManifest-v12.34.toml",
+    ];
+    const failures = [];
+    for (const lockfile of lockfiles) {
+      const mixedCase = lockfile.replace(/[a-z]/gi, (letter, index: number) =>
+        index % 2 === 0 ? letter.toUpperCase() : letter.toLowerCase());
+      for (const filename of new Set([lockfile, lockfile.toLowerCase(), lockfile.toUpperCase(), mixedCase])) {
+        const paths = `selfhost.bundle\t${filename}\nsource.snapshot`;
+        const result = await bash(validate, repoRoot, { ...env, GENERATED_PATHS: paths });
+        if (result.code !== 1 || !result.out.includes("must exclude CHANGELOG.md, package.json and dependency lockfiles")) {
+          failures.push({ filename, ...result });
+        }
+      }
+    }
+    assert.deepEqual(failures, []);
+    const allowed = "selfhost.bundle references.resolved build.sum pylock.docs.json Manifest-v1.draft.toml";
+    const result = await bash(validate, repoRoot, { ...env, GENERATED_PATHS: allowed });
+    assert.equal(result.code, 0, result.out);
+  });
+}
 
 publicationTest("sync and closeout commit only the policy-verified tree with caller hooks disabled", async t => {
   for (const [kind, source] of [["sync", sync], ["closeout", workflow]] as const) {
@@ -145,6 +199,82 @@ function installChangelogCheck({ root, git }: WorkflowFixture, scripts: Record<s
   git("add", "--", "tools/oracle/package.json");
   git("commit", "-qm", "Configure caller changelog check");
   git("push", "origin", "trunk");
+}
+
+test("generated artifact targets must be clean at checkout and publishable after the hook", async () => fixture(async f => {
+  const prepared = await f.run(setup);
+  assert.equal(prepared.code, 0, prepared.out);
+  appendFileSync(join(f.root, ".gitignore"), "ignored.bundle\n");
+  const dirty = join(f.root, "ignored.bundle");
+  const scope = ["Resolve sync commit scope"];
+  writeFileSync(dirty, "existing output\n");
+  f.env.GENERATED_PATHS = "ignored.bundle";
+  const preexisting = await f.run(scope);
+  assert.equal(preexisting.code, 1, preexisting.out);
+  assert.match(preexisting.out, /must match HEAD before running/);
+  assert.equal(readFileSync(dirty, "utf8"), "existing output\n");
+  rmSync(dirty);
+
+  const link = join(f.root, "link.bundle");
+  symlinkSync("CHANGELOG.md", link);
+  f.git("add", "--", "link.bundle");
+  f.git("commit", "-qm", "Fixture committed symlink");
+  for (const target of ["link.bundle", "tools"]) {
+    f.env.GENERATED_PATHS = target;
+    const nonFile = await f.run(scope);
+    assert.equal(nonFile.code, 1, nonFile.out);
+    assert.match(nonFile.out, /must be regular root files/);
+  }
+
+  const pkg = join(f.root, "tools/oracle/package.json");
+  writeFileSync(pkg, JSON.stringify({ scripts: {
+    "fixture:ignore": "printf output > ../../ignored.bundle",
+    "fixture:link": "ln -s CHANGELOG.md ../../new.bundle",
+    "fixture:skip": "node -e ''",
+  } }));
+  const closed = await f.run(["Close delivered tracker items"]);
+  assert.equal(closed.code, 0, closed.out);
+  for (const [target, script] of [["ignored.bundle", "fixture:ignore"], ["new.bundle", "fixture:link"], ["missing.bundle", "fixture:skip"]] as const) {
+    Object.assign(f.env, { GENERATED_PATHS: target, POST_CLOSEOUT_SCRIPT: script });
+    const refused = await f.run([...scope, "Run caller post-closeout script"]);
+    assert.equal(refused.code, 1, refused.out);
+    assert.match(refused.out, /as a regular, publishable file/);
+  }
+  unpublished(f.git);
+}));
+
+for (const lateWrite of [false, true]) {
+  test(lateWrite ? "closeout policy rejects caller changes to a generated artifact" : "closeout publishes a declared generated artifact with the delivered item", async () => fixture(async f => {
+    const generator = "generated-artifact.mts";
+    writeFileSync(join(f.root, generator), readFileSync(join(repoRoot, "test/fixtures/generated-artifact-consumer.ts")));
+    f.git("add", "--", generator);
+    f.git("commit", "-qm", "Add fixture bundle generator");
+    installChangelogCheck(f, {
+      "closeout:generate": `npm run changelog:full && cd ../.. && node ${generator}`,
+      "accept:self-host": `cd ../.. && node ${generator} --check`,
+      ...(lateWrite ? { "changelog:check": "printf 'unverified\\n' >> ../../selfhost.bundle" } : {}),
+    });
+    f.env.GENERATED_PATHS = "selfhost.bundle";
+    f.env.POST_CLOSEOUT_SCRIPT = "closeout:generate";
+    const parent = f.git("rev-parse", "HEAD");
+    const result = await f.run([...setup, ...finish]);
+    if (lateWrite) {
+      assert.equal(result.code, 1, result.out);
+      assert.match(result.out, /Caller changelog policy modified.*declared generated file/);
+      assert.equal(f.git("rev-parse", "HEAD"), parent);
+      unpublished(f.git);
+      return;
+    }
+    assert.equal(result.code, 0, result.out);
+    assert.equal(f.git("rev-parse", "HEAD^"), parent);
+    const paths = f.git("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").split("\n");
+    assert.ok(paths.includes(`.agents/pm/tasks/${f.id}.toon`));
+    assert.ok(paths.includes("CHANGELOG.md"));
+    assert.ok(paths.includes("selfhost.bundle"));
+    assert.equal(f.git("ls-remote", "origin", `refs/heads/${branch}`).split(/\s/)[0], f.git("rev-parse", "HEAD"));
+    const acceptance = await bash("npm run accept:self-host", join(f.root, "tools/oracle"), f.env);
+    assert.equal(acceptance.code, 0, acceptance.out);
+  }));
 }
 
 publicationTest("a failing caller changelog check blocks closeout publication", async () => fixture(async f => {
@@ -273,6 +403,7 @@ publicationTest("workflow refusal reporter emits one precise annotation and with
       { ...f.env, FAILURE_REPORT: report, FAILURE_ERROR: error, FAILURE_DIFF: diff });
     assert.equal(result.code, 0, result.out);
     assert.equal(result.out.match(/::error::/g)?.length, 1, result.out);
+    assert.doesNotMatch(result.out, /unbound variable/);
     assert.match(result.out, expected);
     assert.ok(!result.out.includes(secret));
     unpublished(f.git);
@@ -343,7 +474,7 @@ publicationTest("behavioural revert: removing only the no-op guard opens a PR wi
   const publication = workflow.indexOf("      - name: Commit gated closeout changes and open review PR");
   assert.ok(publication >= 0);
   const mutant = workflow.slice(0, publication) + workflow.slice(publication).replace(
-    'if [[ "${CLOSEOUT_CLOSED}" == 0 && "${CLOSEOUT_REVIEW:-0}" == 0 ]] || git diff --cached --quiet -- "${sync_scope[0]}" "${sync_scope[@]:2}"; then',
+    'if [[ "${CLOSEOUT_CLOSED}" == 0 && "${CLOSEOUT_REVIEW:-0}" == 0 ]] || git diff --cached --quiet -- "${tracker_scope[@]}"; then',
     "if false; then",
   );
   assert.notEqual(mutant, workflow);

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Publish declared generated artifacts with gated tracker changes ([pm-github-generated-sync-artifacts](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-generated-sync-artifacts.toon))
+
 ## 2026.11.24 - 2026-11-24
 
 No changes.

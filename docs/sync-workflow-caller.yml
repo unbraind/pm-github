@@ -40,6 +40,7 @@ jobs:
       npm-project-dir: "." # For pm-rust, use: npm-project-dir: tests/oracle
       # Defaults shown explicitly; use "" to disable an optional action; empty CI also disables auto-merge.
       post-import-script: "changelog:full"
+      # generated-paths: "selfhost.bundle" # Set post-import-script to the npm script that produces it.
       ci-workflows: "ci.yml codeql.yml" # Whitespace-separated filenames, e.g. "ci.yml codeql.yml".
     secrets:
       automation_app_private_key: ${{ secrets.PM_GITHUB_APP_PRIVATE_KEY }}

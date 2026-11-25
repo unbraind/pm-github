@@ -1,8 +1,9 @@
 /** Check literal path operands in the exact helper body shipped by both workflows. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import test from "node:test";
 
 for (const kind of ["sync", "closeout"]) {
@@ -28,5 +29,20 @@ for (const kind of ["sync", "closeout"]) {
       });
       assert.equal(result.status, status, path + result.stderr);
     }
+  });
+  test(`${kind}: declaring generated artifacts requires a Git checkout`, () => {
+    const root = mkdtempSync(join(tmpdir(), "generated-artifact-no-git-"));
+    try {
+      const pmRoot = join(root, "tracker");
+      const env = { ...process.env, PM_PATH: pmRoot, PM_GLOBAL_PATH: join(root, "global") };
+      const init = spawnSync(resolve(import.meta.dirname, "../node_modules/.bin/pm"),
+        ["--path", pmRoot, "init", "fixture"], { cwd: root, env, encoding: "utf8" });
+      assert.equal(init.status, 0, init.stderr);
+      const probe = spawnSync("bash", ["-c", helper + "\ncheck_generated_paths_clean"], {
+        cwd: root, env: { ...env, PM_SYNC_TRACKER: "tracker", GENERATED_PATHS: "selfhost.bundle" }, encoding: "utf8",
+      });
+      assert.equal(probe.status, 1, probe.stdout + probe.stderr);
+      assert.match(probe.stderr, /not a git repository/i);
+    } finally { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
   });
 }
