@@ -1020,6 +1020,83 @@ const WORKFLOW_IMPORT_SEQUENCE = ["Resolve sync commit scope", "Validate GitHub 
 const importWorkflowCorpus = workflowCorpus(test, "import-workflow");
 const workflowTest = importWorkflowCorpus.test;
 
+for (const mode of ["declared", "undeclared", "disabled", "mixed", "private"] as const) {
+  test(`generated artifact consumer: ${mode} sync hook and committed bundle`, async () => {
+    const { root, base, bare, git } = initSyncRepo();
+    try {
+      fs.copyFileSync(path.join(repoRoot, "test/fixtures/generated-artifact-consumer.ts"), path.join(root, "self-host.ts"));
+      fs.writeFileSync(path.join(root, "CHANGELOG.md"), "Fixture baseline\n");
+      fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ type: "module", scripts: {
+        "accept:self-host": "node self-host.ts --check",
+        "self-host:write": "node -e 'require(\"node:fs\").writeFileSync(\"CHANGELOG.md\", \"Tracker changed\\n\")' && node self-host.ts",
+      } }));
+      assert.equal(git(["add", "--", "CHANGELOG.md", "package.json", "self-host.ts"]).status, 0);
+      assert.equal(spawnSync("node", ["self-host.ts"], { cwd: root }).status, 0);
+      assert.equal(git(["add", "--", "selfhost.bundle"]).status, 0);
+      assert.equal(git(["commit", "-qm", "caller bundle baseline"]).status, 0);
+      const env = await prepareWorkflowFixture(root, base);
+      const baseHead = git(["rev-parse", "HEAD"]).stdout.trim();
+      assert.equal(git(["push", "-q", "origin", "main"]).status, 0);
+      assert.equal(git(["switch", "-c", SYNC_BRANCH]).status, 0);
+      const handle = githubHandler([issue(1, "Public issue", "Reviewed public body.")]);
+      await withMockGithub((req, res, url, server) => {
+        if (req.url === "/repos/acme/widgets") jsonResponse(res, 200, { private: false });
+        else handle(req, res, url, server);
+      }, async () => {
+        const workflowEnv = {
+          ...env, PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE,
+          POST_IMPORT_SCRIPT: mode === "disabled" ? "" : "self-host:write",
+          GENERATED_PATHS: mode === "declared" ? "selfhost.bundle\nsource.snapshot" : mode === "mixed" || mode === "private" ? "selfhost.bundle" : "",
+          SECOND_ARTIFACT: mode === "declared" || mode === "mixed" ? "source.snapshot" : "",
+          PRIVATE_ARTIFACT_VALUE: mode === "private" ? GH_TOKEN : "",
+        };
+        const shell = workflowShell(["Validate sync inputs", ...WORKFLOW_IMPORT_SEQUENCE]);
+        const result = await executeWorkflow(shell, root, workflowEnv);
+        if (mode === "undeclared" || mode === "mixed" || mode === "private") {
+          assert.equal(result.code, 1, result.stdout + result.stderr);
+          assert.match(result.stdout, mode === "private" ? /github-token-classic/
+            : mode === "mixed" ? /Changed path outside sync commit scope: source\.snapshot/
+              : /Changed path outside sync commit scope: selfhost\.bundle/);
+          assert.ok(!result.stdout.includes(GH_TOKEN) && !result.stderr.includes(GH_TOKEN));
+          assert.deepEqual(remoteRefs(bare), ["refs/heads/main"]);
+          assert.ok(!fs.existsSync(env.REVIEW_RECEIPT!));
+          return;
+        }
+        assert.equal(result.code, 0, result.stdout + result.stderr);
+        assert.equal(git(["rev-parse", "HEAD^"]).stdout.trim(), baseHead);
+        assert.equal(git(["rev-parse", `origin/${SYNC_BRANCH}`]).stdout, git(["rev-parse", "HEAD"]).stdout);
+        assert.deepEqual(remoteRefs(bare), [`refs/heads/${SYNC_BRANCH}`, "refs/heads/main"]);
+        const paths = git(["diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD"]).stdout.split("\n");
+        assert.ok(paths.some(name => /^\.agents\/pm\/issues\/.*\.toon$/.test(name)));
+        assert.equal(paths.includes("selfhost.bundle"), mode === "declared");
+        assert.equal(paths.includes("source.snapshot"), mode === "declared");
+        assert.equal(paths.includes("CHANGELOG.md"), mode === "declared");
+        const check = await executeWorkflow("npm run accept:self-host", root, env);
+        assert.equal(check.code, mode === "declared" ? 0 : 1, check.stdout + check.stderr);
+        if (mode === "disabled") {
+          assert.match(check.stderr, /Committed bundle is stale/);
+          return;
+        }
+        assert.equal(git(["show", "HEAD:source.snapshot"]).stdout, git(["show", "HEAD:selfhost.bundle"]).stdout);
+        const patch = fs.readFileSync(path.join(base, "pm-github-sync.patch"), "utf8");
+        assert.match(patch, /^\+\+\+ b\/selfhost\.bundle$/m);
+        assert.match(patch, /^\+\+\+ b\/source\.snapshot$/m);
+        const receipt = JSON.parse(fs.readFileSync(path.join(base, "pm-github-final-gate.json"), "utf8")) as { verdict: string; scanned_files: number };
+        assert.deepEqual([receipt.verdict, receipt.scanned_files], ["pass", paths.filter(Boolean).length]);
+        const toon = await executeWorkflow('pm github gate --diff "$RUNNER_TEMP/pm-github-sync.patch"', root, env);
+        assert.equal(toon.code, 0, toon.stdout + toon.stderr);
+        assert.match(toon.stdout, /^verdict: "?pass"?$/m);
+        const published = git(["rev-parse", "HEAD"]).stdout;
+        const repeat = await executeWorkflow(shell, root, { ...workflowEnv, POST_IMPORT_SCRIPT: "must-not-run" });
+        assert.equal(repeat.code, 0, repeat.stdout + repeat.stderr);
+        assert.match(repeat.stdout, /already match the pm tracker/);
+        assert.equal(git(["rev-parse", "HEAD"]).stdout, published);
+        assert.equal(git(["status", "--porcelain"]).stdout, "");
+      });
+    } finally { fs.rmSync(base, { recursive: true, force: true }); }
+  });
+}
+
 for (const attributes of ["missing", "outdated"] as const) {
   for (const registry of ["tracked", "untracked"] as const) {
     workflowTest(`setup artifacts never enter tracker publication: ${attributes} attributes, ${registry} registry`, async () => {

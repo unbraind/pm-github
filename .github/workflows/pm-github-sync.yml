@@ -44,10 +44,15 @@ on:
         required: false
         default: "."
       post-import-script:
-        description: "Caller npm script after import, before the final gate; missing skips, empty disables it"
+        description: "Caller npm script after import. Required for generated paths on tracker changes. Otherwise a missing or empty script skips the hook"
         type: string
         required: false
         default: "changelog:full"
+      generated-paths:
+        description: "Whitespace-separated root artifact filenames produced by the caller post-script"
+        type: string
+        required: false
+        default: ""
       ci-workflows:
         description: "Caller workflow filenames with workflow_dispatch; empty disables dispatch and auto-merge"
         type: string
@@ -116,6 +121,7 @@ jobs:
       REQUESTED_PM_GITHUB_VERSION: ${{ inputs.pm-github-version }}
       NPM_PROJECT_DIR: ${{ inputs.npm-project-dir }}
       POST_IMPORT_SCRIPT: ${{ inputs.post-import-script }}
+      GENERATED_PATHS: ${{ inputs.generated-paths }}
       CI_WORKFLOWS: ${{ inputs.ci-workflows }}
       CALLING_REPOSITORY: ${{ github.repository }}
     steps:
@@ -202,6 +208,23 @@ jobs:
           [[ "${SYNC_BRANCH}" == automation/* ]] || { echo "::error::sync-branch must start with automation/."; exit 1; }
           git check-ref-format "refs/heads/${SYNC_BRANCH}"
           [[ -z "${POST_IMPORT_SCRIPT:-}" || "${POST_IMPORT_SCRIPT:-}" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.:-]*$ ]] || { echo "::error::post-import-script must be an npm script name, not a shell command."; exit 1; }
+          IFS=$' \t\n' read -r -d '' -a generated_paths < <(printf '%s\0' "${GENERATED_PATHS:-}")
+          if (( ${#generated_paths[@]} > 0 )) && [[ -z "${POST_IMPORT_SCRIPT:-}" ]]; then
+            echo "::error::generated-paths requires a caller npm post-script."
+            exit 1
+          fi
+          for generated_path in "${generated_paths[@]}"; do
+            if [[ ! "${generated_path}" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,254}$ ]]; then
+              echo "::error::generated-paths must contain only literal root filenames."
+              exit 1
+            fi
+            case "${generated_path,,}" in
+              changelog.md|package.json|npm-shrinkwrap.json|go.sum|*.lock|*.lockb|*.lockfile|*.lock.*|*-lock.*|*_lock.*)
+                echo "::error::generated-paths must exclude CHANGELOG.md, package.json and dependency lockfiles."
+                exit 1
+                ;;
+            esac
+          done
 
       - name: Checkout caller default branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -282,6 +305,8 @@ jobs:
               echo "::error::Failure diagnostic blocked by the privacy gate; review source content before retrying. No branch was published."
             fi
           }
+          # Diagnostics can use this helper before the tracker is resolved.
+          [[ -n "${PM_SYNC_TRACKER:-}" ]] || return 0
           mapfile -t sync_scope < <(printf '%s\n' \
             ":(top,literal)${PM_SYNC_TRACKER}" \
             ':(top,literal)CHANGELOG.md' \
@@ -290,6 +315,28 @@ jobs:
             ":(top,exclude,literal)${PM_SYNC_TRACKER}/checkpoints" \
             ":(top,exclude,literal)${PM_SYNC_TRACKER}/settings.json" \
             ":(top,exclude,literal)${PM_SYNC_TRACKER}/history/_workspace.jsonl")
+          tracker_scope=("${sync_scope[0]}" "${sync_scope[@]:2}")
+          IFS=$' \t\n' read -r -d '' -a generated_paths < <(printf '%s\0' "${GENERATED_PATHS:-}")
+          generated_scope=()
+          for generated_path in "${generated_paths[@]}"; do
+            generated_scope+=(":(top,literal)${generated_path}")
+          done
+          sync_scope+=("${generated_scope[@]}")
+          check_generated_paths_clean() {
+            (( ${#generated_paths[@]} > 0 )) || return 0
+            local changed generated_path
+            for generated_path in "${generated_paths[@]}"; do
+              if [[ -L "${generated_path}" || ( -e "${generated_path}" && ! -f "${generated_path}" ) ]]; then
+                echo "::error::Declared generated paths must be regular root files."
+                return 1
+              fi
+            done
+            changed="$(git --literal-pathspecs status --porcelain=v1 --untracked-files=all --ignored=matching -- "${generated_paths[@]}")" || return 1
+            if [[ -n "${changed}" ]]; then
+              echo "::error::Declared generated files must match HEAD before running the caller npm post-script."
+              return 1
+            fi
+          }
           restore_sync_setup() {
             for setup_path in "${PM_SYNC_TRACKER}/settings.json" "${PM_SYNC_TRACKER}/history/_workspace.jsonl"; do
               if git cat-file -e "HEAD:${setup_path}" 2>/dev/null; then
@@ -344,6 +391,10 @@ jobs:
             elif [[ "$1" == "${PM_SYNC_TRACKER}/"* || "$1" == CHANGELOG.md ]]; then
               return 0
             fi
+            local generated_path
+            for generated_path in "${generated_paths[@]}"; do
+              [[ "$1" != "${generated_path}" ]] || return 0
+            done
             printf '::error::Changed path outside sync commit scope: %q\n' "$1"
             return 1
           }
@@ -354,8 +405,8 @@ jobs:
             # hide changes from the policy, and new paths and deletions are visible.
             worktree_hash="$(
               {
-                printf 'CHANGELOG.md\0'
-                git ls-files --cached --others --exclude-standard -z -- "${sync_scope[0]}" "${sync_scope[@]:2}"
+                printf '%s\0' CHANGELOG.md "${generated_paths[@]}"
+                git ls-files --cached --others --exclude-standard -z -- "${tracker_scope[@]}"
               } | LC_ALL=C sort -zu | node -e '
                 const { createHash } = require("node:crypto");
                 const { lstatSync, readFileSync, readlinkSync } = require("node:fs");
@@ -377,16 +428,36 @@ jobs:
             local current
             if ! current="$(changelog_policy_hash)" || \
                ! cmp -s -- "${RUNNER_TEMP}/pm-github-changelog-policy.hash" <(printf '%s\n' "${current}"); then
-              echo "::error::Cannot publish: CHANGELOG.md or tracker files changed after the caller changelog policy check, or its snapshot is unavailable."
+              echo "::error::Cannot publish: CHANGELOG.md or tracker files changed after the caller changelog policy check, a declared generated file changed, or its snapshot is unavailable."
               return 1
             fi
           }
-          gate_sync_change() {
-            check_sync_scope
-            git ls-files -z --modified --deleted --others --exclude-standard -- "${sync_scope[0]}" "${sync_scope[@]:2}" > "${RUNNER_TEMP}/pm-github-sync-stage-paths"
+          stage_sync_paths() {
+            git ls-files -z --modified --deleted --others --exclude-standard -- "$@" > "${RUNNER_TEMP}/pm-github-sync-stage-paths"
             if [[ -s "${RUNNER_TEMP}/pm-github-sync-stage-paths" ]]; then
               git --literal-pathspecs add --pathspec-from-file="${RUNNER_TEMP}/pm-github-sync-stage-paths" --pathspec-file-nul
             fi
+          }
+          run_generated_post_script() {
+            local script="$1" have_candidate="$2" generated_path
+            check_generated_paths_clean
+            restore_sync_setup
+            # A generator may discover sources through the index (including new items).
+            stage_sync_paths "${tracker_scope[@]}"
+            if [[ "${have_candidate}" == false ]] || git diff --cached --quiet -- "${tracker_scope[@]}"; then
+              return 0
+            fi
+            (cd "${NPM_PROJECT_PATH}" && npm run "${script}")
+            for generated_path in "${generated_paths[@]}"; do
+              if [[ ! -f "${generated_path}" || -L "${generated_path}" ]] || git check-ignore --quiet -- "${generated_path}"; then
+                echo "::error::The caller npm post-script must leave each declared generated path as a regular, publishable file."
+                return 1
+              fi
+            done
+          }
+          gate_sync_change() {
+            check_sync_scope
+            stage_sync_paths "${tracker_scope[@]}" "${generated_scope[@]}"
             if [[ -e CHANGELOG.md ]] || git ls-files --error-unmatch -- CHANGELOG.md >/dev/null 2>&1; then
               git --literal-pathspecs add -- CHANGELOG.md
             fi
@@ -402,6 +473,8 @@ jobs:
             fi
           }
           SCOPE
+          source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
+          check_generated_paths_clean
 
       # Restore only these two files inside the bounded setup windows.
       # Refuse existing edits (including ignored files) before claiming ownership.
@@ -520,24 +593,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          paths_file="${RUNNER_TEMP}/pm-github-tracker-paths"
           source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
-          git ls-files -z --modified --deleted --others --exclude-standard -- "${sync_scope[0]}" "${sync_scope[@]:2}" > "${paths_file}"
-          if [[ -s "${paths_file}" ]]; then
-            git --literal-pathspecs add --pathspec-from-file="${paths_file}" --pathspec-file-nul
-          fi
+          stage_sync_paths "${tracker_scope[@]}"
           adopt_args=()
           if [[ "${ADOPT_CITED:-false}" == true ]]; then adopt_args+=(--adopt-cited); fi
-          source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
           if ! pm github import "${REPOSITORY}" --state all --atomic --gate --with-comments "${adopt_args[@]}" --json > "${RUNNER_TEMP}/pm-github-import.json" 2> "${RUNNER_TEMP}/pm-github-import.err"; then
             report_workflow_failure "${RUNNER_TEMP}/pm-github-import.json" "${RUNNER_TEMP}/pm-github-import.err"
             exit 1
           fi
-          if ! git diff --exit-code -- "${sync_scope[0]}" "${sync_scope[@]:2}" > "${RUNNER_TEMP}/pm-github-repeat.patch"; then
+          if ! git diff --exit-code -- "${tracker_scope[@]}" > "${RUNNER_TEMP}/pm-github-repeat.patch"; then
             report_workflow_failure /dev/null /dev/null "${RUNNER_TEMP}/pm-github-repeat.patch"
             exit 1
           fi
-          git ls-files --others --exclude-standard -- "${sync_scope[0]}" "${sync_scope[@]:2}" > "${RUNNER_TEMP}/pm-github-repeat-untracked"
+          git ls-files --others --exclude-standard -- "${tracker_scope[@]}" > "${RUNNER_TEMP}/pm-github-repeat-untracked"
           if [[ -s "${RUNNER_TEMP}/pm-github-repeat-untracked" ]]; then
             sed 's|^|diff --git a/|' "${RUNNER_TEMP}/pm-github-repeat-untracked" > "${RUNNER_TEMP}/pm-github-repeat.patch"
             report_workflow_failure /dev/null /dev/null "${RUNNER_TEMP}/pm-github-repeat.patch"
@@ -549,7 +617,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -n "${POST_IMPORT_SCRIPT}" ]]; then
+          if [[ "${GENERATED_PATHS:-}" =~ [^[:space:]] ]]; then
+            source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
+            run_generated_post_script "${POST_IMPORT_SCRIPT}" true
+          elif [[ -n "${POST_IMPORT_SCRIPT}" ]]; then
             (cd "${NPM_PROJECT_PATH}" && npm run --if-present "${POST_IMPORT_SCRIPT}")
           fi
 
@@ -570,7 +641,7 @@ jobs:
           set -euo pipefail
           source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
           before="$(changelog_policy_hash)"
-          if git diff --cached --quiet -- "${sync_scope[0]}" "${sync_scope[@]:2}"; then
+          if git diff --cached --quiet -- "${tracker_scope[@]}"; then
             printf '%s\n' "${before}" > "${RUNNER_TEMP}/pm-github-changelog-policy.hash"
             exit 0
           fi
@@ -580,7 +651,7 @@ jobs:
           fi
           after="$(changelog_policy_hash)"
           if [[ "${before}" != "${after}" ]]; then
-            echo "::error::Caller changelog policy modified CHANGELOG.md or tracker files. Make changelog:check and its npm lifecycle hooks read-only."
+            echo "::error::Caller changelog policy modified CHANGELOG.md or tracker files or a declared generated file. Make changelog:check and its npm lifecycle hooks read-only."
             exit 1
           fi
           printf '%s\n' "${after}" > "${RUNNER_TEMP}/pm-github-changelog-policy.hash"
@@ -663,7 +734,7 @@ jobs:
               gh pr close "${number}" -R "${REPOSITORY}" --comment "The tracker already matches GitHub, so this sync no longer proposes a change; closing this review PR."
             fi
           }
-          if git diff --cached --quiet -- "${sync_scope[0]}" "${sync_scope[@]:2}"; then
+          if git diff --cached --quiet -- "${tracker_scope[@]}"; then
             # Changelog drift alone belongs to the caller's changelog check;
             # publish regenerated output only alongside tracker changes.
             if ! git diff --cached --quiet -- CHANGELOG.md; then
@@ -693,7 +764,7 @@ jobs:
               # shows the proposed item while the review PR is open.
               printf -- '- [%s](https://github.com/%s/blob/%s/%s) ([proposed](https://github.com/%s/blob/%s/%s))\n' "${item_id}" "${REPOSITORY}" "${DEFAULT_BRANCH}" "${changed}" "${REPOSITORY}" "${SYNC_BRANCH}" "${changed}" >> "${links_file}"
             fi
-          done < <(git diff --cached --name-only -- "${sync_scope[0]}" "${sync_scope[@]:2}")
+          done < <(git diff --cached --name-only -- "${tracker_scope[@]}")
           if [[ ! -s "${links_file}" ]]; then
             echo "::error::The sync changed tracker state but no item link could be generated."
             exit 1
@@ -709,7 +780,7 @@ jobs:
           policy_tree="$(git write-tree)"
           git -c core.hooksPath=/dev/null --literal-pathspecs commit --no-verify --only --pathspec-from-file="${RUNNER_TEMP}/pm-github-sync-commit-paths" --pathspec-file-nul -m "chore(pm): sync GitHub issues (gated)"
           if ! git diff --quiet --no-ext-diff "${policy_tree}" HEAD -- "${sync_scope[@]}"; then
-            echo "::error::Cannot publish: committed changelog or tracker differs from the verified index."
+            echo "::error::Cannot publish: committed changelog or tracker differs from the verified index, or a declared generated file differs."
             exit 1
           fi
           gh auth setup-git

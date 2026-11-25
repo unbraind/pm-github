@@ -29,7 +29,8 @@ jobs:
     with:
       automation-app-client-id: ${{ vars.PM_GITHUB_APP_CLIENT_ID }}
       npm-project-dir: "." # Use tools/oracle or another contained npm project when needed.
-      post-closeout-script: "changelog:full" # Missing script skips; "" disables it.
+      post-closeout-script: "changelog:full" # Without generated-paths, a missing or empty script skips.
+      # generated-paths: "selfhost.bundle" # Set post-closeout-script to the npm script that produces it.
       # One context per line; match your repository's required checks when metadata cannot be read.
       required-checks: |
         test (22)
