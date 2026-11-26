@@ -34,7 +34,10 @@ export function parseSourceTimestamp(value: unknown): number {
   const offsetMinutes = match[10] === undefined ? 0 : Number(match[10]);
   if (offsetHours > 23 || offsetMinutes > 59) return Number.NaN;
   const offsetMs = sign * (offsetHours * 60 + offsetMinutes) * 60_000;
-  const epoch = Date.UTC(year, month - 1, day, hour, minute, second) - offsetMs;
+  // Sub-second precision truncates to milliseconds exactly as the engine does,
+  // so the returned instant and the engine's reading of the same text agree.
+  const fractionMs = match[7] === undefined ? 0 : Math.trunc(Number(`0.${match[7]}`) * 1000);
+  const epoch = Date.UTC(year, month - 1, day, hour, minute, second) - offsetMs + fractionMs;
   const read = new Date(epoch + offsetMs);
   // Date.UTC rolls impossible dates forward instead of refusing them, so the
   // declared fields must read back exactly; anything else never happened.
