@@ -290,6 +290,27 @@ test("Ownership guard preserves ambient mutation guards", async () => tracker(as
   assert.deepEqual(await bytes(root, item.id), before);
 }));
 
+test("import apply preserves the ownership guard failure raised inside the item lock", async () => tracker(async root => {
+  const { item } = await create({ title: "Curated source", type: "Issue" }, { pmRoot: root });
+  const settings = await readSettings(root);
+  const before = await bytes(root, item.id);
+  let reads = 0;
+  const target = { id: item.id, repo, number: 7, initialLink: () => {
+    if (++reads > 1) throw new Error("Review the current source ownership before importing.");
+    return true;
+  } };
+  await assert.rejects(() => withGithubImportOwners(root, [target], () => mutateItem({
+    pmRoot: root, settings, id: item.id, author: "fixture", op: "import",
+    mutate: document => {
+      document.metadata.title = "Imported source";
+      return { changedFields: ["title"] };
+    },
+  })), (error: unknown) => error instanceof PmCliError && error.code === "extension_mutation_guard_failed"
+    && error.message === "Extension mutation guard github-import-owner failed before import: Review the current source ownership before importing.");
+  assert.equal(reads, 2);
+  assert.deepEqual(await bytes(root, item.id), before);
+}));
+
 /** Detached work keeps the AsyncLocalStorage stores of a finished scope; it must take a fresh lease and a fresh owner check. */
 async function leaseHeld(root: string): Promise<boolean> {
   try {

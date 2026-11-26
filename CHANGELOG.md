@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Preflight gated sync and closeout host compatibility ([pm-github-sync-host-compatibility](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-sync-host-compatibility.toon))
+
 ## 2026.11.25 - 2026-11-25
 
 ### Fixed

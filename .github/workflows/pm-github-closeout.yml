@@ -198,6 +198,7 @@ jobs:
           package="$(curl --fail --silent --show-error --location --retry 2 --max-time 60 \
             "https://registry.npmjs.org/pm-github/${PM_GITHUB_VERSION}")" || { echo "::error::Selected pm-github extension ${PM_GITHUB_VERSION} is unavailable; refusing tracker writes."; exit 1; }
           jq -se --arg version "${PM_GITHUB_VERSION}" 'length == 1 and .[0].name == "pm-github" and .[0].version == $version' <<< "${package}" >/dev/null 2>&1 || { echo "::error::Registry metadata does not identify the selected pm-github version; refusing tracker writes."; exit 1; }
+          printf '%s\n' "${package}" > "${RUNNER_TEMP}/pm-github-release.json"
           printf 'PM_GITHUB_VERSION=%s\n' "${PM_GITHUB_VERSION}" >> "${GITHUB_ENV}"
 
       - name: Validate closeout inputs
@@ -283,6 +284,62 @@ jobs:
           set -euo pipefail
           (cd "${NPM_PROJECT_PATH}" && npm ci --ignore-scripts)
           printf '%s/node_modules/.bin\n' "${NPM_PROJECT_PATH}" >> "${GITHUB_PATH}"
+
+      - name: Check pm CLI host compatibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'PREFLIGHT'
+          import { execFileSync } from "node:child_process";
+          import { appendFileSync, readFileSync } from "node:fs";
+          import { join } from "node:path";
+
+          const { GITHUB_STEP_SUMMARY, NPM_PROJECT_PATH, PM_GITHUB_VERSION, RUNNER_TEMP } = process.env;
+          const cli = "@unbrained/pm-cli";
+          const versionPattern = /^(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){2}(?:-[0-9]+)?$/;
+          const isVersion = value => typeof value === "string" && versionPattern.test(value) && !/\s/.test(value);
+          const isStable = value => isVersion(value) && !value.includes("-");
+          let release;
+          try { release = JSON.parse(readFileSync(join(RUNNER_TEMP, "pm-github-release.json"), "utf8")); }
+          catch { /* Missing or unreadable selected release metadata. */ }
+          const peer = release?.peerDependencies?.[cli];
+          const minimum = typeof peer === "string" && peer.startsWith(">=") ? peer.slice(2) : undefined;
+          const maximum = release?.devDependencies?.[cli];
+          const compare = (left, right) => {
+            const parts = right.split(".").map(BigInt);
+            return left.split(".").map((part, i) => BigInt(part) - parts[i]).find(part => part !== 0n) ?? 0n;
+          };
+          const range = isStable(minimum) && isStable(maximum) && compare(minimum, maximum) <= 0n
+            ? { minimum, maximum } : null;
+
+          let installed = null;
+          try {
+            // Execute the very launcher npm ci added to PATH, without global fallback.
+            const version = execFileSync(join(NPM_PROJECT_PATH, "node_modules/.bin/pm"), ["--version"],
+              { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10000, maxBuffer: 4096 });
+            // Allow one line ending from the CLI; never print malformed output.
+            const line = version.replace(/\r?\n$/, "");
+            if (isVersion(line)) installed = line;
+          } catch { /* Missing, failing or unreadable launcher. */ }
+
+          let code;
+          if (!range) code = "pm_github_host_range_unreadable";
+          else if (!installed) code = "pm_cli_version_unreadable";
+          else if (!isStable(installed) || compare(installed, minimum) < 0n || compare(installed, maximum) > 0n) code = "pm_cli_outside_tested_range";
+          if (code) {
+            const evidence = range ? `pm-github ${PM_GITHUB_VERSION} was tested with pm CLI ${minimum} through ${maximum}.`
+              : `The tested host range for pm-github ${PM_GITHUB_VERSION} could not be verified.`;
+            const host = installed ? `This repository installs pm CLI ${installed}.` : "The installed pm CLI version is unreadable.";
+            const remedy = installed ? `Move the workflow pin to a release that supports ${installed}.`
+              : "Restore a working caller pm CLI install, then move the workflow pin to a release that supports it.";
+            const reason = `${evidence} ${host} ${remedy}`;
+            const report = { code, pm_github_version: PM_GITHUB_VERSION, pm_cli_version: installed, tested_host_range: range, reason };
+            appendFileSync(GITHUB_STEP_SUMMARY, `### pm CLI host compatibility\n\n${reason}\n`);
+            console.log(JSON.stringify(report));
+            console.error(`::error::${reason}`);
+            process.exitCode = 1;
+          }
+          PREFLIGHT
 
       # The explicit publication allowlist is the SDK-resolved tracker (except
       # extensions, locks, checkpoints and extension setup files) and CHANGELOG.md. Nothing else may

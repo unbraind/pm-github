@@ -30,3 +30,18 @@ test("npm bugs points to the package issue tracker", () => {
     "url": "https://github.com/unbraind/pm-github/issues"
   });
 });
+
+test("released compatibility ceiling is the pm CLI version locked for package tests", () => {
+  const cli = "@unbrained/pm-cli";
+  const manifest = packageJson as { devDependencies: Record<string, string>; peerDependencies: Record<string, string> };
+  const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8")) as {
+    packages: Record<string, { version?: string; devDependencies?: Record<string, string> }>;
+  };
+  const maximum = manifest.devDependencies[cli]!;
+  const minimum = /^>=(\d+\.\d+\.\d+)$/.exec(manifest.peerDependencies[cli]!)?.[1];
+  assert.ok(minimum);
+  assert.match(maximum, /^\d+\.\d+\.\d+$/);
+  assert.equal(lock.packages[""]?.devDependencies?.[cli], maximum);
+  assert.equal(lock.packages[`node_modules/${cli}`]?.version, maximum);
+  assert.ok(minimum.localeCompare(maximum, undefined, { numeric: true }) <= 0);
+});

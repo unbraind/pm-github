@@ -1,5 +1,11 @@
 # Daily gated sync recovery
 
+For a host compatibility refusal, check the installed pm CLI and tested host
+range in the job summary. Upgrade the pm CLI and both workflow pins together,
+using one pm-github release that supports the installed host. Repair an
+unreadable caller CLI installation before retrying. See the
+[paired upgrade instructions](../README.md#upgrade-the-pm-cli-and-both-workflow-pins-together).
+
 The 2026-10-29 audit read the latest `pm-github-sync.yml` run and each job's logs through the GitHub API. Eleven repositories failed repeat-import verification: pm-beads, pm-brief, pm-gantt-chart, pm-hypothesis, pm-linear, pm-presets, pm-review, pm-slack, pm-slack-standup, pm-starter and pm-ts-starter. Sampled caller logs installed pm-github 2026.10.19. pm-csv failed preview because issue #197 has multiple existing owners; that conflict must remain fail-closed until the owner repairs provenance.
 
 The importer compares both stored and desired fields using the shared SDK-aware type, status, assignment, tag, body and timestamp normalization. It omits each unchanged item from fresh atomic batches and from plain updates. Pending transactions retain their complete plan for recovery. Native comment synchronization still runs when item content is unchanged. Gated dry runs now scan the same rendered plan before returning, including in a plain non-git tracker.

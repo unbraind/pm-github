@@ -268,6 +268,27 @@ export async function withGithubImportOwners<T>(pmRoot: string, targets: readonl
 /** Infer the mutation callback from the public SDK so the declared minimum remains supported. */
 type GithubOwnershipMutationHook = NonNullable<NonNullable<Parameters<typeof setActiveExtensionHooks>[0]>["beforeMutation"]>[number]["run"];
 
+/** Preserve a guard's thrown detail across the SDK boundary, which only forwards native CLI errors. @internal */
+export class GithubMutationGuardError extends PmCliError {
+  /** Keep the name and operation while exposing the guard's actual failure. */
+  constructor(name: string, operation: string, error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error);
+    super(`Extension mutation guard ${name} failed before ${operation}: ${detail}`, EXIT_CODE.CONFLICT,
+      { code: "extension_mutation_guard_failed", reason: `project:${name}` });
+  }
+}
+
+/** Forward the native guard decision and preserve errors the SDK would otherwise replace. @internal */
+export function preserveGithubMutationGuardFailure(name: string, run: GithubOwnershipMutationHook): GithubOwnershipMutationHook {
+  return async context => {
+    try { return await run(context); }
+    catch (error: unknown) {
+      if (error instanceof PmCliError) throw error;
+      throw new GithubMutationGuardError(name, context.operation, error);
+    }
+  };
+}
+
 /** Preserve ambient delegates and registrations while installing one native ownership check. */
 async function withGithubOwnershipHooks<T>(pmRoot: string, name: string, delegateName: string, check: GithubOwnershipMutationHook, run: () => Promise<T>): Promise<T> {
   const prior = AsyncResource.bind(runActiveBeforeMutationHooks);
@@ -279,14 +300,14 @@ async function withGithubOwnershipHooks<T>(pmRoot: string, name: string, delegat
       onRead: [{ layer: "project", name: delegateName, run: async context => { await onRead(context); } }],
       onWrite: [{ layer: "project", name: delegateName, run: async context => { await onWrite(context); } }],
       onIndex: [{ layer: "project", name: delegateName, run: async context => { await onIndex(context); } }],
-      beforeMutation: [{ layer: "project", name, run: async context => {
+      beforeMutation: [{ layer: "project", name, run: preserveGithubMutationGuardFailure(name, async context => {
         // The current SDK derives the actor from the history author and the
         // caller's identity scope. The original scope is bound above.
         const actor = "actor" in context ? context.actor as { author: string } : undefined;
         const input = { ...context, author: actor?.author ?? "unknown" };
         await prior(input);
         return check(context);
-      } }],
+      }) }],
     });
     return run();
   });

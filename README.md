@@ -1091,6 +1091,31 @@ pass; this configuration does not bypass them. It uses the existing workflow's
 [Dependabot option definitions](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference)
 for schedules, groups, commit messages and labels.
 
+### Upgrade the pm CLI and both workflow pins together
+
+When upgrading the caller's pm CLI, move both the sync and closeout workflow
+pins to the same reviewed pm-github release that supports the new CLI. Update
+the caller's npm lockfile and both workflow SHAs (and matching tag comments)
+in the same change. Remove any stale `pm-github-version` hold. If the workflows
+refuse the new CLI, move the workflow pin to a release that supports it.
+
+Both workflows check the actual caller-local `pm --version` immediately after
+`npm ci`, before installing the extension, previewing the sync, or applying
+closeout. The inclusive tested host range is recorded in the selected release's
+immutable npm metadata. Its lower endpoint is the minimum exercised by the
+packed minimum-SDK consumer test and declared by the peer dependency. Its upper
+endpoint is the release's exact pm CLI development dependency, which the release
+tests install from its lockfile. The exact upper endpoint bounds workflow
+compatibility even though npm's peer requirement is open-ended. Release tests
+exercise the endpoints and the workflow accepts stable versions between them.
+A deliberate extension hold uses the held release's own range.
+
+An out-of-range version, prerelease, unreadable local launcher or missing range
+stops the job before tracker commands. The error annotation, JSON diagnostic
+and job summary name the chosen pm-github release, installed version (or that
+it is unreadable), tested range when available, and the pin remedy. For an
+unreadable version, restore the caller's local CLI installation first.
+
 ## Automated closeout workflow
 
 For scheduled failures, start with the [November 6 watch matrix and caller actions](docs/scheduled-workflow-watch-1106.md). The [historical run evidence and refusal guide](docs/scheduled-workflow-refusals.md) retains earlier incident context.

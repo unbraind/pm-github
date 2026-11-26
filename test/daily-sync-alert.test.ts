@@ -118,6 +118,15 @@ test("failure alert deduplicates, updates safely and closes on recovery; API fai
   assert.match(readFileSync(receipt, "utf8"), /^<!-- pm-github-sync-status -->\n\nFailing step: Confirm caller CI registration and summarize handoff\n/);
 });
 
+test("failure alert names the host compatibility step without quoting its diagnostics", t => {
+  const { run, receipt } = alertFixture(t);
+  run({ JOBS_JSON: JSON.stringify({ name: "gated-sync", steps: [
+    { name: "Check pm CLI host compatibility", conclusion: "failure", detail: "Untrusted diagnostic" },
+  ] }) });
+  assert.match(readFileSync(receipt, "utf8"), /^<!-- pm-github-sync-status -->\n\nFailing step: Check pm CLI host compatibility\n/);
+  assert.doesNotMatch(readFileSync(receipt, "utf8"), /Untrusted diagnostic/);
+});
+
 test("recovery closes only open owned alerts, including the legacy exact-title alert", t => {
   const fixture = alertFixture(t, [
     { number: 1, title, state: "open", user: { login: "person" }, body: marker },

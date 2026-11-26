@@ -167,6 +167,8 @@ for (const file of files) {
         assert.equal(result.status, 0, output);
         assert.notDeepEqual(snapshot(join(cwd, ".agents/pm")), before, "control mutation proves the real tracker write is reachable");
         assert.equal(readFileSync(env.GITHUB_ENV!, "utf8"), `PM_GITHUB_VERSION=${scenario.expected}\n`);
+        const releaseReceipt = JSON.parse(readFileSync(join(cwd, "pm-github-release.json"), "utf8")) as unknown;
+        assert.deepEqual(releaseReceipt, { name: "pm-github", version: scenario.expected });
         assert.equal(output.includes("::warning::pm-github-version is deprecated"), !!scenario.warning, output);
         if (scenario.warning) assert.match(output, new RegExp(`workflow ${version} installs extension ${scenario.expected}`.replaceAll(".", "\\.")));
         assert.match(readFileSync(join(cwd, "http-receipt"), "utf8"), new RegExp(`/pm-github/${scenario.expected}\\n$`.replaceAll(".", "\\.")));

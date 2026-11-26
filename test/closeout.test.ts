@@ -216,6 +216,24 @@ test("apply continues after lock and policy refusals and counts only successful 
   } finally { await unlock(); }
 }));
 
+test("closeout apply keeps its locked guard's actionable refusal and redacts sensitive details", async () => tracker(async (root, ids) => {
+  const id = ids[0]!;
+  const before = snapshot(root);
+  const privateDetail = "fixture" + "@example.dev";
+  await withMockGithub(fixture(link(id)), async () => {
+    const report = await runCloseout(root, repo, { pr: "42", apply: true }, api(), async point => {
+      if (point === "locked") throw `Review the delivery evidence for ${privateDetail} before closing.`;
+    });
+    const reason = "Extension mutation guard closeout-revision failed before close: Review the delivery evidence for [redacted] before closing.";
+    assert.equal(report.closed, 0);
+    assert.equal(report.failed, 1);
+    assert.equal(report.plan[0]!.reason, reason);
+    assert.deepEqual(report.plan[0]!.missing_evidence, [{ pr: 42, code: "close_failed", reason }]);
+    assert.ok(!JSON.stringify(report).includes(privateDetail));
+    assert.equal(snapshot(root), before);
+  });
+}));
+
 test("a close-policy refusal records a refuse action and does not fail the remaining run", async () => tracker(async (root, ids) => {
   const sdk = { pmRoot: root, noExtensions: true };
   const policy = { id: "completeness-issue", description: "Closing without recorded steps leaves no evidence", effect: "refuse",
