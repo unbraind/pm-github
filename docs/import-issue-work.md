@@ -15,18 +15,29 @@ field to the issue's exact URL. A `gh:<owner>/<repo>#<N>` tag is a reference.
 ## Repair a reserved-ID refusal
 
 Verify that the named tracker item belongs to the named issue. If it does, run
-the command in the refusal. For example, to explicitly link issue 7:
+the command in the refusal: it names the tracker the failed import used (a
+`--pm-path` selector), so copying it in another directory still updates only
+that tracker. For example, to explicitly link issue 7:
 
 ```sh
 pm update pm-github-0123456789ab-7 --field github_url=https://github.com/example/project/issues/7
 pm github import example/project --state all --atomic --gate --dry-run
 ```
 
+The refusal offers that command only when the item's existing GitHub
+provenance does not contradict the link — an item whose declared
+`github_number` or `github_repo` names a different issue keeps the plain
+refusal, because linking it would create two owners and block the next import.
+In that case, correct the fields first or use a different configured ID prefix
+or tracker.
+
 The preview should count the item as matched by provenance. The link keeps the
 curated item's title, description, body, and local comments. With
 `--with-comments`, the importer adds GitHub comments as native comments on
 linked curated items, preserving the GitHub creation time and skipping IDs
-already mirrored, including markers written by older releases.
+already mirrored, including markers written by older releases. A comment
+whose source timestamp is missing or unparseable is refused and counted as a
+failed write, never stored with a malformed time.
 
 If the item belongs to other work, keep it and its history. Use a different
 configured ID prefix or tracker, or review any competing GitHub ownership

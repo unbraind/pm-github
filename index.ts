@@ -1,7 +1,7 @@
 import { writeGithubStateAtomic, syncGithubStatePath, type GithubStateWriteOptions } from "./durable-state.ts";
 import { buildGithubOwnershipIndex, warnGithubOwnershipScope, withGithubItemConsistency, readGithubOwnershipSnapshot, githubRepositoryHash, githubOwnershipClaims, githubOwnedIdentityKeys, assertGithubOwnershipConsistency, assertGithubImportOwner, GithubImportOwnershipError, readGithubImportOwner, withGithubImportOwners, mutateGithubOwnedItem, type GithubOwnershipIndex, type GithubOwnedTarget, ownershipStateOf } from "./import-ownership.ts";
 import { parseGithubIssueUrl, githubUrlTokens } from "./github-url.ts";
-import { readGithubWorkspace, canonicalGithubStatus, githubStatusKind, githubStatusIsTerminal, type GithubStatusRegistry } from "./workspace.ts";
+import { canonicalGithubStatus, githubStatusIsTerminal, githubStatusKind, readGithubWorkspace, withGithubInvocationScope, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
 import { uniqueGithubLabelNames } from "./label-names.ts";
 import { githubLabelsToTags, importTagArguments, importTagOptions, importTagValues, nativeTagAdditions } from "./import-tags.ts";
@@ -7234,7 +7234,7 @@ export default defineExtension({
     // importer — `pm github import <owner/repo>` (idempotent native pipeline)
     // -----------------------------------------------------------------------
     api.registerImporter("github", async (ctx: ImportExportContext) => {
-      return runImport(ctx.args[0], ctx.pm_root, parseImportOptions(ctx.options));
+      return withGithubInvocationScope(ctx.global.path, () => runImport(ctx.args[0], ctx.pm_root, parseImportOptions(ctx.options)));
     }, {
       description:
         "Start work with pm github import <owner>/<repo> --issue <N> to record provenance. The importer reserves <prefix>-github-<repo-hash>-<N> IDs. Fetches GitHub issues and creates/updates pm items (idempotent " +
@@ -7501,7 +7501,7 @@ export default defineExtension({
         { long: "--atomic", description: "Commit all changed linked items in one workspace writer transaction; an interrupted transaction is replayed from its persisted plan on the next refresh before unchanged items are skipped" },
       ],
       async run(ctx: CommandHandlerContext) {
-        return runRefresh(ctx.args[0], ctx.pm_root, ctx.options);
+        return withGithubInvocationScope(ctx.global.path, () => runRefresh(ctx.args[0], ctx.pm_root, ctx.options));
       },
     });
 
@@ -7535,7 +7535,7 @@ export default defineExtension({
       arguments: [{ name: "owner/repo", required: true, description: "Expected repository boundary" }],
       flags: [{ long: "--limit", value_name: "N", description: "Maximum deliveries per batch, 1 to 100 (default 20)" }],
       async run(ctx: CommandHandlerContext) {
-        return reconcileGithubWebhooks(ctx.pm_root, ctx.args[0] ?? "", ctx.options.limit === undefined ? 20 : Number(ctx.options.limit));
+        return withGithubInvocationScope(ctx.global.path, () => reconcileGithubWebhooks(ctx.pm_root, ctx.args[0] ?? "", ctx.options.limit === undefined ? 20 : Number(ctx.options.limit)));
       },
     });
 
@@ -7574,7 +7574,7 @@ export default defineExtension({
         "Use --atomic for a durable resumable journal with reverse compensation on ordinary failures.",
       ],
       async run(ctx: CommandHandlerContext) {
-        return runImport(ctx.args[0], ctx.pm_root, parseImportOptions(ctx.options));
+        return withGithubInvocationScope(ctx.global.path, () => runImport(ctx.args[0], ctx.pm_root, parseImportOptions(ctx.options)));
       },
     });
 

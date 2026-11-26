@@ -1,8 +1,8 @@
 import {
-  EXIT_CODE, locateItem, PmCliError, readAnnotationEntries, readLocatedItem, runAnnotationCommand, type AnnotationEntry,
+  EXIT_CODE, locateItem, PmCliError, readAnnotationEntries, readLocatedItem, renderPmCommand, runAnnotationCommand, type AnnotationEntry,
 } from "@unbrained/pm-cli/sdk";
 import type { GhComment } from "./index.ts";
-import { readGithubWorkspace } from "./workspace.ts";
+import { githubInvocationPath, readGithubWorkspace, repairScopeArgs } from "./workspace.ts";
 
 /** Read complete persisted comment text, including markers at the end of long rows. */
 export async function readStoredComments(itemId: string, pmPath: string) {
@@ -13,8 +13,27 @@ export async function readStoredComments(itemId: string, pmPath: string) {
   return readAnnotationEntries<AnnotationEntry>(document.metadata, "comments");
 }
 
+/**
+ * Validate one source timestamp before any write; a mirror never persists a
+ * malformed source time. A refused comment counts as a failed write and stays
+ * retryable, instead of being stored, counted as success, and then skipped by
+ * its comment ID on every later sync.
+ *
+ * @param comment - The GitHub comment whose creation time the mirror stores.
+ * @returns The validated source timestamp.
+ * @throws {@link PmCliError} When the timestamp is absent or unparseable; the
+ * caller counts the comment as not written.
+ */
+function requireGithubCommentTimestamp(comment: GhComment): string {
+  if (typeof comment.created_at !== "string" || !Number.isFinite(Date.parse(comment.created_at))) {
+    throw new PmCliError(`GitHub comment ${comment.id} has an invalid source timestamp; nothing was written.`, EXIT_CODE.GENERIC_FAILURE);
+  }
+  return comment.created_at;
+}
+
 /** Append a source annotation through the native item lock and comment history operation. */
 export async function appendGithubComment(itemId: string, pmRoot: string, comment: GhComment, text: string): Promise<number> {
+  const created_at = requireGithubCommentTimestamp(comment);
   const result = await runAnnotationCommand(itemId, { author: comment.user?.login ?? "github", ifAbsent: true }, { path: pmRoot }, {
     collectionKey: "comments",
     op: "comment_add",
@@ -23,10 +42,10 @@ export async function appendGithubComment(itemId: string, pmRoot: string, commen
     bypassOwnershipConflict: false,
     conflictGuidance: {
       required: "Ask the current owner to release the item before retrying the comment mirror.",
-      examples: ["pm release <id>"],
+      examples: [renderPmCommand([...repairScopeArgs(githubInvocationPath()), "release", itemId])],
       nextSteps: ["Retry the GitHub import when the item is available."],
     },
-    createEntry: entry => ({ ...entry, created_at: comment.created_at }),
+    createEntry: entry => ({ ...entry, created_at }),
   });
   return result.mutation_receipt!.changed_count;
 }
