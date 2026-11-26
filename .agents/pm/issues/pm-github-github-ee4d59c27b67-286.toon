@@ -1,0 +1,40 @@
+id: pm-github-github-ee4d59c27b67-286
+title: "A hand-created item under the importer's reserved ID stops the whole sync, and the refusal does not name the repair"
+description: "GH issue #286: https://github.com/unbraind/pm-github/issues/286 · author @unbraind · created 2026-11-26T09:58:54Z · updated 2026-11-26T10:20:32Z"
+type: Issue
+status: open
+priority: 2
+tags[2]: "gh:unbraind/pm-github#286","github_author:unbraind"
+created_at: "2026-11-26T09:58:54Z"
+updated_at: "2026-11-26T11:31:28.196Z"
+author: pm-github
+comments[8]{created_at,author,text}:
+  "2026-11-26T10:25:17.260Z",codex-agent,"Imported issue 286 through the pinned CLI. Reproducing the released atomic gated comment mirror in an isolated clone, then checking the reserved-ID refusal through the shared import ownership guard."
+  "2026-11-26T10:27:00.950Z",codex-agent,"Reproduced with locked pm CLI 2026.11.24 and pm-github 2026.11.25 on the clean public pm-rl main at 273a687: comments 17 to 18 to 19. The second import reported zero item updates yet changed the tracker. The SDK comments read shortened the stored 1221-character bot comment to 253 characters, hiding its trailing stable ID; the persisted item still had the full marker. Removing the explicit link in the isolated fixture also reproduced github_import_owner_conflict without a copyable repair."
+  "2026-11-26T10:29:16.576Z",codex-agent,"Control confirmed on pm-ado main at ce4b8c1: issue 137 comments 5 to 6 to 6, with identical item bytes on repeat. Its SDK list retained all 1079 characters and the trailing ID. The defect depends on SDK output compaction, not on comment count or timestamps alone. The same bounded read feeds blocker-comment marker detection, so both consumers now read the native annotation store."
+  "2026-11-26T10:33:05.885Z",codex-agent,"The first packed fixed replay on pristine pm-rl main produced 17 to 18 to 18. The GitHub bot row retained 2026-11-24T18:15:04Z. Item and history bytes matched after each repeat, which reported unchanged and passed the same gate. Reserved-ID guidance is restricted to an unowned creation destination, with the usable command carried through the typed diagnostic."
+  "2026-11-26T10:40:09.744Z",codex-agent,"Behavioral reverts were rebuilt in a disposable copy. Restoring the old comment sync and removing the reserved-ID guidance and issue-start help failed four regressions: byte-identical repeat, native mirror behavior, the JSON/TOON repair and help. Reverting only the timestamp factory failed with import time in place of 2026-01-01T03:04:05Z. Restoring only the bounded blocker read failed the no-Git grouped marker preview/apply regression. All five pass with the fixes restored. The linked pm test command passed."
+  "2026-11-26T10:47:48.014Z",codex-agent,"The packed candidate passed the two-import check through npx --no-install pm and bunx --bun --no-install pm, with locked host 2026.11.24 and the captured public REST and read-only GraphQL responses. Both repeated imports reported unchanged, zero imports and updates, passed the gate and left item and history bytes identical. The independent packed minimum-SDK consumer test passed 1/1 at 2026.10.23. All six focused Node regressions passed."
+  "2026-11-26T11:28:54.769Z",codex-agent,"The targeted 57-file Node run completed with 1445 passing tests, no failures and no skips. Typecheck, test compilation, lint, the 323-declaration docstring gate, the 34-module duplication gate, and the ownership inventory all passed. The staged privacy scan audited 10590 objects and found no unapproved identities, credentials or host paths."
+  "2026-11-26T11:31:25.047Z",codex-agent,Final comment-path recheck passed 26/26. Returning this item to open and releasing the claim for exact-head CI handoff. CI coverage and release checks remain at the repository thresholds. CI monitoring is capped at 30 minutes from the last push.
+files[4]{path,scope}:
+  comment-mirror.ts,project
+  import-repair.ts,project
+  index.ts,project
+  test/linked-import-regression.test.ts,project
+tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  node --test --test-concurrency=2 test/linked-import-regression.test.ts,project,180,codex-agent,"2026-11-26T10:37:59.104Z",local_mutation,fix/linked-item-import-converges
+docs[2]{path,scope}:
+  docs/identity-collisions.md,project
+  docs/import-issue-work.md,project
+github_close_reason: ""
+github_closed_at: ""
+github_created_at: "2026-11-26T09:58:54Z"
+github_link_only: false
+github_number: 286
+github_release: ""
+github_state: open
+github_state_reason: unspecified
+github_updated_at: "2026-11-26T10:20:32Z"
+github_url: "https://github.com/unbraind/pm-github/issues/286"
+body: "## What happens\n\nWhen a tracker item exists under the ID the importer reserves for an issue (`<prefix>-github-<hash>-<N>`) but was not created by the importer, the gated import refuses to run for the whole repository:\n\n> GitHub import target pm-vcs-github-c1741e698b48-228 is reserved for unbraind/pm-vcs#228, but its current owner is curated/unowned for content mirroring; importer creation provenance missing. Restore the intended GitHub provenance only if this item belongs to that issue; otherwise use a different configured ID prefix or tracker. …\n\nThis happened in three repositories on 2026-11-26 (pm-vcs issue 228, pm-rl issue 202, pm-ado issue 137): while the sync was down, agents that fixed those issues created the tracker item by hand under the reserved ID and tagged it `gh:owner/repo#N`.\n\n## What works (verified)\n\nSetting the declared field on the item links it explicitly, and the import then matches it by provenance:\n\n```\npm update <item> --field github_url=https://github.com/<owner>/<repo>/issues/<N>\npm github import <owner>/<repo> --state all --atomic --gate --dry-run   # plan verified, 1 matched by provenance\n```\n\n`--adopt-cited` alone does not help, and `pm github identity --identity … --owner …` needs a `--detach`, which does not fit a single item.\n\n## Expected\n\n1. The refusal names the repair: \"set `github_url` on this item to link it, or …\".\n2. The documentation for people and agents who start work on an issue says how to get its item: `pm github import <owner>/<repo> --issue <N>` (creates it with provenance), never a hand-created item under the reserved ID form.\n3. Optional: `pm create` refuses or warns when the requested ID matches the importer's reserved form and no `github_url` is set.\n\n## Acceptance\n\n- The refusal text contains the repair command for the named item.\n- Tests: a hand-created item under the reserved ID with `github_url` set is matched; without it the refusal names the repair."

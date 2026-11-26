@@ -42,6 +42,10 @@ are diagnostic evidence, not a provider migration or a duplicate-close policy.
 
 The [ownership routing inventory](identity-ownership-inventory.md) lists every operational selector, raw collector and non-owning reference reader. The explorer uses the same claims function for diagnostics; it can display contradictions that operational selectors refuse.
 
+For a GitHub import that reports an occupied reserved ID, see
+[starting work on a GitHub issue](import-issue-work.md) for the single-item
+link command and gated retry.
+
 ## Review and apply one repair
 
 Suppose `example-owner` declares `github_url` for issue 7, while
