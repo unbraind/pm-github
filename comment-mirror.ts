@@ -2,6 +2,7 @@ import {
   EXIT_CODE, locateItem, PmCliError, readAnnotationEntries, readLocatedItem, renderPmCommand, runAnnotationCommand, type AnnotationEntry,
 } from "@unbrained/pm-cli/sdk";
 import type { GhComment } from "./index.ts";
+import { parseSourceTimestamp } from "./source-time.ts";
 import { githubInvocationPath, readGithubWorkspace, repairScopeArgs } from "./workspace.ts";
 
 /** Read complete persisted comment text, including markers at the end of long rows. */
@@ -15,17 +16,18 @@ export async function readStoredComments(itemId: string, pmPath: string) {
 
 /**
  * Validate one source timestamp before any write; a mirror never persists a
- * malformed source time. A refused comment counts as a failed write and stays
- * retryable, instead of being stored, counted as success, and then skipped by
- * its comment ID on every later sync.
+ * malformed or impossible source time. A refused comment counts as a failed
+ * write and stays retryable, instead of being stored, counted as success, and
+ * then skipped by its comment ID on every later sync.
  *
  * @param comment - The GitHub comment whose creation time the mirror stores.
  * @returns The validated source timestamp.
- * @throws {@link PmCliError} When the timestamp is absent or unparseable; the
- * caller counts the comment as not written.
+ * @throws {@link PmCliError} When the timestamp is absent, not RFC 3339, or
+ * names an impossible calendar moment; the caller counts the comment as not
+ * written.
  */
 function requireGithubCommentTimestamp(comment: GhComment): string {
-  if (typeof comment.created_at !== "string" || !Number.isFinite(Date.parse(comment.created_at))) {
+  if (!Number.isFinite(parseSourceTimestamp(comment.created_at))) {
     throw new PmCliError(`GitHub comment ${comment.id} has an invalid source timestamp; nothing was written.`, EXIT_CODE.GENERIC_FAILURE);
   }
   return comment.created_at;

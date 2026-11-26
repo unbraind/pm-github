@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test, { type TestContext } from "node:test";
 import { comments, create, getHistoryPath, getItemPath, init, normalizeItemId, readLocatedItem, renderPmCommand } from "@unbrained/pm-cli/sdk";
-import { appendBlockerComments, buildCommentText, deriveAtomicItemId, syncGithubCommentsToAnnotations, type BlockerReferenceState, type GhComment, type GhIssue } from "../index.ts";
+import { appendBlockerComments, buildCommentText, deriveAtomicItemId, importGithubAtomic, parseImportOptions, runImport, syncGithubCommentsToAnnotations, type BlockerReferenceState, type GhComment, type GhIssue } from "../index.ts";
 import { appendGithubComment } from "../comment-mirror.ts";
 import { assertGithubImportOwner, GithubImportOwnershipError } from "../import-ownership.ts";
 import { withGithubInvocationScope } from "../workspace.ts";
@@ -215,6 +215,11 @@ test("issue-start help and documentation describe creating the tracked owner thr
   const guide = readFileSync(join(packageRoot, "docs", "import-issue-work.md"), "utf8");
   assert.ok(guide.includes("pm github import <owner>/<repo> --issue <N>"));
   assert.ok(guide.includes("create an ordinary item with a generated ID"));
+  // The repair guidance must state the limits of its own copy safety instead
+  // of claiming cross-directory safety no selector can guarantee.
+  const flatGuide = guide.replace(/\s+/g, " ");
+  assert.ok(flatGuide.includes("Only an absolute selector keeps the command safe from any other directory."));
+  assert.ok(flatGuide.includes("run the copy from the same directory and environment"));
 });
 
 test("native mirror records the source timestamp and recognizes existing long comments by ID", async t => {
@@ -237,18 +242,26 @@ test("invalid source comment timestamps are refused, never stored, and stay retr
     { ...remoteComment, id: 61, created_at: "", body: "Missing timestamp." },
     { ...remoteComment, id: 62, created_at: "not-a-timestamp", body: "Garbage timestamp." },
     { ...remoteComment, id: 63, created_at: "2026-02-31T25:61:61Z", body: "Out-of-range timestamp." },
+    // Date parsing would roll these impossible or free-form dates forward;
+    // the mirror must refuse them instead of storing a time that never existed.
+    { ...remoteComment, id: 64, created_at: "2026-02-30T03:04:05Z", body: "Impossible calendar date." },
+    { ...remoteComment, id: 65, created_at: "2027-02-29T00:00:00Z", body: "Non-leap-year February 29." },
+    { ...remoteComment, id: 66, created_at: "February 31, 2026", body: "Free-form rolled date." },
+    { ...remoteComment, id: 67, created_at: "2/31/2026", body: "Ambiguous rolled date." },
   ] satisfies GhComment[];
-  const batch = [remoteComment, ...malformed];
-  assert.deepEqual(await syncGithubCommentsToAnnotations(id, batch, tracker.pmRoot, 7), { added: 1, skipped: 0, failed: 3 });
+  const batch = [remoteComment, { ...remoteComment, id: 68, created_at: "2028-02-29T00:00:00Z", body: "A real leap day." }, ...malformed];
+  assert.deepEqual(await syncGithubCommentsToAnnotations(id, batch, tracker.pmRoot, 7), { added: 2, skipped: 0, failed: 7 });
   const rows = await storedComments(tracker.itemPath);
-  assert.equal(rows.length, 1, "only the comment with a valid timestamp may be stored");
+  assert.equal(rows.length, 2, "only the comments with real calendar timestamps may be stored");
   assert.equal(rows[0]!.created_at, remoteComment.created_at);
+  const leap = rows.find(row => row.text.includes("A real leap day."));
+  assert.equal(leap?.created_at, "2028-02-29T00:00:00Z");
   // A refused comment is never marked synced by its ID: the next sync retries
   // it, fails it again, and leaves the tracker byte-identical.
   const settled = tracker.snapshot();
-  assert.deepEqual(await syncGithubCommentsToAnnotations(id, batch, tracker.pmRoot, 7), { added: 0, skipped: 1, failed: 3 });
+  assert.deepEqual(await syncGithubCommentsToAnnotations(id, batch, tracker.pmRoot, 7), { added: 0, skipped: 2, failed: 7 });
   assert.deepEqual(tracker.snapshot(), settled, "a refused comment must never change the tracker");
-  assert.equal((await storedComments(tracker.itemPath)).length, 1);
+  assert.equal((await storedComments(tracker.itemPath)).length, 2);
 });
 
 test("linked reserved-ID import repeats byte-for-byte with newer, long local comments", async t => {
@@ -273,6 +286,33 @@ test("linked reserved-ID import repeats byte-for-byte with newer, long local com
     assert.equal(mirrored[0]!.created_at, remoteComment.created_at);
     assert.deepEqual(rows.filter(row => row.author !== remoteComment.user!.login), before);
     assert.ok(mirrored[0]!.text.endsWith("<!-- pm-github:comment:42 -->"));
+  });
+});
+
+test("an atomic import that meets a reserved item mid-transaction still refuses with the repair", async t => {
+  const directory = mkdtempSync(join(tmpdir(), "pm-github-atomic-repair-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const pmRoot = join(directory, ".agents", "pm");
+  const client = { pmRoot, cwd: directory, author: "fixture", noExtensions: true };
+  await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, client);
+  // The item appears only after the import's own planning, inside its atomic
+  // commit; the rethrow path must surface the repair refusal itself, not the
+  // generic transaction-failure wrapper that would bury its typed code.
+  const dependencies = {
+    resolveToken: () => "fixture",
+    fetchIssues: async () => [issue],
+    fetchIssueComments: async () => [],
+    commitAtomic: async (root: string, repoArg: string, entries: Parameters<typeof importGithubAtomic>[2], opts: Parameters<typeof importGithubAtomic>[3]) => {
+      await create({ id, type: "Task", title: "Hand-created mid-flight", description: "d",
+        body: "b", author: "fixture", tags: `gh:${repo}#7` }, client);
+      return importGithubAtomic(root, repoArg, entries, opts);
+    },
+  };
+  await assert.rejects(runImport(repo, pmRoot, parseImportOptions({ atomic: true }), dependencies), error => {
+    const refusal = error as { code?: string; exitCode?: number; message: string };
+    return refusal.code === "github_import_owner_conflict" && refusal.exitCode === 2 &&
+      refusal.message.startsWith("If this item belongs to") &&
+      refusal.message.includes(`pm update ${id} --field github_url=${issue.html_url}`);
   });
 });
 
