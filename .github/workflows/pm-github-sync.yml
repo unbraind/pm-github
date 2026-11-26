@@ -399,7 +399,7 @@ jobs:
             local patch="${RUNNER_TEMP}/pm-github-diagnostic.patch"
             # A newer-than-tested host keeps running; its hint leads any later failure message.
             local compatibility_hint=""
-            local hint_pattern='^pm CLI (0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){2} is newer than the newest host this pm-github release was tested with \((0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){2}\); continuing\. If the apply step fails, (move the workflow pin to a newer pm-github release\.|remove or update the pm-github-version hold that selected pm-github (0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){2}, or move the workflow pin to a newer pm-github release\.)$'
+            local hint_pattern='^pm CLI (0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){2} is newer than the newest host this pm-github release was tested with \((0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){2}\); continuing\. If the apply step fails, (move the workflow pin to a newer pm-github release\.|remove or update the pm-github-version hold that selected pm-github (0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){2}(-[0-9]+)?, or move the workflow pin to a newer pm-github release\.)$'
             if [[ -s "${RUNNER_TEMP}/pm-cli-host-compatibility-hint" ]]; then
               IFS= read -r compatibility_hint < "${RUNNER_TEMP}/pm-cli-host-compatibility-hint" || compatibility_hint=""
               # Only the preflight's exact fixed grammar is ever printed; replaced file text never reaches an annotation.
@@ -1207,7 +1207,7 @@ jobs:
           FAILURE_RULES="$(printf '%s' "${FAILURE_RULES}" | tr ',' '\n' | grep -Ex 'github-token-classic|github-token-fine-grained|npm-token|aws-access-key-id|slack-token|slack-webhook|openai-legacy-key|openai-api-key|openai-project-key|openai-service-account-key|anthropic-api-key|bearer-token|private-key-block|email-address|phone-number|absolute-host-path|windows-host-path|home-username|high-entropy-assignment' | sort -u | paste -sd, - || true)"
           # Only the preflight's exact hint grammar may enter the alert body: both remedy variants, canonical version slots, no suffix.
           hint=""
-          hint_pattern='^pm CLI (0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){2} is newer than the newest host this pm-github release was tested with \((0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){2}\); continuing\. If the apply step fails, (move the workflow pin to a newer pm-github release\.|remove or update the pm-github-version hold that selected pm-github (0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){2}, or move the workflow pin to a newer pm-github release\.)$'
+          hint_pattern='^pm CLI (0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){2} is newer than the newest host this pm-github release was tested with \((0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){2}\); continuing\. If the apply step fails, (move the workflow pin to a newer pm-github release\.|remove or update the pm-github-version hold that selected pm-github (0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){2}(-[0-9]+)?, or move the workflow pin to a newer pm-github release\.)$'
           if [[ "${COMPATIBILITY_HINT:-}" != *[$'\r\n']* && "${COMPATIBILITY_HINT:-}" =~ ${hint_pattern} ]]; then
             hint="${COMPATIBILITY_HINT}"
           fi

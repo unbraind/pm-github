@@ -137,10 +137,19 @@ test("failure alert leads with the validated preflight hint and refuses any othe
   assert.equal(readFileSync(receipt, "utf8"), marker + "\n\n" + hint + "\n\n" + plain.slice(marker.length + 2));
   run({ COMPATIBILITY_HINT: holdHint });
   assert.equal(readFileSync(receipt, "utf8"), marker + "\n\n" + holdHint + "\n\n" + plain.slice(marker.length + 2));
+  const prereleaseHoldHint = holdHint.replace("2026.11.15", "2026.11.25-1");
+  run({ COMPATIBILITY_HINT: prereleaseHoldHint });
+  assert.equal(readFileSync(receipt, "utf8"), marker + "\n\n" + prereleaseHoldHint + "\n\n" + plain.slice(marker.length + 2));
   const padded = hint.replace("(2026.11.22)", "(2026.11.022)");
   const unstable = hint.replace("pm CLI 2026.11.24", "pm CLI 2026.11.24-1");
   const holdPadded = holdHint.replace("selected pm-github 2026.11.15", "selected pm-github 2026.11.015");
-  for (const untrusted of ["Untrusted diagnostic. " + hint, hint + "\nUntrusted second line", hint + " Untrusted suffix.", padded, unstable, holdPadded, "pm CLI 2026.11.24 is newer than the newest host this pm-github release was tested with (2026.11.22-unvalidated); continuing."]) {
+  for (const untrusted of [
+    "Untrusted diagnostic. " + hint, hint + "\nUntrusted second line", hint + " Untrusted suffix.", padded, unstable, holdPadded,
+    "pm CLI 2026.11.24 is newer than the newest host this pm-github release was tested with (2026.11.22-unvalidated); continuing.",
+    prereleaseHoldHint.replace("2026.11.25-1", "2026.11.25-beta"),
+    prereleaseHoldHint.replace("pm CLI 2026.11.24", "pm CLI 2026.11.24-1"),
+    prereleaseHoldHint.replace("(2026.11.22)", "(2026.11.22-1)"),
+  ]) {
     run({ COMPATIBILITY_HINT: untrusted });
     assert.equal(readFileSync(receipt, "utf8"), plain, "only the preflight's exact hint grammar may enter the alert body");
   }
