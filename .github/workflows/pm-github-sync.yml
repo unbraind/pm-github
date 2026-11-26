@@ -287,7 +287,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node --input-type=module <<'PREFLIGHT'
+          node --input-type=module -e '
           import { execFileSync } from "node:child_process";
           import { appendFileSync, readFileSync } from "node:fs";
           import { join } from "node:path";
@@ -337,7 +337,7 @@ jobs:
             console.error(`::error::${reason}`);
             process.exitCode = 1;
           }
-          PREFLIGHT
+          '
 
       # The explicit publication allowlist is the SDK-resolved tracker (except
       # extensions, locks, checkpoints and extension setup files) and CHANGELOG.md. Nothing else may
