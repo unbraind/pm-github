@@ -320,8 +320,10 @@ jobs:
           let installed = null;
           try {
             // Execute the very launcher npm ci added to PATH, without global fallback.
+            // A hard kill bounds this version-only probe: a launcher that traps or
+            // ignores SIGTERM must never hold the job until its own timeout.
             const version = execFileSync(join(NPM_PROJECT_PATH, "node_modules/.bin/pm"), ["--version"],
-              { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10000, maxBuffer: 4096 });
+              { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10000, maxBuffer: 4096, killSignal: "SIGKILL" });
             // Allow one line ending from the CLI; never print malformed output.
             const line = version.replace(/\r?\n$/, "");
             if (isVersion(line)) installed = line;
@@ -360,6 +362,11 @@ jobs:
               ? (hold
                 ? `Restore a working caller pm CLI install, then remove or update the pm-github-version hold that selected pm-github ${PM_GITHUB_VERSION}, or move the workflow pin to a release that supports it.`
                 : "Restore a working caller pm CLI install, then move the workflow pin to a release that supports it.")
+              // No extension selection can support a prerelease host; only a stable CLI fixes it.
+              : !isStable(installed)
+                ? (range
+                  ? `Install a stable pm CLI release within the tested range ${minimum} through ${maximum}.`
+                  : "Install a stable pm CLI release, then retry with a release whose tested host range is readable.")
               : (hold
                 ? `Remove or update the pm-github-version hold that selected pm-github ${PM_GITHUB_VERSION}, or move the workflow pin to a release that supports ${installed}.`
                 : `Move the workflow pin to a release that supports ${installed}.`);
@@ -392,8 +399,11 @@ jobs:
             local patch="${RUNNER_TEMP}/pm-github-diagnostic.patch"
             # A newer-than-tested host keeps running; its hint leads any later failure message.
             local compatibility_hint=""
+            local hint_pattern='^pm CLI (0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){2} is newer than the newest host this pm-github release was tested with \((0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){2}\); continuing\. If the apply step fails, (move the workflow pin to a newer pm-github release\.|remove or update the pm-github-version hold that selected pm-github (0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){2}, or move the workflow pin to a newer pm-github release\.)$'
             if [[ -s "${RUNNER_TEMP}/pm-cli-host-compatibility-hint" ]]; then
-              compatibility_hint="$(<"${RUNNER_TEMP}/pm-cli-host-compatibility-hint")"
+              IFS= read -r compatibility_hint < "${RUNNER_TEMP}/pm-cli-host-compatibility-hint" || compatibility_hint=""
+              # Only the preflight's exact fixed grammar is ever printed; replaced file text never reaches an annotation.
+              [[ -z "${compatibility_hint}" ]] || [[ "${compatibility_hint}" =~ ${hint_pattern} ]] || compatibility_hint=""
             fi
             pm github workflow-diagnostic --report "${report_file}" --error-file "${error_file}" --diff "${diff_file}" --json > "${diagnostic}"
             { printf '%s\n' '--- /dev/null' '+++ b/workflow-diagnostic.txt' '@@ -0,0 +1 @@'; jq -r '"+" + (.reason | gsub("[\\r\\n]"; " "))' "${diagnostic}"; } > "${patch}"
@@ -1195,9 +1205,9 @@ jobs:
             *) failed_step="gated-sync" ;;
           esac
           FAILURE_RULES="$(printf '%s' "${FAILURE_RULES}" | tr ',' '\n' | grep -Ex 'github-token-classic|github-token-fine-grained|npm-token|aws-access-key-id|slack-token|slack-webhook|openai-legacy-key|openai-api-key|openai-project-key|openai-service-account-key|anthropic-api-key|bearer-token|private-key-block|email-address|phone-number|absolute-host-path|windows-host-path|home-username|high-entropy-assignment' | sort -u | paste -sd, - || true)"
-          # Only the preflight's own validated hint text may enter the alert body.
+          # Only the preflight's exact hint grammar may enter the alert body: both remedy variants, canonical version slots, no suffix.
           hint=""
-          hint_pattern='^pm CLI [0-9]+\.[0-9]+\.[0-9]+ is newer than the newest host this pm-github release was tested with \([0-9]+\.[0-9]+\.[0-9]+\); continuing\.'
+          hint_pattern='^pm CLI (0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){2} is newer than the newest host this pm-github release was tested with \((0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){2}\); continuing\. If the apply step fails, (move the workflow pin to a newer pm-github release\.|remove or update the pm-github-version hold that selected pm-github (0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){2}, or move the workflow pin to a newer pm-github release\.)$'
           if [[ "${COMPATIBILITY_HINT:-}" != *[$'\r\n']* && "${COMPATIBILITY_HINT:-}" =~ ${hint_pattern} ]]; then
             hint="${COMPATIBILITY_HINT}"
           fi

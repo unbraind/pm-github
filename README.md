@@ -1116,7 +1116,9 @@ chosen pm-github release, installed version (or that it is unreadable), the
 tested range when available, and the remedy: remove or update the
 `pm-github-version` hold when one selected the release, otherwise move the
 workflow pin to a release that supports the installed CLI. For an unreadable
-version, restore the caller's local CLI installation first.
+version, restore the caller's local CLI installation first. A prerelease host is
+refused with its own remedy: install a stable pm CLI release within the tested
+range. No extension pin or hold can make a release support a prerelease host.
 
 A host newer than the tested upper endpoint does not stop the job. The preflight
 emits one warning annotation and one job-summary line naming the installed CLI,

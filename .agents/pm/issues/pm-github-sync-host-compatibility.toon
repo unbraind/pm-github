@@ -2,14 +2,16 @@ id: pm-github-sync-host-compatibility
 title: Preflight gated sync and closeout host compatibility
 description: "https://github.com/unbraind/pm-github/issues/279"
 type: Issue
-status: open
+status: in_progress
 priority: 1
 tags[2]: changelog-unreleased,"gh:unbraind/pm-github#279"
 created_at: "2026-11-26T08:22:23.276Z"
-updated_at: "2026-11-26T13:11:56.213Z"
+updated_at: "2026-11-26T15:28:38.218Z"
+assignee: pi-pm-github-279-1126
+claim_principal: pi-pm-github-279-1126
 author: codex-agent
 acceptance_criteria: "Reject unsupported or unreadable installed pm CLI versions before both workflows run tracker commands. Report the release, host, tested range and pin remedy. Preserve mutation refusal details in apply failures."
-comments[15]{created_at,author,text}:
+comments[19]{created_at,author,text}:
   "2026-11-26T08:24:45.083Z",codex-agent,"Reproduced against published packages with the real pm CLI 2026.11.23 and a synthetic GitHub REST issue. Preview passed on pm-github 2026.11.15 and 2026.11.25. The older apply failed in github-import-owner before create, and the newer apply imported one issue. The linked pm-rl run failed in preview, while the other three linked runs failed in apply. Plan: gate both workflows just after npm ci, read the installed local launcher, derive the range from the selected release metadata and preserve guard failures at the shared hook boundary."
   "2026-11-26T08:28:47.956Z",codex-agent,"Both workflows preflight the exact caller-local launcher with no global fallback. The release-selected npm metadata records a floor exercised by the packed minimum-SDK test and an inclusive ceiling from the exact lockfile-installed development host. The older release records 2026.10.23 through 2026.11.6. A supported version continues silently. Unreadable CLI or release evidence stops the job without leaking process output. The shared ownership/closeout hook wrapper preserves raw thrown detail across the SDK error boundary, and closeout redacts it before returning a report."
   "2026-11-26T08:56:58.031Z",codex-agent,"The first linked run executed 1,350 tests with 1,346 passes. Four inventory tests identified stale generated anchors shifted by the workflow and guard changes. Regenerated the ownership inventory from the changed source and will verify the focused inventory file again."
@@ -25,6 +27,10 @@ comments[15]{created_at,author,text}:
   "2026-11-26T12:30:47.444Z",pi-pm-github-279-1126,"Exact-head CI on b33de0d is green within the watch window: test (22) and test (26) both passed (CI run 45815814771 completed with success, certifying coverage and the release gates at unchanged thresholds), and codeql, CodeQL, semgrep and the Greptile review all passed. The verified-auto-merge and audit-armed-requests entries skip by design. No pending runs remain for this head."
   "2026-11-26T13:00:21.855Z",pi-pm-github-279-1126,"Final round-2 state: both pushed heads are CI-certified. Code head b33de0d passed test (22) 10m36s and test (26) 21m53s with codeql, CodeQL, semgrep and Greptile green (CI run 45815814771 success). Tracker-record head bb4b1b7 also passed test (22) and test (26) (CI run 45820392856 success). The item is released and open; no pending runs remain. Open risk (accepted): the declared known-incompatible host mechanism (pmCliIncompatibleFrom) ships with no release using it yet; its validation, fail-closed contradiction handling and maintainer how-to are covered by tests and docs, and the first release that needs it can set it without further code change."
   "2026-11-26T13:11:52.622Z",pi-pm-github-279-1126,"Cutoff note: the code-bearing heads b33de0d and bb4b1b7 are fully CI-certified green. The final tracker-record head 56b39fd (this .agents/pm-only change) queued its CI at the 30-minute cutoff; pending exact-head runs to list: https://github.com/unbraind/pm-github/actions/runs/45824953107 (CI) and https://github.com/unbraind/pm-github/actions/runs/45824952810 (CodeQL). Stopping per the watch budget; the identical tracker-only head bb4b1b7 already completed CI success (run 45820392856)."
+  "2026-11-26T14:59:52.667Z",pi-pm-github-279-1126,"Review round 3 (nine unresolved CodeRabbit threads on the round-2 head): all eight new findings verified valid and fixed; the first thread (explicit hold in the pin remedy) was already fixed in the round-2 commit b33de0d and verified at the head. Fixes: (1) both preflight probes now killSignal SIGKILL so a launcher that traps or ignores SIGTERM cannot hold the job past the 10s probe deadline; (2) a prerelease host gets its own remedy (install a stable pm CLI release within the tested range; retry wording when the range itself is unreadable) instead of the pin/hold wording that cannot fix it; (3) report_workflow_failure reads one line of the hint file and prints it only when it matches the preflight's exact fixed grammar (both remedy variants, canonical version slots, fully anchored), so a replaced file can never bypass the privacy gate in either the gated or gate-blocked branch; (4) the sync alert body validates the same full grammar, so poisoned step-output text with any suffix, padding or prerelease slot is refused; (5) package-metadata and the preflight test now share the preflights' canonical stable-version grammar, rejecting zero-padded components like 2026.11.023; (6) scenario fixtures always set REQUESTED_PM_GITHUB_VERSION (hold ?? empty) so inherited shell values cannot flip no-hold wording; (7) the fleet-pair test follows the release's recorded policy (floor, ceiling and pmCliIncompatibleFrom pass-through) so a pin advance or a new declared cutoff changes the assertion instead of breaking the fixture. The review's Linked-Issues pre-merge check (stop newer hosts) is refused with evidence: the issue author corrected that wording in the previous round and this round's instructions keep warn-and-continue; the real pair (pm CLI 2026.11.24 with this release's locked host 2026.11.22) is covered by the fleet-pair warning test."
+  "2026-11-26T14:59:58.751Z",pi-pm-github-279-1126,"Round 3 revert proofs (disposable copy, original worktree untouched). Stage A - both workflows restored to the reviewed round-2 head: 10 focused tests fail exactly as the findings predict: 'launcher ignoring SIGTERM' for sync and closeout (the probe hangs to the outer timeout, 15.08s each, instead of being killed at 10s), the three prerelease-host scenarios for both workflows (old pin/hold wording), the apply-failure hint test (the old reporter prints replaced file content unvalidated) and the alert hint test (the old prefix-only pattern accepts suffixed/padded text). Stage B - only killSignal removed: exactly the two SIGTERM-trap scenarios fail. Stage C - only the metadata grammar loosened back to digit-dot form: exactly the canonical grammar test fails (padding accepted). No existing test was weakened or deleted; the round-2 scenario set keeps all its assertions and gained six scenarios and three poisoned-hint regression cases."
+  "2026-11-26T15:18:51.598Z",pi-pm-github-279-1126,"Round 3 gates so far (exact worktree, concurrency 2): typecheck, eslint, docstring gate, privacy gate (10686 objects), regenerated-changelog check and publish-attestation all pass after a full build; identity inventory regenerated and --check clean. Focused suites: workflow-host-compatibility 51/51 (includes the 10-second hard-kill scenarios), daily-sync-alert + package-metadata with it 70/70 across the trio, closeout-workflow-publication + self-versioned-workflows + identity-inventory 102/102 (both preflight shells stay byte-identical and the reporter hint blocks match), verify-release-publish-attestation + round-twelve 40/40. The import-gate suite is running; the full release gate is delegated to exact-head CI as before."
+  "2026-11-26T15:28:38.218Z",pi-pm-github-279-1126,"Round 3 gates complete: import-gate 54/54, zero failures. Full release gate (npm/bun with coverage) stays delegated to exact-head CI at unchanged thresholds per the watch budget; a first detached local run of import-gate was killed by a tool timeout mid-suite and is not a test failure - the rerun completed green."
 files[14]{path,scope}:
   .github/workflows/pm-github-closeout.yml,project
   .github/workflows/pm-github-sync.yml,project
@@ -40,7 +46,7 @@ files[14]{path,scope}:
   test/verify-release-publish-attestation.test.ts,project
   test/workflow-diagnostic-class.test.ts,project
   test/workflow-host-compatibility.test.ts,project
-tests[4]:
+tests[5]:
   - command: "npm run build && npm run build:test && PATH=./node_modules/.bin:$PATH PM_TEST_DEPTH=quick node --test --test-concurrency=2 test/bot-pr-workflow.test.ts test/changelog-placement.test.ts test/ci-codeql.test.ts test/ci-routing.test.ts test/ci-tiers.test.ts test/cited-issue-adoption.test.ts test/closeout-attribution.test.ts test/closeout-publication-text.test.ts test/closeout-revision.test.ts test/closeout-selection.test.ts test/closeout-workflow.test.ts test/closeout.test.ts test/compatibility-floor.test.ts test/daily-sync-alert.test.ts test/daily-sync-idempotency.test.ts test/daily-sync-privacy.test.ts test/dependabot-merge.test.ts test/gate.test.ts test/identity-inventory.test.ts test/import-conflict-report.test.ts test/import-gate.test.ts test/import-ownership.test.ts test/legacy-description-compatibility.test.ts test/minimum-sdk-consumer.test.ts test/owner-field-values.test.ts test/ownership-consistency.test.ts test/package-metadata.test.ts test/privacy-gate.test.ts test/refresh.test.ts test/review-round1.test.ts test/round-eighteen.test.ts test/round-seven.test.ts test/round-seventeen.test.ts test/round-twelve.test.ts test/scheduled-refusals.test.ts test/scoped-ownership.test.ts test/sdk-adoption.test.ts test/self-versioned-workflows.test.ts test/workflow-diagnostic-class.test.ts test/workflow-host-compatibility.test.ts test/workflow-rule-names.test.ts test/workspace-resolution.test.ts"
     scope: project
     timeout_seconds: 1500
@@ -70,6 +76,13 @@ tests[4]:
     provenance:
       author: pi-pm-github-279-1126
       created_at: "2026-11-26T11:24:45.855Z"
+      source_kind: local_mutation
+      source_ref: feat/sync-host-compatibility-preflight
+  - command: "PATH=./node_modules/.bin:$PATH PM_TEST_DEPTH=quick node --test --test-concurrency=2 test/workflow-host-compatibility.test.ts test/daily-sync-alert.test.ts test/package-metadata.test.ts"
+    scope: project
+    provenance:
+      author: pi-pm-github-279-1126
+      created_at: "2026-11-26T15:00:04.700Z"
       source_kind: local_mutation
       source_ref: feat/sync-host-compatibility-preflight
 docs[5]{path,scope}:

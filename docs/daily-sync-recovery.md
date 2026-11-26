@@ -4,7 +4,8 @@ For a host compatibility stop, check the installed pm CLI and tested host
 range in the job summary. The preflight stops a host below the tested range, an
 unreadable or prerelease local CLI, or a release-declared known-incompatible
 host; its remedy names the `pm-github-version` hold that selected the release,
-or the workflow pin for hold-free callers. A newer-than-tested host does not
+or the workflow pin for hold-free callers, while a prerelease local CLI is told
+to install a stable release within the tested range instead. A newer-than-tested host does not
 stop the run: it logs one warning and continues, and a later apply failure and
 this alert lead with that hint, both versions and the remedy, before the
 preserved underlying error. Upgrade the pm CLI and both workflow pins together,

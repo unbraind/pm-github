@@ -23,6 +23,7 @@ interface Scenario {
   readonly case?: "below_minimum" | "newer_untested" | "declared_incompatible" | "unreadable";
   readonly hold?: string;
   readonly failure?: boolean;
+  readonly termTrap?: boolean;
   readonly metadata?: string;
   readonly maximum?: string;
   readonly declared?: string;
@@ -39,9 +40,12 @@ const scenarios: readonly Scenario[] = [
   { name: "newer host below the declared known-incompatible version", version: newer, declared: declaredFrom, case: "newer_untested" },
   { name: "declared known-incompatible host", version: "2026.12.1", declared: declaredFrom, case: "declared_incompatible" },
   { name: "prerelease host", version: "2026.11.6-1", case: "unreadable" },
+  { name: "prerelease host with an explicit hold", version: "2026.11.6-1", hold: release, case: "unreadable" },
+  { name: "prerelease host with an unreadable range", version: "2026.11.6-1", metadata: "{}", case: "unreadable" },
   { name: "missing local launcher", version: null, case: "unreadable" },
   { name: "missing local launcher with an explicit hold", version: null, hold: release, case: "unreadable" },
   { name: "failing launcher", version: maximum, failure: true, case: "unreadable" },
+  { name: "launcher ignoring SIGTERM", version: maximum, termTrap: true, case: "unreadable" },
   { name: "unreadable version", version: "malformed\n::error::fixture value", case: "unreadable" },
   { name: "missing range", version: maximum, metadata: "{}", case: "unreadable" },
   { name: "unreadable metadata", version: maximum, metadata: "[", case: "unreadable" },
@@ -51,7 +55,10 @@ const scenarios: readonly Scenario[] = [
   { name: "prerelease declaration", version: newer, declared: `${declaredFrom}-1`, case: "unreadable" },
 ];
 
-const isStableText = (value: string) => /^\d+\.\d+\.\d+$/.test(value);
+/** The canonical grammar both preflights enforce; zero-padded components are refused. */
+const canonicalStable = /^(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*)){2}$/;
+const canonicalVersion = /^(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){2}(?:-[0-9]+)?$/;
+const isStableText = (value: string) => canonicalStable.test(value);
 const compareVersions = (left: string, right: string) => {
   const delta = left.split(".").map(Number).map((part, index) => part - Number(right.split(".")[index]));
   return delta.find(part => part !== 0) ?? 0;
@@ -74,7 +81,8 @@ function expectedOutcome(scenario: Scenario) {
   const rangeValid = !scenario.metadata && isStableText(minimum) && isStableText(ceiling)
     && compareVersions(minimum, ceiling) <= 0
     && (scenario.declared === undefined || declaredStable && compareVersions(scenario.declared, ceiling) > 0);
-  const installed = scenario.version === null || scenario.failure || (scenario.version !== null && !/^\d+(?:\.\d+){2}(?:-\d+)?$/.test(scenario.version))
+  const installed = scenario.version === null || scenario.failure || scenario.termTrap
+    || (scenario.version !== null && !canonicalVersion.test(scenario.version))
     ? null : scenario.version;
   if (scenario.case === undefined) return { range: { minimum, maximum: ceiling }, installed, reason: "" };
   if (scenario.case === "newer_untested") {
@@ -97,9 +105,14 @@ function expectedOutcome(scenario: Scenario) {
     ? (scenario.hold !== undefined
       ? `Restore a working caller pm CLI install, then remove or update the pm-github-version hold that selected pm-github ${release}, or move the workflow pin to a release that supports it.`
       : "Restore a working caller pm CLI install, then move the workflow pin to a release that supports it.")
-    : (scenario.hold !== undefined
-      ? `Remove or update the pm-github-version hold that selected pm-github ${release}, or move the workflow pin to a release that supports ${installed}.`
-      : `Move the workflow pin to a release that supports ${installed}.`);
+    // No extension selection can support a prerelease host; only a stable CLI fixes it.
+    : !isStableText(installed)
+      ? (rangeValid
+        ? `Install a stable pm CLI release within the tested range ${minimum} through ${ceiling}.`
+        : "Install a stable pm CLI release, then retry with a release whose tested host range is readable.")
+      : (scenario.hold !== undefined
+        ? `Remove or update the pm-github-version hold that selected pm-github ${release}, or move the workflow pin to a release that supports ${installed}.`
+        : `Move the workflow pin to a release that supports ${installed}.`);
   return { range: rangeValid ? { minimum, maximum: ceiling } : null, installed, reason: `${evidence} ${host} ${remedy}` };
 }
 
@@ -129,9 +142,9 @@ for (const kind of ["sync", "closeout"]) {
     writeFileSync(join(root, "pm-github-release.json"), releaseMetadata(scenario));
     if (scenario.version !== null) {
       writeFileSync(join(bin, "pm"), `#!/bin/bash
-[[ "$*" == --version ]] || exit 91
+${scenario.termTrap ? 'trap "" TERM' + "\n" : ""}[[ "$*" == --version ]] || exit 91
 printf '%s\\n' '${scenario.version}'
-${scenario.failure ? "exit 1" : ""}
+${scenario.termTrap ? "sleep 30" : scenario.failure ? "exit 1" : ""}
 `, { mode: 0o755 });
     }
 
@@ -174,14 +187,23 @@ ${scenario.failure ? "exit 1" : ""}
   });
 }
 
-test("the fleet pair passes with the warning: pm CLI newer than this release's locked host", t => {
+test("the real fleet pair follows this release's recorded compatibility policy", t => {
   const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
-    peerDependencies: Record<string, string>; devDependencies: Record<string, string>;
+    peerDependencies: Record<string, string>; devDependencies: Record<string, string>; pmCliIncompatibleFrom?: string;
   };
   const cli = "@unbrained/pm-cli";
-  const floor = /^>=(\d+\.\d+\.\d+)$/.exec(manifest.peerDependencies[cli]!)![1];
+  const peerFloor = manifest.peerDependencies[cli]!;
+  assert.ok(peerFloor.startsWith(">="), "the peer dependency must declare a canonical floor");
+  const floor = peerFloor.slice(2);
+  assert.match(floor, canonicalStable);
   const ceiling = manifest.devDependencies[cli]!;
-  assert.ok(compareVersions("2026.11.24", ceiling) > 0, "the fixture host must be newer than this release's tested ceiling");
+  const declared = manifest.pmCliIncompatibleFrom;
+  const host = "2026.11.24";
+  // The expected outcome follows the recorded policy, so a pin advance or a new
+  // declared cutoff changes the assertion instead of breaking the fixture.
+  const expected = compareVersions(host, floor) < 0 ? "below_minimum"
+    : declared !== undefined && compareVersions(host, declared) >= 0 ? "declared_incompatible"
+    : compareVersions(host, ceiling) > 0 ? "newer_untested" : "supported";
   for (const kind of ["sync", "closeout"]) {
     const root = mkdtempSync(join(tmpdir(), "workflow-host-"));
     t.after(() => rmSync(root, { recursive: true, force: true }));
@@ -189,28 +211,48 @@ test("the fleet pair passes with the warning: pm CLI newer than this release's l
     const bin = join(project, "node_modules/.bin");
     mkdirSync(bin, { recursive: true });
     writeFileSync(join(bin, "pm"), `#!/bin/bash
-printf '%s\\n' '2026.11.24'
+printf '%s\\n' '${host}'
 `, { mode: 0o755 });
     writeFileSync(join(root, "pm-github-release.json"), JSON.stringify({
       name: "pm-github", version: release,
       peerDependencies: { [cli]: `>=${floor}` },
       devDependencies: { [cli]: ceiling },
+      ...(declared !== undefined ? { pmCliIncompatibleFrom: declared } : {}),
     }));
     const { jobs } = parse(readFileSync(new URL(`../.github/workflows/pm-github-${kind}.yml`, import.meta.url), "utf8")) as { jobs: Record<string, { steps: Step[] }> };
     const preflight = jobs[`gated-${kind}`]!.steps.find(step => step.name === name)!;
     const child = spawnSync("bash", ["-c", preflight.run! + '\nprintf ran > "$PREVIEW_MARKER"'], {
       cwd: root, encoding: "utf8", timeout: 15_000,
       env: { ...process.env, PM_GITHUB_VERSION: release, NPM_PROJECT_PATH: project, RUNNER_TEMP: root,
-        GITHUB_STEP_SUMMARY: join(root, "job-summary"), GITHUB_OUTPUT: join(root, "step-output"), PREVIEW_MARKER: join(root, "preview-ran") },
+        GITHUB_STEP_SUMMARY: join(root, "job-summary"), GITHUB_OUTPUT: join(root, "step-output"), PREVIEW_MARKER: join(root, "preview-ran"),
+        REQUESTED_PM_GITHUB_VERSION: "" },
     });
     assert.ifError(child.error);
-    const hint = `pm CLI 2026.11.24 is newer than the newest host this pm-github release was tested with (${ceiling}); continuing. If the apply step fails, move the workflow pin to a newer pm-github release.`;
-    assert.equal(child.status, 0, child.stderr);
-    assert.equal(existsSync(join(root, "preview-ran")), true);
-    assert.deepEqual(JSON.parse(child.stdout), { case: "newer_untested", pm_github_version: release, pm_cli_version: "2026.11.24", tested_host_range: { minimum: floor, maximum: ceiling }, reason: hint });
-    assert.equal(child.stderr, `::warning::${hint}\n`);
+    if (expected === "supported") {
+      assert.equal(child.status, 0, child.stderr);
+      assert.equal(child.stdout + child.stderr, "", "the fleet host is inside the tested range: silent pass");
+      continue;
+    }
+    if (expected === "newer_untested") {
+      const hint = `pm CLI ${host} is newer than the newest host this pm-github release was tested with (${ceiling}); continuing. If the apply step fails, move the workflow pin to a newer pm-github release.`;
+      assert.equal(child.status, 0, child.stderr);
+      assert.equal(existsSync(join(root, "preview-ran")), true);
+      assert.deepEqual(JSON.parse(child.stdout), { case: "newer_untested", pm_github_version: release, pm_cli_version: host, tested_host_range: { minimum: floor, maximum: ceiling }, reason: hint });
+      assert.equal(child.stderr, `::warning::${hint}\n`);
+      continue;
+    }
+    const evidence = expected === "declared_incompatible"
+      ? `pm-github ${release} was tested with pm CLI ${floor} through ${ceiling} and declares pm CLI ${declared} or newer known-incompatible.`
+      : `pm-github ${release} was tested with pm CLI ${floor} through ${ceiling}.`;
+    assert.equal(child.status, 1, child.stderr);
+    assert.equal(existsSync(join(root, "preview-ran")), false);
+    assert.deepEqual(JSON.parse(child.stdout), { case: expected, pm_github_version: release, pm_cli_version: host,
+      tested_host_range: { minimum: floor, maximum: ceiling },
+      ...(expected === "declared_incompatible" ? { declared_incompatible_from: declared } : {}),
+      reason: `${evidence} This repository installs pm CLI ${host}. Move the workflow pin to a release that supports ${host}.` });
   }
 });
+
 
 test("apply failures lead with the newer-host hint before the preserved underlying error", t => {
   const underlying = "Extension mutation guard github-import-owner failed before import";
@@ -237,34 +279,49 @@ esac
     const reportFile = join(root, "report.json");
     const errorFile = join(root, "error.log");
 
-    const reportFailure = (withHint: boolean, gateBlock = false) => {
+    const reportFailure = (hintText: string | null, gateBlock = false) => {
       rmSync(runnerTemp, { recursive: true, force: true });
       mkdirSync(runnerTemp, { recursive: true });
       writeFileSync(reportFile, "{}");
       writeFileSync(errorFile, "");
-      if (withHint) writeFileSync(join(runnerTemp, "pm-cli-host-compatibility-hint"), `${hint}\n`);
+      if (hintText !== null) writeFileSync(join(runnerTemp, "pm-cli-host-compatibility-hint"), `${hintText}\n`);
       const child = spawnSync("bash", ["-c", `source "${scopeFile}"\nreport_workflow_failure "${reportFile}" "${errorFile}"`], {
         cwd: root, encoding: "utf8", timeout: 15_000,
-        env: { ...process.env, PATH: binDir + delimiter + process.env.PATH, RUNNER_TEMP: runnerTemp, GATE_BLOCK: gateBlock ? "1" : "" },
+        env: { ...process.env, PATH: binDir + delimiter + process.env.PATH, RUNNER_TEMP: runnerTemp,
+          GATE_BLOCK: gateBlock ? "1" : "", REQUESTED_PM_GITHUB_VERSION: "" },
       });
       assert.ifError(child.error);
       return child;
     };
 
-    const withHint = reportFailure(true);
+    const withHint = reportFailure(hint);
     assert.equal(withHint.status, 0, withHint.stdout + withHint.stderr);
     assert.equal(withHint.stdout, `::error::${hint} ${underlying}\n`);
     // The privacy gate scans only the untrusted reason; the hint is workflow-built text.
     assert.equal(readFileSync(join(runnerTemp, "pm-github-diagnostic.patch"), "utf8"),
       `--- /dev/null\n+++ b/workflow-diagnostic.txt\n@@ -0,0 +1 @@\n+${underlying}\n`);
 
-    const withoutHint = reportFailure(false);
+    const withoutHint = reportFailure(null);
     assert.equal(withoutHint.status, 0, withoutHint.stdout + withoutHint.stderr);
     assert.equal(withoutHint.stdout, `::error::${underlying}\n`);
 
-    const blocked = reportFailure(true, true);
+    const blocked = reportFailure(hint, true);
     assert.equal(blocked.status, 0, blocked.stdout + blocked.stderr);
     assert.equal(blocked.stdout, `::error::${hint} Failure diagnostic blocked by the privacy gate; review source content before retrying. No branch was published.\n`);
+
+    // A replaced hint file never reaches either annotation branch.
+    const secret = "ghp_" + "A".repeat(36);
+    for (const replaced of [`${hint} Untrusted suffix.`, `Untrusted diagnostic ${secret}`, hint.replace(`(${maximum})`, "(2026.11.006)")]) {
+      const poisoned = reportFailure(replaced);
+      assert.equal(poisoned.status, 0, poisoned.stdout + poisoned.stderr);
+      assert.equal(poisoned.stdout, `::error::${underlying}\n`, "replaced hint text must never reach the annotation");
+      const poisonedBlocked = reportFailure(replaced, true);
+      assert.equal(poisonedBlocked.status, 0, poisonedBlocked.stdout + poisonedBlocked.stderr);
+      assert.equal(poisonedBlocked.stdout, "::error::Failure diagnostic blocked by the privacy gate; review source content before retrying. No branch was published.\n",
+        "the gate-blocked branch never prints an unverified hint");
+      assert.ok(!poisonedBlocked.stdout.includes(secret));
+    }
+
   }
 });
 
