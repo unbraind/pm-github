@@ -11,6 +11,7 @@ import { init, get, create, acquireLock } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension, { acceptGithubWebhook, reconcileGithubWebhooks, WebhookRefusal, type GithubWebhookDelivery } from "../index.ts";
 import { runRefresh } from "../refresh.ts";
+import { withGithubInvocationScope } from "../workspace.ts";
 import { withEnv, withMockGithub, jsonResponse } from "./helpers/mock-github-server.ts";
 import { boundedCli } from "./helpers/bounded-cli.ts";
 
@@ -57,6 +58,15 @@ function upstream(state = "CLOSED") {
     url: "https://github.com/fixture/repo/issues/1", author: { login: "fixture" },
     labels: { nodes: [], pageInfo: { hasNextPage: false, endCursor: null } } };
 }
+
+test("the reconcile recovery hint replays the failing invocation's tracker selector", async () => fixture(async root => {
+  // The hint is rendered from one invocation that already selected a tracker;
+  // copying it must poll THAT tracker, never whatever the copy's directory holds.
+  const receipt = await withGithubInvocationScope("tracker-b", () => reconcileGithubWebhooks(root, "fixture/repo"));
+  assert.equal(receipt.recovery, "pm --pm-path tracker-b github refresh fixture/repo --dry-run");
+  const implicit = await reconcileGithubWebhooks(root, "fixture/repo");
+  assert.equal(implicit.recovery, "pm github refresh fixture/repo --dry-run");
+}));
 
 test("signature failures perform zero writes even on absent storage and duplicate deliveries", async () => fixture(async root => {
   const input = delivery();

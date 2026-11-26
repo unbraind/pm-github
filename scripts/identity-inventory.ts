@@ -15,6 +15,7 @@ const additional = new Map([
   ["projects.ts/indexSelectedByIssue", "Build one complete ownership index, then validate only selected tracker items matched by current board issue keys or project-item IDs. Off-board conflicts warn; a peer claiming a board candidate still refuses."],
   ["import-ownership.ts/ownershipStateOf", "Identity-safe state read: the states map is keyed by object identity, so a separately allocated copy of a corpus record derives its claims instead of reading as unowned; every planner and selector uses it."],
   ["import-ownership.ts/warnGithubOwnershipScope", "Diagnostics only: malformed native numbers and conflicts wholly outside selected targets emit warnings naming affected IDs; no warning chooses an owner or authorizes writes."],
+  ["import-repair.ts/withReservedIdRepair", "Repair rendering only: it re-evaluates the refused item's post-link claims through the shared ownership-claims parser and withholds the link command when any claim contradicts the target issue; the offered command updates one declared field and authorizes no write by itself."],
 ]);
 
 /** Minimal syntax shape keeps this tooling independent of the compiler's optional JavaScript API. */

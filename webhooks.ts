@@ -3,8 +3,9 @@ import { writeGithubStateAtomic, syncGithubStatePath } from "./durable-state.ts"
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { mkdir, readdir, readFile } from "node:fs/promises";
 import { join, basename } from "node:path";
-import { acquireLock, resolvePmRoot, ensureTrackerInitialized } from "@unbrained/pm-cli/sdk";
+import { acquireLock, renderPmCommand, resolvePmRoot, ensureTrackerInitialized } from "@unbrained/pm-cli/sdk";
 import { runRefresh } from "./refresh.ts";
+import { githubInvocationPath, repairScopeArgs } from "./workspace.ts";
 
 /** Stable refusal discriminators; no secret, payload or storage path is included in diagnostics. */
 export type WebhookRefusalCode = "invalid_signature" | "invalid_event" | "invalid_options" | "delivery_conflict" | "inbox_corrupt" | "inbox_unavailable" | "provider_unavailable";
@@ -196,6 +197,6 @@ export async function reconcileGithubWebhooks(pmRoot: string, repoArg: string, l
       reconciled++;
     }
     return { ok: true, repo, selected: records.length, remaining: selected.length - reconciled, reconciled, retry: records.length - reconciled, unlinked,
-      proposals, recovery: `pm github refresh ${repo} --dry-run` };
+      proposals, recovery: renderPmCommand([...repairScopeArgs(githubInvocationPath()), "github", "refresh", repo, "--dry-run"]) };
   }, "github-webhooks-reconcile");
 }
