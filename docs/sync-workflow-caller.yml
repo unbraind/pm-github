@@ -1,6 +1,9 @@
 # Pin a reviewed release SHA and its matching tag comment; Dependabot maintains both.
 # The workflow resolves its exact package version from the release tag on that SHA.
 # See README.md for the daily github-actions pm-toolchain group configuration.
+# Failure alerts are owned by github-actions[bot] and carry <!-- pm-github-sync-status -->.
+# Legacy bot alerts are recognized by the exact title and marked on the next failure.
+# The job summary reports same-title issues from other authors left untouched.
 # With the App client ID/key mapping below, runs start at once and auto-merge lands
 # the PR after required checks; with GITHUB_TOKEN, each new run waits for one approval
 # (a maintainer or an approval sweep), and auto-merge then lands it.
