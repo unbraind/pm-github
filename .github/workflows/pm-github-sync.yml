@@ -114,6 +114,7 @@ jobs:
       parked-run-urls: ${{ steps.ci_handoff.outputs.parked-run-urls }}
       ci-confirmation: ${{ steps.ci_handoff.outputs.ci-confirmation }}
       failure-rules: ${{ steps.failure_rules.outputs.rules }}
+      compatibility-hint: ${{ steps.host_compatibility.outputs.hint }}
     env:
       REPOSITORY: ${{ inputs.repository }}
       ADOPT_CITED: ${{ inputs.adopt-cited }}
@@ -284,15 +285,17 @@ jobs:
           printf '%s/node_modules/.bin\n' "${NPM_PROJECT_PATH}" >> "${GITHUB_PATH}"
 
       - name: Check pm CLI host compatibility
+        id: host_compatibility
         shell: bash
         run: |
           set -euo pipefail
           node --input-type=module -e '
           import { execFileSync } from "node:child_process";
-          import { appendFileSync, readFileSync } from "node:fs";
+          import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
           import { join } from "node:path";
 
-          const { GITHUB_STEP_SUMMARY, NPM_PROJECT_PATH, PM_GITHUB_VERSION, RUNNER_TEMP } = process.env;
+          const { GITHUB_OUTPUT, GITHUB_STEP_SUMMARY, NPM_PROJECT_PATH, PM_GITHUB_VERSION, RUNNER_TEMP } = process.env;
+          const hold = Boolean(process.env.REQUESTED_PM_GITHUB_VERSION);
           const cli = "@unbrained/pm-cli";
           const versionPattern = /^(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){2}(?:-[0-9]+)?$/;
           const isVersion = value => typeof value === "string" && versionPattern.test(value) && !/\s/.test(value);
@@ -303,11 +306,15 @@ jobs:
           const peer = release?.peerDependencies?.[cli];
           const minimum = typeof peer === "string" && peer.startsWith(">=") ? peer.slice(2) : undefined;
           const maximum = release?.devDependencies?.[cli];
+          // A reviewed release may declare the first pm CLI version it is known not to work with.
+          const declared = release?.pmCliIncompatibleFrom;
           const compare = (left, right) => {
             const parts = right.split(".").map(BigInt);
             return left.split(".").map((part, i) => BigInt(part) - parts[i]).find(part => part !== 0n) ?? 0n;
           };
+          // A declaration at or below the tested ceiling contradicts the recorded range.
           const range = isStable(minimum) && isStable(maximum) && compare(minimum, maximum) <= 0n
+            && (declared === undefined || isStable(declared) && compare(declared, maximum) > 0n)
             ? { minimum, maximum } : null;
 
           let installed = null;
@@ -320,18 +327,45 @@ jobs:
             if (isVersion(line)) installed = line;
           } catch { /* Missing, failing or unreadable launcher. */ }
 
-          let code;
-          if (!range) code = "pm_github_host_range_unreadable";
-          else if (!installed) code = "pm_cli_version_unreadable";
-          else if (!isStable(installed) || compare(installed, minimum) < 0n || compare(installed, maximum) > 0n) code = "pm_cli_outside_tested_range";
-          if (code) {
-            const evidence = range ? `pm-github ${PM_GITHUB_VERSION} was tested with pm CLI ${minimum} through ${maximum}.`
+          // A supported host stays silent; every other outcome names its case in the JSON report.
+          let outcome;
+          if (!range || !installed || !isStable(installed)) outcome = "unreadable";
+          else if (compare(installed, minimum) < 0n) outcome = "below_minimum";
+          else if (declared !== undefined && compare(installed, declared) >= 0n) outcome = "declared_incompatible";
+          else if (compare(installed, maximum) > 0n) outcome = "newer_untested";
+
+          if (outcome === "newer_untested") {
+            // One warning annotation and one job-summary line; the run continues.
+            const hint = `pm CLI ${installed} is newer than the newest host this pm-github release was tested with (${maximum}); continuing. `
+              + (hold
+                ? `If the apply step fails, remove or update the pm-github-version hold that selected pm-github ${PM_GITHUB_VERSION}, or move the workflow pin to a newer pm-github release.`
+                : "If the apply step fails, move the workflow pin to a newer pm-github release.");
+            writeFileSync(join(RUNNER_TEMP, "pm-cli-host-compatibility-hint"), `${hint}\n`);
+            // Later failure reports and the alert job quote only this workflow-built text.
+            if (GITHUB_OUTPUT) appendFileSync(GITHUB_OUTPUT, `hint=${hint}\n`);
+            appendFileSync(GITHUB_STEP_SUMMARY, `### pm CLI host compatibility\n\n${hint}\n`);
+            console.log(JSON.stringify({ case: outcome, pm_github_version: PM_GITHUB_VERSION, pm_cli_version: installed, tested_host_range: range, reason: hint }));
+            console.error(`::warning::${hint}`);
+          } else if (outcome) {
+            const evidence = range
+              ? (outcome === "declared_incompatible"
+                ? `pm-github ${PM_GITHUB_VERSION} was tested with pm CLI ${minimum} through ${maximum} and declares pm CLI ${declared} or newer known-incompatible.`
+                : `pm-github ${PM_GITHUB_VERSION} was tested with pm CLI ${minimum} through ${maximum}.`)
               : `The tested host range for pm-github ${PM_GITHUB_VERSION} could not be verified.`;
-            const host = installed ? `This repository installs pm CLI ${installed}.` : "The installed pm CLI version is unreadable.";
-            const remedy = installed ? `Move the workflow pin to a release that supports ${installed}.`
-              : "Restore a working caller pm CLI install, then move the workflow pin to a release that supports it.";
+            const host = installed === null
+              ? "The installed pm CLI version is unreadable."
+              : isStable(installed) ? `This repository installs pm CLI ${installed}.`
+                : `This repository installs pm CLI ${installed}, which is not a stable release.`;
+            const remedy = installed === null
+              ? (hold
+                ? `Restore a working caller pm CLI install, then remove or update the pm-github-version hold that selected pm-github ${PM_GITHUB_VERSION}, or move the workflow pin to a release that supports it.`
+                : "Restore a working caller pm CLI install, then move the workflow pin to a release that supports it.")
+              : (hold
+                ? `Remove or update the pm-github-version hold that selected pm-github ${PM_GITHUB_VERSION}, or move the workflow pin to a release that supports ${installed}.`
+                : `Move the workflow pin to a release that supports ${installed}.`);
             const reason = `${evidence} ${host} ${remedy}`;
-            const report = { code, pm_github_version: PM_GITHUB_VERSION, pm_cli_version: installed, tested_host_range: range, reason };
+            const report = { case: outcome, pm_github_version: PM_GITHUB_VERSION, pm_cli_version: installed, tested_host_range: range, reason };
+            if (outcome === "declared_incompatible") report.declared_incompatible_from = declared;
             appendFileSync(GITHUB_STEP_SUMMARY, `### pm CLI host compatibility\n\n${reason}\n`);
             console.log(JSON.stringify(report));
             console.error(`::error::${reason}`);
@@ -356,12 +390,17 @@ jobs:
             grep -Eoh '\b(github-token-classic|github-token-fine-grained|npm-token|aws-access-key-id|slack-token|slack-webhook|openai-legacy-key|openai-api-key|openai-project-key|openai-service-account-key|anthropic-api-key|bearer-token|private-key-block|email-address|phone-number|absolute-host-path|windows-host-path|home-username|high-entropy-assignment)\b' "${report_file}" "${error_file}" > "${RUNNER_TEMP}/pm-github-failure-rules" || true
             local diagnostic="${RUNNER_TEMP}/pm-github-diagnostic.json"
             local patch="${RUNNER_TEMP}/pm-github-diagnostic.patch"
+            # A newer-than-tested host keeps running; its hint leads any later failure message.
+            local compatibility_hint=""
+            if [[ -s "${RUNNER_TEMP}/pm-cli-host-compatibility-hint" ]]; then
+              compatibility_hint="$(<"${RUNNER_TEMP}/pm-cli-host-compatibility-hint")"
+            fi
             pm github workflow-diagnostic --report "${report_file}" --error-file "${error_file}" --diff "${diff_file}" --json > "${diagnostic}"
             { printf '%s\n' '--- /dev/null' '+++ b/workflow-diagnostic.txt' '@@ -0,0 +1 @@'; jq -r '"+" + (.reason | gsub("[\\r\\n]"; " "))' "${diagnostic}"; } > "${patch}"
             if pm github gate --diff "${patch}" --json > "${RUNNER_TEMP}/pm-github-diagnostic-gate.json" 2> "${RUNNER_TEMP}/pm-github-diagnostic-gate.err"; then
-              jq -r '"::error::" + (.reason | gsub("%"; "%25") | gsub("\\r"; "%0D") | gsub("\\n"; "%0A"))' "${diagnostic}"
+              jq -r --arg hint "${compatibility_hint}" '"::error::" + (if $hint == "" then "" else $hint + " " end) + (.reason | gsub("%"; "%25") | gsub("\\r"; "%0D") | gsub("\\n"; "%0A"))' "${diagnostic}"
             else
-              echo "::error::Failure diagnostic blocked by the privacy gate; review source content before retrying. No branch was published."
+              echo "::error::${compatibility_hint:+${compatibility_hint} }Failure diagnostic blocked by the privacy gate; review source content before retrying. No branch was published."
             fi
           }
           # Diagnostics can use this helper before the tracker is resolved.
@@ -1112,6 +1151,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SYNC_RESULT: ${{ needs.gated-sync.result }}
           FAILURE_RULES: ${{ needs.gated-sync.outputs.failure-rules }}
+          COMPATIBILITY_HINT: ${{ needs.gated-sync.outputs.compatibility-hint }}
         shell: bash
         run: |
           set -euo pipefail
@@ -1155,8 +1195,15 @@ jobs:
             *) failed_step="gated-sync" ;;
           esac
           FAILURE_RULES="$(printf '%s' "${FAILURE_RULES}" | tr ',' '\n' | grep -Ex 'github-token-classic|github-token-fine-grained|npm-token|aws-access-key-id|slack-token|slack-webhook|openai-legacy-key|openai-api-key|openai-project-key|openai-service-account-key|anthropic-api-key|bearer-token|private-key-block|email-address|phone-number|absolute-host-path|windows-host-path|home-username|high-entropy-assignment' | sort -u | paste -sd, - || true)"
+          # Only the preflight's own validated hint text may enter the alert body.
+          hint=""
+          hint_pattern='^pm CLI [0-9]+\.[0-9]+\.[0-9]+ is newer than the newest host this pm-github release was tested with \([0-9]+\.[0-9]+\.[0-9]+\); continuing\.'
+          if [[ "${COMPATIBILITY_HINT:-}" != *[$'\r\n']* && "${COMPATIBILITY_HINT:-}" =~ ${hint_pattern} ]]; then
+            hint="${COMPATIBILITY_HINT}"
+          fi
           {
             printf '%s\n\n' "${marker}"
+            [[ -z "${hint}" ]] || printf '%s\n\n' "${hint}"
             printf 'Failing step: %s\n' "${failed_step}"
             printf 'Run URL: %s/%s/actions/runs/%s/attempts/%s\n' "${GITHUB_SERVER_URL}" "${GITHUB_REPOSITORY}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
             printf 'Rules: %s\n' "${FAILURE_RULES:-none}"

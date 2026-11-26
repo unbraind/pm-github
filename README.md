@@ -1097,7 +1097,8 @@ When upgrading the caller's pm CLI, move both the sync and closeout workflow
 pins to the same reviewed pm-github release that supports the new CLI. Update
 the caller's npm lockfile and both workflow SHAs (and matching tag comments)
 in the same change. Remove any stale `pm-github-version` hold. If the workflows
-refuse the new CLI, move the workflow pin to a release that supports it.
+refuse the new CLI, remove or update the `pm-github-version` hold that selected
+the release, or move the workflow pin to a release that supports it.
 
 Both workflows check the actual caller-local `pm --version` immediately after
 `npm ci`, before installing the extension, previewing the sync, or applying
@@ -1105,16 +1106,36 @@ closeout. The inclusive tested host range is recorded in the selected release's
 immutable npm metadata. Its lower endpoint is the minimum exercised by the
 packed minimum-SDK consumer test and declared by the peer dependency. Its upper
 endpoint is the release's exact pm CLI development dependency, which the release
-tests install from its lockfile. The exact upper endpoint bounds workflow
-compatibility even though npm's peer requirement is open-ended. Release tests
-exercise the endpoints and the workflow accepts stable versions between them.
-A deliberate extension hold uses the held release's own range.
+tests install from its lockfile. A deliberate extension hold uses the held
+release's own range.
 
-An out-of-range version, prerelease, unreadable local launcher or missing range
-stops the job before tracker commands. The error annotation, JSON diagnostic
-and job summary name the chosen pm-github release, installed version (or that
-it is unreadable), tested range when available, and the pin remedy. For an
-unreadable version, restore the caller's local CLI installation first.
+A host below the tested minimum, an unreadable or prerelease local launcher, or
+an unreadable, inverted or self-contradictory tested range stops the job before
+tracker commands. The error annotation, JSON diagnostic and job summary name the
+chosen pm-github release, installed version (or that it is unreadable), the
+tested range when available, and the remedy: remove or update the
+`pm-github-version` hold when one selected the release, otherwise move the
+workflow pin to a release that supports the installed CLI. For an unreadable
+version, restore the caller's local CLI installation first.
+
+A host newer than the tested upper endpoint does not stop the job. The preflight
+emits one warning annotation and one job-summary line naming the installed CLI,
+the newest tested host and the same hold-aware remedy: `pm CLI X is newer than
+the newest host this pm-github release was tested with (Y); continuing. If the
+apply step fails, remove or update the pm-github-version hold that selected the
+release, or move the workflow pin to a newer pm-github release.` The run then
+continues with the preview and apply. When the apply or closeout write then
+fails, its failure message and the sync failure alert lead with that
+compatibility hint before the preserved underlying error. Adopting a newer
+pm-github release whose tests cover the newer host ends the warning.
+
+A release may declare the first pm CLI version it is known not to work with.
+Maintainers add a reviewed `pmCliIncompatibleFrom` string to the release's
+package.json before publishing: an exact stable version above the tested upper
+endpoint. Only hosts at or above that declared version turn the newer-host
+warning back into a stop; a declaration at or below the tested ceiling, or an
+unstable value, contradicts the recorded range and fails closed instead. The
+field is absent unless a maintainer sets it deliberately.
 
 ## Automated closeout workflow
 

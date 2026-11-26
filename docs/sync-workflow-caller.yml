@@ -1,7 +1,8 @@
 # Pin a reviewed release SHA and its matching tag comment; Dependabot maintains both.
 # The workflow resolves its exact package version from package.json at that SHA.
 # Upgrade the pm CLI and both workflow pins together. Review the new release's tested host range.
-# The job summary reports when to move the workflow pin before tracker commands run.
+# The preflight stops a host below the tested range or declared known-incompatible; a newer-than-tested host warns once and continues.
+# A later apply failure and the sync failure alert lead with that hint and its workflow-pin remedy.
 # See README.md for the daily github-actions pm-toolchain group configuration.
 # Failure alerts are owned by github-actions[bot] and carry <!-- pm-github-sync-status -->.
 # Legacy bot alerts are recognized by the exact title and marked on the next failure.

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import test from "node:test";
 import { parse } from "yaml";
 
@@ -13,25 +13,95 @@ const name = "Check pm CLI host compatibility";
 const minimum = "2026.10.23";
 const maximum = "2026.11.6";
 const release = "2026.11.15";
-const outside = "pm_cli_outside_tested_range";
-const unreadable = "pm_cli_version_unreadable";
-const invalidRange = "pm_github_host_range_unreadable";
+const newer = "2026.11.23";
+const declaredFrom = "2026.11.30";
 
-const scenarios = [
-  { name: "older host", version: "2026.10.22", code: outside },
+/** One outcome per preflight case, for both reusable workflows. */
+interface Scenario {
+  readonly name: string;
+  readonly version: string | null;
+  readonly case?: "below_minimum" | "newer_untested" | "declared_incompatible" | "unreadable";
+  readonly hold?: string;
+  readonly failure?: boolean;
+  readonly metadata?: string;
+  readonly maximum?: string;
+  readonly declared?: string;
+}
+
+const scenarios: readonly Scenario[] = [
+  { name: "older host", version: "2026.10.22", case: "below_minimum" },
+  { name: "older host with an explicit hold", version: "2026.10.22", hold: release, case: "below_minimum" },
   { name: "minimum host", version: minimum },
   { name: "supported host", version: "2026.11.5" },
   { name: "maximum host", version: maximum },
-  { name: "newer untested host", version: "2026.11.23", code: outside },
-  { name: "prerelease host", version: "2026.11.6-1", code: outside },
-  { name: "missing local launcher", version: null, code: unreadable },
-  { name: "failing launcher", version: maximum, failure: true, code: unreadable },
-  { name: "unreadable version", version: "malformed\n::error::fixture value", code: unreadable },
-  { name: "missing range", version: maximum, metadata: "{}", code: invalidRange },
-  { name: "unreadable metadata", version: maximum, metadata: "[", code: invalidRange },
-  { name: "unbounded range", version: maximum, maximum: ">=2026.11.6", code: invalidRange },
-  { name: "inverted range", version: maximum, maximum: "2026.10.22", code: invalidRange },
+  { name: "newer untested host", version: newer, case: "newer_untested" },
+  { name: "newer untested host with an explicit hold", version: newer, hold: release, case: "newer_untested" },
+  { name: "newer host below the declared known-incompatible version", version: newer, declared: declaredFrom, case: "newer_untested" },
+  { name: "declared known-incompatible host", version: "2026.12.1", declared: declaredFrom, case: "declared_incompatible" },
+  { name: "prerelease host", version: "2026.11.6-1", case: "unreadable" },
+  { name: "missing local launcher", version: null, case: "unreadable" },
+  { name: "missing local launcher with an explicit hold", version: null, hold: release, case: "unreadable" },
+  { name: "failing launcher", version: maximum, failure: true, case: "unreadable" },
+  { name: "unreadable version", version: "malformed\n::error::fixture value", case: "unreadable" },
+  { name: "missing range", version: maximum, metadata: "{}", case: "unreadable" },
+  { name: "unreadable metadata", version: maximum, metadata: "[", case: "unreadable" },
+  { name: "unbounded range", version: maximum, maximum: ">=2026.11.6", case: "unreadable" },
+  { name: "inverted range", version: maximum, maximum: "2026.10.22", case: "unreadable" },
+  { name: "declaration at the tested ceiling", version: newer, declared: maximum, case: "unreadable" },
+  { name: "prerelease declaration", version: newer, declared: `${declaredFrom}-1`, case: "unreadable" },
 ];
+
+const isStableText = (value: string) => /^\d+\.\d+\.\d+$/.test(value);
+const compareVersions = (left: string, right: string) => {
+  const delta = left.split(".").map(Number).map((part, index) => part - Number(right.split(".")[index]));
+  return delta.find(part => part !== 0) ?? 0;
+};
+
+/** Every recorded release metadata field the preflight may read. */
+function releaseMetadata(scenario: Scenario): string {
+  return scenario.metadata ?? JSON.stringify({
+    name: "pm-github", version: release,
+    peerDependencies: { "@unbrained/pm-cli": `>=${minimum}` },
+    devDependencies: { "@unbrained/pm-cli": scenario.maximum ?? maximum },
+    ...(scenario.declared !== undefined ? { pmCliIncompatibleFrom: scenario.declared } : {}),
+  });
+}
+
+/** Reproduce the preflight's own reasoning so the fixture pins exact behaviour. */
+function expectedOutcome(scenario: Scenario) {
+  const declaredStable = scenario.declared !== undefined && isStableText(scenario.declared);
+  const ceiling = scenario.maximum ?? maximum;
+  const rangeValid = !scenario.metadata && isStableText(minimum) && isStableText(ceiling)
+    && compareVersions(minimum, ceiling) <= 0
+    && (scenario.declared === undefined || declaredStable && compareVersions(scenario.declared, ceiling) > 0);
+  const installed = scenario.version === null || scenario.failure || (scenario.version !== null && !/^\d+(?:\.\d+){2}(?:-\d+)?$/.test(scenario.version))
+    ? null : scenario.version;
+  if (scenario.case === undefined) return { range: { minimum, maximum: ceiling }, installed, reason: "" };
+  if (scenario.case === "newer_untested") {
+    const reason = `pm CLI ${installed} is newer than the newest host this pm-github release was tested with (${ceiling}); continuing. `
+      + (scenario.hold !== undefined
+        ? `If the apply step fails, remove or update the pm-github-version hold that selected pm-github ${release}, or move the workflow pin to a newer pm-github release.`
+        : "If the apply step fails, move the workflow pin to a newer pm-github release.");
+    return { range: { minimum, maximum: ceiling }, installed, reason };
+  }
+  const evidence = rangeValid
+    ? scenario.case === "declared_incompatible"
+      ? `pm-github ${release} was tested with pm CLI ${minimum} through ${ceiling} and declares pm CLI ${scenario.declared} or newer known-incompatible.`
+      : `pm-github ${release} was tested with pm CLI ${minimum} through ${ceiling}.`
+    : `The tested host range for pm-github ${release} could not be verified.`;
+  const host = installed === null
+    ? "The installed pm CLI version is unreadable."
+    : isStableText(installed) ? `This repository installs pm CLI ${installed}.`
+      : `This repository installs pm CLI ${installed}, which is not a stable release.`;
+  const remedy = installed === null
+    ? (scenario.hold !== undefined
+      ? `Restore a working caller pm CLI install, then remove or update the pm-github-version hold that selected pm-github ${release}, or move the workflow pin to a release that supports it.`
+      : "Restore a working caller pm CLI install, then move the workflow pin to a release that supports it.")
+    : (scenario.hold !== undefined
+      ? `Remove or update the pm-github-version hold that selected pm-github ${release}, or move the workflow pin to a release that supports ${installed}.`
+      : `Move the workflow pin to a release that supports ${installed}.`);
+  return { range: rangeValid ? { minimum, maximum: ceiling } : null, installed, reason: `${evidence} ${host} ${remedy}` };
+}
 
 for (const kind of ["sync", "closeout"]) {
   const file = new URL(`../.github/workflows/pm-github-${kind}.yml`, import.meta.url);
@@ -53,13 +123,10 @@ for (const kind of ["sync", "closeout"]) {
     const project = join(root, "nested caller");
     const bin = join(project, "node_modules/.bin");
     const summary = join(root, "job-summary");
+    const output = join(root, "step-output");
     const goal = join(root, "preview-ran");
     mkdirSync(bin, { recursive: true });
-    writeFileSync(join(root, "pm-github-release.json"), scenario.metadata ?? JSON.stringify({
-      name: "pm-github", version: release,
-      peerDependencies: { "@unbrained/pm-cli": `>=${minimum}` },
-      devDependencies: { "@unbrained/pm-cli": scenario.maximum ?? maximum },
-    }));
+    writeFileSync(join(root, "pm-github-release.json"), releaseMetadata(scenario));
     if (scenario.version !== null) {
       writeFileSync(join(bin, "pm"), `#!/bin/bash
 [[ "$*" == --version ]] || exit 91
@@ -72,32 +139,134 @@ ${scenario.failure ? "exit 1" : ""}
     const child = spawnSync("bash", ["-c", preflight.run + '\nprintf ran > "$PREVIEW_MARKER"'], {
       cwd: root, encoding: "utf8", timeout: 15_000,
       env: { ...process.env, PM_GITHUB_VERSION: release, NPM_PROJECT_PATH: project, RUNNER_TEMP: root,
-        GITHUB_STEP_SUMMARY: summary, PREVIEW_MARKER: goal },
+        GITHUB_STEP_SUMMARY: summary, GITHUB_OUTPUT: output, PREVIEW_MARKER: goal,
+        ...(scenario.hold !== undefined ? { REQUESTED_PM_GITHUB_VERSION: scenario.hold } : {}) },
     });
     assert.ifError(child.error);
-    if (!scenario.code) {
+    const { range, installed, reason } = expectedOutcome(scenario);
+    if (scenario.case === undefined) {
       assert.equal(child.status, 0, child.stderr);
       assert.equal(child.stdout + child.stderr, "");
       assert.equal(existsSync(summary), false);
       assert.equal(existsSync(goal), true);
+      assert.equal(existsSync(output), false, "a supported host exports no hint");
+      return;
+    }
+    const report = { case: scenario.case, pm_github_version: release, pm_cli_version: installed, tested_host_range: range, reason,
+      ...(scenario.case === "declared_incompatible" ? { declared_incompatible_from: scenario.declared } : {}) };
+    if (scenario.case === "newer_untested") {
+      assert.equal(child.status, 0, child.stderr);
+      assert.equal(existsSync(goal), true, "a newer-than-tested host must continue to the tracker commands");
+      assert.deepEqual(JSON.parse(child.stdout), report);
+      assert.equal(child.stderr, `::warning::${reason}\n`);
+      assert.equal(readFileSync(summary, "utf8"), `### pm CLI host compatibility\n\n${reason}\n`);
+      assert.equal(readFileSync(join(root, "pm-cli-host-compatibility-hint"), "utf8"), `${reason}\n`);
+      assert.equal(readFileSync(output, "utf8"), `hint=${reason}\n`);
       return;
     }
     assert.equal(child.status, 1, child.stderr);
     assert.equal(existsSync(goal), false);
-    const expectedVersion = scenario.code === unreadable ? null : scenario.version;
-    const range = scenario.code === invalidRange ? null : { minimum, maximum };
-    const report: unknown = JSON.parse(child.stdout);
-    const evidence = range ? `pm-github ${release} was tested with pm CLI ${minimum} through ${maximum}.`
-      : `The tested host range for pm-github ${release} could not be verified.`;
-    const host = expectedVersion ? `This repository installs pm CLI ${expectedVersion}.` : "The installed pm CLI version is unreadable.";
-    const remedy = expectedVersion ? `Move the workflow pin to a release that supports ${expectedVersion}.`
-      : "Restore a working caller pm CLI install, then move the workflow pin to a release that supports it.";
-    const reason = `${evidence} ${host} ${remedy}`;
-    assert.deepEqual(report, { code: scenario.code, pm_github_version: release, pm_cli_version: expectedVersion, tested_host_range: range, reason });
+    assert.deepEqual(JSON.parse(child.stdout), report);
     assert.equal(child.stderr, `::error::${reason}\n`);
     assert.equal(readFileSync(summary, "utf8"), `### pm CLI host compatibility\n\n${reason}\n`);
+    assert.equal(existsSync(join(root, "pm-cli-host-compatibility-hint")), false, "a stopped host exports no hint");
+    assert.equal(existsSync(output), false, "a stopped host exports no hint");
   });
 }
+
+test("the fleet pair passes with the warning: pm CLI newer than this release's locked host", t => {
+  const manifest = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
+    peerDependencies: Record<string, string>; devDependencies: Record<string, string>;
+  };
+  const cli = "@unbrained/pm-cli";
+  const floor = /^>=(\d+\.\d+\.\d+)$/.exec(manifest.peerDependencies[cli]!)![1];
+  const ceiling = manifest.devDependencies[cli]!;
+  assert.ok(compareVersions("2026.11.24", ceiling) > 0, "the fixture host must be newer than this release's tested ceiling");
+  for (const kind of ["sync", "closeout"]) {
+    const root = mkdtempSync(join(tmpdir(), "workflow-host-"));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const project = join(root, "nested caller");
+    const bin = join(project, "node_modules/.bin");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, "pm"), `#!/bin/bash
+printf '%s\\n' '2026.11.24'
+`, { mode: 0o755 });
+    writeFileSync(join(root, "pm-github-release.json"), JSON.stringify({
+      name: "pm-github", version: release,
+      peerDependencies: { [cli]: `>=${floor}` },
+      devDependencies: { [cli]: ceiling },
+    }));
+    const { jobs } = parse(readFileSync(new URL(`../.github/workflows/pm-github-${kind}.yml`, import.meta.url), "utf8")) as { jobs: Record<string, { steps: Step[] }> };
+    const preflight = jobs[`gated-${kind}`]!.steps.find(step => step.name === name)!;
+    const child = spawnSync("bash", ["-c", preflight.run! + '\nprintf ran > "$PREVIEW_MARKER"'], {
+      cwd: root, encoding: "utf8", timeout: 15_000,
+      env: { ...process.env, PM_GITHUB_VERSION: release, NPM_PROJECT_PATH: project, RUNNER_TEMP: root,
+        GITHUB_STEP_SUMMARY: join(root, "job-summary"), GITHUB_OUTPUT: join(root, "step-output"), PREVIEW_MARKER: join(root, "preview-ran") },
+    });
+    assert.ifError(child.error);
+    const hint = `pm CLI 2026.11.24 is newer than the newest host this pm-github release was tested with (${ceiling}); continuing. If the apply step fails, move the workflow pin to a newer pm-github release.`;
+    assert.equal(child.status, 0, child.stderr);
+    assert.equal(existsSync(join(root, "preview-ran")), true);
+    assert.deepEqual(JSON.parse(child.stdout), { case: "newer_untested", pm_github_version: release, pm_cli_version: "2026.11.24", tested_host_range: { minimum: floor, maximum: ceiling }, reason: hint });
+    assert.equal(child.stderr, `::warning::${hint}\n`);
+  }
+});
+
+test("apply failures lead with the newer-host hint before the preserved underlying error", t => {
+  const underlying = "Extension mutation guard github-import-owner failed before import";
+  const hint = `pm CLI ${newer} is newer than the newest host this pm-github release was tested with (${maximum}); continuing. If the apply step fails, move the workflow pin to a newer pm-github release.`;
+  for (const kind of ["sync", "closeout"]) {
+    const { jobs } = parse(readFileSync(new URL(`../.github/workflows/pm-github-${kind}.yml`, import.meta.url), "utf8")) as { jobs: Record<string, { steps: Step[] }> };
+    const scope = jobs[`gated-${kind}`]!.steps.find(step => step.name === "Resolve sync commit scope")!.run!
+      .split("<<'SCOPE'\n")[1]!.split("\nSCOPE")[0]! + "\n";
+    const root = mkdtempSync(join(tmpdir(), "workflow-hint-"));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
+    const binDir = join(root, "bin");
+    const runnerTemp = join(root, "runner-temp");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(binDir, "pm"), `#!/usr/bin/env bash
+set -euo pipefail
+case "$1 $2" in
+  "github workflow-diagnostic") printf '%s\\n' '{"reason":"${underlying}"}' ;;
+  "github gate") [[ -z "\${GATE_BLOCK:-}" ]] || exit 1; printf '%s\\n' '{}' ;;
+  *) exit 23 ;;
+esac
+`, { mode: 0o755 });
+    const scopeFile = join(root, "scope.sh");
+    writeFileSync(scopeFile, scope);
+    const reportFile = join(root, "report.json");
+    const errorFile = join(root, "error.log");
+
+    const reportFailure = (withHint: boolean, gateBlock = false) => {
+      rmSync(runnerTemp, { recursive: true, force: true });
+      mkdirSync(runnerTemp, { recursive: true });
+      writeFileSync(reportFile, "{}");
+      writeFileSync(errorFile, "");
+      if (withHint) writeFileSync(join(runnerTemp, "pm-cli-host-compatibility-hint"), `${hint}\n`);
+      const child = spawnSync("bash", ["-c", `source "${scopeFile}"\nreport_workflow_failure "${reportFile}" "${errorFile}"`], {
+        cwd: root, encoding: "utf8", timeout: 15_000,
+        env: { ...process.env, PATH: binDir + delimiter + process.env.PATH, RUNNER_TEMP: runnerTemp, GATE_BLOCK: gateBlock ? "1" : "" },
+      });
+      assert.ifError(child.error);
+      return child;
+    };
+
+    const withHint = reportFailure(true);
+    assert.equal(withHint.status, 0, withHint.stdout + withHint.stderr);
+    assert.equal(withHint.stdout, `::error::${hint} ${underlying}\n`);
+    // The privacy gate scans only the untrusted reason; the hint is workflow-built text.
+    assert.equal(readFileSync(join(runnerTemp, "pm-github-diagnostic.patch"), "utf8"),
+      `--- /dev/null\n+++ b/workflow-diagnostic.txt\n@@ -0,0 +1 @@\n+${underlying}\n`);
+
+    const withoutHint = reportFailure(false);
+    assert.equal(withoutHint.status, 0, withoutHint.stdout + withoutHint.stderr);
+    assert.equal(withoutHint.stdout, `::error::${underlying}\n`);
+
+    const blocked = reportFailure(true, true);
+    assert.equal(blocked.status, 0, blocked.stdout + blocked.stderr);
+    assert.equal(blocked.stdout, `::error::${hint} Failure diagnostic blocked by the privacy gate; review source content before retrying. No branch was published.\n`);
+  }
+});
 
 test("caller documentation ties CLI upgrades to both pins and explains the tested range and unreadable version", () => {
   for (const file of ["README.md", "docs/sync-workflow-caller.yml", "docs/closeout-workflow-caller.yml", "docs/daily-sync-recovery.md"]) {
@@ -107,5 +276,17 @@ test("caller documentation ties CLI upgrades to both pins and explains the teste
   }
   const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
   assert.match(readme, /upper\s+endpoint is the release's exact pm CLI development dependency/);
-  assert.match(readme, /unreadable version, restore the caller's local CLI installation first/);
+  assert.match(readme, /unreadable\s+version, restore the caller's local CLI installation first/);
+  assert.match(readme, /newer\s+than\s+the\s+newest\s+host\s+this\s+pm-github\s+release\s+was\s+tested\s+with/);
+  assert.match(readme, /remove or update the `pm-github-version` hold/);
+  assert.match(readme, /pmCliIncompatibleFrom/);
+  for (const file of ["docs/sync-workflow-caller.yml", "docs/closeout-workflow-caller.yml"]) {
+    const text = readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+    assert.match(text, /newer-than-tested host warns once and continues/);
+    assert.match(text, /leads? with that hint and its workflow-pin remedy/);
+  }
+  const recovery = readFileSync(new URL("../docs/daily-sync-recovery.md", import.meta.url), "utf8");
+  assert.match(recovery, /newer-than-tested\s+host\s+does\s+not\s+stop\s+the\s+run/);
+  assert.match(recovery, /lead with that hint/);
+  assert.match(recovery, /`pm-github-version` hold/);
 });

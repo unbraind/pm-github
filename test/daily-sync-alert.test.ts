@@ -74,6 +74,7 @@ esac
     ALERT_CALLS: join(root, "calls"), GITHUB_STEP_SUMMARY: join(root, "summary"), ISSUES_JSON: JSON.stringify(issues),
     ALERT_TITLE: title, ALERT_BOT: bot, GITHUB_REPOSITORY: "fixture/project", GITHUB_RUN_ID: "42", GITHUB_RUN_ATTEMPT: "2",
     GITHUB_SERVER_URL: "https://github.com", SYNC_RESULT: "failure", FAILURE_RULES: "absolute-host-path,email-address",
+    COMPATIBILITY_HINT: "",
     JOBS_JSON: JSON.stringify({ name: "caller / gated-sync", steps: [{ name: "Gated GitHub to pm import", conclusion: "failure" }] }) };
   const shell = alert.steps[0]!.run!;
   const run = (changes: NodeJS.ProcessEnv = {}) => {
@@ -125,6 +126,21 @@ test("failure alert names the host compatibility step without quoting its diagno
   ] }) });
   assert.match(readFileSync(receipt, "utf8"), /^<!-- pm-github-sync-status -->\n\nFailing step: Check pm CLI host compatibility\n/);
   assert.doesNotMatch(readFileSync(receipt, "utf8"), /Untrusted diagnostic/);
+});
+
+test("failure alert leads with the validated preflight hint and refuses any other hint text", t => {
+  const { run, receipt } = alertFixture(t);
+  const plain = marker + "\n\nFailing step: Gated GitHub to pm import\nRun URL: https://github.com/fixture/project/actions/runs/42/attempts/2\nRules: absolute-host-path,email-address\n";
+  const hint = "pm CLI 2026.11.24 is newer than the newest host this pm-github release was tested with (2026.11.22); continuing. If the apply step fails, move the workflow pin to a newer pm-github release.";
+  const holdHint = "pm CLI 2026.11.24 is newer than the newest host this pm-github release was tested with (2026.11.22); continuing. If the apply step fails, remove or update the pm-github-version hold that selected pm-github 2026.11.15, or move the workflow pin to a newer pm-github release.";
+  run({ COMPATIBILITY_HINT: hint });
+  assert.equal(readFileSync(receipt, "utf8"), marker + "\n\n" + hint + "\n\n" + plain.slice(marker.length + 2));
+  run({ COMPATIBILITY_HINT: holdHint });
+  assert.equal(readFileSync(receipt, "utf8"), marker + "\n\n" + holdHint + "\n\n" + plain.slice(marker.length + 2));
+  for (const untrusted of ["Untrusted diagnostic. " + hint, hint + "\nUntrusted second line", "pm CLI 2026.11.24 is newer than the newest host this pm-github release was tested with (2026.11.22-unvalidated); continuing."]) {
+    run({ COMPATIBILITY_HINT: untrusted });
+    assert.equal(readFileSync(receipt, "utf8"), plain, "only the preflight's own validated hint may enter the alert body");
+  }
 });
 
 test("recovery closes only open owned alerts, including the legacy exact-title alert", t => {

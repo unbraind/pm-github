@@ -1,7 +1,13 @@
 # Daily gated sync recovery
 
-For a host compatibility refusal, check the installed pm CLI and tested host
-range in the job summary. Upgrade the pm CLI and both workflow pins together,
+For a host compatibility stop, check the installed pm CLI and tested host
+range in the job summary. The preflight stops a host below the tested range, an
+unreadable or prerelease local CLI, or a release-declared known-incompatible
+host; its remedy names the `pm-github-version` hold that selected the release,
+or the workflow pin for hold-free callers. A newer-than-tested host does not
+stop the run: it logs one warning and continues, and a later apply failure and
+this alert lead with that hint, both versions and the remedy, before the
+preserved underlying error. Upgrade the pm CLI and both workflow pins together,
 using one pm-github release that supports the installed host. Repair an
 unreadable caller CLI installation before retrying. See the
 [paired upgrade instructions](../README.md#upgrade-the-pm-cli-and-both-workflow-pins-together).

@@ -1,7 +1,8 @@
 # Pin a reviewed release SHA and its matching tag comment; Dependabot maintains both.
 # The workflow resolves its exact package version from package.json at that SHA.
 # Upgrade the pm CLI and both workflow pins together. Review the new release's tested host range.
-# The job summary reports when to move the workflow pin before tracker commands run.
+# The preflight stops a host below the tested range or declared known-incompatible; a newer-than-tested host warns once and continues.
+# A later closeout write failure leads with that hint and its workflow-pin remedy.
 # See README.md for the daily github-actions pm-toolchain group configuration.
 # Callers need no guard of their own: API default-branch resolution supports schedule
 # payloads without repository metadata; manual dispatch from another branch fails closed.

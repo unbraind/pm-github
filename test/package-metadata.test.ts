@@ -45,3 +45,18 @@ test("released compatibility ceiling is the pm CLI version locked for package te
   assert.equal(lock.packages[`node_modules/${cli}`]?.version, maximum);
   assert.ok(minimum.localeCompare(maximum, undefined, { numeric: true }) <= 0);
 });
+
+test("a known-incompatible host declaration is absent or a stable version above the tested ceiling", () => {
+  const cli = "@unbrained/pm-cli";
+  const manifest = packageJson as { pmCliIncompatibleFrom?: unknown; devDependencies: Record<string, string> };
+  const declared = manifest.pmCliIncompatibleFrom;
+  // Absent by default: only a deliberate, reviewed declaration stops newer hosts.
+  if (declared === undefined) return;
+  const value = String(declared);
+  assert.equal(typeof declared, "string", "the declaration must be a string version");
+  assert.match(value, /^\d+\.\d+\.\d+$/, "the declaration must be an exact stable version");
+  const maximum = manifest.devDependencies[cli]!;
+  const delta = value.split(".").map(Number)
+    .map((part, index) => part - Number(maximum.split(".")[index])).find(part => part !== 0) ?? 0;
+  assert.ok(delta > 0, "the declaration must sit above the release's tested host ceiling");
+});
