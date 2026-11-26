@@ -257,7 +257,7 @@ printf '%s\\n' '${host}'
 
 
 for (const kind of ["sync", "closeout"]) {
-  test(`${kind} apply failures lead with the newer-host hint before the preserved underlying error`, t => {
+  test(`${kind} apply failures preserve the newer-host hint even when the diagnostic renderer fails`, t => {
     const underlying = "Extension mutation guard github-import-owner failed before import";
     const hint = `pm CLI ${newer} is newer than the newest host this pm-github release was tested with (${maximum}); continuing. If the apply step fails, move the workflow pin to a newer pm-github release.`;
     const { jobs } = parse(readFileSync(new URL(`../.github/workflows/pm-github-${kind}.yml`, import.meta.url), "utf8")) as { jobs: Record<string, { steps: Step[] }> };
@@ -271,7 +271,16 @@ for (const kind of ["sync", "closeout"]) {
     writeFileSync(join(binDir, "pm"), `#!/usr/bin/env bash
 set -euo pipefail
 case "$1 $2" in
-  "github workflow-diagnostic") printf '%s\\n' '{"reason":"${underlying}"}' ;;
+  "github workflow-diagnostic")
+    case "$RENDERER_MODE" in
+      unavailable)
+        printf '%s\\n' "private partial stdout"
+        printf '%s\\n' "::error::private renderer stderr" >&2
+        exit 23 ;;
+      malformed) printf '%s\\n' "private malformed diagnostic" ;;
+      multiple) printf '%s\\n' '{"reason":"private first diagnostic"}' '{"reason":"private second diagnostic"}' ;;
+      *) printf '%s\\n' '{"reason":"${underlying}"}' ;;
+    esac ;;
   "github gate") [[ -z "\${GATE_BLOCK:-}" ]] || exit 1; printf '%s\\n' '{}' ;;
   *) exit 23 ;;
 esac
@@ -281,16 +290,16 @@ esac
     const reportFile = join(root, "report.json");
     const errorFile = join(root, "error.log");
 
-    const reportFailure = (hintText: string | null, gateBlock = false) => {
+    const reportFailure = (hintText: string | null, gateBlock = false, rendererMode = "valid") => {
       rmSync(runnerTemp, { recursive: true, force: true });
       mkdirSync(runnerTemp, { recursive: true });
-      writeFileSync(reportFile, "{}");
-      writeFileSync(errorFile, "");
+      writeFileSync(reportFile, '{"reason":"private raw receipt"}');
+      writeFileSync(errorFile, "private raw error");
       if (hintText !== null) writeFileSync(join(runnerTemp, "pm-cli-host-compatibility-hint"), `${hintText}\n`);
-      const child = spawnSync("bash", ["-c", `source "${scopeFile}"\nreport_workflow_failure "${reportFile}" "${errorFile}"`], {
+      const child = spawnSync("bash", ["-c", `set -euo pipefail\nsource "${scopeFile}"\nreport_workflow_failure "${reportFile}" "${errorFile}"`], {
         cwd: root, encoding: "utf8", timeout: 15_000,
         env: { ...process.env, PATH: binDir + delimiter + process.env.PATH, RUNNER_TEMP: runnerTemp,
-          GATE_BLOCK: gateBlock ? "1" : "", REQUESTED_PM_GITHUB_VERSION: "" },
+          GATE_BLOCK: gateBlock ? "1" : "", RENDERER_MODE: rendererMode, REQUESTED_PM_GITHUB_VERSION: "" },
       });
       assert.ifError(child.error);
       return child;
@@ -336,6 +345,16 @@ esac
       assert.ok(!poisonedBlocked.stdout.includes(secret));
     }
 
+    for (const rendererMode of ["unavailable", "malformed", "multiple"]) {
+      for (const hintText of [null, hint, holdHint, `${hint} Untrusted suffix.`]) {
+        const failed = reportFailure(hintText, false, rendererMode);
+        const prefix = hintText === hint || hintText === holdHint ? `${hintText} ` : "";
+        assert.equal(failed.status, 0, failed.stdout + failed.stderr);
+        assert.equal(failed.stderr, "");
+        assert.equal(failed.stdout, `::error::${prefix}Failure diagnostic unavailable. Review the failed step before retrying. No branch was published.\n`);
+        assert.equal(existsSync(join(runnerTemp, "pm-github-diagnostic.patch")), false);
+      }
+    }
   });
 }
 
