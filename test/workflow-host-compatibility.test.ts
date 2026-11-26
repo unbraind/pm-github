@@ -105,9 +105,7 @@ function expectedOutcome(scenario: Scenario) {
     : isStableText(installed) ? `This repository installs pm CLI ${installed}.`
       : `This repository installs pm CLI ${installed}, which is not a stable release.`;
   const remedy = installed === null
-    ? (scenario.hold !== undefined
-      ? `Restore a working caller pm CLI install, then remove or update the pm-github-version hold that selected pm-github ${release}, or move the workflow pin to a release that supports it.`
-      : "Restore a working caller pm CLI install, then move the workflow pin to a release that supports it.")
+    ? "Restore a working caller pm CLI install, then rerun with the current pm-github release."
     // No extension selection can support a prerelease host; only a stable CLI fixes it.
     : !isStableText(installed)
       ? (rangeValid

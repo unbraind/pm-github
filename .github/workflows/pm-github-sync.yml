@@ -358,10 +358,10 @@ jobs:
               ? "The installed pm CLI version is unreadable."
               : isStable(installed) ? `This repository installs pm CLI ${installed}.`
                 : `This repository installs pm CLI ${installed}, which is not a stable release.`;
+            // Recover the launcher before recommending release changes
+            // based on the installed CLI version.
             const remedy = installed === null
-              ? (hold
-                ? `Restore a working caller pm CLI install, then remove or update the pm-github-version hold that selected pm-github ${PM_GITHUB_VERSION}, or move the workflow pin to a release that supports it.`
-                : "Restore a working caller pm CLI install, then move the workflow pin to a release that supports it.")
+              ? "Restore a working caller pm CLI install, then rerun with the current pm-github release."
               // No extension selection can support a prerelease host; only a stable CLI fixes it.
               : !isStable(installed)
                 ? (range
