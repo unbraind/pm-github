@@ -1047,7 +1047,7 @@ jobs:
       group: pm-github-sync-alert-${{ github.repository }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
-    # The alert only reads run metadata and writes one tracking issue.
+    # The alert reads issue ownership and run metadata to reconcile tracking issues.
     timeout-minutes: 10
     steps:
       - name: Reconcile sync failure tracking issue
@@ -1059,15 +1059,29 @@ jobs:
         run: |
           set -euo pipefail
           title="Daily gated issue sync is failing"
+          marker="<!-- pm-github-sync-status -->"
           body="$(mktemp)"
           trap 'rm -f "${body}"' EXIT
           # A failed read cannot establish absence. Never create after one.
-          if ! issues="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues?state=all&per_page=100" --jq '.[] | select(.pull_request == null) | {number,title,state}' | jq -s --arg title "${title}" '[.[] | select(.title == $title) | {number,state}] | sort_by(.number)')"; then
+          # Prefer a marked bot issue. The exact title identifies pre-marker bot alerts.
+          if ! matches="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues?state=all&per_page=100" \
+            --jq '.[] | select(.pull_request == null) | {number,title,state,login: .user.login,body}' |
+            jq -s --arg title "${title}" --arg marker "${marker}" '
+              map({number, state, bot: (.login == "github-actions[bot]"),
+                   same_title: (.title == $title), marked: ((.body // "") | contains($marker))}) |
+              {
+                owned: (map(select(.bot and (.marked or .same_title))) | sort_by((.marked | not), .number)),
+                skipped: (map(select(.same_title and (.bot | not))) | length)
+              }')"; then
             echo "::warning::Cannot look up the sync failure issue; skipped to avoid duplicates."
             exit 0
           fi
+          skipped="$(jq -r '.skipped' <<< "${matches}")"
+          if (( skipped > 0 )); then
+            printf 'Left %s same-title issue(s) from other authors untouched.\n' "${skipped}" >> "${GITHUB_STEP_SUMMARY}"
+          fi
           if [[ "${SYNC_RESULT}" == success ]]; then
-            for number in $(jq -r '.[] | select(.state == "open") | .number' <<< "${issues}"); do
+            for number in $(jq -r '.owned[] | select(.state == "open") | .number' <<< "${matches}"); do
               gh issue close "${number}" -R "${GITHUB_REPOSITORY}" || { echo "::warning::Cannot close sync failure issue; caller needs issues:write."; exit 0; }
             done
             exit 0
@@ -1085,13 +1099,14 @@ jobs:
           esac
           FAILURE_RULES="$(printf '%s' "${FAILURE_RULES}" | tr ',' '\n' | grep -Ex 'github-token-classic|github-token-fine-grained|npm-token|aws-access-key-id|slack-token|slack-webhook|openai-legacy-key|openai-api-key|openai-project-key|openai-service-account-key|anthropic-api-key|bearer-token|private-key-block|email-address|phone-number|absolute-host-path|windows-host-path|home-username|high-entropy-assignment' | sort -u | paste -sd, - || true)"
           {
+            printf '%s\n\n' "${marker}"
             printf 'Failing step: %s\n' "${failed_step}"
             printf 'Run URL: %s/%s/actions/runs/%s/attempts/%s\n' "${GITHUB_SERVER_URL}" "${GITHUB_REPOSITORY}" "${GITHUB_RUN_ID}" "${GITHUB_RUN_ATTEMPT}"
             printf 'Rules: %s\n' "${FAILURE_RULES:-none}"
           } > "${body}"
-          number="$(jq -r '.[0].number // empty' <<< "${issues}")"
+          number="$(jq -r '.owned[0].number // empty' <<< "${matches}")"
           if [[ -n "${number}" ]]; then
-            if [[ "$(jq -r '.[0].state' <<< "${issues}")" == closed ]]; then
+            if [[ "$(jq -r '.owned[0].state' <<< "${matches}")" == closed ]]; then
               gh issue reopen "${number}" -R "${GITHUB_REPOSITORY}" || { echo "::warning::Cannot reopen sync failure issue; caller needs issues:write."; exit 0; }
             fi
             gh issue edit "${number}" -R "${GITHUB_REPOSITORY}" --body-file "${body}" || echo "::warning::Cannot update sync failure issue; caller needs issues:write."
