@@ -1,4 +1,5 @@
 import { normalizeGithubRepository, normalizeGithubClaim, parseGithubUrl, parseGithubIssueUrl } from "./github-url.ts";
+import { parseSourceTimestamp } from "./source-time.ts";
 import { readGithubWorkspace, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue, setOwnValue } from "./own-record.ts";
 import { buildGithubOwnershipIndex, githubOwnedIdentityKeys, assertGithubImportOwner, GithubImportOwnershipError, assertGithubOwnershipConsistency, githubOwnershipClaims, withGithubImportOwners, type GithubOwnershipIndex, type GithubOwnedTarget, ownershipStateOf } from "./import-ownership.ts";
@@ -507,11 +508,11 @@ export function importCloseReason(issue: GhIssue, events: readonly unknown[]): s
   return connected ? `${base}; linked PR ${connected.url}` : base;
 }
 
-/** Validate source date ordering and return the parsed closure, when supplied. */
+/** Validate that every source date is a real calendar moment in a sane order, and return the parsed closure. */
 export function validateImportLifetime(issue: Pick<GhIssue, "number" | "created_at" | "updated_at" | "closed_at">): number | undefined {
-  const created = Date.parse(issue.created_at);
-  const updated = Date.parse(issue.updated_at);
-  const closed = issue.closed_at ? Date.parse(issue.closed_at) : undefined;
+  const created = parseSourceTimestamp(issue.created_at);
+  const updated = parseSourceTimestamp(issue.updated_at);
+  const closed = issue.closed_at ? parseSourceTimestamp(issue.closed_at) : undefined;
   if (!Number.isFinite(created) || !Number.isFinite(updated) || updated < created ||
     (closed !== undefined && (!Number.isFinite(closed) || closed < created || closed > updated))) {
     throw new CommandError(`GitHub issue #${issue.number} has an invalid source lifetime; nothing may be imported.`);

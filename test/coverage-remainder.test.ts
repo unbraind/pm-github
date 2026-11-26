@@ -525,7 +525,7 @@ test("comment sync skips a contended lock and reports a per-comment write failur
     const tasksDir = path.join(root, ".agents", "pm", "tasks");
     await withReadOnlyDirectory(tasksDir, async () => {
       const failed = await captureStderr(() => syncGithubCommentsToAnnotations(itemId, [
-        { id: 5, body: "", user: null, created_at: "" },
+        { id: 5, body: "", user: null, created_at: "2026-01-01T00:00:00Z" },
       ], path.join(root, ".agents", "pm"), 7));
       assert.equal(failed.result.added, 0);
       assert.match(failed.stderr.join("\n"), /sync failed/);
@@ -720,7 +720,7 @@ test("plain imports preserve assigned metadata and synchronize existing annotati
   const tracker = path.join(root, ".agents/pm");
   try {
     const common = { resolveToken: () => undefined, fetchIssues: async () => [issue({ assignee: { login: "fixture" }, milestone: { title: "Sprint" }, comments: 1 })],
-      fetchIssueComments: async () => [{ id: 11, body: "public note", user: null, created_at: "" }] };
+      fetchIssueComments: async () => [{ id: 11, body: "public note", user: null, created_at: "2026-01-01T00:00:00Z" }] };
     const first = await captureStderr(() => runImport("acme/widgets", tracker, opts({ "comments-mode": "annotations" }), common));
     assert.ok("imported" in first.result && first.result.imported === 1);
     const second = await captureStderr(() => runImport("acme/widgets", tracker, opts({ "comments-mode": "annotations" }), common));

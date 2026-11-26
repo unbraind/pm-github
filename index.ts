@@ -1,7 +1,7 @@
 import { writeGithubStateAtomic, syncGithubStatePath, type GithubStateWriteOptions } from "./durable-state.ts";
 import { buildGithubOwnershipIndex, warnGithubOwnershipScope, withGithubItemConsistency, readGithubOwnershipSnapshot, githubRepositoryHash, githubOwnershipClaims, githubOwnedIdentityKeys, assertGithubOwnershipConsistency, assertGithubImportOwner, GithubImportOwnershipError, readGithubImportOwner, withGithubImportOwners, mutateGithubOwnedItem, type GithubOwnershipIndex, type GithubOwnedTarget, ownershipStateOf } from "./import-ownership.ts";
 import { parseGithubIssueUrl, githubUrlTokens } from "./github-url.ts";
-import { readGithubWorkspace, canonicalGithubStatus, githubStatusKind, githubStatusIsTerminal, type GithubStatusRegistry } from "./workspace.ts";
+import { canonicalGithubStatus, githubStatusIsTerminal, githubStatusKind, readGithubWorkspace, withGithubInvocationScope, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
 import { uniqueGithubLabelNames } from "./label-names.ts";
 import { githubLabelsToTags, importTagArguments, importTagOptions, importTagValues, nativeTagAdditions } from "./import-tags.ts";
@@ -61,6 +61,8 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { appendGithubComment, readStoredComments } from "./comment-mirror.ts";
+import { withReservedIdRepair } from "./import-repair.ts";
 
 import {
   PmClient, createPmCliExpectedError,
@@ -79,8 +81,6 @@ import {
   getHistoryPath as sdkGetHistoryPath,
   readHistorySnapshot as sdkReadHistorySnapshot,
   type BulkItemMutation,
-  type CommentsCommandOptions,
-  type CommentsResult,
   type CommitItemMutationsOptions,
   type CommitItemMutationsResult,
   type ItemDocument,
@@ -180,7 +180,7 @@ export interface GhComment {
 //                   comments into the item body as blockquoted markdown under a
 //                   `### GitHub comments (N)` heading. Governed by --with-comments.
 // - "annotations" — sync comments into the pm item's native comments collection
-//                   via the SDK `comments()` primitive. Comments are fetched
+//                   via the SDK annotation store. Comments are fetched
 //                   regardless of --with-comments. Re-sync is idempotent: each
 //                   stored comment carries a stable `<!-- pm-github:comment:N -->`
 //                   marker (the GitHub comment id), so re-running import never
@@ -1931,7 +1931,7 @@ async function commitGithubImportTransactionUnchecked(config: {
 async function commitGithubImportTransaction(config: Parameters<typeof commitGithubImportTransactionUnchecked>[0]): Promise<GithubImportCommitResult> {
   const targets = config.entries.map(entry => githubImportTarget(config.repo, entry, config.itemIds.get(entry.issueNumber)!, !config.opts.updateOnly && !entry.match?.id));
   try { return await commitGithubImportTransactionUnchecked({ ...config,
-    commit: input => withGithubImportOwners(config.pmRoot, targets, () => config.commit(input)),
+    commit: input => withReservedIdRepair(targets, () => withGithubImportOwners(config.pmRoot, targets, () => config.commit(input))),
   }); }
   catch (error: unknown) {
     if (error && typeof error === "object" && "code" in error && ["github_import_owner_conflict", "github_identity_conflict"].includes(String(error.code))) {
@@ -2688,7 +2688,7 @@ export async function acquireImportLock(
 // ---------------------------------------------------------------------------
 //
 // `--comments-mode annotations|both` mirrors a GitHub issue's conversation into
-// the pm item's native comments collection (the SDK `comments()` primitive), so
+// the pm item's native comments collection, so
 // agents get structured, queryable comments instead of body-embedded text.
 //
 // Re-sync is idempotent: every stored comment carries a stable marker embedding
@@ -2702,7 +2702,7 @@ export async function acquireImportLock(
  * HTML comments are invisible in rendered markdown but survive `pm comments`
  * storage verbatim, so the id embedded in the marker is the stable dedupe key.
  */
-export const COMMENT_MARKER_REGEX = /<!--\s*pm-github:comment:(\d+)\s*-->/;
+export const COMMENT_MARKER_REGEX = /<!--\s*pm-github:comment:(\d+)\s*-->\s*$/;
 
 /**
  * Build the text for one native pm comment from a GitHub comment.
@@ -2778,7 +2778,7 @@ export function parseCreatedItemId(stdout: string): string | undefined {
 }
 
 // Sync GitHub issue comments into a pm item's native comments collection via
-// the SDK `comments()` primitive. Idempotent: comments already present (matched
+// the SDK annotation store. Idempotent: comments already present (matched
 // by their GitHub comment id marker) are skipped, so re-running import never
 // duplicates. Each GitHub comment becomes one pm comment authored by the
 // GitHub login. Failures are logged and never abort the import.
@@ -2801,7 +2801,7 @@ export function parseCreatedItemId(stdout: string): string | undefined {
  *
  * Idempotent: comments already present (matched by their marker id) are skipped,
  * so re-running import never duplicates. Each GitHub comment becomes one pm
- * comment authored by the GitHub login. Failures are reported in the returned
+ * comment with its GitHub author and creation time. Failures are reported in the returned
  * `failed` count and logged, never thrown: a contended or unavailable lock, an
  * unreadable existing-comment collection, and each refused add all count every
  * comment that did not land (see {@link acquireImportLock}). Gated callers turn
@@ -2832,10 +2832,9 @@ export async function syncGithubCommentsToAnnotations(
   }
   const release = acquisition.status === "acquired" ? () => acquisition.lock.release() : () => {};
   try {
-    let existing: { text?: string }[] = [];
+    let existing: { text?: string }[];
     try {
-      const list: CommentsResult = await pmCommentsFn(itemId, {}, { pmRoot });
-      existing = list.comments;
+      existing = await readStoredComments(itemId, pmRoot);
     } catch (err: unknown) {
       const msg = errorMessage(err);
       console.error(`#${issueNumber}: could not read existing comments for ${itemId} — ${msg}`);
@@ -2850,10 +2849,11 @@ export async function syncGithubCommentsToAnnotations(
         skipped++;
         continue;
       }
-      const author = c.user?.login ?? "github";
       try {
-        await pmCommentsFn(itemId, { add: buildCommentText(c), author }, { pmRoot });
-        added++;
+        const writes = await appendGithubComment(itemId, pmRoot, c, buildCommentText(c));
+        synced.add(c.id);
+        added += writes;
+        skipped += 1 - writes;
       } catch (err: unknown) {
         const msg = errorMessage(err);
         console.error(`#${issueNumber}: comment ${c.id} sync failed — ${msg}`);
@@ -3881,7 +3881,7 @@ export async function runImport(
     for (const entry of planned) {
       const target = githubImportTarget(repo, entry,
         entry.match?.id ?? deriveAtomicItemId(repo, entry.issueNumber, workspace.settings.id_prefix, sdkNormalizeItemId), !entry.match?.id);
-      await readGithubImportOwner(pmRoot, target, ownership);
+      await withReservedIdRepair([target], () => readGithubImportOwner(pmRoot, target, ownership));
       if (!entry.match?.id) assertGithubImportOwner({ id: target.id, author: "pm-github", description: entry.description, tags: importTagValues(entry) }, target);
     }
     if (opts.gate) {
@@ -4089,13 +4089,13 @@ export async function runImport(
     /** Native SDK writes retain expected revisions and validate the live corpus inside their item lock. */
     const ownedPmRun = async (id: string, action: "create" | "update" | "close", options: Record<string, unknown>) => {
       const target = githubImportTarget(repo, prepared, id, action === "create");
-      const hash = await readGithubImportOwner(pmRoot, target);
+      const hash = await withReservedIdRepair([target], () => readGithubImportOwner(pmRoot, target));
       try {
-        const result = await mutateGithubOwnedItem(pmRoot, target, action, options, hash);
+        const result = await withReservedIdRepair([target], () => mutateGithubOwnedItem(pmRoot, target, action, options, hash));
         return { ok: true, stdout: JSON.stringify(result), stderr: "" };
       } catch (error: unknown) {
         if (error && typeof error === "object" && "code" in error && ["github_import_owner_conflict", "github_identity_conflict"].includes(String(error.code))) throw error;
-        await readGithubImportOwner(pmRoot, target);
+        await withReservedIdRepair([target], () => readGithubImportOwner(pmRoot, target));
         return { ok: false, stdout: "", stderr: errorMessage(error) };
       }
     };
@@ -5694,8 +5694,8 @@ export async function appendBlockerComments(
     try {
       let existing: { text?: string }[];
       try {
-        const list: CommentsResult = await pmCommentsFn(entry.itemId, {}, { pmRoot, cwd: pmRoot });
-        existing = list.comments;
+        // The output projection can omit trailing markers on long grouped comments.
+        existing = await readStoredComments(entry.itemId, pmRoot);
       } catch (err: unknown) {
         console.error(`${entry.itemId}: could not read existing comments — ${errorMessage(err)}`);
         failed++;
@@ -7089,9 +7089,9 @@ const IMPORT_FLAGS = [
   { long: "--milestone", value_name: "name", description: "Filter by milestone title" },
   { long: "--include-prs", description: "Include pull requests (default: skip PRs)" },
   { long: "--skip-drafts", description: "Exclude draft pull requests (only meaningful with --include-prs)" },
-  { long: "--with-comments", description: "Fetch issue comments and append them to the item body" },
+  { long: "--with-comments", description: "Fetch issue comments. Embed them in mirrored item bodies or record native comments on linked curated items" },
   { long: "--include-comments", description: "Alias for --with-comments" },
-  { long: "--comments-mode", value_name: "body|annotations|both", description: "How to persist fetched GitHub comments: `body` (default, embed in item body), `annotations` (sync to the pm item's native comments collection), or `both`. `annotations`/`both` are idempotent on re-import (dedupe by GitHub comment id)" },
+  { long: "--comments-mode", value_name: "body|annotations|both", description: "How to persist fetched GitHub comments: `body` (default, embed in item body), `annotations` (sync to the pm item's native comments collection), or `both`. `annotations`/`both` preserve the GitHub creation time and dedupe by GitHub comment id" },
   { long: "--atomic", description: "Commit the complete import as one workspace-writer-locked, crash-resumable transaction (pm-cli >=2026.7.20); compensate applied mutations on failure and report incomplete compensation" },
   { long: "--link-deps", description: "After import, map dependency references in issue bodies (`Blocked by #N`, `Depends on owner/repo#N`, `Blocks #N`) to pm dependency edges between the linked items. Idempotent; skips self- and unresolved references; ordering cycles are reported (via the SDK ordering-cycle advisory), not rejected" },
   { long: "--gate", description: "Fail-closed privacy gate: verify plan completeness and explicit-identity idempotency before the write, then scan the proposed tracker change for credentials, personal data, and host paths after it; any finding (or unreadable scan input) fails the import so nothing is ever pushed" },
@@ -7234,10 +7234,10 @@ export default defineExtension({
     // importer — `pm github import <owner/repo>` (idempotent native pipeline)
     // -----------------------------------------------------------------------
     api.registerImporter("github", async (ctx: ImportExportContext) => {
-      return runImport(ctx.args[0], ctx.pm_root, parseImportOptions(ctx.options));
+      return withGithubInvocationScope(ctx.global.path, () => runImport(ctx.args[0], ctx.pm_root, parseImportOptions(ctx.options)));
     }, {
       description:
-        "Fetch GitHub issues from a repo and create/update pm items (idempotent " +
+        "Start work with pm github import <owner>/<repo> --issue <N> to record provenance. The importer reserves <prefix>-github-<repo-hash>-<N> IDs. Fetches GitHub issues and creates/updates pm items (idempotent " +
         "on re-import via persisted GitHub identity). Skips pull " +
         "requests by default.",
       intent: "import GitHub issues as pm items",
@@ -7501,7 +7501,7 @@ export default defineExtension({
         { long: "--atomic", description: "Commit all changed linked items in one workspace writer transaction; an interrupted transaction is replayed from its persisted plan on the next refresh before unchanged items are skipped" },
       ],
       async run(ctx: CommandHandlerContext) {
-        return runRefresh(ctx.args[0], ctx.pm_root, ctx.options);
+        return withGithubInvocationScope(ctx.global.path, () => runRefresh(ctx.args[0], ctx.pm_root, ctx.options));
       },
     });
 
@@ -7535,7 +7535,7 @@ export default defineExtension({
       arguments: [{ name: "owner/repo", required: true, description: "Expected repository boundary" }],
       flags: [{ long: "--limit", value_name: "N", description: "Maximum deliveries per batch, 1 to 100 (default 20)" }],
       async run(ctx: CommandHandlerContext) {
-        return reconcileGithubWebhooks(ctx.pm_root, ctx.args[0] ?? "", ctx.options.limit === undefined ? 20 : Number(ctx.options.limit));
+        return withGithubInvocationScope(ctx.global.path, () => reconcileGithubWebhooks(ctx.pm_root, ctx.args[0] ?? "", ctx.options.limit === undefined ? 20 : Number(ctx.options.limit)));
       },
     });
 
@@ -7544,7 +7544,7 @@ export default defineExtension({
     api.registerCommand({
       name: "gh-issues import",
       description:
-        "Fetch GitHub issues from a repo and create/update pm items (idempotent " +
+        "Start work with pm github import <owner>/<repo> --issue <N> to record provenance. The importer reserves <prefix>-github-<repo-hash>-<N> IDs. Fetches GitHub issues and creates/updates pm items (idempotent " +
         "on re-import via persisted GitHub identity). Skips pull " +
         "requests by default. Uses GITHUB_TOKEN/GH_TOKEN (or the authenticated " +
         "gh CLI) when available for 5000 req/hr and private repos; falls back to " +
@@ -7574,7 +7574,7 @@ export default defineExtension({
         "Use --atomic for a durable resumable journal with reverse compensation on ordinary failures.",
       ],
       async run(ctx: CommandHandlerContext) {
-        return runImport(ctx.args[0], ctx.pm_root, parseImportOptions(ctx.options));
+        return withGithubInvocationScope(ctx.global.path, () => runImport(ctx.args[0], ctx.pm_root, parseImportOptions(ctx.options)));
       },
     });
 

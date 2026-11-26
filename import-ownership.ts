@@ -25,12 +25,19 @@ export class GithubImportOwnershipError extends PmCliError {
   readonly expected: string;
   /** Authoritative identities currently attached to the target. */
   readonly owners: readonly string[];
+  /**
+   * Metadata of the item the guard refused, when the refusal read one. Kept
+   * non-enumerable so serialized diagnostics never quote item content; only
+   * in-process repair decisions may inspect it.
+   */
+  declare readonly refusedItem?: PmItem;
   /** Explicit recovery instruction; never silently reassign a colliding ID. */
   readonly remedy = OWNER_REMEDY;
   /** Name the requested identity and every current owner without quoting item content. */
-  constructor(itemId: string, expected: string, owners: readonly string[]) {
+  constructor(itemId: string, expected: string, owners: readonly string[], refusedItem?: PmItem) {
     super(`GitHub import target ${itemId} is reserved for ${expected}, but its current owner is ${owners.join(" versus ") || "curated/unowned"}. ${owners.some(owner => owner.includes("claimed by")) ? "multiple existing owners; import plan is not idempotent. " : ""}${OWNER_REMEDY} No conflicting item was written.`, 2, { code: "github_import_owner_conflict", required: OWNER_REMEDY });
     this.itemId = itemId; this.expected = expected; this.owners = owners;
+    if (refusedItem !== undefined) Object.defineProperty(this, "refusedItem", { value: refusedItem });
   }
 }
 
@@ -222,7 +229,7 @@ export function assertGithubImportOwner(item: PmItem, target: GithubOwnedTarget,
   const expected = `${target.repo.toLowerCase()}#${target.number}`;
   const owners = assertGithubOwnershipConsistency(item, target, peers);
   if (target.mirrorContent && !importerCreatedItem(item, target.repo, target.number)) {
-    throw new GithubImportOwnershipError(target.id, expected, [...owners, "curated/unowned for content mirroring; importer creation provenance missing"]);
+    throw new GithubImportOwnershipError(target.id, expected, [...owners, "curated/unowned for content mirroring; importer creation provenance missing"], item);
   }
   if (owners.length === 1 && owners[0] === expected) return;
   if (owners.length === 0 && target.initialLink?.(item)) return;

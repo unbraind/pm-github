@@ -424,9 +424,16 @@ test("closure and identity edge cases retain exact evidence rather than inventin
     ...[{}, { url: 1 }, { url: "https://example.invalid/unrelated" }].map(fields => ({ event: "connected", created_at: issue.closed_at, ...fields })),
     [], 1, null]), /closing/);
   assert.match(importCloseReason({ ...issue, closed_at: null, state_reason: null }, []), /unspecified on an unknown date/);
-  for (const override of [{ created_at: "bad" }, { updated_at: "bad" }, { updated_at: "2000-01-01" }, { closed_at: "bad" }, { closed_at: "2099-01-01" }]) {
+  for (const override of [{ created_at: "bad" }, { updated_at: "bad" }, { updated_at: "2000-01-01" }, { closed_at: "bad" }, { closed_at: "2099-01-01" },
+    // Date parsing would roll impossible or free-form dates forward; the
+    // source-lifetime gate must refuse them instead of importing a moment
+    // that never existed.
+    { created_at: "2026-02-30T00:00:00Z" }, { updated_at: "2027-02-29T12:00:00Z" }, { closed_at: "February 31, 2026" }, { created_at: "2/31/2026" }]) {
     assert.throws(() => buildImportFidelity({ ...issue, ...override }, [], []), /invalid source lifetime/);
   }
+  // A real leap day stays importable: the gate rejects impossible dates, not
+  // rare ones.
+  assert.match(buildImportFidelity({ ...issue, created_at: "2028-02-29T00:00:00Z", updated_at: "2028-03-01T00:00:00Z", closed_at: null }, [], []).github_created_at, /^2028-02-29/);
   assert.equal(buildImportFidelity({ ...issue, closed_at: null }, [], []).github_closed_at, "");
   assert.equal(buildImportFidelity({ ...issue, state: "open", state_reason: null }, [], []).github_state_reason, "unspecified");
   const tagged = { id: "tagged", tags: ["gh:unbraind/pm-beads#85"] };
