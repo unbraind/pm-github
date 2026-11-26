@@ -6,7 +6,7 @@ status: open
 priority: 1
 tags[2]: changelog-unreleased,"gh:unbraind/pm-github#279"
 created_at: "2026-11-26T08:22:23.276Z"
-updated_at: "2026-11-26T13:11:52.622Z"
+updated_at: "2026-11-26T13:11:56.213Z"
 author: codex-agent
 acceptance_criteria: "Reject unsupported or unreadable installed pm CLI versions before both workflows run tracker commands. Report the release, host, tested range and pin remedy. Preserve mutation refusal details in apply failures."
 comments[15]{created_at,author,text}:
