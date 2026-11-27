@@ -345,7 +345,7 @@ jobs:
             writeFileSync(join(RUNNER_TEMP, "pm-cli-host-compatibility-hint"), `${hint}\n`);
             // Later failure reports and the alert job quote only this workflow-built text.
             if (GITHUB_OUTPUT) appendFileSync(GITHUB_OUTPUT, `hint=${hint}\n`);
-            appendFileSync(GITHUB_STEP_SUMMARY, `### pm CLI host compatibility\n\n${hint}\n`);
+            appendFileSync(GITHUB_STEP_SUMMARY, `### pm CLI host compatibility (pm-github ${PM_GITHUB_VERSION})\n\n${hint}\n`);
             console.log(JSON.stringify({ case: outcome, pm_github_version: PM_GITHUB_VERSION, pm_cli_version: installed, tested_host_range: range, reason: hint }));
             console.error(`::warning::${hint}`);
           } else if (outcome) {

@@ -174,7 +174,7 @@ ${scenario.termTrap ? "sleep 30" : scenario.failure ? "exit 1" : ""}
       assert.equal(existsSync(goal), true, "a newer-than-tested host must continue to the tracker commands");
       assert.deepEqual(JSON.parse(child.stdout), report);
       assert.equal(child.stderr, `::warning::${reason}\n`);
-      assert.equal(readFileSync(summary, "utf8"), `### pm CLI host compatibility\n\n${reason}\n`);
+      assert.equal(readFileSync(summary, "utf8"), `### pm CLI host compatibility (pm-github ${selectedRelease})\n\n${reason}\n`);
       assert.equal(readFileSync(join(root, "pm-cli-host-compatibility-hint"), "utf8"), `${reason}\n`);
       assert.equal(readFileSync(output, "utf8"), `hint=${reason}\n`);
       return;
@@ -241,6 +241,8 @@ printf '%s\\n' '${host}'
       assert.equal(existsSync(join(root, "preview-ran")), true);
       assert.deepEqual(JSON.parse(child.stdout), { case: "newer_untested", pm_github_version: release, pm_cli_version: host, tested_host_range: { minimum: floor, maximum: ceiling }, reason: hint });
       assert.equal(child.stderr, `::warning::${hint}\n`);
+      // The no-hold warning summary must name the selected release, per the acceptance criteria.
+      assert.equal(readFileSync(join(root, "job-summary"), "utf8"), `### pm CLI host compatibility (pm-github ${release})\n\n${hint}\n`);
       continue;
     }
     const evidence = expected === "declared_incompatible"

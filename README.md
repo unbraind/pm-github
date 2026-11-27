@@ -1121,7 +1121,8 @@ refused with its own remedy: install a stable pm CLI release within the tested
 range. No extension pin or hold can make a release support a prerelease host.
 
 A host newer than the tested upper endpoint does not stop the job. The preflight
-emits one warning annotation and one job-summary line naming the installed CLI,
+emits one warning annotation and one job-summary line: the summary heading
+names the selected pm-github release, and the line names the installed CLI,
 the newest tested host and the same hold-aware remedy: `pm CLI X is newer than
 the newest host this pm-github release was tested with (Y); continuing. If the
 apply step fails, remove or update the pm-github-version hold that selected the
