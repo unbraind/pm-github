@@ -4,6 +4,19 @@ Tracking: [pm-github-lfcf](https://github.com/unbraind/pm-github/blob/main/.agen
 related [pm-github-c093](https://github.com/unbraind/pm-github/blob/main/.agents/pm/features/pm-github-c093.toon),
 wording follow-up [pm-github-n0mm](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-n0mm.toon).
 
+## Tracker-only workflow publication
+
+Sync and closeout probe the caller's installed pm-changelog for
+`--check-pending`, available from 2026.11.28. With that capability, omit the
+post-script input to skip the default changelog regeneration. The caller's
+`changelog:check` still runs on the proposed tracker changes. Legacy callers
+retain the generation and commit behavior documented below. An explicitly
+named script still runs, including its npm lifecycle hooks, and declared
+artifact files can still be committed. For pending-aware callers, the workflow
+restores the hook's root `CHANGELOG.md` output before checking or publishing.
+Remove an explicit `changelog:full` override when its sole purpose is to write
+the changelog. Release workflows continue to regenerate the file.
+
 ## Scope and replay method
 
 On 2026-10-20, read all 14 unresolved review threads on the eight reported PRs

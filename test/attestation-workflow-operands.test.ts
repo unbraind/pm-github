@@ -30,6 +30,14 @@ for (const kind of ["sync", "closeout"]) {
       assert.equal(result.status, status, path + result.stderr);
     }
   });
+  test(`${kind}: pending mode excludes the changelog and retains a declared artifact`, () => {
+    const result = spawnSync("bash", ["-c", helper + '\nprintf "%s\\0" "${sync_scope[@]}"'], {
+      env: { ...process.env, PM_SYNC_TRACKER: "tracker", GENERATED_PATHS: "selfhost.bundle", legacy_changelog: "false" }, encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(result.stdout, /CHANGELOG\.md/);
+    assert.ok(result.stdout.split("\0").includes(":(top,literal)selfhost.bundle"));
+  });
   test(`${kind}: declaring generated artifacts requires a Git checkout`, () => {
     const root = mkdtempSync(join(tmpdir(), "generated-artifact-no-git-"));
     try {
