@@ -16,6 +16,7 @@ import { githubOwnershipClaims, withGithubImportOwners, withGithubOwnershipWork,
 import { buildProjectPullPlan, buildProjectPushPlan, indexPmByIssue, projectItemTag } from "../projects.ts";
 import { writeGithubStateAtomic } from "../durable-state.ts";
 import { captureStderr, withEnv, withMockGithub, jsonResponse } from "./helpers/mock-github-server.ts";
+import { appendedHistory } from "./helpers/history-assertions.ts";
 
 const repo = "o/r";
 const source: GhIssue = { number: 7, title: "Public source", body: "Public body", state: "open", labels: [], user: null,
@@ -253,6 +254,50 @@ for (const operation of ["create", "update"] as const) test(`Projects import rej
   assert.equal(competed, true);
   assert.equal((await listAllComplete({}, { pmRoot: root })).items.length, local ? 2 : 1);
   if (local) assert.deepEqual(await bytes(root, local.id), before);
+}));
+
+for (const shape of [
+  { name: "wrapped issue", typename: "Issue", description: "GH issue #7: https://github.com/o/r/issues/7 · native notes", kind: "issues" },
+  { name: "wrapped pull request", typename: "PullRequest", description: "GH PR #7: https://github.com/o/r/pull/7", kind: "pull" },
+  { name: "tagged draft", typename: "DraftIssue", description: "GitHub issue: https://www.github.com/O/R/issues/7/", kind: "issues" },
+  { name: "explicit issue plus matching legacy declaration", typename: "Issue", description: "GH issue #7: https://github.com/o/r/issues/7", kind: "issues", explicit: true },
+  { name: "explicit issue plus unrelated declaration", typename: "Issue", description: "GH issue #8: https://github.com/o/r/issues/8", kind: "issues", explicit: true, replace: true },
+] as const) test(`Projects import preserves applicable legacy ownership on update and repeat (${shape.name})`, async () => tracker(async root => {
+  const local = (await create({ title: "Before board import", type: "Chore", description: shape.description,
+    ...(shape.typename === "DraftIssue" ? { tags: projectItemTag({ owner: "o", number: 1 }, "card") } : {}),
+  }, { pmRoot: root })).item;
+  if ("explicit" in shape) await change(root, local.id, { github_url: source.html_url });
+  const initial = await bytes(root, local.id);
+  const ext = await harness;
+  await withMockGithub((_request, response, body) => {
+    const { query } = JSON.parse(body);
+    jsonResponse(response, 200, { data: query.includes("projectV2(number:") ? {
+      organization: { projectV2: { id: "board", title: "Fixture board" } },
+    } : { node: { items: { pageInfo: { hasNextPage: false }, nodes: [{
+      id: "card", fieldValueByName: { name: "Done" }, content: { __typename: shape.typename, title: "After board import", body: "New board body",
+        ...(shape.typename !== "DraftIssue" ? { number: 7, repository: { nameWithOwner: repo } } : {}),
+      },
+    }] } } } });
+  }, async () => {
+    const run = async (options: Record<string, boolean> = {}) => (await ext.runCommand({ command: "github project import", args: ["o/1"], pmRoot: root, options })).result;
+    assert.deepEqual(await run({ "dry-run": true }), { dryRun: true, project: "o/1", wouldImport: 0, wouldUpdate: 1, planned: 1 });
+    assert.deepEqual(await bytes(root, local.id), initial);
+    assert.deepEqual(await run(), { imported: 0, updated: 1, skipped: 0, project: "o/1", planned: 1 });
+    const item = (await get(local.id, {}, { pmRoot: root })).item;
+    assert.equal(item.title, "After board import");
+    assert.equal(item.status, "closed");
+    if (shape.typename === "DraftIssue") assert.equal(item.body?.trim(), "New board body");
+    assert.deepEqual(githubOwnershipClaims(item).owners, ["o/r#7"]);
+    assert.deepEqual(githubOwnershipClaims(item).kinds, [shape.kind]);
+    if ("replace" in shape) assert.match(item.description!, /^GH project item o\/1/);
+    else assert.equal(item.description, shape.description);
+    const after = await bytes(root, local.id);
+    const history = appendedHistory(Buffer.from(initial[1]!, "hex").toString("utf8"), Buffer.from(after[1]!, "hex").toString("utf8"));
+    assert.deepEqual(history.map(row => row.op), ["update", "close"]);
+    assert.deepEqual(await run({ "dry-run": true }), { dryRun: true, project: "o/1", wouldImport: 0, wouldUpdate: 0, planned: 1 });
+    assert.deepEqual(await run(), { imported: 0, updated: 0, skipped: 0, project: "o/1", planned: 1 });
+    assert.deepEqual(await bytes(root, local.id), after);
+  });
 }));
 
 for (const selectedConflicts of [false, true]) test(`Round12 scoped project pull ignores conflicts confined to unselected items (selected conflicts: ${selectedConflicts})`, async () => tracker(async root => {

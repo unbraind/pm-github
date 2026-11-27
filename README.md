@@ -788,6 +788,8 @@ items. Both preview and apply stop before writes when links are ambiguous.
 Native writes recheck the planned card against the current tracker links.
 If another item claims the card or the link moves after planning, the affected
 mutation stops and a fresh plan is required.
+An existing description that declares the item's verified issue or pull request
+is preserved. The Projects tag records the board-card link.
 
 ```bash
 pm github project import unbraind/5 --dry-run

@@ -38,7 +38,7 @@ import { compileIssueForm, completeIssueForm, readRepositoryIssueForm, refuseIss
 export { compileIssueForm, completeIssueForm, readRepositoryIssueForm } from "./issue-forms.ts";
 export type { IssueFormInput, IssueFormSelection, IssueFormContract, IssueFormReport, IssueFormCompletion, IssueFormRefusalCode, FormField, FormRepair, IssueFormReader } from "./issue-forms.ts";
 import {
-  AmbiguousCitationError, type LegacyGithubIdentityConflict, indexByImportIdentity, importerCreatedItem, buildImportFidelity, fetchImportTimeline, githubLifecycleFields, importFidelityFields, matchImportedIssue, normalizeImportValue, persistImportFidelity, readImportReleases, selectImportContextIndex, serializeImportTags, validateImportLifetime,
+  AmbiguousCitationError, type LegacyGithubIdentityConflict, indexByImportIdentity, importerCreatedItem, buildImportFidelity, fetchImportTimeline, githubLifecycleFields, importFidelityFields, legacyGithubDescriptionIdentity, matchImportedIssue, normalizeImportValue, persistImportFidelity, readImportReleases, selectImportContextIndex, serializeImportTags, validateImportLifetime,
   type AmbiguousCitationPlan, type CitationCandidate, type ImportFidelity,
 } from "./import-fidelity.ts";
 import { refreshChanges, runRefresh } from "./refresh.ts";
@@ -6724,13 +6724,17 @@ async function runProjectImport(ctx: CommandHandlerContext) {
     const client = PmClient.forActiveExtensionHost({ pmRoot: ctx.pm_root, noExtensions: true });
     if (entry.action === "update" && entry.pmId) {
       const current = currentItems.get(entry.pmId)!;
+      const declaration = legacyGithubDescriptionIdentity(current);
+      // A native legacy declaration can be the only issue ownership or issue/PR
+      // kind evidence. Keep it and use the Projects tag for board provenance.
+      const replacesDescription = !(declaration && binding.owners.includes(declaration.key));
       const addedTags = nativeTagAdditions(current.tags, entry.tags);
       const mappedStatus = entry.mappedStatus;
       const mapsToClose = mappedStatus === workspace.statuses.close_status;
       const statusChanged = mappedStatus !== undefined && mappedStatus !== canonicalGithubStatus(current.status, workspace.statuses);
       const closeAfterUpdate = mapsToClose && statusChanged;
       const writesCloseReason = mappedStatus !== undefined && !mapsToClose && githubStatusIsTerminal(mappedStatus, workspace.statuses);
-      const updatesContent = current.title !== entry.title || current.description !== description ||
+      const updatesContent = current.title !== entry.title || (replacesDescription && current.description !== description) ||
         addedTags.length !== 0 || Boolean(entry.body && normalizeImportValue("body", current.body) !== normalizeImportValue("body", entry.body));
       // Native create can omit the reason on a custom terminal status even when
       // given one. Preserve that omission on repeat and repair recorded reasons.
@@ -6746,7 +6750,8 @@ async function runProjectImport(ctx: CommandHandlerContext) {
       if (needsUpdate) {
         try {
           await withGithubItemConsistency(ctx.pm_root, id, binding.owners, () => client.update(id, {
-            title: entry.title, description, message: `Re-imported from GitHub project ${ref.owner}/${ref.number}`,
+            title: entry.title, message: `Re-imported from GitHub project ${ref.owner}/${ref.number}`,
+            ...(replacesDescription ? { description } : {}),
             ...(addedTags.length ? { addTags: addedTags } : {}),
             ...(entry.body ? { body: entry.body } : {}),
             // Unknown mappings preserve the current status. Native close is a separate lifecycle operation.
@@ -6869,7 +6874,7 @@ export async function applyPushEntry(
       };
       /** Validate the new pair before its next side effect and again inside the native tag write. */
       const check = (item: PmItem, peers: readonly PmItem[]) => {
-        const proposed = entry.itemId ? item : { ...item, tags: [...(item.tags ?? []), tag] };
+        const proposed = entry.itemId ? item : { ...item, tags: [...toImportTags(item.tags), tag] };
         assertProjectWriteBinding(attachedScope, itemId, proposed, peers);
       };
       if (entry.targetOptionId && meta.statusField) {

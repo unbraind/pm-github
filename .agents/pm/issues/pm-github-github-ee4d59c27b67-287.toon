@@ -7,9 +7,9 @@ status: open
 priority: 2
 tags[2]: "gh:unbraind/pm-github#287","github_author:unbraind"
 created_at: "2026-11-26T10:29:01Z"
-updated_at: "2026-11-27T19:33:17.952Z"
+updated_at: "2026-11-27T20:58:39.812Z"
 author: pm-github
-comments[28]{created_at,author,text}:
+comments[33]{created_at,author,text}:
   "2026-11-27T11:17:01.364Z",codex-agent,Investigating the four hosted repeat-gate failures. The pinned caller reproduction will compare native documents and history across both passes and distinguish the published versions from the later merged comment fix.
   "2026-11-27T11:21:45.811Z",codex-agent,"Reproduced on pm-rl main e11861f with its locked PM CLI 2026.11.24 and pinned pm-github 2026.11.25. A frozen nine-issue REST and closure snapshot produced 17, 18, then 19 native comments for item 202. Both new comment_add rows share provider comment 7140375699. The repeat appended one history row touching comments and updated_at while reporting zero item updates and unchanged. Published 2026.11.26 differs in dist only by its version literal and predates merged #288. Auditing body, lifecycle, annotations, and dependency writes independently."
   "2026-11-27T11:33:28.528Z",codex-agent,"Release comparison confirmed: 2026.11.25 and 2026.11.26 both append comment 7140375699 twice (history 36 → 38 → 39). Merged #288 reads full native annotation text and preserves the original provider timestamp (history 36 → 38 → 38). Existing dependency writes are byte-idempotent on the pinned SDK but their duplicate receipt used to count a link. The workflow now compares a source-only snapshot before writes and still requires both byte-diff checks and the privacy scan. Consumer adoption and independent hosted verification are tracked in issue #297."
@@ -38,6 +38,11 @@ comments[28]{created_at,author,text}:
   "2026-11-27T19:00:36.546Z",codex-agent,"Round 3 rule for sync receipts: a typed refusal takes precedence over capability checks and secondary stderr. The real ambiguous-citation preview exited successfully with a blocked plan, which the old workflow mislabeled as a pin problem. A blocked report now reaches the existing privacy-gated diagnostic before hash validation, even if it includes a valid-looking digest. Diagnostics expose the validated github_url remedy and omit arbitrary prose. Actual apply already returned a typed nonzero refusal; shared diagnostic formatting covers both. Closeout scenarios use their own refusal receipts."
   "2026-11-27T19:01:20.765Z",codex-agent,"Round 3 behavioral reverts in a disposable source copy. Removing only the shared board association check made seven adversarial cases fail: moved and contested pull, native import create and update, reassigned push with retained issue ownership, and peer claims during attachment and status writes. The uncontested control still passed. Removing the blocked preview branch restored the wrong pin diagnostic in a real CLI preview. Removing structured blocked precedence made the diagnostics property test choose secondary stderr over the ownership remedy. The initial live baseline also reproduced all three requested refusal failures before code changes. Fixed focused suite passed 15/15."
   "2026-11-27T19:33:16.062Z",codex-agent,"Round 3 local gates passed. Focused checks 16/16. PM-linked 73-file suite at configured CI depth with two workers 1877/1877, zero skips or failures. Covered direct SDK, JSON and TOON, real non-git trackers, packed npm and native Bun, declared minimum SDK and the reusable workflow. Typecheck, package and test builds, lint, 331 docstrings, zero configured duplication and the syntax-derived ownership inventory passed. No repeat or privacy gate was weakened."
+  "2026-11-27T19:46:24.808Z",codex-agent,The exact-head Greptile review identified a legacy issue description as the only ownership proof that Projects import would replace. Reproducing the preview and apply disagreement on native items and checking all other writers that can overwrite a declaration.
+  "2026-11-27T19:49:23.426Z",codex-agent,"Legacy-owner rule: a content writer must preserve accepted source authority and source kind across its proposed document. Native Projects import replaces descriptions, so it now omits that field when the shared parser finds a declaration that names the verified planned owner. The same decision drives preview and the no-op projection. Unrelated descriptions still refresh. Projects pull only writes lifecycle state and push only adds board provenance. Issue import and refresh preserve curated content or write the exact issue declaration and fidelity for a verified mirror. Export and closeout do not replace the native description. Both CLI receipt formats and packed consumers share the same command handler."
+  "2026-11-27T19:52:04.391Z",codex-agent,"Legacy ownership revert proof on a real non-git tracker: running the new tests against the prior Projects writer caused three apply refusals after successful previews (wrapped issue, wrapped PR and tagged draft). A fourth case lost the matching declaration even with an explicit issue URL. The unrelated declaration control still passed. Fixed tests check the existing ID, issue identity and kind, the native update and close records, and byte-identical item and history on repeat."
+  "2026-11-27T20:03:59.896Z",codex-agent,"Exact-head CI on e0f0e31 passed 2,187 tests on both Node versions and CodeQL. Node 26 stopped at the unchanged 100% branch threshold: the only uncovered branch was the local empty-tag fallback when projecting a Projects attachment. The native complete reader and locked metadata already supply tags. The projection now uses the same SDK tag normalizer as the write-side addition, which handles the optional input and preserves native tag atoms. Coverage will be certified by CI."
+  "2026-11-27T20:58:37.083Z",codex-agent,"Legacy Projects and coverage follow-up verified. The focused five-case set passed. The pinned PM runner repeated all 73 related files with two workers and passed 1,882 of 1,882 cases, zero skips, failures or cancellations. The five new cases each verified a no-write preview, accepted update and close, and a byte-identical repeat. Typecheck, build, test compilation, lint, 331 docstrings, configured duplication and the regenerated ownership inventory passed. The review thread is indexed by its public discussion link in the delivery report."
 files[25]{path,scope}:
   .github/workflows/pm-github-sync.yml,project
   import-ownership.ts,project
@@ -64,7 +69,7 @@ files[25]{path,scope}:
   test/typed-sentinel-normalization.test.ts,project
   test/workflow-diagnostic-class.test.ts,project
   workflow-diagnostic.ts,project
-tests[9]:
+tests[10]:
   - command: "node --test --test-concurrency=2 --test-name-pattern=\"reusable sync binds|legacy TOON import|linked reserved-ID import repeats|creation-only item type|project import skips|runImport --link-deps writes|interrupted transaction replay\" test/linked-import-regression.test.ts test/daily-sync-idempotency.test.ts test/project-sync.test.ts test/link-deps.test.ts test/repeat-import-noop.test.ts"
     scope: project
     timeout_seconds: 1200
@@ -137,6 +142,14 @@ tests[9]:
     provenance:
       author: codex-agent
       created_at: "2026-11-27T19:00:41.134Z"
+      source_kind: local_mutation
+      source_ref: fix/repeat-import-preserves-updated-at
+  - command: "PM_TEST_DEPTH=quick node --test --test-concurrency=2 --test-name-pattern=\"Projects import preserves applicable legacy ownership\" test/round-twelve.test.ts"
+    scope: project
+    timeout_seconds: 900
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-27T19:51:26.757Z"
       source_kind: local_mutation
       source_ref: fix/repeat-import-preserves-updated-at
 docs[4]{path,scope}:
