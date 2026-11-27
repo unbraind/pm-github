@@ -785,6 +785,9 @@ same item. Preview and apply skip matching content and mapped status, and an
 already-closed item keeps its closure and history on repeat.
 Project import and sync require one-to-one links between board cards and tracker
 items. Both preview and apply stop before writes when links are ambiguous.
+Native writes recheck the planned card against the current tracker links.
+If another item claims the card or the link moves after planning, the affected
+mutation stops and a fresh plan is required.
 
 ```bash
 pm github project import unbraind/5 --dry-run
@@ -1306,6 +1309,8 @@ still pass the tracked and untracked diff checks and the privacy scan.
 An extension that cannot provide the snapshot stops at preview. See
 [workflow and extension version pins](#self-versioned-workflows-and-dependabot)
 for how to update an older hold.
+When citation adoption is blocked by competing candidates, preview stops with
+the ownership remedy. Set `github_url` on the intended tracker item before retrying.
 
 Before extension and attributes setup, both reusable maintenance workflows require `.gitattributes` and the tracker’s `extensions/.managed-extensions.json` to match the checkout, including the index and ignored untracked files. Immediately after setup they save the runtime artifacts outside the checkout, then restore original tracked bytes or remove setup-created files before any privacy or publication scan. Strict health temporarily uses the saved runtime files after checking that both paths still match the baseline; an exit trap restores the baseline even when health fails. No caller script runs inside either setup window. Preexisting edits and later caller edits to either artifact fail closed and remain untouched, including ignored files.
 

@@ -490,6 +490,8 @@ export function buildProjectPushPlan(
   const options = statusField?.options ?? [];
   const selected = pmItems.filter((item): item is PmItemLike => Boolean(item));
   const { ownership, projectByPmId } = indexSelectedByIssue(selected, opts.corpus ?? selected, projectItems, ref, { warnForAllSelected: true });
+  const scope = projectWriteScope(ref, projectItems);
+  const ownersById = new Map<string, readonly string[]>();
 
   const entries: PushPlanEntry[] = [];
   const statusSkipped: PushPlan["statusSkipped"] = [];
@@ -501,6 +503,7 @@ export function buildProjectPushPlan(
 
     const linked = projectByPmId.get(item.id);
     const keys = githubOwnedIdentityKeys(item, ownership);
+    ownersById.set(item.id, keys);
     const [repository, number] = keys[0]?.split("#") ?? [];
     const issueKey = repository && number ? { repo: repository, number: Number(number) } : undefined;
     if (linked?.content.repo && linked.content.number && ownershipStateOf(ownership, item).evidence) {
@@ -584,6 +587,7 @@ export function buildProjectPushPlan(
     }
   }
 
+  for (const entry of entries) projectWriteBindings.set(entry, { scope, owners: ownersById.get(entry.pmId)! });
   return { entries, statusSkipped };
 }
 
@@ -670,10 +674,30 @@ function indexSelectedByIssue(
   return { ownership, pmByItemId, projectByPmId };
 }
 
-const projectPullOwners = new WeakMap<object, readonly string[]>();
+/** The board identity and eligible cards used to authorize a local mutation. */
+export interface ProjectWriteScope {
+  ref: ProjectRef;
+  cards: ProjectItem[];
+  writeTargets?: Set<string>;
+}
 
-/** Preserve the planning snapshot's owner decision without adding content to public plan rows. */
-export function getProjectPullOwners(entry: object): readonly string[] | undefined { return projectPullOwners.get(entry); }
+const projectWriteBindings = new WeakMap<object, { scope: ProjectWriteScope; owners: readonly string[] }>();
+
+/** Copy the provider identities so later edits to caller-owned objects cannot change a plan's authority. */
+function projectWriteScope(ref: ProjectRef, cards: ProjectItem[], writeTargets?: Set<string>): ProjectWriteScope {
+  return { ref: { ...ref }, cards: cards.map(card => ({ ...card, content: { ...card.content } })), writeTargets };
+}
+
+/** Retain private mutation authority without adding fields to public plan receipts. */
+export function getProjectWriteBinding(entry: object): { scope: ProjectWriteScope; owners: readonly string[] } | undefined {
+  return projectWriteBindings.get(entry);
+}
+
+/** Resolve the planned board association again using the writer's current peer corpus. */
+export function assertProjectWriteBinding(scope: ProjectWriteScope, cardId: string | undefined, item: PmItemLike, peers: readonly PmItemLike[]): void {
+  const { projectByPmId } = indexSelectedByIssue([item], [...peers], scope.cards, scope.ref, { writeTargets: scope.writeTargets });
+  if (projectByPmId.get(item.id!)?.id !== cardId) throw projectLinkConflict("The tracker item's project card link changed after planning.");
+}
 
 /** Board-to-tracker status changes and board options that require an explicit mapping. */
 export interface PullPlan {
@@ -696,6 +720,7 @@ export function buildProjectPullPlan(
   const mapped = new Map(projectItems.map(card => [card.id, mapOptionNameToPmStatus(card.statusName, statusMap, statuses)]));
   const writeTargets = new Set([...mapped].filter(([, status]) => status !== undefined).map(([id]) => id));
   const { ownership, pmByItemId } = indexSelectedByIssue(pmItems, corpus, projectItems, ref, { writeTargets });
+  const scope = projectWriteScope(ref, projectItems, writeTargets);
   const entries: PullPlanEntry[] = [];
   const statusSkipped: PullPlan["statusSkipped"] = [];
 
@@ -713,7 +738,7 @@ export function buildProjectPullPlan(
     const fromStatus = canonicalGithubStatus(pm.status ?? "open", statuses);
     if (fromStatus === toStatus) continue;
     const entry = { itemId: pi.id, pmId: pm.id, title: pm.title ?? "(untitled)", fromStatus, toStatus };
-    projectPullOwners.set(entry, githubOwnedIdentityKeys(pm, ownership));
+    projectWriteBindings.set(entry, { scope, owners: githubOwnedIdentityKeys(pm, ownership) });
     entries.push(entry);
   }
 
@@ -758,6 +783,7 @@ export function buildProjectImportPlan(
 ): ImportPlanEntry[] {
   const candidates = projectItems.filter(item => item.id && item.content.typename !== "Unknown");
   const { ownership, pmByItemId } = indexSelectedByIssue(pmItems, pmItems, candidates, ref);
+  const scope = projectWriteScope(ref, candidates);
   const plan: ImportPlanEntry[] = [];
 
   for (const pi of candidates) {
@@ -796,7 +822,7 @@ export function buildProjectImportPlan(
     }
     const tags = [...new Set([...(existing?.tags ?? []), ...provenance])];
 
-    plan.push({
+    const entry: ImportPlanEntry = {
       action: existing?.id ? "update" : "create",
       itemId: pi.id,
       title,
@@ -806,7 +832,9 @@ export function buildProjectImportPlan(
       tags,
       pmId: existing?.id,
       content: c,
-    });
+    };
+    projectWriteBindings.set(entry, { scope, owners: existing ? githubOwnedIdentityKeys(existing, ownership) : [] });
+    plan.push(entry);
   }
   return plan;
 }

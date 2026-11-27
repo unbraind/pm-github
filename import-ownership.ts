@@ -365,14 +365,19 @@ export async function mutateGithubOwnedItem(pmRoot: string, target: GithubOwnedT
 }
 
 
-/** Guard board-selected native changes against the complete owner corpus while allowing genuinely unowned items. */
-export async function withGithubItemConsistency<T>(pmRoot: string, id: string, expected: readonly string[], run: () => Promise<T>): Promise<T> {
+/** Guard a board write against the current native document and peer corpus under the item lock. */
+export async function withGithubItemConsistency<T>(
+  pmRoot: string, id: string | undefined, expected: readonly string[], run: () => Promise<T>,
+  check?: (item: PmItem, peers: readonly PmItem[]) => void,
+): Promise<T> {
   return withGithubOwnershipLock(pmRoot, () => withGithubOwnershipHooks(pmRoot, "github-board-owner", "github-board-owner-delegate", async context => {
-    if ((context.before ?? context.after)?.metadata.id !== id) return;
+    if (id === undefined ? context.operation !== "create" : (context.before ?? context.after)?.metadata.id !== id) return;
     const peers = buildGithubOwnershipIndex(await context.sdk.list(), expected.map(key => key.split("#")[0]!));
     for (const document of [context.before, context.after]) if (document) {
-      const keys = assertGithubOwnershipConsistency({ ...document.metadata, body: document.body }, undefined, peers);
-      if (JSON.stringify(keys) !== JSON.stringify(expected)) throw new GithubImportOwnershipError(id, expected.join(" versus ") || "original unowned project item", keys);
+      const item = { ...document.metadata, body: document.body };
+      const keys = assertGithubOwnershipConsistency(item, undefined, peers);
+      if (JSON.stringify(keys) !== JSON.stringify(expected)) throw new GithubImportOwnershipError(item.id, expected.join(" versus ") || "original unowned project item", keys);
+      check?.(item, peers.items);
     }
   }, run));
 }

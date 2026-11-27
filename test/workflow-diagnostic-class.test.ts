@@ -111,6 +111,25 @@ test("generic stderr wrappers cannot displace a specific text cause or structure
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("structured blocked receipts retain safe ownership remedies over secondary errors", () => {
+  const root = mkdtempSync(join(tmpdir(), "blocked-workflow-"));
+  try {
+    const report = join(root, "stdout.json"), error = join(root, "stderr.txt");
+    const remedy = "Set github_url to https://github.com/fixture/project/issues/42 on the intended owner, then retry.";
+    writeFileSync(error, "Error: A secondary error");
+    for (const plan of [undefined, [], [{ action: "skip", remedy }], [{ action: "ambiguous_citation", remedy: "private fixture text" }],
+      [{ action: "ambiguous_citation", remedy }]]) {
+      writeFileSync(report, JSON.stringify({ blocked: true, code: "ambiguous_citation", plan }));
+      const { reason } = readWorkflowFailure(report, error, undefined);
+      assert.match(reason, /ambiguous_citation.*Set github_url/);
+      assert.equal(reason.includes(remedy), plan?.[0]?.action === "ambiguous_citation" && plan[0].remedy === remedy);
+      assert.doesNotMatch(reason, /secondary error|private fixture text/);
+    }
+    writeFileSync(report, JSON.stringify({ blocked: true, code: "unknown_refusal" }));
+    assert.match(readWorkflowFailure(report, error, undefined).reason, /preview was blocked.*Inspect its plan/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("packed npm and Bun diagnostics preserve specific redacted causes in JSON and TOON without git", { timeout: 600_000 }, async () => {
   const base = mkdtempSync(join(tmpdir(), "diagnostic-packed-"));
   await withPackedFixture(base, async ({ root, env }) => {
@@ -145,6 +164,15 @@ test("packed npm and Bun diagnostics preserve specific redacted causes in JSON a
       assert.equal(decoded.reason, expected, `${bin}/${json}/${explicit}`);
       assert.ok(!decoded.reason.includes(privatePath));
       assert.equal(durable(pmRoot), before, "diagnostics must preserve durable non-git tracker state");
+    }
+    const remedy = "Set github_url to https://github.com/fixture/project/issues/42 on the intended owner, then retry.";
+    writeFileSync(report, JSON.stringify({ blocked: true, code: "ambiguous_citation", plan: [{ action: "ambiguous_citation", remedy }] }));
+    for (const bin of ["npm", "bun"]) {
+      const args = ["--path", pmRoot, "github", "workflow-diagnostic", "--report", report, "--error-file", error];
+      const output = await run(bin, bin === "npm" ? ["exec", "--offline", "--", "pm", ...args, "--json"] : ["--bun", cli, ...args]);
+      const diagnostic = (bin === "npm" ? JSON.parse(output) : decode(output)) as { reason: string };
+      assert.ok(diagnostic.reason.includes(remedy));
+      assert.equal(durable(pmRoot), before);
     }
   });
 });

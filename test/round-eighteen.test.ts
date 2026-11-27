@@ -100,6 +100,58 @@ test("zero-owner draft creation remains authorized without an issue link or exis
   });
 }));
 
+test("Projects push refuses a re-assigned draft even when the old item retains issue ownership", async () => tracker(async root => {
+  const tag = projectItemTag(ref, "DRAFT_NODE");
+  const item = await native(root, { github_url: issueUrl, tags: [tag] });
+  const peer = await native(root);
+  const board: ProjectItem[] = [{ id: "DRAFT_NODE", statusName: "In Progress", content: { typename: "DraftIssue", title: "Draft" } }];
+  const plan = buildProjectPushPlan([item, peer], ref, board, meta.statusField).entries[0]!;
+  await change(root, item.id!, { tags: [] });
+  await change(root, peer.id!, { tags: [tag] });
+  const before = bytes(root, item);
+  await withMockGithub((_request, response) => jsonResponse(response, 200, { data: {} }), async server => {
+    const result = await applyPushEntry(plan, meta, ref, new Map([[item.id!, item]]), root, "fixture", board);
+    assert.equal(result.changed, false);
+    assert.match(result.error!, /project card link changed/);
+    assert.equal(server.requests.length, 0);
+    assert.deepEqual(bytes(root, item), before);
+  });
+}));
+
+test("Projects push refuses a draft creation after the tracker item gains issue ownership", async () => tracker(async root => {
+  const item = await native(root);
+  const plan = buildProjectPushPlan([item], ref, [], meta.statusField).entries[0]!;
+  assert.equal(plan.action, "add-draft");
+  await change(root, item.id!, { github_url: issueUrl });
+  const before = bytes(root, item);
+  await withMockGithub((_request, response) => jsonResponse(response, 200, {}), async server => {
+    const result = await applyPushEntry(plan, meta, ref, new Map([[item.id!, item]]), root, "fixture", []);
+    assert.equal(result.changed, false);
+    assert.match(result.error!, /original project item owner/);
+    assert.equal(server.requests.length, 0);
+    assert.deepEqual(bytes(root, item), before);
+  });
+}));
+
+for (const race of ["attachment", "status"] as const) test(`Projects push preserves a peer's claim made during ${race}`, async () => tracker(async root => {
+  const item = await native(root);
+  const peer = await native(root);
+  const plan = buildProjectPushPlan([item], ref, [], meta.statusField, { corpus: [item, peer] }).entries[0]!;
+  const before = bytes(root, item);
+  await withMockGithub(async (_request, response, body) => {
+    const attachment = JSON.parse(body).query.includes("addProjectV2DraftIssue");
+    if (race === (attachment ? "attachment" : "status")) await change(root, peer.id!, { tags: [projectItemTag(ref, "DRAFT_NODE")] });
+    jsonResponse(response, 200, { data: attachment ? { addProjectV2DraftIssue: { projectItem: { id: "DRAFT_NODE" } } }
+      : { updateProjectV2ItemFieldValue: { projectV2Item: { id: "DRAFT_NODE" } } } });
+  }, async server => {
+    const result = await applyPushEntry(plan, meta, ref, new Map([[item.id!, item]]), root, "fixture", []);
+    assert.equal(result.changed, true, "the attachment has already succeeded");
+    assert.match(result.error!, /claim the same project card/);
+    assert.equal(server.requests.length, race === "attachment" ? 1 : 2);
+    assert.deepEqual(bytes(root, item), before);
+  });
+}));
+
 for (const competing of [false, true]) test(`each separately locked comment rereads ordinary SDK peer claims (${competing})`, async () => tracker(async root => {
   const owner = await native(root, { github_url: issueUrl }), peer = await native(root);
   const incoming: GhComment[] = [1, 2].map(id => ({ id, body: `Public comment ${id}`, created_at: "2025-02-01T00:00:00Z", user: { login: "fixture" } }));
@@ -259,7 +311,7 @@ test("board status retains a current matching issue owner", async () => tracker(
   const plan = buildProjectPushPlan([item], ref, board, meta.statusField).entries[0]!, before = bytes(root, item);
   assert.equal(plan.action, "set-status");
   await withMockGithub((_request, response) => jsonResponse(response, 200, { data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: "EXISTING_NODE" } } } }), async server => {
-    const result = await applyPushEntry(plan, meta, ref, new Map([[item.id!, item]]), root, "fixture", board);
+    const result = await applyPushEntry(structuredClone(plan), meta, ref, new Map([[item.id!, item]]), root, "fixture", board);
     assert.equal(result.changed, true, result.error ?? "Unexpected matching-owner refusal"); assert.equal(server.requests.length, 1);
     assert.deepEqual(bytes(root, item), before);
   });

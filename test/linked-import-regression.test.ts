@@ -256,6 +256,39 @@ test("sync pin guides explain the snapshot requirement and how old holds recover
   }
 });
 
+test("reusable sync reports citation ownership remedies before checking snapshot support", async t => {
+  const tracker = await fixture(t, false);
+  const candidates = [];
+  for (const title of [`Fix ${repo}#7`, `Handle ${repo}#7`]) candidates.push((await create({ type: "Task", title }, tracker.client)).item);
+  const files = candidates.flatMap(item => [getItemPath(tracker.pmRoot, "Task", item.id), getHistoryPath(tracker.pmRoot, item.id)]);
+  const runner = join(tracker.directory, "runner");
+  mkdirSync(runner);
+  writeFileSync(join(runner, "pm-github-sync-scope.sh"), 'report_workflow_failure() { pm github workflow-diagnostic --report "$1" --error-file "$2" --json; }\n');
+  const workflow = parse(readFileSync(join(packageRoot, ".github/workflows/pm-github-sync.yml"), "utf8")) as
+    { jobs: { "gated-sync": { steps: Array<{ name: string; run?: string }> } } };
+  const script = workflow.jobs["gated-sync"].steps.find(step => step.name === "Preview GitHub to pm plan")!.run!;
+  const environment = { ...tracker.environment, ADOPT_CITED: "true", PM_GITHUB_VERSION: "2026.11.27",
+    REPOSITORY: repo, RUNNER_TEMP: runner, PATH: join(packageRoot, "node_modules/.bin") + delimiter + process.env.PATH };
+  const before = tracker.snapshot();
+  const candidateBytes = files.map(file => readFileSync(file, "utf8"));
+  await source(async base => {
+    const outcome = await boundedCli("bash", ["-c", script], tracker.directory, { ...environment, PM_GITHUB_API_BASE: base });
+    const report = JSON.parse(readFileSync(join(runner, "pm-github-import.json"), "utf8"));
+    assert.equal(report.blocked, true);
+    assert.equal(report.code, "ambiguous_citation");
+    assert.equal(outcome.code, 1);
+    assert.match(outcome.stdout, /ambiguous_citation.*Set github_url to https:\/\/github.com\/fixture\/widgets\/issues\/7/);
+    assert.doesNotMatch(outcome.stdout, /pm-github-version hold/);
+    const shim = 'pm() { if [[ "$1 $2" == "github import" ]]; then printf "%s\\n" "$BLOCKED_RECEIPT"; else command pm "$@"; fi; }\n';
+    const contradictory = await boundedCli("bash", ["-c", shim + script], tracker.directory, { ...environment,
+      BLOCKED_RECEIPT: JSON.stringify({ ...report, source_snapshot: "a".repeat(64) }) });
+    assert.equal(contradictory.code, 1);
+    assert.match(contradictory.stdout, /ambiguous_citation.*Set github_url/);
+  });
+  assert.deepEqual(tracker.snapshot(), before);
+  assert.deepEqual(files.map(file => readFileSync(file, "utf8")), candidateBytes);
+});
+
 test("Projects CLI reports ambiguous links in JSON and TOON without writes in a non-git tracker", async t => {
   const tracker = await fixture(t, false);
   const ref = { owner: "fixture", number: 5 };

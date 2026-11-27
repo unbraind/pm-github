@@ -90,6 +90,16 @@ export function workflowFailure(report: Record<string, unknown>, diff = ""): str
     const finding = decodeWorkflowDiagnostic(JSON.stringify(report.findings[0]));
     return `Import privacy gate refused item ${finding.item_id}, field ${finding.field}, rule ${finding.rule}; remove the source content or review an explicit gate allowlist entry. No branch was published.`;
   }
+  if (report.code === "ambiguous_citation") {
+    const rows = Array.isArray(report.plan) ? report.plan : [];
+    const conflict = rows.map(row => decodeWorkflowDiagnostic(JSON.stringify(row))).find(row => row.action === "ambiguous_citation");
+    const remedy = typeof conflict?.remedy === "string" && /^Set github_url to https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/issues\/[1-9]\d* on the intended owner, then retry\.$/.test(conflict.remedy)
+      ? conflict.remedy : "Set github_url on the intended owner, then retry.";
+    return `GitHub import refused (ambiguous_citation). Multiple tracker items cite the same issue. ${remedy} No branch was published.`;
+  }
+  if (report.blocked === true) {
+    return "GitHub import preview was blocked. Inspect its plan and resolve the reported conflict before retrying. No branch was published.";
+  }
   if (Array.isArray(report.plan)) {
     for (const value of report.plan) {
       const row = decodeWorkflowDiagnostic(JSON.stringify(value));
@@ -109,7 +119,7 @@ export function workflowFailure(report: Record<string, unknown>, diff = ""): str
 export function readWorkflowFailure(reportFile: string | undefined, errorFile: string | undefined, diffFile: string | undefined): { reason: string } {
   const output = decodeWorkflowDiagnostic(receipt(reportFile));
   const error = decodeWorkflowDiagnostic(receipt(errorFile));
-  const fullFailure = output.command === "github closeout" && typeof output.failed === "number" && output.failed > 0;
+  const fullFailure = output.blocked === true || (output.command === "github closeout" && typeof output.failed === "number" && output.failed > 0);
   const diff = receipt(diffFile);
   const outputReason = workflowFailure(output, diff);
   const errorReason = workflowFailure(error, diff);

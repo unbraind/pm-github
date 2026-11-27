@@ -562,6 +562,10 @@ jobs:
             report_workflow_failure "${RUNNER_TEMP}/pm-github-import.json" "${RUNNER_TEMP}/pm-github-import.err"
             exit 1
           fi
+          if jq -se 'any(.[]; .blocked? == true)' "${RUNNER_TEMP}/pm-github-import.json" >/dev/null 2>&1; then
+            report_workflow_failure "${RUNNER_TEMP}/pm-github-import.json" "${RUNNER_TEMP}/pm-github-import.err"
+            exit 1
+          fi
           if ! jq -ser 'select(length == 1) | .[0] | .source_snapshot | strings | select(length == 64 and test("^[a-f0-9]{64}$"))' "${RUNNER_TEMP}/pm-github-import.json" > "${RUNNER_TEMP}/pm-github-source-snapshot" 2>/dev/null; then
             echo "::error::Gated preview from pm-github ${PM_GITHUB_VERSION} did not return a valid source_snapshot. Remove the pm-github-version hold to follow a compatible workflow release, or pin an extension that supports --expect-source. No branch was published."
             exit 1

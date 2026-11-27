@@ -11,7 +11,7 @@ import { githubOwnershipClaims, githubRepositoryHash, buildGithubOwnershipIndex,
 import { legacyGithubDescriptionIdentity, legacyGithubLinkClaims, parseLegacyGithubDescription, matchImportedIssue, githubLinkReferences, GithubIdentityConflictError, buildImportFidelity, importFidelityFields, importCloseReason } from "../import-fidelity.ts";
 import { normalizeGithubRepository, parseGithubUrl, parseGithubIssueUrl, githubUrlTokens } from "../github-url.ts";
 import { writeGithubStateAtomic } from "../durable-state.ts";
-import { buildProjectImportPlan, buildProjectPullPlan, parseProjectRef } from "../projects.ts";
+import { buildProjectImportPlan, buildProjectPullPlan, parseProjectRef, projectItemTag } from "../projects.ts";
 import { runRefresh, selectRefreshTargets } from "../refresh.ts";
 import { assertCloseoutGithubOwner, closeoutOwnershipConflict, extractCloseoutItems } from "../closeout.ts";
 import { captureStderr, withEnv, withMockGithub, jsonResponse } from "./helpers/mock-github-server.ts";
@@ -349,6 +349,8 @@ test("board consistency scopes native mutation hooks and refuses ownership chang
   assert.deepEqual(bytes(root, owner), before);
   const settings = await readSettings(root);
   await withGithubItemConsistency(root, unrelated.id!, [], () => create({ title: "Unrelated creation", type: "Chore" }, { pmRoot: root }));
+  await withGithubItemConsistency(root, undefined, ["o/r#7"], () => update(unrelated.id!, { title: "Outside a create guard" }, { pmRoot: root }));
+  assert.equal((await get(unrelated.id!, {}, { pmRoot: root })).item.title, "Outside a create guard");
   await assert.rejects(() => withGithubItemConsistency(root, unrelated.id!, [], () => mutateItem({ pmRoot: root, id: unrelated.id!, settings, author: "fixture", op: "update", mutate: document => {
     document.metadata.github_url = url; return { changedFields: ["github_url"] };
   } })), /original unowned project item|claimed by/);
@@ -427,12 +429,23 @@ test("export refuses a disappeared planning owner and distinguishes missing-id d
   await assert.rejects(() => applyExportPlan(changed, repo, "fixture", async () => { throw new Error("Must not request"); }), { code: "github_import_owner_conflict" });
 }));
 
-test("markdown export preview renders existing owners and project pull accepts a native unowned legacy entry", async () => tracker(async root => {
+test("markdown export renders owners and project pull needs the authority behind an unowned draft entry", async () => tracker(async root => {
   const local = await native(root, { github_url: url }), harness = await createExtensionTestHarness(extension, { capabilities: ["commands", "importers", "schema", "hooks", "preflight", "search"] });
   const preview = await captureStderr(() => harness.runCommand({ command: "github export", pmRoot: root, options: { repo, ids: local.id, format: "md" }, global: { json: false } }));
   assert.ok(preview.stderr.some(line => line.includes("[update #7]")));
   const unowned = await native(root);
-  const pulled = await applyPullEntry({ itemId: "board-item", pmId: unowned.id!, title: "Native local item", toStatus: "in_progress", fromStatus: "open" }, root);
+  const ref = { owner: "o", number: 1 };
+  await update(unowned.id!, { addTags: [projectItemTag(ref, "board-item")] }, { pmRoot: root });
+  const current = (await get(unowned.id!, {}, { pmRoot: root })).item;
+  const [entry] = buildProjectPullPlan([current], ref, [{
+    id: "board-item", statusName: "In Progress", content: { typename: "DraftIssue", title: "Native local item" },
+  }]).entries;
+  assert.ok(entry);
+  const detached = await applyPullEntry(structuredClone(entry), root);
+  assert.equal(detached.changed, false);
+  assert.match(detached.error!, /Missing Projects pull authority/);
+  assert.equal((await get(unowned.id!, {}, { pmRoot: root })).item.status, "open");
+  const pulled = await applyPullEntry(entry, root);
   assert.equal(pulled.changed, true);
   assert.equal((await get(unowned.id!, {}, { pmRoot: root })).item.status, "in_progress");
 }));

@@ -20,6 +20,8 @@ contract. Move the caller to a published workflow release with snapshot support
 and remove the old `pm-github-version` hold, or set the hold to a compatible
 published extension. The workflow stops at preview before import writes or
 publication when the selected extension cannot supply a valid snapshot.
+An `ambiguous_citation` preview is an ownership refusal. Set `github_url` on
+the intended tracker item and start a fresh preview.
 
 SDK 2026.10.25 and 2026.10.28 reset `closed_at` and `updated_at` on an identical forced closed-state update, through both `update` and `commitItemMutations`, as confirmed by standalone synthetic non-git reproductions. The upstream timestamp fix shipped in SDK 2026.10.31 (GH-1628). The reproduction is recorded in [pm-cli issue #1628](https://github.com/unbraind/pm-cli/issues/1628). The package avoids invoking those mutations for normalized no-ops.
 

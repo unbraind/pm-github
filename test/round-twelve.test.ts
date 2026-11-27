@@ -13,7 +13,7 @@ import extension, { runImport, parseImportOptions, prepareGithubImport, importGi
   readGithubImportPlan, listRetainedGithubImportPlans, applyPullEntry, type GhIssue, type PmItem, type GhComment } from "../index.ts";
 import { selectRefreshTargets, runRefresh } from "../refresh.ts";
 import { githubOwnershipClaims, withGithubImportOwners, withGithubOwnershipWork, type GithubOwnershipWork } from "../import-ownership.ts";
-import { buildProjectPullPlan, buildProjectPushPlan, indexPmByIssue } from "../projects.ts";
+import { buildProjectPullPlan, buildProjectPushPlan, indexPmByIssue, projectItemTag } from "../projects.ts";
 import { writeGithubStateAtomic } from "../durable-state.ts";
 import { captureStderr, withEnv, withMockGithub, jsonResponse } from "./helpers/mock-github-server.ts";
 
@@ -202,6 +202,57 @@ for (const conflicting of [true, false]) test(`Round12 project pull rechecks pee
   assert.equal(result.changed, !conflicting);
   if (conflicting) { assert.match(result.error!, /claimed by/); assert.deepEqual(await bytes(root, local.id), before); }
   else assert.equal((await get(local.id, {}, { pmRoot: root })).item.status, "in_progress");
+}));
+
+for (const peerClaim of ["none", "moved", "competing"] as const) test(`Projects pull rechecks draft card ownership before closing (${peerClaim})`, async () => tracker(async root => {
+  const ref = { owner: "o", number: 1 };
+  const tag = projectItemTag(ref, "board-card");
+  const local = (await create({ title: "Original card owner", type: "Chore", tags: tag }, { pmRoot: root })).item;
+  const peer = (await create({ title: "Another item", type: "Chore" }, { pmRoot: root })).item;
+  const records = (await listAllComplete({}, { pmRoot: root })).items;
+  const entry = buildProjectPullPlan(records, ref, [{ id: "board-card", statusName: "Done", content: { typename: "DraftIssue", title: "Board" } }]).entries[0]!;
+  if (peerClaim !== "none") await change(root, peer.id, { tags: [tag] });
+  if (peerClaim === "moved") await change(root, local.id, { tags: [] });
+  const before = await bytes(root, local.id);
+  const outcome = await applyPullEntry(entry, root);
+  assert.equal(outcome.changed, peerClaim === "none", outcome.error ?? "Unexpected project result");
+  if (peerClaim === "none") assert.equal((await get(local.id, {}, { pmRoot: root })).item.status, "closed");
+  else {
+    assert.match(outcome.error!, /project card/i);
+    assert.deepEqual(await bytes(root, local.id), before);
+  }
+}));
+
+for (const operation of ["create", "update"] as const) test(`Projects import rejects a card claimed inside the native ${operation} boundary`, async () => tracker(async root => {
+  const tag = projectItemTag({ owner: "o", number: 1 }, "card");
+  const local = operation === "update" ? (await create({ title: "Original item", type: "Chore", tags: tag }, { pmRoot: root })).item : undefined;
+  const peer = (await create({ title: "Claiming peer", type: "Chore" }, { pmRoot: root })).item;
+  const before = local ? await bytes(root, local.id) : undefined;
+  let competed = false;
+  const ext = await harness;
+  await runWithActiveExtensions({ path: root, noExtensions: true }, async () => {
+    setActiveExtensionHooks({ beforeCommand: [], afterCommand: [], onRead: [], onWrite: [], onIndex: [], beforeMutation: [
+      { layer: "project", name: "project-card-race", run: async context => {
+        if (competed || context.operation !== operation) return;
+        competed = true;
+        await change(root, peer.id, { tags: [tag] });
+      } },
+    ] });
+    await withMockGithub((_req, response, body) => {
+      const { query } = JSON.parse(body);
+      jsonResponse(response, 200, { data: query.includes("projectV2(number:") ? {
+        organization: { projectV2: { id: "board", title: "Fixture board" } },
+      } : { node: { items: { nodes: [{ id: "card", content: { __typename: "DraftIssue", title: "Changed name" } }], pageInfo: {} } } } });
+    }, async () => {
+      const { stderr } = await captureStderr(() => assert.rejects(ext.runCommand({
+        command: "github project import", args: ["o/1"], pmRoot: root,
+      }), /Imported 0 project item/));
+      assert.match(stderr.join("\n"), /claim the same project card/);
+    });
+  });
+  assert.equal(competed, true);
+  assert.equal((await listAllComplete({}, { pmRoot: root })).items.length, local ? 2 : 1);
+  if (local) assert.deepEqual(await bytes(root, local.id), before);
 }));
 
 for (const selectedConflicts of [false, true]) test(`Round12 scoped project pull ignores conflicts confined to unselected items (selected conflicts: ${selectedConflicts})`, async () => tracker(async root => {
