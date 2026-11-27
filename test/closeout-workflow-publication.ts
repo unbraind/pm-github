@@ -23,7 +23,7 @@ publicationTest("closeout contract keeps sync safety helpers, exact pins, env bi
     if (!step.includes("run:")) continue;
     assert.doesNotMatch(shell(name), /\$\{\{/);
   }
-  for (const name of ["Validate npm project directory", "Install dependencies", "Check pm CLI host compatibility", "Require clean setup artifacts", "Isolate workflow setup artifacts", "Gate tracker and regenerated changelog", "Verify strict pm health"]) {
+  for (const name of ["Validate npm project directory", "Install dependencies", "Check pm CLI host compatibility", "Require clean setup artifacts", "Isolate workflow setup artifacts", "Gate proposed commit", "Verify strict pm health"]) {
     assert.equal(shell(name), shell(name, sync), name);
   }
   const policy = "Check caller changelog policy";
@@ -34,9 +34,9 @@ publicationTest("closeout contract keeps sync safety helpers, exact pins, env bi
   // unchanged publication boundaries directly, rather than diagnostic wrappers.
   const scopes = [shell("Resolve sync commit scope"), shell("Resolve sync commit scope", sync)];
   assert.equal(scopes[0]!.split("report_workflow_failure()")[0], scopes[1]!.split("report_workflow_failure()")[0]);
-  assert.equal(scopes[0]!.split("mapfile -t sync_scope")[1]!.split("restore_sync_setup()")[0],
-    scopes[1]!.split("mapfile -t sync_scope")[1]!.split("restore_sync_setup()")[0]);
-  for (const name of ["check_generated_paths_clean", "restore_sync_setup", "restore_workflow_setup_artifacts", "check_sync_setup_clean", "check_sync_scope", "check_sync_path", "changelog_policy_hash", "verify_changelog_policy", "stage_sync_paths", "run_generated_post_script"]) {
+  assert.equal(scopes[0]!.split("mapfile -t tracker_scope")[1]!.split("restore_sync_setup()")[0],
+    scopes[1]!.split("mapfile -t tracker_scope")[1]!.split("restore_sync_setup()")[0]);
+  for (const name of ["check_generated_paths_clean", "restore_sync_setup", "restore_workflow_setup_artifacts", "check_sync_setup_clean", "caller_changelog_status", "check_pending_changelog_clean", "restore_caller_changelog", "check_sync_scope", "check_sync_path", "changelog_policy_hash", "verify_changelog_policy", "stage_sync_paths", "run_generated_post_script", "run_caller_post_script"]) {
     const pattern = new RegExp(`^${name}\\(\\) \\{[\\s\\S]*?^\\}`, "m");
     const shared = scopes.map(source => pattern.exec(source)?.[0]);
     assert.ok(shared[0], name);
@@ -243,14 +243,27 @@ test("generated artifact targets must be clean at checkout and publishable after
   unpublished(f.git);
 }));
 
-for (const lateWrite of [false, true]) {
-  test(lateWrite ? "closeout policy rejects caller changes to a generated artifact" : "closeout publishes a declared generated artifact with the delivered item", async () => fixture(async f => {
+for (const [mode, name] of [
+  ["legacy", "closeout publishes a declared generated artifact with the delivered item"],
+  ["pending", "closeout pending policy publishes the declared generated artifact and drops changelog output"],
+  ["late-write", "closeout policy rejects caller changes to a generated artifact"],
+] as const) {
+  test(name, async () => fixture(async f => {
+    const lateWrite = mode === "late-write";
+    const pending = mode === "pending";
+    if (pending) {
+      const launcher = join(f.root, "tools/oracle/node_modules/.bin/pm-changelog");
+      const installed = process.env.PM_GITHUB_TEST_PENDING_CHANGELOG_BIN;
+      if (installed) symlinkSync(installed, launcher);
+      else writeFileSync(launcher, "#!/usr/bin/env bash\nprintf '  --check-pending  Strict check\\n'\n", { mode: 0o755 });
+    }
     const generator = "generated-artifact.mts";
     writeFileSync(join(f.root, generator), readFileSync(join(repoRoot, "test/fixtures/generated-artifact-consumer.ts")));
     f.git("add", "--", generator);
     f.git("commit", "-qm", "Add fixture bundle generator");
+    const bundle = `(cd ../.. && node ${generator})`;
     installChangelogCheck(f, {
-      "closeout:generate": `npm run changelog:full && cd ../.. && node ${generator}`,
+      "closeout:generate": pending ? `${bundle} && npm run changelog:full` : `npm run changelog:full && ${bundle}`,
       "accept:self-host": `cd ../.. && node ${generator} --check`,
       ...(lateWrite ? { "changelog:check": "printf 'unverified\\n' >> ../../selfhost.bundle" } : {}),
     });
@@ -269,7 +282,7 @@ for (const lateWrite of [false, true]) {
     assert.equal(f.git("rev-parse", "HEAD^"), parent);
     const paths = f.git("diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").split("\n");
     assert.ok(paths.includes(`.agents/pm/tasks/${f.id}.toon`));
-    assert.ok(paths.includes("CHANGELOG.md"));
+    assert.equal(paths.includes("CHANGELOG.md"), !pending);
     assert.ok(paths.includes("selfhost.bundle"));
     assert.equal(f.git("ls-remote", "origin", `refs/heads/${branch}`).split(/\s/)[0], f.git("rev-parse", "HEAD"));
     const acceptance = await bash("npm run accept:self-host", join(f.root, "tools/oracle"), f.env);

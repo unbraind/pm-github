@@ -45,8 +45,10 @@ jobs:
       adopt-cited: false # Primary prevention: tag new items gh:owner/repo#N.
       npm-project-dir: "." # For pm-rust, use: npm-project-dir: tests/oracle
       # Defaults shown explicitly; use "" to disable an optional action; empty CI also disables auto-merge.
-      post-import-script: "changelog:full"
-      # generated-paths: "selfhost.bundle" # Set post-import-script to the npm script that produces it.
+      # Omit post-import-script for automatic selection.
+      # With pm-changelog 2026.11.28+, the default skips changelog-only generation.
+      # post-import-script: "self-host:write" # Keep explicit scripts with side effects.
+      # generated-paths: "selfhost.bundle"
       ci-workflows: "ci.yml codeql.yml" # Whitespace-separated filenames, e.g. "ci.yml codeql.yml".
     secrets:
       automation_app_private_key: ${{ secrets.PM_GITHUB_APP_PRIVATE_KEY }}
