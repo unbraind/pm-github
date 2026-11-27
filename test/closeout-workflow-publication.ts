@@ -23,7 +23,7 @@ publicationTest("closeout contract keeps sync safety helpers, exact pins, env bi
     if (!step.includes("run:")) continue;
     assert.doesNotMatch(shell(name), /\$\{\{/);
   }
-  for (const name of ["Validate npm project directory", "Install dependencies", "Require clean setup artifacts", "Isolate workflow setup artifacts", "Gate tracker and regenerated changelog", "Verify strict pm health"]) {
+  for (const name of ["Validate npm project directory", "Install dependencies", "Check pm CLI host compatibility", "Require clean setup artifacts", "Isolate workflow setup artifacts", "Gate tracker and regenerated changelog", "Verify strict pm health"]) {
     assert.equal(shell(name), shell(name, sync), name);
   }
   const policy = "Check caller changelog policy";

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 import { decode } from "@toon-format/toon";
 import { init } from "@unbrained/pm-cli/sdk";
@@ -150,7 +151,55 @@ test("packed npm and Bun diagnostics preserve specific redacted causes in JSON a
     const packed = JSON.parse(await run("npm", ["pack", "--ignore-scripts", "--foreground-scripts=false", "--json", "--pack-destination", base], packageRoot,
       { ...env, PM_PATH: join(packageRoot, ".agents/pm") })) as [{ filename: string }];
     await run(cli, ["--path", pmRoot, "package", "install", join(base, packed[0].filename), "--project"]);
+    const guardFixture = join(base, "fixture-guard");
+    mkdirSync(guardFixture);
+    writeFileSync(join(guardFixture, "package.json"), JSON.stringify({ name: "fixture-guard", version: "1.0.0", type: "module" }));
+    writeFileSync(join(guardFixture, "manifest.json"), JSON.stringify({ name: "fixture-guard", version: "1.0.0",
+      description: "Synthetic guard command", entry: "./index.js", capabilities: ["commands"] }));
+    writeFileSync(join(guardFixture, "index.js"), `
+import { withGithubImportOwners } from ${JSON.stringify(pathToFileURL(join(pmRoot, "extensions/pm-github/dist/import-ownership.js")).href)};
+import { mutateItem, readSettings } from "@unbrained/pm-cli/sdk";
+export default {
+  name: "fixture-guard", version: "1.0.0",
+  activate(api) {
+    api.registerCommand({
+      name: "fixture-guard apply", description: "Run a real locked ownership check",
+      async run({ pm_root }) {
+        let reads = 0;
+        const id = "fixture-guarded";
+        const target = { id, repo: "fixture/project", number: 1, initialLink() {
+          if (++reads > 1) throw new Error("Review the current source ownership before importing.");
+          return true;
+        } };
+        const settings = await readSettings(pm_root);
+        return withGithubImportOwners(pm_root, [target], () => mutateItem({
+          pmRoot: pm_root, settings, id, author: "fixture", op: "import",
+          mutate(document) {
+            document.metadata.title = "Imported source";
+            return { changedFields: ["title"] };
+          },
+        }));
+      },
+    });
+  },
+};
+`);
+    await run(cli, ["--path", pmRoot, "package", "install", guardFixture, "--project"]);
+    await run(cli, ["--path", pmRoot, "create", "issue", "Curated source", "--id", "guarded"]);
     const report = join(base, "report.json"), error = join(base, "error.txt");
+    const guardBaseline = durable(pmRoot);
+    const guardReason = "Extension mutation guard github-import-owner failed before import: Review the current source ownership before importing.";
+    for (const bin of ["npm", "bun"]) for (const json of [true, false]) {
+      const args = ["--path", pmRoot, "fixture-guard", "apply", ...(json ? ["--json"] : [])];
+      const failed = await boundedCli(bin, bin === "npm" ? ["exec", "--offline", "--", "pm", ...args] : ["--bun", cli, ...args], root, env);
+      assert.equal(failed.timedOut, false);
+      assert.notEqual(failed.code, 0);
+      writeFileSync(report, failed.stdout);
+      writeFileSync(error, failed.stderr);
+      assert.equal(readWorkflowFailure(report, error, undefined).reason, guardReason + " No branch was published.",
+        failed.stdout + failed.stderr);
+      assert.equal(durable(pmRoot), guardBaseline);
+    }
     const privatePath = "C:" + String.raw`\u005cu005c`;
     const cause = `GET failed HTTP 403; ${privatePath}; reviewer required`;
     const expected = "GET failed HTTP 403; [redacted]; reviewer required No branch was published.";

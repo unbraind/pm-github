@@ -2,7 +2,9 @@
 
 ## 2026.11.27 - 2026-11-27
 
-No changes.
+### Fixed
+
+- Preflight gated sync and closeout host compatibility ([pm-github-sync-host-compatibility](https://github.com/unbraind/pm-github/blob/main/.agents/pm/issues/pm-github-sync-host-compatibility.toon))
 
 ## 2026.11.26 - 2026-11-26
 

@@ -167,6 +167,8 @@ for (const file of files) {
         assert.equal(result.status, 0, output);
         assert.notDeepEqual(snapshot(join(cwd, ".agents/pm")), before, "control mutation proves the real tracker write is reachable");
         assert.equal(readFileSync(env.GITHUB_ENV!, "utf8"), `PM_GITHUB_VERSION=${scenario.expected}\n`);
+        const releaseReceipt = JSON.parse(readFileSync(join(cwd, "pm-github-release.json"), "utf8")) as unknown;
+        assert.deepEqual(releaseReceipt, { name: "pm-github", version: scenario.expected });
         assert.equal(output.includes("::warning::pm-github-version is deprecated"), !!scenario.warning, output);
         if (scenario.warning) assert.match(output, new RegExp(`workflow ${version} installs extension ${scenario.expected}`.replaceAll(".", "\\.")));
         assert.match(readFileSync(join(cwd, "http-receipt"), "utf8"), new RegExp(`/pm-github/${scenario.expected}\\n$`.replaceAll(".", "\\.")));
@@ -181,6 +183,37 @@ for (const file of files) {
       }
     }));
   }
+  test(`${kind} preflight enforces the cutoff from the selected registry release`, () => fixture(cwd => {
+    const held = "2026.10.16";
+    const minimum = "2026.9.21";
+    const maximum = "2026.10.15";
+    const cutoff = "2026.10.28";
+    const metadata = { name: "pm-github", version: held,
+      peerDependencies: { "@unbrained/pm-cli": `>=${minimum}` },
+      devDependencies: { "@unbrained/pm-cli": maximum }, pmCliIncompatibleFrom: cutoff };
+    const env = { ...setup(cwd), REQUESTED_PM_GITHUB_VERSION: held, REGISTRY_METADATA: JSON.stringify(metadata),
+      NPM_PROJECT_PATH: cwd, GITHUB_STEP_SUMMARY: join(cwd, "job-summary"), GITHUB_OUTPUT: join(cwd, "step-output") };
+    const launcher = join(cwd, "node_modules", ".bin");
+    mkdirSync(launcher, { recursive: true });
+    writeFileSync(join(launcher, "pm"), `#!/usr/bin/env bash\n[[ "$*" == --version ]] || exit 91\nprintf '%s\\n' '${cutoff}'\n`, { mode: 0o755 });
+    const before = snapshot(join(cwd, ".agents/pm"));
+    const resolved = bash(cwd, shell(source, "Resolve pm-github release version"), env);
+    assert.equal(resolved.status, 0, resolved.stdout + resolved.stderr);
+    assert.equal(readFileSync(join(cwd, "github-env"), "utf8"), `PM_GITHUB_VERSION=${held}\n`);
+    const checked = bash(cwd, 'set -euo pipefail\nset -a; source "$GITHUB_ENV"; set +a\n'
+      + shell(source, "Check pm CLI host compatibility")
+      + '\npm update fixture-curated --description "Reached tracker write"', env);
+    assert.equal(checked.status, 1, checked.stdout + checked.stderr);
+    const reason = `pm-github ${held} was tested with pm CLI ${minimum} through ${maximum} and declares pm CLI ${cutoff} or newer known-incompatible. `
+      + `This repository installs pm CLI ${cutoff}. Remove or update the pm-github-version hold that selected pm-github ${held}, or move the workflow pin to a release that supports ${cutoff}.`;
+    assert.deepEqual(JSON.parse(checked.stdout), { case: "declared_incompatible", pm_github_version: held, pm_cli_version: cutoff,
+      tested_host_range: { minimum, maximum }, declared_incompatible_from: cutoff, reason });
+    assert.equal(checked.stderr, `::error::${reason}\n`);
+    assert.equal(readFileSync(env.GITHUB_STEP_SUMMARY, "utf8"), `### pm CLI host compatibility\n\n${reason}\n`);
+    assert.equal(existsSync(env.GITHUB_OUTPUT), false);
+    assert.deepEqual(snapshot(join(cwd, ".agents/pm")), before);
+    assert.deepEqual(JSON.parse(readFileSync(join(cwd, "pm-github-release.json"), "utf8")), metadata);
+  }));
   test(`${kind} install verification explains invalid metadata without disclosure`, () => fixture(cwd => {
     const env = { ...setup(cwd), PM_GITHUB_VERSION: version };
     const scope = shell(source, "Resolve sync commit scope").split("<<'SCOPE'\n")[1]!.split("\nSCOPE")[0]!;
