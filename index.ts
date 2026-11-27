@@ -6737,7 +6737,10 @@ async function runProjectImport(ctx: CommandHandlerContext) {
       const writesCloseReason = mappedStatus !== undefined && !mapsToClose && githubStatusIsTerminal(mappedStatus, workspace.statuses);
       const updatesContent = current.title !== entry.title || current.description !== description ||
         addedTags.length !== 0 || Boolean(entry.body && normalizeImportValue("body", current.body) !== normalizeImportValue("body", entry.body));
-      const needsUpdate = updatesContent || (!mapsToClose && statusChanged) || (writesCloseReason && current.close_reason !== closeReason);
+      // Native create can omit the reason on a custom terminal status even when
+      // given one. Preserve that omission on repeat and repair recorded reasons.
+      const changesCloseReason = writesCloseReason && typeof current.close_reason === "string" && current.close_reason !== closeReason;
+      const needsUpdate = updatesContent || (!mapsToClose && statusChanged) || changesCloseReason;
       if (!needsUpdate && !closeAfterUpdate) continue;
       if (dryRun) {
         console.error(`  [dry-run] update "${entry.title}" (${entry.status})`);

@@ -11,6 +11,7 @@ import extension, { runImport, parseImportOptions, importGithubAtomic, prepareGi
 import { refreshChanges } from "../refresh.ts";
 import { persistImportFidelity, buildImportFidelity, selectImportContextIndex } from "../import-fidelity.ts";
 import { captureStderr, withEnv } from "./helpers/mock-github-server.ts";
+import { appendedHistory } from "./helpers/history-assertions.ts";
 
 const repo = "fixture/widgets";
 /** Keep creation, completion and later source edits distinct. */
@@ -36,7 +37,7 @@ async function tracker(run: (pmRoot: string) => Promise<void>): Promise<void> {
 /** Fake only GitHub transport; all PM planning, writes, journals and gate scans are real. */
 async function importing(pmRoot: string, issues: GhIssue[], comments: GhComment[] = [], onTransition?: AtomicImportOptions["onTransition"], expectSource?: string) {
   return (await captureStderr(() => runImport(repo, pmRoot,
-    { ...parseImportOptions({ state: "all", atomic: true, gate: true, "with-comments": true }), expectSource }, {
+    { ...parseImportOptions({ state: "all", atomic: true, gate: true, "comments-mode": "both" }), expectSource }, {
       resolveToken: () => undefined, fetchIssues: async () => issues, fetchIssueComments: async () => comments,
       ...(onTransition ? { commitAtomic: (root, name, entries) => importGithubAtomic(root, name, entries, { onTransition }) } : {}),
     }))).result as Record<string, unknown>;
@@ -54,11 +55,12 @@ async function repeat(pmRoot: string, issues: GhIssue[], id: string, comments: G
   assert.deepEqual(await bytes(pmRoot, id), before);
 }
 
-/** Import history must never claim that an old GitHub closure happened at import time. */
+/** Check that history contains the expected closure instants without fabricating others. */
 function assertSourceClosures(pmRoot: string, id: string, skip = 0, dates: readonly unknown[] = [issue(1).closed_at]) {
-  const events = readFileSync(getHistoryPath(pmRoot, id), "utf8").trim().split("\n").map(line => JSON.parse(line) as { patch: Array<{ path: string; value?: unknown }> });
+  const events = appendedHistory("", readFileSync(getHistoryPath(pmRoot, id), "utf8"));
   const writes = events.flatMap(event => event.patch).filter(patch => patch.path === "/metadata/closed_at" && patch.value);
-  assert.ok(writes.slice(skip).every(patch => dates.includes(patch.value)), "every import closure must retain the exact source instant");
+  assert.deepEqual(new Set(writes.slice(skip).map(patch => patch.value)), new Set(dates),
+    "history must contain every expected source closure instant");
 }
 
 test("mixed new and linked closed issues plus an open issue repeat with identical item and history bytes", async () => tracker(async pmRoot => {
@@ -92,7 +94,10 @@ test("mixed new and linked closed issues plus an open issue repeat with identica
     }
   }
   assert.equal((await get(linked.id, {}, { pmRoot })).item.created_at, linked.created_at);
-  for (const item of items) assertSourceClosures(pmRoot, item.id, item.id === linked.id ? 1 : 0);
+  for (const item of items) {
+    const previouslyClosed = item.id === linked.id;
+    assertSourceClosures(pmRoot, item.id, previouslyClosed ? 1 : 0, !previouslyClosed && item.status === "closed" ? [issue(1).closed_at] : []);
+  }
 }));
 
 test("closed finalization writes only changed values and retains the native mutation clock", async () => tracker(async pmRoot => {
@@ -142,7 +147,8 @@ for (const field of ["title", "body", "labels", "comments", "state"] as const) {
       ...(field === "state" ? { state_reason: "not_planned" as const } : {}),
     };
     const comments = field === "comments" ? [{ id: 1, body: "New comment", user: { login: "fixture" }, created_at: changed.updated_at }] : [];
-    await importing(pmRoot, [changed], comments);
+    const applied = await importing(pmRoot, [changed], comments);
+    if (field === "comments") assert.equal(applied.addedComments, 1);
     assert.notDeepEqual(await bytes(pmRoot, id), before);
     const item = (await get(id, {}, { pmRoot })).item;
     assert.equal(item.github_updated_at, changed.updated_at);

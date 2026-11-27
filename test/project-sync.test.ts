@@ -11,6 +11,7 @@ import { projectItemTag } from "../projects.ts";
 import { captureStderr, jsonResponse, withEnv, withMockGithub } from "./helpers/mock-github-server.ts";
 import type { MockGithubHandler } from "./helpers/mock-github-server.ts";
 import { nodeScenario } from "./helpers/node-scenario.ts";
+import { appendedHistory } from "./helpers/history-assertions.ts";
 
 const harness = createExtensionTestHarness(extension, {
   capabilities: ["commands", "importers", "schema", "hooks", "preflight", "search"],
@@ -217,10 +218,21 @@ test("project import applies configured terminal aliases with SDK lifecycle fide
       if (oracle.close_reason !== undefined) assert.match(item.close_reason!, /GitHub project/);
     }
     const histories = written.map(item => fs.readFileSync(getHistoryPath(root, item.id), "utf8"));
+    const documents = written.map(item => fs.readFileSync(getItemPath(root, "Task", item.id), "utf8"));
     for (const history of histories) assert.match(history, /GitHub project/);
     const preview = await sync(root, { pull: true, "status-map": "SETTLED=Done" });
     assert.deepEqual(preview.result, { dryRun: true, project: "acme/5", push: undefined, pull: { actionable: 0, statusSkipped: 0 } });
-    for (const [index, item] of written.entries()) assert.equal(fs.readFileSync(getHistoryPath(root, item.id), "utf8"), histories[index]);
+    await withEnv({ GITHUB_TOKEN: "fixture", GH_TOKEN: undefined }, async () => {
+      const options = { "status-map": "settled=Done" };
+      const planned = await ext.runCommand({ ...request, options: { ...options, "dry-run": true } });
+      assert.deepEqual(planned.result, { dryRun: true, project: "acme/5", wouldImport: 0, wouldUpdate: 0, planned: 2 });
+      const repeated = await ext.runCommand({ ...request, options });
+      assert.deepEqual(repeated.result, { imported: 0, updated: 0, skipped: 0, project: "acme/5", planned: 2 });
+    });
+    for (const [index, item] of written.entries()) {
+      assert.equal(fs.readFileSync(getHistoryPath(root, item.id), "utf8"), histories[index]);
+      assert.equal(fs.readFileSync(getItemPath(root, "Task", item.id), "utf8"), documents[index]);
+    }
   });
 });
 
@@ -263,9 +275,45 @@ test("project import skips an identical closed item and can update its body with
         assert.deepEqual(apply.result, { imported: 0, updated: 1, skipped: 0, project: "acme/5", planned: 1 });
       });
       assert.match(fs.readFileSync(file, "utf8"), /New board note\./);
-      const appended = fs.readFileSync(history, "utf8").slice(before[1]!.length).trim().split("\n");
-      assert.equal(appended.length, 1);
-      assert.doesNotMatch(appended[0]!, /"op":"close"/);
+      const appended = appendedHistory(before[1]!, fs.readFileSync(history, "utf8"));
+      assert.deepEqual(appended.map(event => event.op), ["update"]);
+    });
+  });
+});
+
+test("project import records a status-only change and repairs a canceled reason only once", async t => {
+  const root = tracker(t);
+  const ext = await harness;
+  const request = { command: "github project import", args: ["acme/5"], options: {}, pmRoot: root, global: { json: true } };
+  const client = { pmRoot: root, noExtensions: true };
+  const cardId = "lifecycle-card";
+  await withEnv({ GITHUB_TOKEN: "fixture", GH_TOKEN: undefined }, async () => {
+    await withMockGithub(board([draft(cardId, "Todo", "todo")]), () => ext.runCommand(request));
+    const [item] = items(root);
+    assert.ok(item);
+    const history = getHistoryPath(root, item.id);
+    const beforeStatus = fs.readFileSync(history, "utf8");
+    await withMockGithub(board([draft(cardId, "In Progress", "doing")]), async () => {
+      const result = await ext.runCommand(request);
+      assert.equal((result.result as { updated: number }).updated, 1);
+    });
+    assert.equal((await sdkGet(item.id, {}, client)).item.status, "in_progress");
+    assert.deepEqual(appendedHistory(beforeStatus, fs.readFileSync(history, "utf8")).map(event => event.op), ["update"]);
+
+    await sdkUpdate(item.id, { status: "canceled", closeReason: "Local reason" }, client);
+    const beforeReason = fs.readFileSync(history, "utf8");
+    await withMockGithub(board([draft(cardId, "Canceled", "cancel")]), async () => {
+      const result = await ext.runCommand(request);
+      assert.equal((result.result as { updated: number }).updated, 1);
+      assert.equal((await sdkGet(item.id, {}, client)).item.close_reason, "GitHub project acme/5 item closed");
+      const afterReason = fs.readFileSync(history, "utf8");
+      assert.deepEqual(appendedHistory(beforeReason, afterReason).map(event => event.op), ["update"]);
+      const file = getItemPath(root, "Task", item.id);
+      const document = fs.readFileSync(file, "utf8");
+      const repeat = await ext.runCommand(request);
+      assert.equal((repeat.result as { updated: number }).updated, 0);
+      assert.equal(fs.readFileSync(file, "utf8"), document);
+      assert.equal(fs.readFileSync(history, "utf8"), afterReason);
     });
   });
 });

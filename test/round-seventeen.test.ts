@@ -718,10 +718,11 @@ test("native lease publication catches a peer relink after the plain import's re
 test("an optional atomic annotation receipt may be undefined without changing actual native writes", async () => tracker(async root => {
   await withMockGithub((request, response) => jsonResponse(response, 200, request.url!.includes("/issues?") ? [source()] : []), async () => {
     const result = await runImport(repo, root, parseImportOptions({ atomic: true }), { commitAtomic: async (trackerRoot, repository, entries) => ({
-      ...await importGithubAtomic(trackerRoot, repository, entries), commentWriteFailures: undefined,
+      ...await importGithubAtomic(trackerRoot, repository, entries), commentWriteFailures: undefined, addedComments: undefined,
     }) });
     assert.equal("imported" in result && result.imported, 1);
     assert.equal("commentWriteFailures" in result, false);
+    assert.equal("addedComments" in result, false);
     assert.equal((await listAllComplete({}, { pmRoot: root })).items.length, 1);
   });
 }));

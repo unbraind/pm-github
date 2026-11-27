@@ -132,14 +132,16 @@ test("a snapshot-bound import rejects changed assignment evidence before writing
   const preview = await runImport(repo, root, opts, deps);
   assert.ok("source_snapshot" in preview && preview.source_snapshot);
   const expectSource = preview.source_snapshot;
+  const applyOptions = parseImportOptions({ atomic: true, gate: true, "expect-source": expectSource });
+  assert.equal(applyOptions.expectSource, expectSource);
   const before = snapshot(root);
   issue = { ...issue, milestone: { title: "Moved delivery" } };
-  await assert.rejects(runImport(repo, root, { ...opts, dryRun: false, expectSource }, deps), {
+  await assert.rejects(runImport(repo, root, applyOptions, deps), {
     code: "github_import_source_drift",
   });
   assert.equal(snapshot(root), before);
   issue = { ...issue, milestone: { title: "Delivery" } };
-  const apply = await runImport(repo, root, { ...opts, gate: false, dryRun: false, expectSource }, deps);
+  const apply = await runImport(repo, root, { ...applyOptions, gate: false }, deps);
   assert.equal("imported" in apply && apply.imported, 1);
   assert.equal("source_snapshot" in apply && apply.source_snapshot, expectSource);
 }));
