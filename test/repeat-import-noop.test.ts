@@ -34,9 +34,9 @@ async function tracker(run: (pmRoot: string) => Promise<void>): Promise<void> {
   } finally { setActiveExtensionRegistrations(null); rmSync(directory, { recursive: true, force: true }); }
 }
 /** Fake only GitHub transport; all PM planning, writes, journals and gate scans are real. */
-async function importing(pmRoot: string, issues: GhIssue[], comments: GhComment[] = [], onTransition?: AtomicImportOptions["onTransition"]) {
+async function importing(pmRoot: string, issues: GhIssue[], comments: GhComment[] = [], onTransition?: AtomicImportOptions["onTransition"], expectSource?: string) {
   return (await captureStderr(() => runImport(repo, pmRoot,
-    parseImportOptions({ state: "all", atomic: true, gate: true, "with-comments": true }), {
+    { ...parseImportOptions({ state: "all", atomic: true, gate: true, "with-comments": true }), expectSource }, {
       resolveToken: () => undefined, fetchIssues: async () => issues, fetchIssueComments: async () => comments,
       ...(onTransition ? { commitAtomic: (root, name, entries) => importGithubAtomic(root, name, entries, { onTransition }) } : {}),
     }))).result as Record<string, unknown>;
@@ -193,6 +193,10 @@ test("local reopen and interrupted transaction replay restore GitHub close witho
     }), /journal is resumable/);
     assert.ok(transactionId);
     assert.notEqual(transactionId, first.transactionId);
+    const beforeRecovery = await bytes(pmRoot, id);
+    await assert.rejects(importing(pmRoot, [source], [], undefined, String(first.source_snapshot)), /Finish the pending GitHub import/);
+    await assert.rejects(importGithubAtomic(pmRoot, repo, [], { requireFreshSource: true }), /Finish the pending GitHub import/);
+    assert.deepEqual(await bytes(pmRoot, id), beforeRecovery);
     const finalized = transition === "committing" ? await bytes(pmRoot, id) : undefined;
     const recovered = await importing(pmRoot, [source]);
     assert.equal(recovered.recovered, true);

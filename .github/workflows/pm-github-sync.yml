@@ -562,6 +562,10 @@ jobs:
             report_workflow_failure "${RUNNER_TEMP}/pm-github-import.json" "${RUNNER_TEMP}/pm-github-import.err"
             exit 1
           fi
+          if ! jq -er '.source_snapshot | strings | select(test("^[a-f0-9]{64}$"))' "${RUNNER_TEMP}/pm-github-import.json" > "${RUNNER_TEMP}/pm-github-source-snapshot"; then
+            echo "::error::Gated preview did not return a source snapshot. Check the preview and use a pm-github release that supports --expect-source. No branch was published."
+            exit 1
+          fi
           # Keep the first plan's conflicts: a successful apply makes repeat plans unchanged.
           jq -r '.plan[]? | select(.identity.title_conflict == true or .identity.conflict != null) | "- Issue #\(.issue): \([if .identity.title_conflict then "title differs (curated title preserved)" else empty end, if .identity.conflict then if .identity.conflict.rule == "preserve-provider-owner" then "state differs (provider state preserved)" else "state differs (GitHub state applied)" end else empty end] | join("; "))"' "${RUNNER_TEMP}/pm-github-import.json" > "${RUNNER_TEMP}/pm-github-import-conflicts.md"
           jq -r '([.identity_conflicts[]? | select(.code == "ambiguous_legacy_github_identity")] | length) as $count | if $count > 0 then "- ambiguous_legacy_github_identity: \($count) item(s) with ambiguous number-only provenance preserved; set github_repo or github_url explicitly." else empty end' "${RUNNER_TEMP}/pm-github-import.json" >> "${RUNNER_TEMP}/pm-github-import-conflicts.md"
@@ -577,7 +581,8 @@ jobs:
           adopt_args=()
           if [[ "${ADOPT_CITED:-false}" == true ]]; then adopt_args+=(--adopt-cited); fi
           source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
-          if ! pm github import "${REPOSITORY}" --state all --atomic --gate --with-comments "${adopt_args[@]}" --json > "${RUNNER_TEMP}/pm-github-import.json" 2> "${RUNNER_TEMP}/pm-github-import.err"; then
+          IFS= read -r source_snapshot < "${RUNNER_TEMP}/pm-github-source-snapshot"
+          if ! pm github import "${REPOSITORY}" --state all --atomic --gate --with-comments "${adopt_args[@]}" --expect-source "${source_snapshot}" --json > "${RUNNER_TEMP}/pm-github-import.json" 2> "${RUNNER_TEMP}/pm-github-import.err"; then
             report_workflow_failure "${RUNNER_TEMP}/pm-github-import.json" "${RUNNER_TEMP}/pm-github-import.err"
             exit 1
           fi
@@ -599,7 +604,8 @@ jobs:
           stage_sync_paths "${tracker_scope[@]}"
           adopt_args=()
           if [[ "${ADOPT_CITED:-false}" == true ]]; then adopt_args+=(--adopt-cited); fi
-          if ! pm github import "${REPOSITORY}" --state all --atomic --gate --with-comments "${adopt_args[@]}" --json > "${RUNNER_TEMP}/pm-github-import.json" 2> "${RUNNER_TEMP}/pm-github-import.err"; then
+          IFS= read -r source_snapshot < "${RUNNER_TEMP}/pm-github-source-snapshot"
+          if ! pm github import "${REPOSITORY}" --state all --atomic --gate --with-comments "${adopt_args[@]}" --expect-source "${source_snapshot}" --json > "${RUNNER_TEMP}/pm-github-import.json" 2> "${RUNNER_TEMP}/pm-github-import.err"; then
             report_workflow_failure "${RUNNER_TEMP}/pm-github-import.json" "${RUNNER_TEMP}/pm-github-import.err"
             exit 1
           fi

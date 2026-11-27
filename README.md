@@ -572,6 +572,7 @@ pm github import owner/repo --dry-run
 | `--link-deps` | boolean | After import, map dependency references in issue **bodies** (`Blocked by #N`, `Depends on owner/repo#N`, `Blocks #N`) to pm dependency edges between the linked items. Idempotent, best-effort, and re-runnable; see [Dependency linking](#dependency-linking---link-deps) below. |
 | `--gate` | boolean | Fail-closed privacy gate: verify plan completeness (every fetched issue accounted for exactly once) and provenance idempotency (every re-import lands on exactly one explicit importer identity) BEFORE the write, then scan the proposed tracker change with [`pm github gate`](#pm-github-gate) AFTER it. Any finding — or any unreadable scan input — exits non-zero so an automated pipeline can never commit or push the change. Embeds `gate` receipts in the result. |
 | `--dry-run` | boolean | Preview without writing |
+| `--expect-source <sha256>` | string | Require the `source_snapshot` from a gated preview before writing items, comments, or dependency edges. |
 | `--type <type>` | string | Override pm item type (default: Issue) |
 
 Each imported item records GitHub provenance: a `gh:owner/repo#N` reference tag, a `github_author:<login>` tag, and an enriched description (`author @<login> · state reason <reason> · created <iso> · updated <iso>`). GitHub issues closed as `not_planned` import as pm `canceled` instead of `closed`, preserving the difference between completed work and deliberately dropped work. The integration declares the `github_url`, `github_number`, `github_state`, `github_author`, `github_created_at`, and `github_updated_at` schema fields.
@@ -714,7 +715,7 @@ Both bare `#N` (resolved against the imported repo) and explicit `owner/repo#N` 
 - **Safe** — references inside fenced/inline code spans are ignored; self-references and references to issues not in the workspace are skipped (the latter counted as `unresolvedDependencyRefs`); a failed individual edge never fails the import (it is reported in `dependencyLinkFailures` and the pass is re-runnable).
 - **Cycle-aware, not cycle-blocking** — ordering cycles the mapped edges introduce are reported in `orderingCycleWarnings` (computed via the pm SDK `collectNewOrderingCycleWarnings` advisory over the workspace before/after the pass) rather than rejected, mirroring the SDK's warn-don't-reject contract for legacy graph debt.
 
-The import result gains `linkedDependencies`, `unresolvedDependencyRefs`, `orderingCycleWarnings` (and `dependencyLinkFailures` when non-empty); a `--dry-run --link-deps` result reports `wouldLinkDependencyCandidates`.
+The import result gains `linkedDependencies` (edges added during this run), `unresolvedDependencyRefs`, `orderingCycleWarnings` (and `dependencyLinkFailures` when non-empty). A `--dry-run --link-deps` result reports `wouldLinkDependencyCandidates`.
 
 ## Export (pm → GitHub)
 
@@ -779,7 +780,9 @@ pm github project fields unbraind/5
 
 ### `pm github project import <owner/number>`
 
-Import every board item (draft issues included) as pm items. Idempotent: an item already linked (by project tag, or by the `gh:repo#N` issue it wraps) is **updated, not duplicated**. The board's Status option maps to the pm status.
+Import board items, including draft issues, into pm. An existing link reuses the
+same item. Preview and apply skip matching content and mapped status, and an
+already-closed item keeps its closure and history on repeat.
 
 ```bash
 pm github project import unbraind/5 --dry-run
@@ -876,6 +879,13 @@ Every field persisted in the recovery plan, including source bodies and dependen
 The `gate` receipt reports the verdict, scanned file count, findings, and allowlisted count. Each finding includes `match_offset` (the starting character offset of the hashed match within the scanned field value, or the serialized added line for tracker text) and `excerpt`. Host-path excerpts show only the root initial, such as `/h***/…`; other matches use `[redacted]`. Human-readable workflow diagnostics include the same evidence. Full paths and secrets never appear. Recognizable bare-root JavaScript regex literals immediately used with `.test()` or `.exec()` are distinguished from paths; quoted host paths and slash-separated host paths remain refused, including inside code and regex source. Ambiguous quote contexts remain refused. Whole JSON-serialized fields retain the same distinction after decoding; TOON wrappers are recognized only in tracker text.
 
 With `--json`, successful reports go to stdout; failures use the host CLI's JSON error envelope on stderr, with the redacted gate report serialized in `detail` (`jq ' .detail | fromjson ' gate-error.json`). Unreadable inputs produce a nonzero JSON refusal.
+
+A gated preview reports a `source_snapshot` in JSON and TOON. Pass it to
+`--expect-source` with the same import selection and comment options to verify
+the selected issue data, comments, and closure evidence before any tracker
+write. If the source changes, the import exits with `github_import_source_drift`.
+Take a fresh gated preview to retry. Finish any pending transaction using its
+original options before starting a new snapshot-bound import.
 
 ## Verified Dependabot auto-merge
 
@@ -1282,6 +1292,10 @@ Fleet repos sync their issues into pm through ONE audited implementation: the re
 
 After validation succeeds, a run with no tracker changes skips the caller changelog check and discards any regenerated `CHANGELOG.md` drift. The sync closes any owned open review PR and exits without pushing or dispatching CI. Changelog changes are published together with tracker changes.
 
+The workflow passes the preview's source snapshot to both the apply and the
+repeat import. Source drift stops the run before publication. The repeat must
+still pass the tracked and untracked diff checks and the privacy scan.
+
 Before extension and attributes setup, both reusable maintenance workflows require `.gitattributes` and the tracker’s `extensions/.managed-extensions.json` to match the checkout, including the index and ignored untracked files. Immediately after setup they save the runtime artifacts outside the checkout, then restore original tracked bytes or remove setup-created files before any privacy or publication scan. Strict health temporarily uses the saved runtime files after checking that both paths still match the baseline; an exit trap restores the baseline even when health fails. No caller script runs inside either setup window. Preexisting edits and later caller edits to either artifact fail closed and remain untouched, including ignored files.
 
 The explicit allowed scope for changed paths is:
@@ -1477,13 +1491,13 @@ write after a transaction failure. The
 [original SDK finalization analysis](docs/atomic-finalization-sdk.md) records
 the old failure and its test quarantines.
 
-An atomic apply whose complete normalized source projection already matches every item
-reports `unchanged: true`, zero imports/updates, and no transaction ID. It leaves
-native timestamps and item history untouched, including after a mixed batch of
-new and existing items. This shortcut is disabled while any GitHub SDK journal
-is unfinished; normal recovery still runs. Native annotation synchronization,
-dependency linking, and the post-write privacy gate still run on an unchanged
-item projection.
+An atomic apply skips the item transaction when the normalized source projection
+already matches every item. Native annotation synchronization, dependency
+linking, and the post-write privacy gate still run. The receipt reports
+`addedComments` when native comments were appended and `linkedDependencies`
+when dependency linking ran. It reports `unchanged: true` when the item
+transaction and both writers leave the tracker untouched. Normal recovery still
+runs for an unfinished GitHub SDK journal.
 
 SDK limitation: native `updated_at` remains the local mutation clock because the bulk SDK uses it to address rollback history. The GitHub update date is retained exactly in `github_updated_at`, and the gated plan discloses this policy. Backdating native `updated_at` safely requires an SDK import mutation whose version identity is independent of source time. Native creation, closure and completion dates still preserve GitHub lifetimes for momentum and cycle-time readers.
 

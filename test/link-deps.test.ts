@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { getHistoryPath, getItemPath, resolvePmRoot } from "@unbrained/pm-cli/sdk";
 
 import {
   buildProvenanceIndexFromMetadata,
@@ -409,11 +410,15 @@ test("runImport --link-deps writes a blocked_by edge between imported items (ide
       [{ id: id1, kind: "blocked_by" }],
     );
 
-    // Re-import must not duplicate the edge.
+    const pmRoot = resolvePmRoot(process.cwd(), root);
+    const files = [getItemPath(pmRoot, "Issue", id2), getHistoryPath(pmRoot, id2)];
+    const before = files.map(file => fs.readFileSync(file, "utf8"));
+    // Re-import must not duplicate the edge, stamp the item, or report a write.
     const second = (await runImport("acme/widgets", root, importOpts(), deps)) as Record<string, unknown>;
-    assert.strictEqual(second.linkedDependencies, 1);
+    assert.strictEqual(second.linkedDependencies, 0);
     const item2Again = showItem(root, id2);
     assert.strictEqual((item2Again.dependencies ?? []).length, 1);
+    assert.deepEqual(files.map(file => fs.readFileSync(file, "utf8")), before);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

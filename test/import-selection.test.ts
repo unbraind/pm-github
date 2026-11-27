@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, delimiter } from "node:path";
 import test from "node:test";
-import { comments as readComments, create } from "@unbrained/pm-cli/sdk";
+import { comments as readComments, create, getHistoryPath, getItemPath } from "@unbrained/pm-cli/sdk";
 import {
   CommandError, EXIT_CODE, fetchAllIssues, parseImportOptions, parseIssueNumbers,
   readPmItems, runImport, type GhIssue, type GhComment,
@@ -93,8 +93,13 @@ test("selection accepts numbers and same-repo references, deduplicates and valid
   assert.equal(parseImportOptions({ limit: "1" }).limit, 1);
 });
 
-test("one recorded issue uses one REST endpoint and re-import updates its existing provenance item", async () => tracker(async (_root, pmRoot) => {
-  await withMockGithub(recorded, async server => {
+test("one recorded issue uses one REST endpoint, skips an identical repeat, and applies a real edit in place", async () => tracker(async (_root, pmRoot) => {
+  const endpoint = "/repos/unbraind/pm-web/issues/189";
+  let source = web;
+  await withMockGithub((request, response, body, baseUrl) => {
+    if (request.url === endpoint) jsonResponse(response, 200, source);
+    else return recorded(request, response, body, baseUrl);
+  }, async server => {
     const first = await importing(pmRoot, { issue: "189,#189,unbraind/pm-web#189", type: "Task" });
     assert.equal(first.result.imported, 1);
     const items = readPmItems(pmRoot);
@@ -102,12 +107,23 @@ test("one recorded issue uses one REST endpoint and re-import updates its existi
     assert.equal(items[0]!.title, web.title);
     assert.equal((JSON.parse(setup(join(pmRoot, "../.."), cli, ["show", items[0]!.id!, "--json"])) as { item: { type: string } }).item.type, "Task");
     assert.ok(items[0]!.tags?.includes("gh:unbraind/pm-web#189"));
+    const id = items[0]!.id!;
+    const files = [getItemPath(pmRoot, "Task", id), getHistoryPath(pmRoot, id)];
+    const before = files.map(file => readFileSync(file, "utf8"));
     const repeat = await importing(pmRoot, { issue: "189" });
     assert.equal(repeat.result.imported, 0);
-    assert.equal(repeat.result.updated, 1);
-    assert.equal(readPmItems(pmRoot)[0]!.id, items[0]!.id);
-    assert.equal(readPmItems(pmRoot).length, 1);
-    assert.deepEqual(server.requests.map(request => request.url), Array(2).fill("/repos/unbraind/pm-web/issues/189"));
+    assert.equal(repeat.result.updated, 0);
+    assert.deepEqual(files.map(file => readFileSync(file, "utf8")), before);
+
+    source = { ...web, title: "An actual upstream title edit", updated_at: "2026-11-27T00:00:00Z" };
+    const changed = await importing(pmRoot, { issue: "189" });
+    assert.equal(changed.result.imported, 0);
+    assert.equal(changed.result.updated, 1);
+    const after = readPmItems(pmRoot);
+    assert.equal(after[0]!.id, id);
+    assert.equal(after[0]!.title, source.title);
+    assert.equal(after.length, 1);
+    assert.deepEqual(server.requests.map(request => request.url), Array(3).fill(endpoint));
   });
 }));
 

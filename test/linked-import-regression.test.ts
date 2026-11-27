@@ -1,9 +1,9 @@
 /** Exercise reserved-ID recovery and repeat sync through a real PM CLI and tracker. */
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import test, { type TestContext } from "node:test";
 import { comments, create, getHistoryPath, getItemPath, init, normalizeItemId, readLocatedItem, renderPmCommand } from "@unbrained/pm-cli/sdk";
 import { appendBlockerComments, buildCommentText, deriveAtomicItemId, importGithubAtomic, parseImportOptions, runImport, syncGithubCommentsToAnnotations, type BlockerReferenceState, type GhComment, type GhIssue } from "../index.ts";
@@ -14,6 +14,8 @@ import { withReservedIdRepair } from "../import-repair.ts";
 import { readWorkflowFailure } from "../workflow-diagnostic.ts";
 import { boundedCli } from "./helpers/bounded-cli.ts";
 import { jsonResponse, withMockGithub } from "./helpers/mock-github-server.ts";
+import { decode } from "@toon-format/toon";
+import { parse } from "yaml";
 
 const packageRoot = resolve(import.meta.dirname, "..");
 const cli = join(packageRoot, "node_modules", "@unbrained", "pm-cli", "dist", "cli.js");
@@ -55,7 +57,7 @@ async function fixture(t: TestContext, git = true) {
   const environment = { ...process.env, PM_PATH: pmRoot, PM_AUTHOR: "fixture",
     PM_GLOBAL_PATH: join(directory, "global"), GITHUB_TOKEN: "fixture" };
   return {
-    directory, pmRoot, client, itemPath,
+    directory, pmRoot, client, itemPath, environment,
     snapshot: () => ({ item: readFileSync(itemPath, "utf8"), history: readFileSync(historyPath, "utf8") }),
     invoke: (args: string[], api?: string) => boundedCli(process.execPath, [cli, "--path", pmRoot, ...args],
       directory, { ...environment, PM_GITHUB_API_BASE: api }),
@@ -107,6 +109,128 @@ function source<T>(run: (base: string) => Promise<T>, record = issue) {
     return result;
   });
 }
+
+test("reusable sync binds apply and repeat to the preview source and preserves all durable bytes", async t => {
+  const tracker = await fixture(t);
+  const linked = await tracker.invoke(["update", id, "--field", `github_url=${issue.html_url}`]);
+  assert.equal(linked.code, 0, linked.stderr);
+  const runner = mkdtempSync(join(tmpdir(), "pm-github-sync-runner-"));
+  t.after(() => rmSync(runner, { recursive: true, force: true }));
+  const closed: GhIssue = {
+    ...issue, number: 8, html_url: `https://github.com/${repo}/issues/8`,
+    title: "Closed mirror", body: "Blocked by #7\r\n\r\nSource body.  \r\n",
+    state: "closed", state_reason: "completed", closed_at: issue.updated_at,
+    labels: [{ name: "first" }, { name: "second" }],
+  };
+  const canceled: GhIssue = {
+    ...closed, number: 9, html_url: `https://github.com/${repo}/issues/9`,
+    title: "Canceled mirror", state_reason: "not_planned", comments: 0,
+  };
+  let issues = [issue, closed, canceled];
+  let comment = remoteComment;
+  let closingCommit = "a".repeat(40);
+  const workflow = parse(readFileSync(join(packageRoot, ".github/workflows/pm-github-sync.yml"), "utf8")) as
+    { jobs: { "gated-sync": { steps: Array<{ name: string; run?: string }> } } };
+  writeFileSync(join(runner, "pm-github-sync-scope.sh"), [
+    'tracker_scope=( ".agents/pm/issues" ".agents/pm/tasks" ".agents/pm/history" )',
+    'stage_sync_paths() { git add -- "$@"; }',
+    'report_workflow_failure() { pm github workflow-diagnostic --report "$1" --error-file "$2" --diff "${3:-/dev/null}" --json; }',
+  ].join("\n"));
+  const preview = "Preview GitHub to pm plan";
+  const apply = "Gated GitHub to pm import";
+  const repeat = "Verify repeat import is a no-op";
+  const report = join(runner, "pm-github-import.json");
+
+  /** Retain the native item documents and append-only history streams. */
+  const durable = () => readdirSync(tracker.pmRoot, { recursive: true }).map(String)
+    .filter(file => /^(?:issues|tasks)\/.*\.toon$|^history\/.*\.jsonl$/.test(file)).sort()
+    .map(file => [file, readFileSync(join(tracker.pmRoot, file), "utf8")]);
+
+  await withMockGithub((req, res) => {
+    const url = req.url?.split("?")[0];
+    if (url?.endsWith("/comments")) jsonResponse(res, 200, [comment]);
+    else if (url?.endsWith("/timeline")) jsonResponse(res, 200, [{
+      event: "closed", created_at: closed.closed_at, commit_id: closingCommit,
+    }]);
+    else jsonResponse(res, 200, issues);
+  }, async server => {
+    /** Execute the checked-in workflow steps with the real local CLI. */
+    const step = (name: string) => boundedCli("bash", ["-c", workflow.jobs["gated-sync"].steps.find(step => step.name === name)!.run!],
+      tracker.directory, { ...tracker.environment, PM_GITHUB_API_BASE: server.baseUrl, REPOSITORY: repo,
+        RUNNER_TEMP: runner, PATH: join(packageRoot, "node_modules/.bin") + delimiter + process.env.PATH });
+    const original = durable();
+    const planned = await step(preview);
+    assert.equal(planned.code, 0, planned.stdout + planned.stderr);
+    const expected = JSON.parse(readFileSync(report, "utf8")).source_snapshot;
+    assert.match(expected, /^[a-f0-9]{64}$/);
+    issues = [];
+    let outcome = await step(apply);
+    assert.notEqual(outcome.code, 0);
+    assert.match(outcome.stdout, /source drift.*No branch was published/);
+    assert.deepEqual(durable(), original);
+
+    issues = [issue, closed, canceled];
+    outcome = await step(apply);
+    assert.equal(outcome.code, 0, outcome.stderr);
+    assert.equal(JSON.parse(readFileSync(report, "utf8")).addedComments, 1);
+    assert.equal((await storedComments(tracker.itemPath)).length, 1);
+    assert.match(tracker.snapshot().item, /Curated body\./);
+    const afterApply = durable();
+    comment = { ...remoteComment, body: "An edit to the same source comment." };
+    outcome = await step(repeat);
+    assert.notEqual(outcome.code, 0);
+    assert.match(outcome.stdout, /source drift.*No branch was published/);
+    assert.deepEqual(durable(), afterApply);
+
+    comment = remoteComment;
+    closingCommit = "b".repeat(40);
+    outcome = await step(repeat);
+    assert.notEqual(outcome.code, 0);
+    assert.match(outcome.stdout, /source drift.*No branch was published/);
+    assert.deepEqual(durable(), afterApply);
+
+    closingCommit = "a".repeat(40);
+    issues = [canceled, { ...closed, labels: [...closed.labels].reverse() }, issue];
+    outcome = await step(repeat);
+    assert.equal(outcome.code, 0, outcome.stdout + outcome.stderr);
+    const repeated = JSON.parse(readFileSync(report, "utf8"));
+    assert.equal(repeated.source_snapshot, expected);
+    assert.equal(repeated.unchanged, true);
+    assert.deepEqual(durable(), afterApply);
+    const diff = spawnSync("git", ["diff", "--exit-code", "--", ".agents/pm/issues", ".agents/pm/tasks", ".agents/pm/history"], { cwd: tracker.directory });
+    assert.equal(diff.status, 0);
+  });
+});
+
+test("legacy TOON import reports annotation-only writes and accepts the same source on a non-git repeat", async t => {
+  const tracker = await fixture(t, false);
+  const linked = await tracker.invoke(["update", id, "--field", `github_url=${issue.html_url}`]);
+  assert.equal(linked.code, 0, linked.stderr);
+  await source(async base => {
+    const args = ["gh-issues", "import", repo, "--atomic", "--output-format", "toon"];
+    const prepared = await tracker.invoke(args, base);
+    assert.equal(prepared.code, 0, prepared.stderr);
+    const applied = await tracker.invoke([...args, "--comments-mode", "annotations"], base);
+    assert.equal(applied.code, 0, applied.stderr);
+    const annotation = decode(applied.stdout) as { updated: number; addedComments: number; unchanged?: boolean };
+    assert.equal(annotation.updated, 0);
+    assert.equal(annotation.addedComments, 1);
+    assert.equal(annotation.unchanged, undefined);
+    const initial = tracker.snapshot();
+    const basePreview = await tracker.invoke([...args, "--comments-mode", "annotations", "--dry-run", "--gate"], base);
+    assert.equal(basePreview.code, 0, basePreview.stderr);
+    const { source_snapshot: expected } = decode(basePreview.stdout) as { source_snapshot: string };
+    assert.match(expected, /^[a-f0-9]{64}$/);
+    const result = await tracker.invoke([...args, "--comments-mode", "annotations", "--expect-source", expected], base);
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal((decode(result.stdout) as { unchanged: boolean }).unchanged, true);
+    assert.deepEqual(tracker.snapshot(), initial);
+    const invalid = await tracker.invoke([...args, "--expect-source", "bad"], base);
+    assert.notEqual(invalid.code, 0);
+    assert.match(invalid.stderr, /requires the full source_snapshot/);
+    assert.throws(() => parseImportOptions({ "expect-source": "" }), /requires the full source_snapshot/);
+  });
+});
 
 test("gated import and the legacy alias report an executable, tracker-scoped reserved-ID repair in JSON and TOON", async t => {
   const tracker = await fixture(t);

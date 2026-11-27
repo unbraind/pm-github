@@ -1,0 +1,48 @@
+id: pm-github-github-ee4d59c27b67-287
+title: Gated sync on 2026.11.25 stops at the repeat no-op check after item updated_at changes
+description: "GH issue #287: https://github.com/unbraind/pm-github/issues/287 · author @unbraind · created 2026-11-26T10:29:01Z · updated 2026-11-26T13:28:22Z"
+type: Issue
+status: open
+priority: 2
+tags[2]: "gh:unbraind/pm-github#287","github_author:unbraind"
+created_at: "2026-11-26T10:29:01Z"
+updated_at: "2026-11-27T13:02:11.352Z"
+author: pm-github
+comments[8]{created_at,author,text}:
+  "2026-11-27T11:17:01.364Z",codex-agent,Investigating the four hosted repeat-gate failures. The pinned caller reproduction will compare native documents and history across both passes and distinguish the published versions from the later merged comment fix.
+  "2026-11-27T11:21:45.811Z",codex-agent,"Reproduced on pm-rl main e11861f with its locked PM CLI 2026.11.24 and pinned pm-github 2026.11.25. A frozen nine-issue REST and closure snapshot produced 17, 18, then 19 native comments for item 202. Both new comment_add rows share provider comment 7140375699. The repeat appended one history row touching comments and updated_at while reporting zero item updates and unchanged. Published 2026.11.26 differs in dist only by its version literal and predates merged #288. Auditing body, lifecycle, annotations, and dependency writes independently."
+  "2026-11-27T11:33:28.528Z",codex-agent,"Release comparison confirmed: 2026.11.25 and 2026.11.26 both append comment 7140375699 twice (history 36 → 38 → 39). Merged #288 reads full native annotation text and preserves the original provider timestamp (history 36 → 38 → 38). Existing dependency writes are byte-idempotent on the pinned SDK but their duplicate receipt used to count a link. The workflow now compares a source-only snapshot before writes and still requires both byte-diff checks and the privacy scan. Consumer adoption and independent hosted verification are tracked in issue #297."
+  "2026-11-27T11:45:41.408Z",codex-agent,"Behavioral revert proof in disposable copies: disabling the source guard or removing its apply and repeat workflow arguments each failed the source-drift regression. Removing either recovery fence replayed a pending plan and failed the rejection check. Reverting the annotation receipt, dependency receipt, plain type comparison or Projects no-op comparison each failed its targeted assertion. Restoring the released comment read/append function in the candidate on the frozen pm-rl caller again produced 17 → 18 → 19 comments and appended a history row. Reverting only the reader stayed byte-identical for unchanged text because native ifAbsent still deduplicated. The caller SDK projected the legacy 1,221-character comment as 253 characters and dropped its marker. The fixed linked test command passed 7/7."
+  "2026-11-27T11:45:45.081Z",codex-agent,"Packed candidate contained 103 files and the source snapshot module. On frozen pm-rl main e11861f with PM CLI 2026.11.24, both npm and native Bun returned a matching snapshot and zero repeat imports or updates. Native comment and history bytes were identical and the privacy scan passed. The historical hosted pm-rl repeat failure was verified on run 45975772213. Verification of a hosted caller with the fixed release is tracked in #297."
+  "2026-11-27T12:07:27.436Z",codex-agent,"The selected-issue acceptance case counted a repeat as updated solely because the first pass had created a Task. Its assertions now preserve original endpoint and genuine-update coverage and also require a byte-identical no-op for the identical source. The shared object-store privacy scan found only two unrelated dangling commit objects, both absent from every ref and from a fresh remote clone. The exact delivery commit will be scanned in that clone."
+  "2026-11-27T12:40:54.994Z",codex-agent,"The corrected selection file passed all 26 tests through the pinned PM linked runner, with zero skips. Restoring the old plain comparison made the real-tracker selection test fail with 1 reported update instead of 0. The production code and packed replay are unchanged by this fixture update."
+  "2026-11-27T13:02:09.806Z",codex-agent,"Local gates passed: 1,832 distinct test cases over 68 related files and four focused sync-workflow cases, after rerunning the two updated fixtures. The PM-linked commands passed 7/7, 26/26, and 1/1. The packed Bun fixture now uses the workflow preview receipt, runs three repeats under the existing 45-second budget, and compares item and history bytes. Dependency coverage also compares both files on repeat. Typecheck, build, test compilation, lint, docstrings and duplication passed. Exact caller adoption remains tracked in #297."
+files[10]{path,scope}:
+  .github/workflows/pm-github-sync.yml,project
+  import-source.ts,project
+  index.ts,project
+  test/daily-sync-idempotency.test.ts,project
+  test/import-gate.test.ts,project
+  test/import-selection.test.ts,project
+  test/link-deps.test.ts,project
+  test/linked-import-regression.test.ts,project
+  test/project-sync.test.ts,project
+  test/repeat-import-noop.test.ts,project
+tests[3]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  "node --test --test-concurrency=2 --test-name-pattern=\"reusable sync binds|legacy TOON import|linked reserved-ID import repeats|creation-only item type|project import skips|runImport --link-deps writes|interrupted transaction replay\" test/linked-import-regression.test.ts test/daily-sync-idempotency.test.ts test/project-sync.test.ts test/link-deps.test.ts test/repeat-import-noop.test.ts",project,1200,codex-agent,"2026-11-27T11:34:15.919Z",local_mutation,fix/repeat-import-preserves-updated-at
+  node --test --test-concurrency=1 test/import-selection.test.ts,project,900,codex-agent,"2026-11-27T12:28:36.332Z",local_mutation,fix/repeat-import-preserves-updated-at
+  "node --test --test-concurrency=1 --test-name-pattern=\"packed installed CLI repeats a completed gated import\" test/import-gate.test.ts",project,300,codex-agent,"2026-11-27T12:52:30.711Z",local_mutation,fix/repeat-import-preserves-updated-at
+docs[2]{path,scope}:
+  docs/daily-sync-recovery.md,project
+  README.md,project
+github_close_reason: ""
+github_closed_at: ""
+github_created_at: "2026-11-26T10:29:01Z"
+github_link_only: false
+github_number: 287
+github_release: ""
+github_state: open
+github_state_reason: unspecified
+github_updated_at: "2026-11-26T13:28:22Z"
+github_url: "https://github.com/unbraind/pm-github/issues/287"
+body: "## Hosted evidence\n\nTwo actual runs reach and pass both `Preview GitHub to pm plan` and `Gated GitHub to pm import`, then fail `Verify repeat import is a no-op` without publishing a branch:\n\n- [PM Web run 45792469885 / job 139814702911](https://github.com/unbraind/pm-web/actions/runs/45792469885/job/139814702911), caller `12a277c0d4cb069af0c5b3ada73f08d02138f782`, installed pm-github `2026.11.25`. The repeat reports a changed `updated_at` on `pm-web-5sx6`. Consumer alert: [pm-web#369](https://github.com/unbraind/pm-web/issues/369).\n- [PM RL run 45799801908 / job 139839761659](https://github.com/unbraind/pm-rl/actions/runs/45799801908/job/139839761659), caller `273a68769d1ab37b1bbc89a71b4fba1a8f9613d6`. After the separate provenance issue was fixed by [pm-rl#211](https://github.com/unbraind/pm-rl/pull/211), the repeat reports a changed `updated_at` on `pm-rl-github-eecd7460423f-202`. Consumer alert: [pm-rl#210](https://github.com/unbraind/pm-rl/issues/210).\n\nThese are the same observed failure class, not proof of a single underlying cause. The logs do not show whether the provider records changed between the two imports, nor prove this is the same cause as the closed 2026.10.19 history-churn report #175. This is distinct from the host-compatibility, timestamp validation, and reserved-ID preview refusals.\n\n## Acceptance\n\nFor a pinned unchanged source snapshot, the initial write and identical repeat must preserve the item timestamp, authoritative history and permitted changes on the repeat. If source inputs actually change between passes, return a clear source-drift diagnostic without publishing; retain the fail-closed privacy and no-op gates. Include a sanitized regression exercising both stable and changed evidence and verify the matching hosted workflow on at least one affected consumer."

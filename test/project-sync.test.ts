@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test, { type TestContext } from "node:test";
-import { schemaAddStatus, getHistoryPath, create as sdkCreate, update as sdkUpdate, init as sdkInit, get as sdkGet, readSettings, mutateItem } from "@unbrained/pm-cli/sdk";
+import { schemaAddStatus, getHistoryPath, getItemPath, create as sdkCreate, update as sdkUpdate, init as sdkInit, get as sdkGet, readSettings, mutateItem } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import extension from "../index.ts";
 import { projectItemTag } from "../projects.ts";
@@ -233,6 +233,41 @@ test("project import preserves literal tags when replacing an existing tag set",
     await withEnv({ GITHUB_TOKEN: "fixture", GH_TOKEN: undefined }, () => ext.runCommand({ command: "github project import", args: ["acme/5"], options: {}, pmRoot: root, global: { json: true } }));
   });
   assert.deepEqual(new Set(items(root).find(item => item.id === id)!.tags), new Set(retained));
+});
+
+test("project import skips an identical closed item and can update its body without closing again", async t => {
+  const root = tracker(t);
+  const ext = await harness;
+  const request = { command: "github project import", args: ["acme/5"], pmRoot: root, global: { json: true } };
+  const card = draft("closed-card", "Done", "done");
+  await withEnv({ GITHUB_TOKEN: "fixture", GH_TOKEN: undefined }, async () => {
+    await withMockGithub(board([draft("closed-card", "Todo", "todo")]), async () => {
+      await ext.runCommand({ ...request, options: {} });
+    });
+    await withMockGithub(board([card]), async () => {
+      const closure = await ext.runCommand({ ...request, options: {} });
+      assert.deepEqual(closure.result, { imported: 0, updated: 1, skipped: 0, project: "acme/5", planned: 1 });
+      const [item] = items(root);
+      assert.equal(item?.status, "closed");
+      const file = getItemPath(root, "Task", item.id);
+      const history = getHistoryPath(root, item.id);
+      const before = [fs.readFileSync(file, "utf8"), fs.readFileSync(history, "utf8")];
+      const preview = await ext.runCommand({ ...request, options: { "dry-run": true } });
+      assert.deepEqual(preview.result, { dryRun: true, project: "acme/5", wouldImport: 0, wouldUpdate: 0, planned: 1 });
+      const repeat = await ext.runCommand({ ...request, options: {} });
+      assert.deepEqual(repeat.result, { imported: 0, updated: 0, skipped: 0, project: "acme/5", planned: 1 });
+      assert.deepEqual([fs.readFileSync(file, "utf8"), fs.readFileSync(history, "utf8")], before);
+      const edited = { ...card, content: { ...card.content, body: "New board note." } };
+      await withMockGithub(board([edited]), async () => {
+        const apply = await ext.runCommand({ ...request, options: {} });
+        assert.deepEqual(apply.result, { imported: 0, updated: 1, skipped: 0, project: "acme/5", planned: 1 });
+      });
+      assert.match(fs.readFileSync(file, "utf8"), /New board note\./);
+      const appended = fs.readFileSync(history, "utf8").slice(before[1]!.length).trim().split("\n");
+      assert.equal(appended.length, 1);
+      assert.doesNotMatch(appended[0]!, /"op":"close"/);
+    });
+  });
 });
 
 for (const prefer of ["pm", "github"]) {

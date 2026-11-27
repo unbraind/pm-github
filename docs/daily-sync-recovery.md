@@ -4,6 +4,16 @@ The 2026-10-29 audit read the latest `pm-github-sync.yml` run and each job's log
 
 The importer compares both stored and desired fields using the shared SDK-aware type, status, assignment, tag, body and timestamp normalization. It omits each unchanged item from fresh atomic batches and from plain updates. Pending transactions retain their complete plan for recovery. Native comment synchronization still runs when item content is unchanged. Gated dry runs now scan the same rendered plan before returning, including in a plain non-git tracker.
 
+The pm-rl item for GitHub issue #202 reproduced a duplicate native comment with
+both published versions 2026.11.25 and 2026.11.26. The compact SDK read hid a
+long comment's trailing GitHub ID, which caused an extra `comment_add` history
+row and advanced `updated_at`. The merged fix in [#288](https://github.com/unbraind/pm-github/pull/288)
+reads the full stored comment. The workflow also passes the gated preview's
+`source_snapshot` to both apply and repeat. If the provider evidence changes,
+the run reports source drift and stops before publication. Start a new run
+from a fresh preview. A stable source still has to pass the item and history
+diff checks and the privacy scan.
+
 SDK 2026.10.25 and 2026.10.28 reset `closed_at` and `updated_at` on an identical forced closed-state update, through both `update` and `commitItemMutations`, as confirmed by standalone synthetic non-git reproductions. The upstream timestamp fix shipped in SDK 2026.10.31 (GH-1628). The reproduction is recorded in [pm-cli issue #1628](https://github.com/unbraind/pm-cli/issues/1628). The package avoids invoking those mutations for normalized no-ops.
 
 The SDK 2026.11.4 recheck exposed a plain-writer mismatch at seed 17: the second identical import changed `updated_at`. GH-1614 makes typed assignment values literal, while legacy CLI `--assignee none` clears the field. Plain create/update now supply assignment fields through `--stdin-json`, preserving literal assignee and milestone names. Native close also clears assignee, so plain finalization restores an explicit source assignee. Link-only owners retain their native assignment. The complete generated repeat-import file and a new open/closed create/update regression pass; reverting the production fix makes the regression fail. Exact byte-snapshot and zero-update assertions remain intact. Atomic rollback after finalization remains separately blocked by pm-cli#1656.
