@@ -722,6 +722,7 @@ test("applyOutcomeError: a non-empty plan where every item fails throws CommandE
   assert.ok(err instanceof CommandError, "all-fail batch must surface a CommandError");
   assert.strictEqual(err!.exitCode, EXIT_CODE.GENERIC_FAILURE, "all-fail batch must exit 1");
   assert.match(err!.message, /failed to apply/i);
+  assert.match(err!.message, /no issue writes were confirmed/i);
   assert.match(err!.message, /o\/r/, "message names the target repo");
 });
 

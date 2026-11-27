@@ -15,7 +15,7 @@ export async function readStoredComments(itemId: string, pmPath: string) {
 }
 
 /**
- * Validate one source timestamp before any write; a mirror never persists a
+ * Validate the source timestamp before appending this comment; a mirror never persists a
  * malformed or impossible source time. A refused comment counts as a failed
  * write and stays retryable, instead of being stored, counted as success, and
  * then skipped by its comment ID on every later sync.
@@ -28,7 +28,7 @@ export async function readStoredComments(itemId: string, pmPath: string) {
  */
 function requireGithubCommentTimestamp(comment: GhComment): string {
   if (!Number.isFinite(parseSourceTimestamp(comment.created_at))) {
-    throw new PmCliError(`GitHub comment ${comment.id} has an invalid source timestamp; nothing was written.`, EXIT_CODE.GENERIC_FAILURE);
+    throw new PmCliError(`GitHub comment ${comment.id} has an invalid source timestamp and was refused.`, EXIT_CODE.GENERIC_FAILURE);
   }
   return comment.created_at;
 }

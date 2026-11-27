@@ -2015,7 +2015,7 @@ export async function importGithubAtomic(
       try { assertGithubImportOwner({ ...entry.match, id, author: entry.match?.author ?? "pm-github", description: entry.description, tags: importTagValues(entry) }, target); }
       catch (error: unknown) {
         if (!(error instanceof GithubImportOwnershipError)) throw error;
-        throw new GithubImportRecoveryError("github_import_plan_ownership_invalid", `Import plan for ${repo.toLowerCase()}#${entry.issueNumber} does not retain import ownership through its content updates. Build it with prepareGithubImport and retain explicit provenance or its proven importer-created ID. No item was written.`);
+        throw new GithubImportRecoveryError("github_import_plan_ownership_invalid", `Import plan for ${repo.toLowerCase()}#${entry.issueNumber} does not retain import ownership through its content updates. Build it with prepareGithubImport and retain explicit provenance or its proven importer-created ID.`);
       }
     }
   }
@@ -2242,7 +2242,7 @@ export function parseIssueNumbers(repo: string, input: string): number[] {
   return [...numbers];
 }
 
-/** Fetch only selected REST issue endpoints, refusing PRs and missing numbers before writes. */
+/** Fetch selected REST endpoints and report unavailable members to a snapshot-bound caller. */
 async function fetchSelectedIssues(repo: string, numbers: readonly number[], opts: ImportOptions, token?: string): Promise<{ issues: GhIssue[]; missingIssues: number[] }> {
   const issues: GhIssue[] = [];
   const missingIssues: number[] = [];
@@ -2251,7 +2251,8 @@ async function fetchSelectedIssues(repo: string, numbers: readonly number[], opt
     try {
       ({ body } = await fetchJSON(`${githubApiBase()}/repos/${repo}/issues/${number}`, token));
     } catch (err: unknown) {
-      if (!/HTTP 404/.test(errorMessage(err))) throw err;
+      if (!errorMessage(err).startsWith("GitHub API returned HTTP 404 for GET ")) throw err;
+      if (opts.expectSource !== undefined) return { issues, missingIssues: [number] };
       if (!opts.dryRun) throw new Error(`GitHub issue ${repo}#${number} was not found (HTTP 404); no issues were imported.`);
       missingIssues.push(number);
       console.error(`[dry-run] Missing issue: ${repo}#${number} (HTTP 404).`);
@@ -2260,6 +2261,7 @@ async function fetchSelectedIssues(repo: string, numbers: readonly number[], opt
     const issue = JSON.parse(body) as GhIssue;
     if (issue.number !== number) throw new Error(`Unexpected GitHub issue response for ${repo}#${number}.`);
     if (issue.pull_request && !opts.includePrs) {
+      if (opts.expectSource !== undefined) return { issues, missingIssues: [number] };
       throw new Error(`${repo}#${number} is a pull request; use --include-prs to import it. No issues were imported.`);
     }
     issues.push(issue);
@@ -3580,7 +3582,7 @@ export function verifyImportIdempotency(
     throw new CommandError(
       `pm github gate: import plan is not idempotent — ${duplicateIdentities.size} duplicate import identity claim(s) ` +
         `in the existing corpus, ${untaggedNewEntries} new entr(y/ies) without a provenance tag, ` +
-        `${conflictingTargets} conflicting target(s). No item was written.`,
+        `${conflictingTargets} conflicting target(s).`,
       EXIT_CODE.GENERIC_FAILURE,
     );
   }
@@ -3700,9 +3702,16 @@ function githubImportPreflightRefusal(preflight: ImportGateReceipt): GithubImpor
 
 /** A saved passing verdict and a fresh passing scan are both required before any replay mutation. */
 export function assertGithubImportReplayPreflight(pmRoot: string, record: GithubImportPlanRecord): void {
-  if (record.preflight?.verdict !== "pass") throw new GithubImportRecoveryError("github_import_preflight_failed", `Transaction ${record.transactionId} has a failed or missing saved privacy preflight. Review the original plan and establish a passing preflight before explicit recovery; no item was written.`);
+  if (record.preflight?.verdict !== "pass") throw new GithubImportRecoveryError("github_import_preflight_failed", `Transaction ${record.transactionId} has a failed or missing saved privacy preflight. Review the original plan and establish a passing preflight before explicit recovery.`);
   const current = scanGithubImportPreflight(pmRoot, record.entries, record.mutations, record);
-  if (current.verdict !== "pass") throw new GithubImportRecoveryError("github_import_preflight_failed", `Transaction ${record.transactionId} failed its replay privacy preflight; no item was written.`);
+  if (current.verdict !== "pass") throw new GithubImportRecoveryError("github_import_preflight_failed", `Transaction ${record.transactionId} failed its replay privacy preflight. Recovery stopped.`);
+}
+
+/** Use one typed refusal for unavailable or changed evidence in a snapshot-bound import. */
+function refuseImportSourceDrift(): never {
+  throw createPmCliExpectedError("GitHub import source drift: the selected issues, comments or closure evidence no longer match the preview. Start a new gated preview; this import wrote no tracker changes.", {
+    context: { code: "github_import_source_drift" },
+  });
 }
 
 /**
@@ -3785,6 +3794,7 @@ export async function runImport(
     const exitCode = /HTTP 404/.test(msg) ? EXIT_CODE.NOT_FOUND : EXIT_CODE.GENERIC_FAILURE;
     throw new CommandError(`Failed to fetch issues from ${repo}: ${msg}${hint}`, exitCode);
   }
+  if (opts.expectSource !== undefined && missingIssues.length > 0) refuseImportSourceDrift();
 
   const eligible = applyClientFilters(fetched, opts);
   const filtered = opts.limit === undefined ? eligible : eligible.slice(0, opts.limit);
@@ -3798,11 +3808,7 @@ export async function runImport(
   const sourceReceipt = (entries: readonly PreparedGithubImport[]) => {
     if (!opts.gate && opts.expectSource === undefined) return {};
     const snapshot = importSourceSnapshot(repo, filtered, missingIssues, entries);
-    if (opts.expectSource !== undefined && opts.expectSource !== snapshot) {
-      throw createPmCliExpectedError("GitHub import source drift: selected issues, comments or closure evidence changed since the preview. Start a new gated preview; this import wrote no tracker changes.", {
-        context: { code: "github_import_source_drift" },
-      });
-    }
+    if (opts.expectSource !== undefined && opts.expectSource !== snapshot) refuseImportSourceDrift();
     return { source_snapshot: snapshot };
   };
 
@@ -4741,22 +4747,19 @@ export async function applyExportPlan(
 //
 // The per-item-continue design above is intentional: one bad item never aborts
 // the batch. But the batch as a WHOLE still has to report honest success or
-// failure to the shell. A non-empty plan that wrote NOTHING (zero creates, zero
-// updates) yet recorded at least one failure is a total failure — exiting 0 in
-// that case would let a CI/script step believe the export succeeded when in
-// fact nothing reached GitHub. Returns a CommandError to throw in that case, or
+// failure to the shell. A non-empty plan with failed operations and no
+// confirmed writes must exit nonzero. Returns a CommandError in that case, or
 // undefined when the batch should succeed (exit 0):
 //   - empty plan (nothing to do)                       → success
 //   - any creates/updates landed (partial or full)     → success (per-item
 //     failures are already reported; the batch still wrote real changes)
-//   - non-empty plan, nothing written, >=1 failure     → GENERIC_FAILURE
+//   - non-empty plan, no confirmed write, >=1 failure  → GENERIC_FAILURE
 /**
  * Decide the exit status of a completed `export --apply` batch.
  *
  * Per-item continuation is intentional (one bad item never aborts the batch),
- * but the batch as a whole must still report honestly: a non-empty plan that
- * wrote NOTHING while recording at least one failure is a total failure, so it
- * returns a {@link CommandError} to throw; otherwise `undefined` (exit 0).
+ * but the batch still fails if it records errors and confirms no writes.
+ * Returns a {@link CommandError} in that case, otherwise `undefined` (exit 0).
  *
  * @param plan - The plan that was applied.
  * @param result - What the apply loop actually wrote.
@@ -4771,7 +4774,7 @@ export function applyOutcomeError(
   if (plan.length > 0 && result.created === 0 && result.updated === 0 && result.failed > 0) {
     return new CommandError(
       `All ${result.failed} item(s) failed to apply to ${repo}; ` +
-        "no issues were created or updated. See errors above.",
+        "no issue writes were confirmed. See errors above.",
       EXIT_CODE.GENERIC_FAILURE,
     );
   }
@@ -4910,11 +4913,8 @@ async function runExport(ctx: CommandHandlerContext) {
       console.error(`${failed} item(s) failed and were skipped (see errors above).`);
     }
   }
-  // Honest batch-level exit status. Per-item failures are tolerated as long
-  // as SOMETHING was written, but a non-empty plan that wrote nothing and
-  // recorded only failures must exit non-zero — otherwise a CI/script step
-  // sees success when no issue reached GitHub. Thrown AFTER the summary so
-  // the per-item errors and the summary line are emitted first for context.
+  // Exit nonzero when the batch records failures and confirms no writes.
+  // Emit the summary and per-item errors first.
   const outcomeError = applyOutcomeError(
     plan,
     { created, updated, failed, failures },
@@ -6449,7 +6449,7 @@ async function gqlAddIssue(projectId: string, contentId: string, token: string |
   return id;
 }
 
-// Set a project item's single-select Status field to the given option id.
+/** Set a card's Status and require the provider to confirm the requested card. */
 async function gqlSetStatus(
   projectId: string,
   itemId: string,
@@ -6458,7 +6458,10 @@ async function gqlSetStatus(
   token: string | undefined,
 ): Promise<void> {
   const q = `mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){ updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){ projectV2Item{ id } } }`;
-  await githubGraphQL<GraphqlSetStatusData>(token, q, { p: projectId, i: itemId, f: fieldId, o: optionId });
+  const data = await githubGraphQL<GraphqlSetStatusData>(token, q, { p: projectId, i: itemId, f: fieldId, o: optionId });
+  if (data.updateProjectV2ItemFieldValue?.projectV2Item?.id !== itemId) {
+    throw new CommandError("GitHub did not confirm the Projects status update for the requested card.");
+  }
 }
 
 /**
@@ -6762,7 +6765,7 @@ async function runProjectImport(ctx: CommandHandlerContext) {
       }
       if (closeAfterUpdate) {
         try { await withGithubItemConsistency(ctx.pm_root, id, binding.owners, () => client.close(id, closeReason), check); }
-        catch (error) { console.error(`  ${entry.title}: close failed — ${errorMessage(error)}`); skipped++; continue; }
+        catch (error) { console.error(`  ${entry.title}: close failed${needsUpdate ? " after tracker update" : ""} — ${errorMessage(error)}`); skipped++; continue; }
       }
       updated++;
       continue;
@@ -6790,7 +6793,7 @@ async function runProjectImport(ctx: CommandHandlerContext) {
     } catch (error) { console.error(`  ${entry.title}: create failed — ${errorMessage(error)}`); skipped++; continue; }
     if (mustClose) {
       try { await withGithubItemConsistency(ctx.pm_root, createdId, binding.owners, () => client.close(createdId, closeReason), check); }
-      catch (error) { console.error(`  ${entry.title}: close failed — ${errorMessage(error)}`); skipped++; continue; }
+      catch (error) { console.error(`  ${entry.title}: close failed after creating tracker item ${createdId} — ${errorMessage(error)}`); skipped++; continue; }
     }
     imported++;
   }
@@ -6877,14 +6880,19 @@ export async function applyPushEntry(
         const proposed = entry.itemId ? item : { ...item, tags: [...toImportTags(item.tags), tag] };
         assertProjectWriteBinding(attachedScope, itemId, proposed, peers);
       };
+      let statusFailure: string | undefined;
       if (entry.targetOptionId && meta.statusField) {
         if (!entry.itemId) {
           try {
             const attached = readTarget(false);
             check(attached.current, attached.corpus);
-          } catch (error) { return { changed: true, error: `linked but tag write failed — ${errorMessage(error)}` }; }
+          } catch (error) { return { changed: true, error: `card attached; status and tracker tag skipped — ${errorMessage(error)}` }; }
         }
-        await gqlSetStatus(meta.id, itemId!, meta.statusField.id, entry.targetOptionId, token);
+        try { await gqlSetStatus(meta.id, itemId!, meta.statusField.id, entry.targetOptionId, token); }
+        catch (error) {
+          if (entry.itemId) throw error;
+          statusFailure = `card attached but status was not confirmed — ${errorMessage(error)}`;
+        }
       }
       try {
         const attached = readTarget(false);
@@ -6896,9 +6904,10 @@ export async function applyPushEntry(
             }), check);
         }
       } catch (error) {
-        return { changed: true, error: `linked but tag write failed — ${errorMessage(error)}` };
+        const tagFailure = `linked but tag write failed — ${errorMessage(error)}`;
+        return { changed: true, error: [statusFailure, tagFailure].filter(Boolean).join("; ") };
       }
-      return { changed: true };
+      return statusFailure ? { changed: true, error: statusFailure } : { changed: true };
     });
   } catch (err: unknown) {
     return { changed: false, error: errorMessage(err) };
@@ -7117,7 +7126,7 @@ async function runProjectSync(ctx: CommandHandlerContext) {
   );
   const result = { project: `${ref.owner}/${ref.number}`, pushed, pushFailed, pulled, pullFailed, prefer };
   if (pushFailed + pullFailed > 0 && pushed + pulled === 0) {
-    throw new CommandError(`Sync wrote nothing; ${pushFailed + pullFailed} operation(s) failed.`);
+    throw new CommandError(`Sync confirmed no completed operations; ${pushFailed + pullFailed} operation(s) failed.`);
   }
   return result;
 }
@@ -7819,7 +7828,7 @@ export default defineExtension({
       failure_hints: [
         "Set GITHUB_TOKEN/GH_TOKEN or run `gh auth login`; blockers reads live GitHub state.",
         "Pass --repo owner/repo so bare `#N`, `GH-N`, and `name#N` references resolve; imported items resolve against their own provenance repo.",
-        "Exit code 4 means at least one blocked item has a cleared or partially cleared blocker; nothing was changed — revalidate the item by hand.",
+        "Exit code 4 means at least one blocked item has a cleared or partially cleared blocker. Review the report, including any annotations added with --comment, and revalidate the item by hand.",
         "--comment never unblocks: it only appends one idempotent comment per cleared item.",
         "Use --ids <pm-1,pm-2> to scope revalidation; unknown IDs fail fast.",
       ],

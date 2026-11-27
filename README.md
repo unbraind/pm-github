@@ -479,8 +479,9 @@ repository. It selects explicit import identities, including `github_url`
 links (also `github_repo` with `github_number`), fetches those numbers in GraphQL
 batches of at most 100, and **never creates items**. Only `/issues/N` URLs are
 refreshable links: the batch query reads issue nodes, so a `/pull/N` URL is not
-selected. Ordinary references in text
-are not links. Conflicting identities or multiple owners fail before any write.
+selected. Ordinary references in text do not select a target. Selection rejects
+conflicting identities or multiple owners, and the writer rechecks ownership
+before applying the selected change.
 
 ```sh
 pm github refresh owner/repo --dry-run --json
@@ -784,10 +785,10 @@ Import board items, including draft issues, into pm. An existing link reuses the
 same item. Preview and apply skip matching content and mapped status, and an
 already-closed item keeps its closure and history on repeat.
 Project import and sync require one-to-one links between board cards and tracker
-items. Both preview and apply stop before writes when links are ambiguous.
+items. Ambiguity during planning stops preview and apply before writes.
 Native writes recheck the planned card against the current tracker links.
 If another item claims the card or the link moves after planning, the affected
-mutation stops and a fresh plan is required.
+mutation stops and a fresh plan is required. Completed actions remain in place.
 An existing description that declares the item's verified issue or pull request
 is preserved. The Projects tag records the board-card link.
 
@@ -800,6 +801,10 @@ pm github project import unbraind/5 --status-map in_progress=Doing,closed=Shippe
 ### `pm github project sync <owner/number>`
 
 Bidirectionally sync pm items and a board. **Safe by default**: with no `--apply` it previews *both* directions and writes nothing.
+
+If attachment succeeds but a later status or tracker-tag step fails, the sync
+reports the attachment and the failed step. A status failure still records the
+board link when it passes the ownership check, so the retry can use the same card.
 
 - `--push` (pm → board): adds missing pm items to the board — attaching the existing GitHub issue when the pm item is issue-linked, otherwise creating a draft issue — and sets each item's **Status** from its pm status.
 - `--pull` (board → pm): updates each linked pm item's status from the board's Status column (status only — never touches title/body/tags).
@@ -890,7 +895,8 @@ With `--json`, successful reports go to stdout; failures use the host CLI's JSON
 A gated preview reports a `source_snapshot` in JSON and TOON. Pass it to
 `--expect-source` with the same import selection and comment options to verify
 the selected issue data, comments, and closure evidence before any tracker
-write. If the source changes, the import exits with `github_import_source_drift`.
+write. If the source changes or an explicitly selected issue is no longer
+available, the import exits with `github_import_source_drift`.
 Take a fresh gated preview to retry. Finish any pending transaction using its
 original options before starting a new snapshot-bound import.
 

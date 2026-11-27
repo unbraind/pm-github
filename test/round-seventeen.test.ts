@@ -479,6 +479,7 @@ test("nested revision guards share only equivalent scopes and preserve unexpecte
 test("closeout isolates typed ownership conflicts and propagates unrelated parser failures", async () => tracker(async root => {
   const item = await native(root), before = bytes(root, item);
   const conflict = new GithubIdentityConflictError(item.id, ["o/r#7", "other/project#8"]);
+  assert.doesNotMatch(conflict.message, /no item was written/i);
   const declared = { ...item };
   Object.defineProperty(declared, "github_url", { enumerable: true, configurable: true, get: () => { throw conflict; } });
   assert.equal(closeoutOwnershipConflict(declared as Parameters<typeof closeoutOwnershipConflict>[0], repo, []), conflict);

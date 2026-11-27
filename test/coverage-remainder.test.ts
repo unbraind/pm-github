@@ -778,9 +778,10 @@ test("Projects import fails closed at each local mutation boundary", async () =>
     assert.equal(created.status, 0, created.stderr);
     for (const fixture of [
       { id: "linked", fail: "update", diagnostic: /update failed/ },
-      { id: "linked", fail: "close", diagnostic: /close failed/ },
+      { id: "linked", fail: "close", diagnostic: /close failed after tracker update/ },
+      { id: "linked", fail: "close", diagnostic: /close failed —/ },
       { id: "new", fail: "create", diagnostic: /create failed/ },
-      { id: "new", fail: "close", diagnostic: /close failed/ },
+      { id: "new", fail: "close", diagnostic: /close failed after creating tracker item/ },
     ]) {
       await withEnv({ GITHUB_TOKEN: "fixture-token", GH_TOKEN: undefined }, () => withMockGithub((_req, res, body) => {
         const query = (JSON.parse(body) as { query: string }).query;

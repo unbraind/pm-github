@@ -612,9 +612,15 @@ test("--comment appends one idempotent comment per cleared item and --dry-run wr
       const before = await readComments(id, {}, { pmRoot: root });
       assert.equal(before.comments.length, 0);
       // The real run appends exactly one comment.
-      assert.equal((await runBlockers(root, { comment: true })).exit_code, 4);
+      const applied = await runBlockers(root, { comment: true });
+      assert.equal(applied.exit_code, 4);
+      assert.equal(applied.comment?.added, 1);
       const after = await readComments(id, {}, { pmRoot: root });
       assert.equal(after.comments.length, 1);
+      const contract = (await harness).assertCommandContract({ name: "github blockers" });
+      const hint = contract.command.failure_hints?.find(text => text.includes("Exit code 4"));
+      assert.match(hint ?? "", /annotations added with --comment/i);
+      assert.doesNotMatch(hint ?? "", /nothing was changed/i);
       assert.equal(after.comments[0]?.author, "pm-github");
       assert.match(after.comments[0]?.text ?? "", /Blocker unbraind\/pm-cli#854 closed on 2026-08-01; revalidate\./);
       assert.match(after.comments[0]?.text ?? "", /<!-- pm-github:blockers:unbraind\/pm-cli#854:closed:2026-08-01T15:24:48Z -->/);

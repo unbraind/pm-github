@@ -147,8 +147,51 @@ for (const race of ["attachment", "status"] as const) test(`Projects push preser
     const result = await applyPushEntry(plan, meta, ref, new Map([[item.id!, item]]), root, "fixture", []);
     assert.equal(result.changed, true, "the attachment has already succeeded");
     assert.match(result.error!, /claim the same project card/);
+    assert.doesNotMatch(result.error!, /no (?:project or tracker )?item was written|wrote nothing/i);
     assert.equal(server.requests.length, race === "attachment" ? 1 : 2);
     assert.deepEqual(bytes(root, item), before);
+  });
+}));
+
+for (const [existing, responseKind, duringStatus] of [
+  [true, "error"], [false, "error"], [false, "missing"], [false, "missing-item"], [false, "different"], [false, "error", "competing"],
+] as const) test(`Projects push reports only confirmed effects when status fails (${existing ? "existing" : "new"} card, ${responseKind}, ${duringStatus ?? "uncontested"})`, async () => tracker(async root => {
+  const tag = projectItemTag(ref, "DRAFT_NODE");
+  const board: ProjectItem[] = existing
+    ? [{ id: "DRAFT_NODE", statusName: "In Progress", content: { typename: "DraftIssue", title: "Draft" } }]
+    : [];
+  const item = await native(root, existing ? { tags: [tag] } : {});
+  const plan = buildProjectPushPlan([item], ref, board, meta.statusField).entries[0]!;
+  const peer = duringStatus ? await native(root) : undefined;
+  const before = bytes(root, item);
+  await withMockGithub(async (_request, response, body) => {
+    const { query } = JSON.parse(body);
+    const statusReceipt = {
+      error: { errors: [{ message: "Board status write was refused" }] },
+      missing: { data: { updateProjectV2ItemFieldValue: null } },
+      "missing-item": { data: { updateProjectV2ItemFieldValue: {} } },
+      different: { data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: "OTHER_NODE" } } } },
+    }[responseKind];
+    const attachment = query.includes("addProjectV2DraftIssue");
+    if (!attachment && peer) await change(root, peer.id!, { tags: [tag] });
+    jsonResponse(response, 200, attachment
+      ? { data: { addProjectV2DraftIssue: { projectItem: { id: "DRAFT_NODE" } } } }
+      : statusReceipt);
+  }, async server => {
+    const result = await applyPushEntry(plan, meta, ref, new Map([[item.id!, item]]), root, "fixture", board);
+    assert.equal(result.changed, !existing);
+    assert.match(result.error!, responseKind === "error" ? /Board status write was refused/ : /did not confirm.*requested card/);
+    if (!existing) assert.match(result.error!, /card attached.*status.*not confirmed/i);
+    assert.equal(server.requests.length, existing ? 1 : 2);
+    if (peer) assert.match(result.error!, /linked but tag write failed.*claim the same project card/);
+    if (existing || peer) assert.deepEqual(bytes(root, item), before);
+    else {
+      const stored = (await listAllComplete({}, { pmRoot: root })).items.find(candidate => candidate.id === item.id)!;
+      assert.ok(stored.tags.includes(tag), "retain the confirmed attachment for a safe retry");
+      const retry = buildProjectPushPlan([stored], ref, [{ id: "DRAFT_NODE", statusName: "In Progress",
+        content: { typename: "DraftIssue", title: "Draft" } }], meta.statusField).entries[0]!;
+      assert.equal(retry.action, "set-status", "retry addresses the existing card");
+    }
   });
 }));
 

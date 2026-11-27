@@ -22,8 +22,9 @@ both published versions 2026.11.25 and 2026.11.26. The compact SDK read hid a
 long comment's trailing GitHub ID, which caused an extra `comment_add` history
 row and advanced `updated_at`. The merged fix in [#288](https://github.com/unbraind/pm-github/pull/288)
 reads the full stored comment. The workflow also passes the gated preview's
-`source_snapshot` to both apply and repeat. If the provider evidence changes,
-the run reports source drift and stops before publication. Start a new run
+`source_snapshot` to both apply and repeat. If the provider evidence changes
+or an explicitly selected issue disappears, the run reports source drift and
+stops before publication. Start a new run
 from a fresh preview. A stable source still has to pass the item and history
 diff checks and the privacy scan.
 

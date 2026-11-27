@@ -14,7 +14,7 @@ import { withReservedIdRepair } from "../import-repair.ts";
 import { readWorkflowFailure } from "../workflow-diagnostic.ts";
 import { projectItemTag } from "../projects.ts";
 import { boundedCli } from "./helpers/bounded-cli.ts";
-import { jsonResponse, withMockGithub } from "./helpers/mock-github-server.ts";
+import { captureStderr, jsonResponse, withMockGithub } from "./helpers/mock-github-server.ts";
 import { decode } from "@toon-format/toon";
 import { parse } from "yaml";
 
@@ -347,6 +347,50 @@ test("legacy TOON import reports annotation-only writes and accepts the same sou
   });
 });
 
+test("snapshot-bound selected issues distinguish missing or excluded source from unreadable source in JSON and TOON", async t => {
+  const tracker = await fixture(t, false);
+  assert.equal((await tracker.invoke(["update", id, "--field", `github_url=${issue.html_url}`])).code, 0);
+  const selectedPr = { ...issue, number: 8, html_url: `https://github.com/${repo}/pull/8`, comments: 0, pull_request: {} };
+  const selectedIssue = { ...issue, comments: 0 };
+  let issueStatus = 200;
+  await withMockGithub((request, response) => {
+    if (request.url?.endsWith("/issues/7")) jsonResponse(response, issueStatus, issueStatus === 200 ? selectedIssue : {});
+    else if (request.url?.endsWith("/issues/8")) jsonResponse(response, 200, selectedPr);
+    else jsonResponse(response, 200, []);
+  }, async server => {
+    const before = tracker.snapshot();
+    const histories = readdirSync(join(tracker.pmRoot, "history")).sort();
+    for (const format of ["json", "toon"] as const) {
+      const command = format === "json" ? ["github", "import", repo] : ["gh-issues", "import", repo, "--atomic"];
+      const args = [...command, "--output-format", format, "--issue", format === "json" ? "7" : "8,7"];
+      const preview = await tracker.invoke([...args, "--include-prs", "--gate", "--dry-run"], server.baseUrl);
+      assert.equal(preview.code, 0, preview.stderr);
+      const snapshot = ((format === "json" ? JSON.parse(preview.stdout) : decode(preview.stdout)) as { source_snapshot: string }).source_snapshot;
+      assert.match(snapshot, /^[a-f0-9]{64}$/);
+      issueStatus = 404;
+      const bound = await tracker.invoke([...args, "--include-prs", "--expect-source", snapshot], server.baseUrl);
+      assert.notEqual(bound.code, 0);
+      assert.match(bound.stderr, format === "json" ? /github_import_source_drift/ : /GitHub import source drift/i);
+      const ordinary = await tracker.invoke([...args, "--include-prs"], server.baseUrl);
+      assert.notEqual(ordinary.code, 0);
+      assert.match(ordinary.stderr, /not found \(HTTP 404\)/);
+      issueStatus = 403;
+      const denied = await tracker.invoke([...args, "--include-prs", "--expect-source", snapshot], server.baseUrl);
+      assert.notEqual(denied.code, 0);
+      assert.match(denied.stderr, /HTTP 403/);
+      assert.doesNotMatch(denied.stderr, /source drift|source_drift/i);
+      issueStatus = 200;
+      if (format === "toon") {
+        const excluded = await tracker.invoke([...args, "--expect-source", snapshot], server.baseUrl);
+        assert.notEqual(excluded.code, 0);
+        assert.match(excluded.stderr, /GitHub import source drift/i);
+      }
+      assert.deepEqual(tracker.snapshot(), before);
+      assert.deepEqual(readdirSync(join(tracker.pmRoot, "history")).sort(), histories);
+    }
+  });
+});
+
 test("gated import and the legacy alias report an executable, tracker-scoped reserved-ID repair in JSON and TOON", async t => {
   const tracker = await fixture(t);
   const decoy = await decoyTracker(t, id);
@@ -489,7 +533,10 @@ test("invalid source comment timestamps are refused, never stored, and stay retr
     { ...remoteComment, id: 67, created_at: "2/31/2026", body: "Ambiguous rolled date." },
   ] satisfies GhComment[];
   const batch = [remoteComment, { ...remoteComment, id: 68, created_at: "2028-02-29T00:00:00Z", body: "A real leap day." }, ...malformed];
-  assert.deepEqual(await syncGithubCommentsToAnnotations(id, batch, tracker.pmRoot, 7), { added: 2, skipped: 0, failed: 7 });
+  const first = await captureStderr(() => syncGithubCommentsToAnnotations(id, batch, tracker.pmRoot, 7));
+  assert.deepEqual(first.result, { added: 2, skipped: 0, failed: 7 });
+  assert.match(first.stderr.join("\n"), /invalid source timestamp and was refused/);
+  assert.doesNotMatch(first.stderr.join("\n"), /nothing was written/i);
   const rows = await storedComments(tracker.itemPath);
   assert.equal(rows.length, 2, "only the comments with real calendar timestamps may be stored");
   assert.equal(rows[0]!.created_at, remoteComment.created_at);

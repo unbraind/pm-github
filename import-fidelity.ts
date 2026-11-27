@@ -288,7 +288,7 @@ export class GithubIdentityConflictError extends Error {
   readonly remedy = "Correct the explicit GitHub provenance to name one issue. Plain gh: tags are unrestricted references and never claims.";
   /** Name both normalized identities and retain the correction instruction. */
   constructor(id: string | undefined, identities: readonly string[]) {
-    super(`GitHub identity conflict for ${id ?? "<unknown>"}: ${identities.join(" versus ")}. Correct the explicit GitHub provenance to name one issue. Plain gh: tags are unrestricted references and never claims. No item was written.`);
+    super(`GitHub identity conflict for ${id ?? "<unknown>"}: ${identities.join(" versus ")}. Correct the explicit GitHub provenance to name one issue. Plain gh: tags are unrestricted references and never claims.`);
     this.identities = identities;
   }
 }

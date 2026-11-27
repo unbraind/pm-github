@@ -333,9 +333,9 @@ export function mapOptionNameToPmStatus(
 // Indexing helpers
 // ---------------------------------------------------------------------------
 
-/** Refuse ambiguous links before a planner can choose an order-dependent writer. */
+/** Describe the association conflict without inferring effects of earlier mutations. */
 function projectLinkConflict(reason: string): PmCliError {
-  return new PmCliError(`${reason} Resolve the conflicting GitHub Projects links and retry. No project or tracker item was written.`,
+  return new PmCliError(`${reason} Resolve the conflicting GitHub Projects links and retry.`,
     EXIT_CODE.USAGE, { code: "github_project_link_conflict" });
 }
 
