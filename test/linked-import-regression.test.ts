@@ -12,6 +12,7 @@ import { assertGithubImportOwner, GithubImportOwnershipError } from "../import-o
 import { withGithubInvocationScope } from "../workspace.ts";
 import { withReservedIdRepair } from "../import-repair.ts";
 import { readWorkflowFailure } from "../workflow-diagnostic.ts";
+import { projectItemTag } from "../projects.ts";
 import { boundedCli } from "./helpers/bounded-cli.ts";
 import { jsonResponse, withMockGithub } from "./helpers/mock-github-server.ts";
 import { decode } from "@toon-format/toon";
@@ -37,19 +38,21 @@ const repairCommand = (root: string) => renderPmCommand([...repairArgs(root)]);
 const localNotes = Array.from({ length: 17 }, (_, index) => `Local note ${index}. ${"Current work. ".repeat(95)}`);
 
 /** Make a curated item with native history, plus a built project extension for CLI calls. */
-async function fixture(t: TestContext, git = true) {
+async function fixture(t: TestContext, git = true, candidate = true) {
   const directory = mkdtempSync(join(tmpdir(), "pm-github-linked-import-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const pmRoot = join(directory, ".agents", "pm");
   if (git) assert.equal(spawnSync("git", ["init", "-q"], { cwd: directory }).status, 0);
   const client = { pmRoot, cwd: directory, author: "fixture", noExtensions: true };
   await init("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, client);
-  const extension = join(pmRoot, "extensions", "pm-github");
-  mkdirSync(extension, { recursive: true });
-  for (const file of ["dist", "manifest.json", "package.json"]) {
-    cpSync(join(packageRoot, file), join(extension, file), { recursive: true });
+  if (candidate) {
+    const extension = join(pmRoot, "extensions", "pm-github");
+    mkdirSync(extension, { recursive: true });
+    for (const file of ["dist", "manifest.json", "package.json"]) {
+      cpSync(join(packageRoot, file), join(extension, file), { recursive: true });
+    }
+    symlinkSync(join(packageRoot, "node_modules"), join(extension, "node_modules"), "junction");
   }
-  symlinkSync(join(packageRoot, "node_modules"), join(extension, "node_modules"), "junction");
   await create({ id, type: "Task", title: "Curated title", description: "Curated description.",
     body: "Curated body.", author: "fixture", tags: `gh:${repo}#7` }, client);
   const itemPath = getItemPath(pmRoot, "task", id);
@@ -199,6 +202,85 @@ test("reusable sync binds apply and repeat to the preview source and preserves a
     assert.deepEqual(durable(), afterApply);
     const diff = spawnSync("git", ["diff", "--exit-code", "--", ".agents/pm/issues", ".agents/pm/tasks", ".agents/pm/history"], { cwd: tracker.directory });
     assert.equal(diff.status, 0);
+  });
+});
+
+test("reusable sync diagnoses an incompatible published hold and rejects malformed snapshot receipts", async t => {
+  const tracker = await fixture(t, false, false);
+  const version = "2026.11.26";
+  const environment: NodeJS.ProcessEnv = { ...tracker.environment, NPM_CONFIG_USERCONFIG: "/dev/null" };
+  for (const key of ["NPM_TOKEN", "NODE_AUTH_TOKEN", "NPM_MEDIA_SERVER"]) delete environment[key];
+  const installed = await boundedCli(process.execPath, [cli, "--path", tracker.pmRoot, "package", "install",
+    `npm:pm-github@${version}`, "--project"], tracker.directory, environment, 90_000);
+  assert.equal(installed.code, 0, installed.stderr);
+  const manifest = JSON.parse(readFileSync(join(tracker.pmRoot, "extensions", "pm-github", "package.json"), "utf8"));
+  assert.equal(manifest.version, version);
+  const linked = await tracker.invoke(["update", id, "--field", `github_url=${issue.html_url}`]);
+  assert.equal(linked.code, 0, linked.stderr);
+  const runner = join(tracker.directory, "runner");
+  mkdirSync(runner);
+  writeFileSync(join(runner, "pm-github-sync-scope.sh"), "report_workflow_failure() { printf 'Preview command failed\\n'; }\n");
+  const workflow = parse(readFileSync(join(packageRoot, ".github/workflows/pm-github-sync.yml"), "utf8")) as
+    { jobs: { "gated-sync": { steps: Array<{ name: string; run?: string }> } } };
+  const script = workflow.jobs["gated-sync"].steps.find(step => step.name === "Preview GitHub to pm plan")!.run!;
+  const before = tracker.snapshot();
+  await source(async base => {
+    const outcome = await boundedCli("bash", ["-c", script], tracker.directory, { ...environment,
+      PM_GITHUB_API_BASE: base, PM_GITHUB_VERSION: version, REPOSITORY: repo, RUNNER_TEMP: runner,
+      PATH: join(packageRoot, "node_modules/.bin") + delimiter + process.env.PATH });
+    assert.equal(outcome.code, 1, outcome.stdout + outcome.stderr);
+    assert.match(outcome.stdout, /pm-github 2026\.11\.26.*valid source_snapshot.*Remove the pm-github-version hold.*--expect-source.*No branch was published/);
+    const report = JSON.parse(readFileSync(join(runner, "pm-github-import.json"), "utf8"));
+    assert.equal(report.source_snapshot, undefined);
+    assert.deepEqual(tracker.snapshot(), before);
+  });
+
+  const valid = JSON.stringify({ source_snapshot: "a".repeat(64) });
+  const invalid = ["{}", JSON.stringify({ source_snapshot: 7 }), JSON.stringify({ source_snapshot: "a".repeat(64) + "\n" }), valid + "\n{}"];
+  const shim = 'pm() { printf "%s\\n" "${FIXTURE_PREVIEW}"; }\n';
+  for (const preview of [...invalid, valid]) {
+    const outcome = await boundedCli("bash", ["-c", shim + script], tracker.directory, { ...environment,
+      FIXTURE_PREVIEW: preview, PM_GITHUB_VERSION: version, REPOSITORY: repo, RUNNER_TEMP: runner });
+    assert.equal(outcome.code, preview === valid ? 0 : 1, outcome.stdout + outcome.stderr);
+    assert.equal(readFileSync(join(runner, "pm-github-source-snapshot"), "utf8"), preview === valid ? "a".repeat(64) + "\n" : "");
+  }
+});
+
+test("sync pin guides explain the snapshot requirement and how old holds recover", () => {
+  const readme = readFileSync(join(packageRoot, "README.md"), "utf8").split("## Self-versioned workflows and Dependabot")[1]!.split("\n## ")[0]!;
+  for (const doc of [readme, ...["docs/daily-sync-recovery.md", "docs/workflow-version-callers.md"].map(file => readFileSync(join(packageRoot, file), "utf8"))]) {
+    assert.match(doc, /source_snapshot/);
+    assert.match(doc, /--expect-source|snapshot support/);
+    assert.match(doc, /2026\.11\.26/);
+    assert.match(doc, /remove (?:the old |the )?.{0,35}hold/i);
+  }
+});
+
+test("Projects CLI reports ambiguous links in JSON and TOON without writes in a non-git tracker", async t => {
+  const tracker = await fixture(t, false);
+  const ref = { owner: "fixture", number: 5 };
+  const tags = ["first", "second"].map(card => projectItemTag(ref, card));
+  const linked = await tracker.invoke(["update", id, "--add-tags", tags.join(",")]);
+  assert.equal(linked.code, 0, linked.stderr);
+  const before = tracker.snapshot();
+  await withMockGithub((request, response, body) => {
+    assert.equal(request.url, "/graphql");
+    const { query } = JSON.parse(body);
+    if (query.includes("projectV2(number:")) {
+      jsonResponse(response, 200, { data: { organization: { projectV2: { id: "board", title: "Fixture board" } } } });
+    } else {
+      assert.match(query, /items\(first:/);
+      const nodes = ["first", "second"].map(card => ({ id: card, content: { __typename: "DraftIssue", title: card } }));
+      jsonResponse(response, 200, { data: { node: { items: { nodes, pageInfo: { hasNextPage: false } } } } });
+    }
+  }, async server => {
+    for (const format of ["json", "toon"]) {
+      const result = await tracker.invoke(["github", "project", "import", "fixture/5", "--output-format", format], server.baseUrl);
+      assert.equal(result.code, 2, result.stdout + result.stderr);
+      if (format === "json") assert.match(result.stdout + result.stderr, /github_project_link_conflict/);
+      assert.match(result.stdout + result.stderr, /Multiple project cards claim the same tracker item/);
+      assert.deepEqual(tracker.snapshot(), before);
+    }
   });
 });
 

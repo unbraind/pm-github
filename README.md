@@ -783,6 +783,8 @@ pm github project fields unbraind/5
 Import board items, including draft issues, into pm. An existing link reuses the
 same item. Preview and apply skip matching content and mapped status, and an
 already-closed item keeps its closure and history on repeat.
+Project import and sync require one-to-one links between board cards and tracker
+items. Both preview and apply stop before writes when links are ambiguous.
 
 ```bash
 pm github project import unbraind/5 --dry-run
@@ -1040,9 +1042,14 @@ explicit hold. Pin the workflow
 release SHA and keep its same-line release tag comment for Dependabot. With the
 input omitted, a workflow pin update also updates the installed extension,
 including the curated import identity fix released in `2026.11.14`.
-An explicit exact version remains a deliberate hold: a differing value is
-honored and emits `::warning::` naming both the workflow and extension versions.
-Both values are validated and normalized before comparison or diagnostic output.
+An explicit exact version selects the extension to install. A differing value
+emits `::warning::` naming both the workflow and extension versions. The sync
+workflow requires the selected extension to return `source_snapshot` from gated
+preview and accept `--expect-source` on apply and repeat. A hold such as
+`2026.11.26` lacks that support and stops at preview before the import writes
+items or history. Pin a published workflow release with snapshot support and
+remove the hold, or explicitly hold a compatible published extension. Both
+versions are validated and normalized before comparison or diagnostic output.
 No `latest`, range, or floating install tag is accepted.
 
 Before checkout/setup can write any tracker data, the resolver verifies the
@@ -1051,8 +1058,9 @@ selected extension using the public exact-version npm registry endpoint
 A missing release, network error, or invalid response stops the job before
 tracker writes. Installation still verifies the installed version independently.
 An untagged development commit uses its own manifest version and therefore
-requires that exact version to be published; an explicit published hold may
-be used for development. See [the caller inventory](docs/workflow-version-callers.md)
+requires that exact version to be published. Development runs can select an
+explicit published hold that supports the workflow's required features. See
+[the caller inventory](docs/workflow-version-callers.md)
 for the follow-up migration sweep; this change does not edit callers.
 
 GitHub documents [reusable-workflow updates](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/auto-update-actions)
@@ -1295,6 +1303,9 @@ After validation succeeds, a run with no tracker changes skips the caller change
 The workflow passes the preview's source snapshot to both the apply and the
 repeat import. Source drift stops the run before publication. The repeat must
 still pass the tracked and untracked diff checks and the privacy scan.
+An extension that cannot provide the snapshot stops at preview. See
+[workflow and extension version pins](#self-versioned-workflows-and-dependabot)
+for how to update an older hold.
 
 Before extension and attributes setup, both reusable maintenance workflows require `.gitattributes` and the tracker’s `extensions/.managed-extensions.json` to match the checkout, including the index and ignored untracked files. Immediately after setup they save the runtime artifacts outside the checkout, then restore original tracked bytes or remove setup-created files before any privacy or publication scan. Strict health temporarily uses the saved runtime files after checking that both paths still match the baseline; an exit trap restores the baseline even when health fails. No caller script runs inside either setup window. Preexisting edits and later caller edits to either artifact fail closed and remain untouched, including ignored files.
 
@@ -1310,6 +1321,7 @@ Optional inputs:
 
 | Input | Default | Behavior |
 | --- | --- | --- |
+| `pm-github-version` | workflow release version | Deprecated exact extension hold. The selected release must supply `source_snapshot` at gated preview and accept `--expect-source` on apply and repeat. |
 | `adopt-cited` | `false` | Explicitly enable conservative normalized citation adoption for preview, import and repeat verification. Use `github_url` to link an owner explicitly. Leave false to retain normal creates with read-only candidate hints. |
 | `npm-project-dir` | `.` | Relative npm project directory for `npm ci --ignore-scripts`, the CLI `node_modules/.bin` PATH entry, and `post-import-script`. Must have `package.json`, contain no `..` segments, and resolve inside the workspace (including symlinks); invalid paths fail before caching/install. The tracker and publication scope stay at the repository root. |
 | `post-import-script` | `changelog:full` | Caller npm script name invoked after import and before the final scan. With no generated paths, missing scripts are skipped and `""` disables the hook. Raw shell commands are not accepted. When tracker changes are ready to publish, the workflow runs the same project's `changelog:check` if present. |

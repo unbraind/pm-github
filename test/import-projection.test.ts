@@ -10,6 +10,7 @@ import { decode } from "@toon-format/toon";
 import { normalizeItemId, certifyCompleteListResult, create, get, getHistoryPath, listAllComplete, mutateItem, parseTags, toImportTags, decodePmTableRows, readHistoryEntries, verifyHistoryEntries, type PmTableCellEncoding, type PmEncodedTableRows, readSettings, schemaAddStatus, schemaAddType } from "@unbrained/pm-cli/sdk";
 import { deriveAtomicItemId, decodeCompletePmItems, parseImportOptions, runImport, githubLabelsToTags, planGithubLabelMigration, type GhIssue } from "../index.ts";
 import { normalizeImportValue, readImportTypeNames, serializeImportTags } from "../import-fidelity.ts";
+import { projectItemTag } from "../projects.ts";
 import { boundedCli } from "./helpers/bounded-cli.ts";
 import { withPackedFixture } from "./helpers/packed-fixture.ts";
 import { jsonResponse, withMockGithub } from "./helpers/mock-github-server.ts";
@@ -276,6 +277,29 @@ test("packed npm and native Bun consumers preserve mixed-import bytes in JSON an
       assert.equal(problem.code, "github_import_owner_conflict");
       assert.match(problem.detail, /fixture\/project#2.*other\/project#8/);
       assert.equal(durable(pmRoot), relinked, "The actual packed CLI must preserve the relinked item and its history");
+    });
+    const tags = ["first", "second"].map(card => projectItemTag({ owner: "fixture", number: 5 }, card));
+    await create({ title: "Two board links", type: "Task", tags: tags.join(",") }, { pmRoot, noExtensions: true });
+    const beforeProjects = durable(pmRoot);
+    await withMockGithub((_request, response, body) => {
+      const { query } = JSON.parse(body);
+      if (query.includes("projectV2(number:")) {
+        jsonResponse(response, 200, { data: { organization: { projectV2: { id: "board", title: "Packed fixture board" } } } });
+      } else {
+        assert.match(query, /items\(first:/);
+        const nodes = ["first", "second"].map(card => ({ id: card, content: { __typename: "DraftIssue", title: card } }));
+        jsonResponse(response, 200, { data: { node: { items: { nodes, pageInfo: { hasNextPage: false, endCursor: null } } } } });
+      }
+    }, async server => {
+      const args = ["--path", pmRoot, "github", "project", "import", "fixture/5"];
+      const environment = { ...env, PM_GITHUB_API_BASE: server.baseUrl };
+      const npm = await boundedCli("npm", ["exec", "--offline", "--", "pm", ...args, "--json"], root, environment);
+      const bun = await boundedCli("bun", ["--bun", cli, ...args, "--output-format", "toon"], root, environment);
+      assert.equal(npm.code, 2, npm.stderr);
+      assert.equal(bun.code, 2, bun.stderr);
+      assert.match(npm.stdout + npm.stderr, /github_project_link_conflict/);
+      assert.match(bun.stdout + bun.stderr, /Multiple project cards claim the same tracker item/);
+      assert.equal(durable(pmRoot), beforeProjects);
     });
   });
 });

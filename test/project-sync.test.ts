@@ -318,6 +318,40 @@ test("project import records a status-only change and repairs a canceled reason 
   });
 });
 
+test("ambiguous Projects links refuse preview and apply without altering item or history bytes", async t => {
+  const root = tracker(t);
+  const first = draft("First", "In Progress", "doing");
+  const second = draft("Second", "Todo", "todo");
+  const id = create(root, "Linked", [projectItemTag(REF, "First"), projectItemTag(REF, "Second")]);
+  const files = [getItemPath(root, "Task", id), getHistoryPath(root, id)];
+  const before = files.map(file => fs.readFileSync(file, "utf8"));
+  const ext = await harness;
+  const request = { command: "github project import", args: ["acme/5"], pmRoot: root, global: { json: true } };
+  const conflict = { code: "github_project_link_conflict" };
+  await withEnv({ GITHUB_TOKEN: "fixture", GH_TOKEN: undefined }, async () => {
+    for (const cards of [[first, second], [second, first]]) {
+      await withMockGithub(board([draft("Unlinked"), ...cards]), async server => {
+        await assert.rejects(ext.runCommand({ ...request, options: {} }), conflict);
+        await assert.rejects(ext.runCommand({ ...request, options: { "dry-run": true } }), conflict);
+        for (const options of [{ pull: true }, { pull: true, apply: true }, { push: true, apply: true }]) {
+          await assert.rejects(sync(root, options), conflict);
+        }
+        assert.deepEqual(files.map(file => fs.readFileSync(file, "utf8")), before);
+        assert.deepEqual(items(root).map(item => item.id), [id]);
+        assert.equal(server.requests.filter(req => req.body.includes("mutation")).length, 0);
+      });
+    }
+    await withMockGithub(board([first]), async () => {
+      const result = await ext.runCommand({ ...request, options: {} });
+      assert.equal((result.result as { updated: number }).updated, 1);
+      const applied = files.map(file => fs.readFileSync(file, "utf8"));
+      const repeat = await ext.runCommand({ ...request, options: {} });
+      assert.equal((repeat.result as { updated: number }).updated, 0);
+      assert.deepEqual(files.map(file => fs.readFileSync(file, "utf8")), applied);
+    });
+  });
+});
+
 for (const prefer of ["pm", "github"]) {
   test(`project sync resolves simultaneous status conflicts in favor of ${prefer}`, async t => {
     const root = tracker(t);
