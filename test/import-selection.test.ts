@@ -178,6 +178,25 @@ test("a selected PR refuses the entire batch unless --include-prs is set", async
   });
 }));
 
+test("SDK snapshot-bound selection refuses deleted issues and excluded PRs before any tracker write", async () => tracker(async (_root, pmRoot) => {
+  let missing = false;
+  await withMockGithub((request, response, body, base) => {
+    if (missing && request.url?.endsWith("/issues/189")) return jsonResponse(response, 404, { message: "Not Found" });
+    return recorded(request, response, body, base);
+  }, async () => {
+    const flags = { issue: "175,189", "include-prs": true, atomic: true, gate: true };
+    const { result } = await importing(pmRoot, { ...flags, "dry-run": true });
+    assert.equal(result.wouldImport, 2);
+    assert.match(String(result.source_snapshot), /^[a-f0-9]{64}$/);
+    const bound = { ...flags, "expect-source": result.source_snapshot };
+    missing = true;
+    await assert.rejects(() => importing(pmRoot, bound), { code: "github_import_source_drift" });
+    missing = false;
+    await assert.rejects(() => importing(pmRoot, { ...bound, "include-prs": false }), { code: "github_import_source_drift" });
+    assert.deepEqual(readPmItems(pmRoot), []);
+  });
+}));
+
 test("selection composes atomic, gate, comment modes and dependency linking with real SDK writes", async () => tracker(async (_root, pmRoot) => {
   await withMockGithub(recorded, async server => {
     const options = { issue: "189,175", "include-prs": true, "with-comments": true, "comments-mode": "annotations", atomic: true, gate: true, "link-deps": true };

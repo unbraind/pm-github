@@ -7,9 +7,9 @@ status: open
 priority: 2
 tags[2]: "gh:unbraind/pm-github#287","github_author:unbraind"
 created_at: "2026-11-26T10:29:01Z"
-updated_at: "2026-11-27T22:13:00.237Z"
+updated_at: "2026-11-27T22:42:34.533Z"
 author: pm-github
-comments[38]{created_at,author,text}:
+comments[39]{created_at,author,text}:
   "2026-11-27T11:17:01.364Z",codex-agent,Investigating the four hosted repeat-gate failures. The pinned caller reproduction will compare native documents and history across both passes and distinguish the published versions from the later merged comment fix.
   "2026-11-27T11:21:45.811Z",codex-agent,"Reproduced on pm-rl main e11861f with its locked PM CLI 2026.11.24 and pinned pm-github 2026.11.25. A frozen nine-issue REST and closure snapshot produced 17, 18, then 19 native comments for item 202. Both new comment_add rows share provider comment 7140375699. The repeat appended one history row touching comments and updated_at while reporting zero item updates and unchanged. Published 2026.11.26 differs in dist only by its version literal and predates merged #288. Auditing body, lifecycle, annotations, and dependency writes independently."
   "2026-11-27T11:33:28.528Z",codex-agent,"Release comparison confirmed: 2026.11.25 and 2026.11.26 both append comment 7140375699 twice (history 36 → 38 → 39). Merged #288 reads full native annotation text and preserves the original provider timestamp (history 36 → 38 → 38). Existing dependency writes are byte-idempotent on the pinned SDK but their duplicate receipt used to count a link. The workflow now compares a source-only snapshot before writes and still requires both byte-diff checks and the privacy scan. Consumer adoption and independent hosted verification are tracked in issue #297."
@@ -48,6 +48,7 @@ comments[38]{created_at,author,text}:
   "2026-11-27T21:46:17.836Z",codex-agent,"Round 4 behavioral revert proof. In a disposable source copy, removing only the two snapshot-bound selection branches made the real CLI selected-issue regression fail with the ordinary HTTP 404 instead of github_import_source_drift. Restoring only the Projects conflict constructor made both live peer-race cases fail because the result claimed no writes after the provider confirmed the attachment. The starting implementation also failed to report the confirmed attachment after a status error, while the existing-card control passed. Fixed focus was 26/26, including missing and wrong-card GraphQL receipts, overlapping tracker-tag claims, preserved attachment on retry, JSON and TOON on native trackers, and actual npm and Bun packed consumers."
   "2026-11-27T22:02:37.087Z",codex-agent,"The package audit also found a blocker command help hint promising nothing changed for exit 4 even when the native --comment path appended an annotation. The hint now points to actual annotations in the report. The existing real-tracker test checks the registered hint against the actual native write. Refresh documentation now describes ownership refusal at selection and apply, while retaining its existing explanation of earlier recovery commits."
   "2026-11-27T22:12:58.972Z",codex-agent,"Round 4 local verification passed. The pinned PM-linked two-worker run passed 1,952 of 1,952 cases across 74 files, without skips, failures or cancellations. After the blocker help correction, the complete blocker file passed 35 of 35. Restoring only the original blocker hint failed its real annotation-write case because exit 4 had already added an annotation. Focused 26 of 26, compilation, typecheck, lint, all 334 docstrings, configured duplication and ownership inventory also passed. The outside-diff finding is in review 6093501982 and the Projects conflict thread is PRRT_kwDOTbN4pM688I55."
+  "2026-11-27T22:42:31.537Z",codex-agent,"Exact-head CI on 25cbc32 passed 2,262 tests per Node version and CodeQL. Node 26 stopped at 99.95% branch coverage because the packed and built CLI regressions do not register three selected-source branches in the authored module. The same two declines now run through the source SDK entry point against an actual tracker and HTTP transport. The focused SDK case passed and failed when the selected-fetch guards alone were reverted. The production code and gate thresholds remain unchanged."
 files[30]{path,scope}:
   .github/workflows/pm-github-sync.yml,project
   comment-mirror.ts,project
@@ -79,7 +80,7 @@ files[30]{path,scope}:
   test/typed-sentinel-normalization.test.ts,project
   test/workflow-diagnostic-class.test.ts,project
   workflow-diagnostic.ts,project
-tests[12]:
+tests[13]:
   - command: "node --test --test-concurrency=2 --test-name-pattern=\"reusable sync binds|legacy TOON import|linked reserved-ID import repeats|creation-only item type|project import skips|runImport --link-deps writes|interrupted transaction replay\" test/linked-import-regression.test.ts test/daily-sync-idempotency.test.ts test/project-sync.test.ts test/link-deps.test.ts test/repeat-import-noop.test.ts"
     scope: project
     timeout_seconds: 1200
@@ -176,6 +177,14 @@ tests[12]:
     provenance:
       author: codex-agent
       created_at: "2026-11-27T22:02:38.995Z"
+      source_kind: local_mutation
+      source_ref: fix/repeat-import-preserves-updated-at
+  - command: PM_TEST_DEPTH=quick node --test --test-concurrency=2 test/import-selection.test.ts
+    scope: project
+    timeout_seconds: 1800
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-27T22:42:11.124Z"
       source_kind: local_mutation
       source_ref: fix/repeat-import-preserves-updated-at
 docs[4]{path,scope}:
