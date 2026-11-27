@@ -1,8 +1,9 @@
+import { redactWorkflowFailure } from "./workflow-diagnostic.ts";
 import { parseGithubUrl, parseGithubIssueUrl, githubUrlTokens } from "./github-url.ts";
 import { readGithubWorkspace, githubStatusIsTerminal } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
 import { GithubIdentityConflictError, normalizeImportValue } from "./import-fidelity.ts";
-import { buildGithubOwnershipIndex, type GithubOwnershipIndex, withGithubOwnershipLock, assertGithubOwnershipConsistency, githubOwnershipClaims, GithubImportOwnershipError } from "./import-ownership.ts";
+import { buildGithubOwnershipIndex, type GithubOwnershipIndex, withGithubOwnershipLock, assertGithubOwnershipConsistency, githubOwnershipClaims, GithubImportOwnershipError, GithubMutationGuardError, preserveGithubMutationGuardFailure } from "./import-ownership.ts";
 /** Close delivered tracker items using merged pull requests and head-check evidence. */
 import { close, hashDocument, locateItem, readLocatedItem, runWithActiveExtensions, setActiveExtensionHooks, listAllComplete, certifyCompleteListResult, getHistoryPath, readHistoryEntries, verifyHistoryEntries, PmCliError, EXIT_CODE, type ItemDocument } from "@unbrained/pm-cli/sdk";
 
@@ -476,8 +477,9 @@ function closeReason(pr: PullRequest, passed: string[]): string {
     head_sha: pr.head.sha, merged_at: pr.merged_at, checks: passed });
 }
 
-/** Report SDK refusal codes without exposing paths, identities or arbitrary error prose. */
+/** Redact package guard failures and report safe codes for other SDK refusals. */
 export function closeoutFailureReason(error: unknown): string {
+  if (error instanceof GithubMutationGuardError) return redactWorkflowFailure(error.message);
   if (error instanceof PmCliError) {
     const code = error.code;
     if (typeof code === "string" && /^[a-z][a-z0-9_]{0,79}$/.test(code)) {
@@ -754,7 +756,7 @@ async function closeoutAttempt(pmPath: string, repo: string | undefined, options
         // inside the same per-item lock as lifecycle validation, persistence and history.
         await withGithubOwnershipLock(pmRoot, () => runWithActiveExtensions({ path: pmRoot, noExtensions: true }, async () => {
           setActiveExtensionHooks({ beforeCommand: [], afterCommand: [], onRead: [], onWrite: [], onIndex: [],
-            beforeMutation: [{ layer: "project", name: "closeout-revision", run: async context => {
+            beforeMutation: [{ layer: "project", name: "closeout-revision", run: preserveGithubMutationGuardFailure("closeout-revision", async context => {
               await observer?.("locked");
               // SDK close may also auto-unblock dependents. Every resulting write needs its own snapshot.
               const before = context.before!;
@@ -764,7 +766,7 @@ async function closeoutAttempt(pmPath: string, repo: string | undefined, options
                 if (id !== entry.row.item) dependentConflicts.set(id, entry.row.pr);
                 throw new PmCliError("Closeout item revision changed.", 1, { code: "closeout_revision_changed" });
               }
-            } }],
+            }) }],
           });
           await close(entry.row.item, entry.reason, { author: "pm-github", completedAt: entry.at,
             resolution: entry.resolution, expectedResult: entry.expectedResult, actualResult: entry.actualResult,

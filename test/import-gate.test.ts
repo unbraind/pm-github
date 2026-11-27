@@ -693,7 +693,7 @@ test("the caller default branch guard is first and preserves the remaining step 
   assert.deepEqual(steps.map(step => step.split("\n")[0]), [
     "Require caller default branch", "Resolve pm-github release version", "Validate sync inputs", "Checkout caller default branch",
     "Validate npm project directory", "Setup Node.js", "Prepare sync branch from default branch",
-    "Install dependencies", "Resolve sync commit scope", "Require clean setup artifacts", "Install pinned pm-github extension",
+    "Install dependencies", "Check pm CLI host compatibility", "Resolve sync commit scope", "Require clean setup artifacts", "Install pinned pm-github extension",
     "Configure PM merge drivers", "Isolate workflow setup artifacts", "Verify gate is available", "Validate GitHub access",
     "Revalidate GitHub blockers (report only)", "Preview GitHub to pm plan",
     "Gated GitHub to pm import", "Verify repeat import is a no-op", "Run caller post-import script",
