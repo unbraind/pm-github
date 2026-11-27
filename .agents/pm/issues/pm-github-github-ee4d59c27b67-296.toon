@@ -1,0 +1,54 @@
+id: pm-github-github-ee4d59c27b67-296
+title: "Importing an issue that local items already reference by gh: tag creates a second, unlinked record: link them instead of leaving apparent duplicates"
+description: "GH issue #296: https://github.com/unbraind/pm-github/issues/296 · author @unbraind · created 2026-11-27T10:45:14Z · updated 2026-11-27T11:24:24Z"
+type: Issue
+status: open
+priority: 2
+tags[2]: "gh:unbraind/pm-github#296","github_author:unbraind"
+created_at: "2026-11-27T10:45:14Z"
+updated_at: "2026-11-27T23:31:51.443Z"
+author: pm-github
+comments[10]{created_at,author,text}:
+  "2026-11-27T22:25:14.902Z",codex-agent,"Reviewing import ownership, the gated repeat check, and closeout before adding a native related edge from the mirror."
+  "2026-11-27T22:25:29.054Z",codex-agent,"Reproduced on main with a real non-git tracker: a tagged in-progress Chore plus an open GitHub issue creates the mirror and neither item has a dependency. The pinned SDK provides undirected, non-ordering related relationships. Write the source edge on the mirror only so the citing item and its history stay byte-identical."
+  "2026-11-27T22:34:51.655Z",codex-agent,Separate changelog follow-up filed as unbraind/pm-changelog#390 for a single release entry when a mirror and related delivery close in the same release. Verified the pinned host projects the native related edge in full get and deps context. Project-wide context has no association projection or extension section registration.
+  "2026-11-27T22:38:23.809Z",codex-agent,The new edge is written on the mirror via the SDK dep update. The pending replay and refresh paths use the same plan. Verified native deps context and full get. Project context can surface the linking activity; persistent association projection is tracked as pm-github-pasp.
+  "2026-11-27T22:41:31.328Z",codex-agent,"Behavioural revert proof with only the reference planner disabled: 10 distinct assertions failed across first import, multi-citation, closed-mirror backfill, closeout, refresh, original-plan recovery, gated PR text and packed consumers. With only existing-edge recognition disabled, 4 repeat and reverse-edge tests failed. Restored the implementation and rebuilt before running the linked acceptance command."
+  "2026-11-27T22:41:32.698Z",codex-agent,"Linked pm test acceptance passed all 11 tests. Packed npm and native Bun each exercised JSON and TOON preview, apply, repeat and native reads. The closeout fixture closed two cited delivery items while the mirror stayed open."
+  "2026-11-27T22:44:35.955Z",codex-agent,"The shared checkout's whole-object privacy audit found two pre-existing unapproved commit identities. Both objects are absent from this branch ancestry, origin remote-tracking refs and tags. Use a fresh clone of the candidate for the unchanged privacy gate."
+  "2026-11-27T23:07:18.846Z",codex-agent,"Targeted Node run used 73 files and executed 1984 tests. Passed 1982, with the two repository-wide privacy tests affected by unrelated local-only identities. The exact committed candidate is checked in a clean clone. Minimum SDK packed acceptance, identity inventory, build, typecheck, test typecheck and lint passed. Strict tracker health passed with isolated user configuration."
+  "2026-11-27T23:23:14.447Z",codex-agent,Rebased without conflict after pm-github#301 merged at 6229d64. The feature patch was unchanged. Regenerated ownership inventory anchors for the merged workflow and reran the affected workflow and documentation gates.
+  "2026-11-27T23:31:51.442Z",codex-agent,"First pushed head passed Node 22 and CodeQL. Node 26 CI reported uncovered linker branches and lines. Added real SDK tests for a citation changed inside the mutation guard and an unavailable mirror, plus legacy projection cases. Both tests failed in a disposable copy with only those guards disabled and passed through the linked test command after restoration. Coverage thresholds are unchanged. CI evidence: https://github.com/unbraind/pm-github/actions/runs/46080879240"
+files[15]{path,scope}:
+  .github/workflows/pm-github-sync.yml,project
+  closeout.ts,project
+  identity.ts,project
+  import-ownership.ts,project
+  import-references.ts,project
+  index.ts,project
+  refresh.ts,project
+  scripts/identity-inventory.ts,project
+  test/closeout.test.ts,project
+  test/daily-sync-idempotency.test.ts,project
+  test/import-gate.test.ts,project
+  test/import-projection.test.ts,project
+  test/reference-import-identity.test.ts,project
+  test/refresh.test.ts,project
+  test/repeat-import-noop.test.ts,project
+tests[2]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  node --test --test-concurrency=2 --test-name-pattern='one reference-only|two shared references|closed pre-existing|reverse related|closeout accepts tag|refresh previews and backfills|replaying a pending mirror|strict gated sync reports|packed npm and native Bun' test/reference-import-identity.test.ts test/closeout.test.ts test/refresh.test.ts test/repeat-import-noop.test.ts test/import-gate.test.ts test/import-projection.test.ts,project,900,codex-agent,"2026-11-27T22:38:22.147Z",local_mutation,feat/link-imported-issues-to-citing-items
+  node --test --test-concurrency=1 --test-name-pattern='reference linking rechecks|reference plans skip' test/reference-import-identity.test.ts,project,120,codex-agent,"2026-11-27T23:31:27.203Z",local_mutation,feat/link-imported-issues-to-citing-items
+docs[2]{path,scope}:
+  docs/identity-ownership-inventory.md,project
+  README.md,project
+github_close_reason: ""
+github_closed_at: ""
+github_created_at: "2026-11-27T10:45:14Z"
+github_link_only: false
+github_number: 296
+github_release: ""
+github_state: open
+github_state_reason: unspecified
+github_updated_at: "2026-11-27T11:24:24Z"
+github_url: "https://github.com/unbraind/pm-github/issues/296"
+body: "## Problem\n\nSince #230, a `gh:<owner>/<repo>#N` tag on a local item is only a reference. The importer no longer treats it as identity, which is correct: it no longer overwrites curated items. But importing issue #N now creates a second item that is **not linked** to the local items that already reference #N. Agents and reviewers see two unrelated records for one GitHub issue, often with conflicting statuses.\n\nSourcery flags this on open sync PRs:\n\n- pm-lint#109: \"GitHub issue appears twice in tracker\"\n- pm-rust#194: \"GitHub issues appear twice\"\n- pm-glossary#47: \"Linked issue appears twice\"\n- pm-changelog#383: \"Issues appear twice in release notes\"\n- pm-brief#224: \"Duplicate tracker records remain open\"\n\n## Expected (context management, no identity change)\n\n- During import, find local items that carry the reference tag for the issue being imported, or whose `github_url` field names it. Exclude the importer-owned item.\n- Record a typed relationship between the imported item and each such item, for example `related` or `implements` via the SDK's dependency/link API. Do not merge, retitle or overwrite them. Then `pm context`, `pm get` and pm-changelog can show \"tracked by local item X\".\n- The sync PR body lists these links in a short \"Local items referencing imported issues\" section, so a reviewer sees at once that the second record is intentional.\n- pm-changelog: when an imported issue item and a linked local delivery item close in the same release, they render as one entry. This needs a follow-up issue there; file it if the SDK link is in place.\n- The step is idempotent: a repeat sync adds no duplicate links and leaves the tracker bytes unchanged.\n\n## Acceptance\n\n- A fixture with one reference-tagged local chore and one GitHub issue: the import creates the mirror item with a link to the chore, and neither item's curated fields change.\n- A repeat import writes nothing.\n- With two local items referencing the same issue, both are linked and neither the sync nor the closeout refuses.\n- Every new behaviour has a test that fails on revert."

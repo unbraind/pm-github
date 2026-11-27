@@ -6,8 +6,8 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { create, close, update, get, config, acquireLock, PmCliError } from "@unbrained/pm-cli/sdk";
-import extension, { fetchJSON, githubApiBase, parseNextLink } from "../index.ts";
+import { create, close, update, get, config, acquireLock, listAllComplete, PmCliError } from "@unbrained/pm-cli/sdk";
+import extension, { fetchJSON, githubApiBase, parseNextLink, parseImportOptions, runImport, type GhIssue } from "../index.ts";
 import { CloseoutUsageError, closeoutFailureReason, compactCloseoutReport, checkCloseoutHead, declaresDelivery, extractCloseoutItems, runCloseout, type CloseoutApi } from "../closeout.ts";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import { decode } from "@toon-format/toon";
@@ -89,6 +89,29 @@ function snapshot(root: string): string {
 function closeout(root: string, options: Record<string, unknown> = { pr: "42" }) {
   return runCloseout(root, repo, options, api());
 }
+
+test("closeout accepts tag and URL citations after the mirror links both delivery items", async () => tracker(async (root, ids) => {
+  const tagged = ids[0]!, url = ids[1]!;
+  const source: GhIssue = { number: 7, title: "Source", body: "Source issue", state: "open", labels: [],
+    user: null, assignee: null, milestone: null, created_at: "2025-01-01T00:00:00Z", updated_at: "2025-01-02T00:00:00Z",
+    html_url: `https://github.com/${repo}/issues/7` };
+  /** The source transport is the sole stand-in during import. */
+  const sync = () => runImport(repo, root, parseImportOptions({ atomic: true }), { fetchIssues: async () => [source], resolveToken: () => undefined });
+  await sync();
+  const delivery = `delivery-pr:https://github.com/${repo}/pull/42`;
+  await update(tagged, { addTags: [`gh:${repo}#7`, delivery] }, { pmRoot: root });
+  await update(url, { addTags: [delivery] }, { pmRoot: root });
+  const local = (await listAllComplete({ includeBody: true }, { pmRoot: root })).items.find(item => item.id === url)!;
+  await seedExistingItem(root, url, { metadata: { ...local, github_url: source.html_url }, body: typeof local.body === "string" ? local.body : "" }, "Cite the imported issue");
+  await sync();
+  const mirror = (await listAllComplete({}, { pmRoot: root })).items.find(item => item.github_number === 7)!;
+  assert.deepEqual(mirror.dependencies?.map(dep => dep.id).sort(), [tagged, url].sort());
+  await withMockGithub(fixture(`${link(tagged)}\n${link(url)}`), async () => {
+    const result = await closeout(root, { pr: "42", apply: true });
+    assert.equal(result.closed, 2, JSON.stringify(result.plan));
+    assert.equal((await get(mirror.id, {}, { pmRoot: root })).item.status, "open");
+  });
+}));
 
 test("extraction accepts only canonical tracker links and deduplicates references", () => {
   assert.deepEqual(extractCloseoutItems([bareLink("pm-1"), bareLink("pm%2D1"), bareLink("pm-1", "FIXTURE/PROJECT"), bareLink("pm-1", "other/repo"),

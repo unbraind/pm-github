@@ -56,6 +56,8 @@ export interface GithubOwnedTarget {
   initialLink?: (item: PmItem) => boolean;
   /** Dependency endpoints must retain their unique ownership inside the source lock. */
   related?: readonly GithubOwnedTarget[];
+  /** Validate non-owning relationship endpoints against the locked native corpus. */
+  verifyPeers?: (peers: GithubOwnershipIndex) => void;
 }
 
 /** Use the same repository hash for import destinations and legacy identity verification. */
@@ -88,6 +90,7 @@ export interface GithubOwnershipIndex {
   states: WeakMap<PmItem, ReturnType<typeof githubOwnershipClaims>>;
   byId: Map<string, PmItem>;
   claimants: Map<string, Map<string, string[]>>;
+  urlReferences: Map<string, string>;
 }
 
 /** Optional deterministic work counters; production callers need no observer. */
@@ -119,11 +122,31 @@ export async function readGithubOwnershipSnapshot(pmRoot: string, repositories: 
   return buildGithubOwnershipIndex(await readGithubOwnerItems(root), repositories);
 }
 
+/** A plain URL can serve as a citation beside a verified mirror of the same source. */
+function bareGithubUrlKey(item: PmItem): string | undefined {
+  if (importerCreatedItem(item, "", 0) || item.github_link_only !== undefined ||
+      item.github_repo !== undefined || item.github_number !== undefined ||
+      normalizeGithubClaim(item.external_ref) || parseLegacyGithubDescription(item)) return undefined;
+  const [url, extra] = explicitGithubIdentities(item);
+  return url?.field === "github_url" && !extra ? `${url.kind}:${url.key}` : undefined;
+}
+
 /** Parse each item once and index peer claims in linear snapshot work. */
 export function buildGithubOwnershipIndex(items: readonly PmItem[], repositories: readonly string[] = []): GithubOwnershipIndex {
-  const index: GithubOwnershipIndex = { items, repositories: [...repositories], states: new WeakMap(), byId: new Map(), claimants: new Map() };
+  const index: GithubOwnershipIndex = { items, repositories: [...repositories], states: new WeakMap(), byId: new Map(), claimants: new Map(), urlReferences: new Map() };
+  const mirrors = new Map<string, number>();
   for (const item of items) {
-    const state = githubOwnershipClaims(item, false, false, repositories);
+    const identity = githubImporterIdentity(item, repositories);
+    const url = parseGithubIssueUrl(item.github_url) ?? parseLegacyGithubDescription(item)?.identity;
+    if (identity && url?.key === identity && !url.api) {
+      const key = `${url.kind}:${identity}`;
+      mirrors.set(key, (mirrors.get(key) ?? 0) + 1);
+    }
+  }
+  for (const item of items) {
+    const urlKey = bareGithubUrlKey(item);
+    if (item.id && urlKey && mirrors.get(urlKey) === 1) index.urlReferences.set(item.id, urlKey);
+    const state = ownershipStateOf(index, item);
     index.states.set(item, state);
     if (item.id) index.byId.set(item.id, item);
     for (const key of state.claims) {
@@ -165,8 +188,14 @@ export function warnGithubOwnershipScope(index: GithubOwnershipIndex, selected: 
  * The states map is keyed by object identity, so a caller that passes a copy of a corpus record would otherwise read
  * it as unowned and skip every guard that depends on its claims.
  */
-export function ownershipStateOf(index: Pick<GithubOwnershipIndex, "states" | "repositories">, item: PmItem): ReturnType<typeof githubOwnershipClaims> {
-  return index.states.get(item) ?? githubOwnershipClaims(item, false, false, index.repositories);
+export function ownershipStateOf(index: Pick<GithubOwnershipIndex, "states" | "repositories" | "urlReferences">, item: PmItem): ReturnType<typeof githubOwnershipClaims> {
+  const cached = index.states.get(item);
+  if (cached) return cached;
+  const state = githubOwnershipClaims(item, false, false, index.repositories);
+  const reference = item.id && index.urlReferences.get(item.id);
+  return reference && bareGithubUrlKey(item) === reference
+    ? { owners: [], claims: [], evidence: false, kinds: [], direct: false }
+    : state;
 }
 /** Every asserted identity constrains a provenance-bearing item; references alone do not create an owner. */
 export function githubOwnershipClaims(item: PmItem, provisional = false, _allowReferenceTags = false, repositories: readonly string[] = []): { owners: string[]; claims: string[]; evidence: boolean; kinds: string[]; direct: boolean } {
@@ -206,7 +235,7 @@ export function githubOwnershipClaims(item: PmItem, provisional = false, _allowR
 /** Refuse contradictory claims and competing owners from the same current metadata snapshot. */
 export function assertGithubOwnershipConsistency(item: PmItem, target?: GithubOwnedTarget, peers: readonly PmItem[] | GithubOwnershipIndex = [], _allowReferenceTags = false): string[] {
   const index = ownershipIndex(peers, target ? [target.repo] : []);
-  const state = index.states.get(item) ?? githubOwnershipClaims(item, Boolean(target?.initialLink), false, index.repositories);
+  const state = ownershipStateOf(index, item);
   const expected = target ? `${target.repo.toLowerCase()}#${target.number}` : state.owners[0] ?? state.claims[0] ?? "one consistent GitHub issue";
   if (state.claims.length > 1 || state.evidence && state.claims.some(key => key !== expected)) {
     throw new GithubImportOwnershipError(item.id ?? target?.id ?? "<unknown>", expected, state.claims);
@@ -325,7 +354,7 @@ async function withGithubImportOwnersUnderLease<T>(pmRoot: string, targets: read
   const active = ownershipScope.getStore();
   if (active?.active && active.root === pmRoot && targets.every(target => active.targets.some(outer => outer.id === target.id &&
     outer.repo.toLowerCase() === target.repo.toLowerCase() && outer.number === target.number &&
-    (!target.mirrorContent || outer.mirrorContent) && (!target.preserveContent || outer.preserveContent) && (!target.expectedHash || target.expectedHash === outer.expectedHash) && !target.related?.length))) return run();
+    (!target.mirrorContent || outer.mirrorContent) && (!target.preserveContent || outer.preserveContent) && (!target.expectedHash || target.expectedHash === outer.expectedHash) && !target.related?.length && !target.verifyPeers))) return run();
   const { pmRoot: root } = await readGithubWorkspace(pmRoot);
   const corpus = await readGithubOwnerItems(root);
   const observed = ownershipWork.getStore(); if (observed && observed !== work) observed.corpusReads = (observed.corpusReads ?? 0) + 1;
@@ -359,6 +388,7 @@ async function withGithubImportOwnersUnderLease<T>(pmRoot: string, targets: read
           if (observed && observed !== work) observed.corpusReads = (observed.corpusReads ?? 0) + 1;
           return buildGithubOwnershipIndex(items, targets.map(target => target.repo));
         });
+        target.verifyPeers?.(peers);
         for (const related of target.related ?? []) {
           const item = peers.byId.get(related.id);
           if (!item) throw new GithubImportOwnershipError(related.id, `${related.repo.toLowerCase()}#${related.number}`, ["missing dependency endpoint"]);

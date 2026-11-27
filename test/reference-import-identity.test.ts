@@ -6,8 +6,9 @@ import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { init, create, get, getItemPath, getHistoryPath, listAllComplete } from "@unbrained/pm-cli/sdk";
+import { init, create, get, getItemPath, getHistoryPath, listAllComplete, update, runWithActiveExtensions, setActiveExtensionHooks } from "@unbrained/pm-cli/sdk";
 import { runImport, parseImportOptions, type GhIssue } from "../index.ts";
+import { applyLocalIssueReferences, planLocalIssueReferences } from "../import-references.ts";
 import { selectRefreshTargets } from "../refresh.ts";
 import { exploreGithubIdentities } from "../identity.ts";
 import { captureStderr, withEnv } from "./helpers/mock-github-server.ts";
@@ -28,8 +29,8 @@ async function tracker(git: boolean, run: (root: string) => Promise<void>) {
   } finally { rmSync(directory, { recursive: true, force: true }); }
 }
 /** Mock transport only; planner, transactions, metadata, history and the gate use their actual implementations. */
-async function sync(root: string, source = issue, atomic = true, gate = true) {
-  return (await captureStderr(() => runImport(repo, root, parseImportOptions({ state: "all", atomic, gate }), {
+async function sync(root: string, source = issue, atomic = true, gate = true, dryRun = false) {
+  return (await captureStderr(() => runImport(repo, root, parseImportOptions({ state: "all", atomic, gate, "dry-run": dryRun }), {
     resolveToken: () => undefined, fetchIssues: async () => [source], fetchIssueTimeline: async () => [],
   }))).result as Record<string, unknown>;
 }
@@ -46,17 +47,31 @@ for (const atomic of [true, false]) {
     const result = await sync(root, issue, atomic);
     assert.deepEqual(await bytes(root, local.id), before);
     assert.equal(result.imported, 1);
+    const items = (await listAllComplete({}, { pmRoot: root })).items;
+    const mirror = items.find(item => item.github_number === 7)!;
+    assert.deepEqual(mirror.dependencies?.map(({ id, kind }) => ({ id, kind })), [{ id: local.id, kind: "related" }]);
+    assert.equal(mirror.title, issue.title);
+    assert.equal(mirror.status, "open");
     assert.ok(existsSync(getItemPath(root, "Chore", local.id)));
     assert.equal((await get(local.id, {}, { pmRoot: root })).item.created_at, local.created_at);
   }));
   test(`two shared references import exactly once and do not collide (${atomic})`, async () => tracker(true, async root => {
     for (const title of ["Local A", "Local B"]) await create({ title, type: "Task", tags: tag }, { pmRoot: root });
+    const preview = await sync(root, issue, atomic, true, true);
     const result = await sync(root, issue, atomic);
     assert.equal(result.imported, 1);
+    assert.deepEqual(result.local_issue_references, preview.local_issue_references);
     const items = (await listAllComplete({}, { pmRoot: root, noExtensions: true })).items;
     assert.equal(items.length, 3);
     assert.equal(items.filter(item => item.github_number === 7).length, 1);
-    assert.equal((await sync(root, issue, atomic)).imported, 0);
+    const mirror = items.find(item => item.github_number === 7)!;
+    const locals = items.filter(item => item.id !== mirror.id);
+    assert.deepEqual(mirror.dependencies?.map(dep => dep.id).sort(), locals.map(item => item.id).sort());
+    const before = await Promise.all(items.map(item => bytes(root, item.id)));
+    const repeat = await sync(root, issue, atomic);
+    assert.equal(repeat.imported, 0);
+    assert.equal(repeat.local_issue_references, undefined);
+    assert.deepEqual(await Promise.all(items.map(item => bytes(root, item.id))), before);
     assert.equal((await exploreGithubIdentities(root)).collisions, 0);
   }));
   test(`importer-created mirror still refreshes title beside reference items (${atomic})`, async () => tracker(true, async root => {
@@ -68,6 +83,82 @@ for (const atomic of [true, false]) {
     assert.equal((await get(imported.id, {}, { pmRoot: root })).item.title, "New source title");
   }));
 }
+
+test("a closed pre-existing mirror backfills tag and URL citations in a non-git tracker", async () => tracker(false, async root => {
+  const source = { ...issue, state: "closed" as const, state_reason: "completed" as const,
+    closed_at: "2025-01-02T00:00:00Z" };
+  await sync(root, source, true, false);
+  const [mirror] = (await listAllComplete({}, { pmRoot: root })).items;
+  const tagged = (await create({ title: "Tagged", type: "Chore", status: "in_progress", tags: "gh:O/R#7" }, { pmRoot: root })).item;
+  const url = (await create({ title: "URL", type: "Chore", body: "Keep me" }, { pmRoot: root })).item;
+  await seedExistingItem(root, url.id, { metadata: { ...url, github_url: "https://www.github.com/O/R/issues/7/?a=b#note" }, body: "Keep me" }, "Seed URL citation");
+  const unrelated = (await create({ title: "Unrelated", type: "Chore", tags: "gh:o/r#70,gh:other/r#7" }, { pmRoot: root })).item;
+  const ids = [tagged.id, url.id, unrelated.id];
+  const localBytes = await Promise.all(ids.map(id => bytes(root, id)));
+  const before = await bytes(root, mirror!.id);
+  const preview = await sync(root, source, true, false, true);
+  assert.deepEqual(await bytes(root, mirror!.id), before);
+  const applied = await sync(root, source, true, false);
+  assert.equal(applied.imported, 0);
+  assert.equal(applied.updated, 0);
+  assert.equal(applied.unchanged, undefined);
+  assert.deepEqual(applied.local_issue_references, preview.local_issue_references);
+  const linked = (await get(mirror!.id, {}, { pmRoot: root })).item;
+  assert.deepEqual(linked.dependencies?.map(edge => edge.id).sort(), [tagged.id, url.id].sort());
+  for (const field of ["title", "status", "created_at", "closed_at", "completed_at"] as const) assert.equal(linked[field], mirror![field]);
+  const after = await bytes(root, mirror!.id);
+  assert.equal((await sync(root, source, true, false)).unchanged, true);
+  assert.deepEqual(await bytes(root, mirror!.id), after);
+  assert.deepEqual(await Promise.all(ids.map(id => bytes(root, id))), localBytes);
+  assert.equal((await exploreGithubIdentities(root)).collisions, 0);
+}));
+
+test("an existing reverse related edge is preserved without a second write", async () => tracker(false, async root => {
+  await sync(root, issue, true, false);
+  const [mirror] = (await listAllComplete({}, { pmRoot: root })).items;
+  const local = (await create({ title: "Linked", tags: tag }, { pmRoot: root })).item;
+  await update(local.id, { dep: [`id=${mirror!.id},kind=related`] }, { pmRoot: root });
+  const ids = [mirror!.id, local.id];
+  const before = await Promise.all(ids.map(id => bytes(root, id)));
+  assert.equal((await sync(root, issue, true, false)).unchanged, true);
+  assert.deepEqual(await Promise.all(ids.map(id => bytes(root, id))), before);
+}));
+
+test("reference linking rechecks a citation changed under the native writer lock", async () => tracker(false, async root => {
+  await sync(root, issue, true, false);
+  const [mirror] = (await listAllComplete({}, { pmRoot: root })).items;
+  const local = (await create({ title: "Delivery edited during import", type: "Chore", tags: tag }, { pmRoot: root })).item;
+  const before = await bytes(root, mirror!.id);
+  await runWithActiveExtensions({ path: root, noExtensions: true }, async () => {
+    setActiveExtensionHooks({ beforeCommand: [], afterCommand: [], onRead: [], onWrite: [], onIndex: [],
+      beforeMutation: [{ layer: "project", name: "fixture-remove-reference", run: async context => {
+        if (context.before?.metadata.id === mirror!.id) await update(local.id, { removeTags: [tag] }, { pmRoot: root });
+      } }] });
+    await assert.rejects(sync(root, issue, true, false), /Local references to GitHub issue #7 changed during import/);
+  });
+  assert.deepEqual(await bytes(root, mirror!.id), before);
+  assert.equal((await sync(root, issue, true, false)).unchanged, true);
+  await update(local.id, { addTags: [tag] }, { pmRoot: root });
+  assert.deepEqual((await sync(root, issue, true, false)).local_issue_references, [
+    { item: mirror!.id, issue: 7, local_item: local.id, kind: "related" },
+  ]);
+}));
+
+test("reference plans skip unavailable endpoints and unrelated legacy metadata", async () => tracker(false, async root => {
+  const local = (await create({ title: "Local delivery awaiting a mirror", type: "Chore", tags: tag }, { pmRoot: root })).item;
+  const mirror = { item: "fixture-missing-mirror", issue: 7 };
+  const planned = planLocalIssueReferences([
+    local,
+    { tags: [tag] },
+    { id: "fixture-untagged" },
+    { id: "fixture-api", github_url: "https://api.github.com/repos/o/r/issues/7", tags: ["gh:o/r#invalid"] },
+    { id: "fixture-legacy", tags: [tag], dependencies: [null, false, {}, { id: mirror.item }, { id: mirror.item, kind: 1 }] },
+  ], repo, [mirror]);
+  assert.deepEqual(planned.map(edge => edge.local_item), ["fixture-legacy", local.id].sort());
+  const before = await bytes(root, local.id);
+  assert.deepEqual(await applyLocalIssueReferences(root, repo, [mirror], planned), []);
+  assert.deepEqual(await bytes(root, local.id), before);
+}));
 
 test("released legacy snapshot resyncs with zero changes beside shared references", async () => tracker(true, async root => {
   // These are the exact native fields emitted by the released importer, not a plan made by the new code.
@@ -135,7 +226,9 @@ test("references on an already linked owner permit another import without rebind
 }));
 
 test("dependency references resolve importer identities beside related local references", async () => tracker(true, async root => {
-  await create({ title: "Related local work", type: "Chore", tags: tag }, { pmRoot: root });
+  await sync(root);
+  const delivery = (await create({ title: "Related local work", type: "Chore", tags: tag }, { pmRoot: root })).item;
+  await seedExistingItem(root, delivery.id, { metadata: { ...delivery, github_url: issue.html_url }, body: "" }, "Cite with tag and URL");
   const dependent = { ...issue, number: 8, html_url: "https://github.com/o/r/issues/8", body: "Blocked by #7" };
   await captureStderr(() => runImport(repo, root, parseImportOptions({ atomic: true, gate: true, "link-deps": true }), {
     resolveToken: () => undefined, fetchIssues: async () => [issue, dependent], fetchIssueTimeline: async () => [],

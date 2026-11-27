@@ -177,6 +177,21 @@ test("GitHub reopen clears source closure and a later close retains the original
   assertSourceClosures(pmRoot, id, 0, [source.closed_at, closedAgain.closed_at]);
 }));
 
+test("replaying a pending mirror import links its local citation and converges", async () => tracker(async pmRoot => {
+  const source = issue(1);
+  const local = (await create({ title: "Local delivery", type: "Chore", tags: `gh:${repo}#1` }, { pmRoot })).item;
+  const localBefore = await bytes(pmRoot, local.id);
+  await assert.rejects(importing(pmRoot, [source], [], context => {
+    if (context.transition === "committing") throw new WorkspaceTransactionInterruptedError("Interrupt before reference linking");
+  }), /journal is resumable/);
+  const id = deriveAtomicItemId(repo, 1, "fixture-", normalizeItemId);
+  const result = await importing(pmRoot, [source]);
+  assert.equal(result.replayedOriginalPlan, true);
+  assert.deepEqual(result.local_issue_references, [{ issue: 1, item: id, local_item: local.id, kind: "related" }]);
+  assert.deepEqual(await bytes(pmRoot, local.id), localBefore);
+  await repeat(pmRoot, [source], id);
+}));
+
 test("local reopen and interrupted transaction replay restore GitHub close without duplicate effects", async () => tracker(async pmRoot => {
   let source = issue(1, true);
   const first = await importing(pmRoot, [source]);

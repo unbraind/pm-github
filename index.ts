@@ -1,3 +1,4 @@
+import { applyLocalIssueReferences, localIssueReferenceReceipt, planLocalIssueReferences } from "./import-references.ts";
 import { writeGithubStateAtomic, syncGithubStatePath, type GithubStateWriteOptions } from "./durable-state.ts";
 import { buildGithubOwnershipIndex, warnGithubOwnershipScope, withGithubItemConsistency, readGithubOwnershipSnapshot, githubRepositoryHash, githubOwnershipClaims, githubOwnedIdentityKeys, assertGithubOwnershipConsistency, assertGithubImportOwner, GithubImportOwnershipError, readGithubImportOwner, withGithubImportOwners, mutateGithubOwnedItem, type GithubOwnershipIndex, type GithubOwnedTarget, ownershipStateOf } from "./import-ownership.ts";
 import { parseGithubIssueUrl, githubUrlTokens } from "./github-url.ts";
@@ -197,7 +198,7 @@ const COMMENTS_MODES: readonly CommentsMode[] = ["body", "annotations", "both"];
  * of the import path consumes a typed shape rather than re-parsing strings.
  */
 export interface ImportOptions {
-  /** Explicitly enable conservative citation adoption; default imports only report candidates. */
+  /** Explicitly enable conservative citation adoption; default imports report prose candidates without adopting them. */
   adoptCited?: boolean;
   /** Explicit comma-separated issue numbers or same-repository references. */
   issue?: string;
@@ -3145,9 +3146,10 @@ export function buildProvenanceIndexFromMetadata(
 ): Map<string, string> {
   const owners = new Map<string, Set<string>>();
   const invalid = new Set<string>();
+  const ownership = buildGithubOwnershipIndex(items, repositories);
   for (const item of items) {
     if (!item.id) continue;
-    const state = githubOwnershipClaims(item, false, false, repositories);
+    const state = ownershipStateOf(ownership, item);
     for (const key of state.claims) {
       const claimants = owners.get(key) ?? new Set<string>();
       claimants.add(item.id);
@@ -3730,19 +3732,21 @@ export async function runImport(
     assertGithubImportReplayPreflight(recoveryRoot, record);
   });
   if (recovered) {
+    const snapshot = await readGithubOwnershipSnapshot(recoveryRoot, [repo]);
+    const mirrors = [...recovered.itemIds].filter(([issue, id]) => {
+      const item = snapshot.byId.get(id);
+      return item && importerCreatedItem(item, repo, issue);
+    }).map(([issue, item]) => ({ issue, item }));
     failClosedOnPlanDivergence(opts.gate, 0, 0, recovered.commentWriteFailures ?? 0);
-    if (opts.gate) {
-      const corpus = certifyCompleteListResult(await listAllComplete({ includeBody: true }, { pmRoot: recoveryRoot, noExtensions: true }));
-      for (const [number, id] of recovered.itemIds) {
-        const items = decodeCompletePmItems(corpus);
-        const item = items.find(item => item.id === id);
-        if (!item) throw new GithubImportRecoveryError("github_import_owner_conflict", `Recovered target ${id} is missing; no publication is permitted.`);
-        assertGithubImportOwner(item, { id, repo, number }, items);
-      }
-      gateImportWrites(recoveryRoot);
+    if (opts.gate) for (const [number, id] of recovered.itemIds) {
+      const item = snapshot.byId.get(id);
+      if (!item) throw new GithubImportRecoveryError("github_import_owner_conflict", `Recovered target ${id} is missing; no publication is permitted.`);
+      assertGithubImportOwner(item, { id, repo, number }, snapshot);
     }
+    const links = await applyLocalIssueReferences(recoveryRoot, repo, mirrors, planLocalIssueReferences(snapshot.items, repo, mirrors));
+    if (opts.gate) gateImportWrites(recoveryRoot);
     return { transactionId: recovered.transactionId, recovered: recovered.recovered, recoveredItems: recovered.recoveredItems,
-      imported: recovered.imported, updated: recovered.updated, adopted: 0, skipped: 0, atomic: true, replayedOriginalPlan: true, ...(recovered.commentWriteFailures ? { commentWriteFailures: recovered.commentWriteFailures } : {}), ...depLinkResultFields(recovered.depLink) };
+      imported: recovered.imported, updated: recovered.updated, adopted: 0, skipped: 0, atomic: true, replayedOriginalPlan: true, ...(recovered.commentWriteFailures ? { commentWriteFailures: recovered.commentWriteFailures } : {}), ...depLinkResultFields(recovered.depLink), ...localIssueReferenceReceipt(links) };
   }
   const selectedNumbers = opts.issue === undefined ? undefined : parseIssueNumbers(repo, opts.issue);
 
@@ -3935,6 +3939,11 @@ export async function runImport(
       identity: entry.identity,
       ...(entry.citation_candidates ? { citation_candidates: entry.citation_candidates } : {}) };
   });
+  const mirrors = gatePlan!.filter(entry => !entry.linkOnly && !entry.preserveContent).map(entry => ({
+    issue: entry.issueNumber,
+    item: entry.match?.id ?? deriveAtomicItemId(repo, entry.issueNumber, workspace.settings.id_prefix, sdkNormalizeItemId),
+  }));
+  const referencePlan = planLocalIssueReferences(existingItems, repo, mirrors);
   const adoptionCount = gatePlan!.filter(entry => entry.identity?.via === "citation").length;
   const planFields = { ...identityConflictFields, ...curationReceipt, ...(opts.gate || adoptionCount > 0 || citationCandidates.length > 0 ? { plan: fidelityPlan() } : {}), ...citationReceipt };
   const gatePlanFields = { ...planFields, ...(opts.gate ? { gate: { completeness: gateCompleteness, idempotency: gateIdempotency, scan: opts.dryRun ? "plan" : "post-write" } } : {}) };
@@ -3994,6 +4003,7 @@ export async function runImport(
         atomic: true,
         ...(opts.linkDeps ? { wouldLinkDependencyCandidates: countDependencyRefCandidates(repo, filtered) } : {}),
         ...gatePlanFields,
+        ...localIssueReferenceReceipt(referencePlan),
         ...fetchFields,
       };
     }
@@ -4001,8 +4011,8 @@ export async function runImport(
     // Mixed create/update batches can select a fresh journal after the first
     // apply. Replaying an otherwise identical SDK UPDATE advances updated_at.
     // Never hide an interrupted journal behind the unchanged-state shortcut.
-    const unchanged = changed.length === 0;
-    const result = unchanged ? { transactionId: undefined, recovered: false, recoveredItems: undefined, imported: 0, updated: 0,
+    const contentUnchanged = changed.length === 0;
+    const result = contentUnchanged ? { transactionId: undefined, recovered: false, recoveredItems: undefined, imported: 0, updated: 0,
       itemIds: new Map(prepared.map(entry => [entry.issueNumber, entry.match!.id!])) }
       : await (dependencies.commitAtomic ? dependencies.commitAtomic(pmRoot, repo, changed) : importGithubAtomic(pmRoot, repo, changed, { gate: opts.gate, linkDeps: opts.linkDeps, dependencyIssues: filtered }));
     for (const entry of prepared) if (!changed.includes(entry)) result.itemIds.set(entry.issueNumber, entry.match!.id!);
@@ -4029,7 +4039,8 @@ export async function runImport(
       }
     }
     failClosedOnPlanDivergence(opts.gate, skipped, skipped, commentWriteFailures);
-    if (unchanged) console.error("Atomic import unchanged; no item transaction was needed.");
+    const referenceLinks = await applyLocalIssueReferences(pmRoot, repo, mirrors, referencePlan);
+    if (contentUnchanged && !referenceLinks.length) console.error("Atomic import unchanged; no item transaction was needed.");
     else if (result.recovered) {
       console.error(
         `Atomic import recovered transaction ${result.transactionId} covering ${result.recoveredItems ?? prepared.length} item(s).`,
@@ -4050,7 +4061,8 @@ export async function runImport(
     const gateReceipt = opts.gate ? gateImportWrites(pmRoot) : undefined;
     return {
       transactionId: result.transactionId,
-      ...(unchanged ? { unchanged: true } : {}),
+      ...(contentUnchanged && !referenceLinks.length ? { unchanged: true } : {}),
+      ...localIssueReferenceReceipt(referenceLinks),
       recovered: result.recovered,
       imported: result.imported,
       updated: result.updated - (result.recovered ? 0 : changedAdoptions),
@@ -4226,6 +4238,7 @@ export async function runImport(
       wouldSkip: skipped,
       ...(opts.linkDeps ? { wouldLinkDependencyCandidates: countDependencyRefCandidates(repo, filtered) } : {}),
       ...gatePlanFields,
+      ...localIssueReferenceReceipt(referencePlan),
       ...fetchFields,
     };
   }
@@ -4249,11 +4262,12 @@ export async function runImport(
     ? await linkImportedDependencies(repo, filtered, pmRoot, dependencies)
     : undefined;
   reportDepLink(depLink);
+  const referenceLinks = await applyLocalIssueReferences(pmRoot, repo, mirrors, referencePlan);
   // Gated pipeline, phase 2 — the writes are on disk but nothing is committed or
   // pushed; scan the proposed tracker change now and fail closed.
   if (opts.gate) verifyImportedProvenance(await readImportItems(), gatePlan!, repo);
   const gateReceipt = opts.gate ? gateImportWrites(pmRoot) : undefined;
-  return { imported, updated, adopted, skipped, ...(commentWriteFailures ? { commentWriteFailures } : {}), ...fetchFields, ...depLinkResultFields(depLink), ...planFields, ...(gateReceipt ? { gate: gateReceipt } : {}) };
+  return { imported, updated, adopted, skipped, ...(commentWriteFailures ? { commentWriteFailures } : {}), ...fetchFields, ...depLinkResultFields(depLink), ...localIssueReferenceReceipt(referenceLinks), ...planFields, ...(gateReceipt ? { gate: gateReceipt } : {}) };
 }
 
 /**
@@ -4444,7 +4458,7 @@ async function runSync(ctx: CommandHandlerContext) {
     const scopeNote = scopedIds.length > 0 ? ` from --ids (${scopedIds.join(", ")})` : "";
     console.error(
       `No pm items${scopeNote} linked to ${repo} ` +
-        `(set github_url explicitly; reference tags never establish links).`,
+        `(set github_url explicitly; reference tags grant no GitHub write authority).`,
     );
     return {
       ...conflictFields,
@@ -7078,7 +7092,7 @@ export function isMutatingGithubCommand(command: string, options: Record<string,
 // ---------------------------------------------------------------------------
 
 const IMPORT_FLAGS = [
-  { long: "--adopt-cited", description: "Opt in to normalized, anchored citation adoption (default: off). Set github_url to explicitly link an owner; default imports only report citation candidates" },
+  { long: "--adopt-cited", description: "Opt in to normalized, anchored citation adoption (default: off). Set github_url to explicitly link an owner; default imports report prose candidates without adopting them" },
   { long: "--issue", value_name: "N[,N...]", description: "Fetch exactly these issue numbers, #N, or same-repo owner/repo#N references; conflicts with --state/--all/--labels/--since/--assignee/--milestone/--limit. Missing numbers fail before writes (reported by --dry-run); PRs require --include-prs" },
   { long: "--limit", value_name: "n", description: "Positive list-mode issue cap, newest-updated first; reports limit and truncated when more exist (one extra matching issue is fetched to check). Invalid with --issue" },
   { long: "--all", description: "Include closed issues (shorthand for --state all)" },
@@ -7100,7 +7114,7 @@ const IMPORT_FLAGS = [
 ];
 
 const EXPORT_FLAGS = [
-  { long: "--allow-reference-tags", description: "Deprecated compatibility flag; reference tags never establish links. Set github_url explicitly." },
+  { long: "--allow-reference-tags", description: "Deprecated compatibility flag; reference tags grant no GitHub write authority. Set github_url explicitly." },
   { long: "--form", value_name: "path", description: "Enforce a selected repository issue form before any export writes" },
   { long: "--form-ref", value_name: "revision", description: "Explicit repository revision containing the selected form" },
   { long: "--form-answers", value_name: "json", description: "JSON map of form answer IDs to strings or string arrays" },
@@ -7116,7 +7130,7 @@ const EXPORT_FLAGS = [
 ];
 
 const SYNC_FLAGS = [
-  { long: "--allow-reference-tags", description: "Deprecated compatibility flag; reference tags never establish links. Set github_url explicitly." },
+  { long: "--allow-reference-tags", description: "Deprecated compatibility flag; reference tags grant no GitHub write authority. Set github_url explicitly." },
   { long: "--repo", value_name: "owner/repo", description: "Target GitHub repo (required)" },
   { long: "--ids", value_name: "pm-1,pm-2", description: "Only sync these pm item IDs (comma-separated)" },
   { long: "--dry-run", description: "Preview the close/reopen plan without mutating GitHub" },

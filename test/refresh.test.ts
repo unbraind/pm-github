@@ -63,6 +63,26 @@ function transport(nodes: Record<string, ReturnType<typeof node> | null>, errors
   };
 }
 
+test("refresh previews and backfills local citations even if source fields are unchanged", async () => tracker(async (_directory, pmRoot) => {
+  const mirror = (await createImportMirror({ title: "Mirror", tags: "gh:fixture/repo#1" }, { pmRoot })).item;
+  await withMockGithub(transport({ i1: node() }), async () => {
+    await runRefresh("fixture/repo", pmRoot, { atomic: true });
+    const local = (await create({ title: "Delivery", type: "Chore", tags: "gh:fixture/repo#1" }, { pmRoot })).item;
+    const before = snapshot(pmRoot);
+    const preview = await runRefresh("fixture/repo", pmRoot, { atomic: true, "dry-run": true });
+    assert.equal(preview.updated, 0);
+    const edges = [{ issue: 1, item: mirror.id, local_item: local.id, kind: "related" }];
+    assert.deepEqual(preview.local_issue_references, edges);
+    assert.deepEqual(snapshot(pmRoot), before);
+    const applied = await runRefresh("fixture/repo", pmRoot, { atomic: true });
+    assert.deepEqual(applied.local_issue_references, edges);
+    const after = snapshot(pmRoot);
+    for (const [file, data] of Object.entries(before)) if (file.includes(local.id)) assert.equal(after[file], data);
+    assert.equal((await runRefresh("fixture/repo", pmRoot, { atomic: true })).local_issue_references, undefined);
+    assert.deepEqual(snapshot(pmRoot), after);
+  });
+}));
+
 for (const atomic of [false, true]) {
   test(`apply then re-apply preserves every byte and history line without cache priming (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
     const linked = (await createImportMirror({ title: "Stale", tags: "gh:fixture/repo#1,area,api" }, { pmRoot })).item;

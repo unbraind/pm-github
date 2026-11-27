@@ -3,7 +3,7 @@ import { parseGithubUrl, parseGithubIssueUrl, githubUrlTokens } from "./github-u
 import { readGithubWorkspace, githubStatusIsTerminal } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
 import { GithubIdentityConflictError, normalizeImportValue } from "./import-fidelity.ts";
-import { buildGithubOwnershipIndex, type GithubOwnershipIndex, withGithubOwnershipLock, assertGithubOwnershipConsistency, githubOwnershipClaims, GithubImportOwnershipError, GithubMutationGuardError, preserveGithubMutationGuardFailure } from "./import-ownership.ts";
+import { buildGithubOwnershipIndex, type GithubOwnershipIndex, withGithubOwnershipLock, assertGithubOwnershipConsistency, ownershipStateOf, GithubImportOwnershipError, GithubMutationGuardError, preserveGithubMutationGuardFailure } from "./import-ownership.ts";
 /** Close delivered tracker items using merged pull requests and head-check evidence. */
 import { close, hashDocument, locateItem, readLocatedItem, runWithActiveExtensions, setActiveExtensionHooks, listAllComplete, certifyCompleteListResult, getHistoryPath, readHistoryEntries, verifyHistoryEntries, PmCliError, EXIT_CODE, type ItemDocument } from "@unbrained/pm-cli/sdk";
 
@@ -34,7 +34,7 @@ export type CloseoutCode = "already_terminal" | "other_repository" | "duplicate_
 /** Explicit delivery may close local items, but never an issue owned by a different repository. */
 export function assertCloseoutGithubOwner(item: ItemDocument["metadata"], repo: string, peers: readonly ItemDocument["metadata"][] | GithubOwnershipIndex = []): void {
   const ownership = Array.isArray(peers) ? buildGithubOwnershipIndex(peers, [repo]) : peers as GithubOwnershipIndex;
-  const state = ownership.states.get(item) ?? githubOwnershipClaims(item, false, false, [repo]);
+  const state = ownershipStateOf(ownership, item);
   const owners = state.owners;
   if (state.evidence && owners.length !== 1) throw new GithubImportOwnershipError(item.id, `${repo.toLowerCase()} (delivery repository)`, state.claims);
   assertGithubOwnershipConsistency(item, undefined, ownership);
