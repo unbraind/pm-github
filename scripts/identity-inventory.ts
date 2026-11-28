@@ -17,6 +17,7 @@ const additional = new Map([
   ["index.ts/runProjectImport", "Preserve a verified legacy description that names the planned issue or PR owner. Projects tags retain board provenance, and create, update and close recheck the current association under the native lock."],
   ["import-ownership.ts/bareGithubUrlKey", "A plain canonical URL is contextual beside a verified importer mirror of the same kind and issue. Corroborated provenance and standalone explicit owners retain their guards."],
   ["import-references.ts/referenceKeys", "Read whole GitHub reference tags and explicit URLs to discover related items. These locators authorize no ownership change."],
+  ["import-references.ts/guardLocalIssueReferences", "Classify the locked mirror with the same source matcher as preview before applying pending citation mutations."],
   ["import-references.ts/applyLocalIssueReferences", "Write native related edges on guarded mirrors only, with the citing endpoints rechecked in the mirror write hook."],
   ["import-ownership.ts/ownershipStateOf", "Identity-safe state read: the states map is keyed by object identity, so a separately allocated copy of a corpus record derives its claims instead of reading as unowned; every planner and selector uses it."],
   ["import-ownership.ts/warnGithubOwnershipScope", "Diagnostics only: malformed native numbers and conflicts wholly outside selected targets emit warnings naming affected IDs; no warning chooses an owner or authorizes writes."],

@@ -1,7 +1,8 @@
 import { resolveCanonicalRelationshipKind, type UpdateCommandOptions } from "@unbrained/pm-cli/sdk";
 import { normalizeGithubClaim, parseGithubIssueUrl } from "./github-url.ts";
-import { mutateGithubOwnedItem, readGithubOwnershipSnapshot, withGithubOwnershipLock } from "./import-ownership.ts";
-import type { PmItem, PreparedGithubImport } from "./index.ts";
+import { mutateGithubOwnedItem, readGithubOwnershipSnapshot, withGithubOwnershipLock, type GithubOwnershipIndex } from "./import-ownership.ts";
+import { matchImportedIssue } from "./import-fidelity.ts";
+import type { GhIssue, PmItem, PreparedGithubImport } from "./index.ts";
 
 /** The item selected to mirror one issue, including a stable future ID in previews. */
 export interface IssueMirror { issue: number; item: string }
@@ -69,11 +70,19 @@ export function localIssueReferenceMutation(references: readonly LocalIssueRefer
   return { op: "update" as const, id: item, options };
 }
 
-/** Verify actual additions against current citations inside the SDK writer lock. */
+/** Verify pending mirror eligibility and actual citation additions inside the SDK writer lock. */
 export function guardLocalIssueReferences(repo: string, references: readonly LocalIssueReference[]) {
   const { item, issue } = references[0]!;
-  return (peers: { items: readonly PmItem[] }, before?: PmItem, after?: PmItem): void => {
-    const additions = references.filter(ref => !alreadyRelated(before, ref.local_item) && alreadyRelated(after, ref.local_item));
+  // Only the issue locator and body are consumed by the shared ownership matcher.
+  const source = { number: issue, html_url: `https://github.com/${repo}/issues/${issue}`, body: null } as GhIssue;
+  return (peers: GithubOwnershipIndex, before?: PmItem, after?: PmItem): void => {
+    const pending = references.filter(ref => !alreadyRelated(before, ref.local_item));
+    // Check before source updates too, since a stale finalizer could clear the
+    // live link-only marker before the later relationship step sees it.
+    if (before && pending.length && matchImportedIssue([before], source, undefined, false, peers).linkOnly) {
+      throw new Error(`Item ${item} is no longer a full GitHub mirror for issue #${issue}. Review its current mode and retry with a fresh GitHub import plan.`);
+    }
+    const additions = pending.filter(ref => alreadyRelated(after, ref.local_item));
     if (!additions.length) return;
     const live = planLocalIssueReferences(peers.items, repo, [{ item, issue }]);
     if (additions.some(ref => !live.some(edge => edge.local_item === ref.local_item))) {

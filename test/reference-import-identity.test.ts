@@ -6,10 +6,10 @@ import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { init, create, get, getItemPath, getHistoryPath, listAllComplete, update, runWithActiveExtensions, setActiveExtensionHooks, setActiveExtensionRegistrations, normalizeItemId, commitItemMutations } from "@unbrained/pm-cli/sdk";
+import { init, create, get, getItemPath, getHistoryPath, listAllComplete, update, runWithActiveExtensions, setActiveExtensionHooks, setActiveExtensionRegistrations, normalizeItemId, commitItemMutations, WorkspaceTransactionInterruptedError } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import type { ExtensionApi } from "@unbrained/pm-cli/sdk/authoring";
-import { runImport, parseImportOptions, deriveAtomicItemId, type GhIssue } from "../index.ts";
+import { runImport, parseImportOptions, deriveAtomicItemId, importGithubAtomic, type GhIssue } from "../index.ts";
 import { applyLocalIssueReferences, planLocalIssueReferences } from "../import-references.ts";
 import { selectRefreshTargets } from "../refresh.ts";
 import { buildGithubOwnershipIndex, ownershipStateOf } from "../import-ownership.ts";
@@ -146,6 +146,38 @@ test("reference linking rechecks a citation changed under the native writer lock
     { item: mirror!.id, issue: 7, local_item: local.id, kind: "related" },
   ]);
 }));
+
+for (const action of ["plain apply", "reference-only replay", "source-update replay"]) {
+  for (const mode of [{ github_link_only: true }, { jira_id: "PROJ-7" }]) {
+    test(`citation writes recheck live mirror eligibility (${action}, ${Object.keys(mode)[0]})`, async () => tracker(false, async root => {
+      await sync(root, issue, true, false);
+      const [mirror] = (await listAllComplete({ includeBody: true }, { pmRoot: root })).items;
+      const local = (await create({ title: "Citing delivery", type: "Chore", tags: tag }, { pmRoot: root })).item;
+      const mirrors = [{ item: mirror!.id, issue: 7 }];
+      const plan = planLocalIssueReferences([mirror!, local], repo, mirrors);
+      assert.equal(plan.length, 1);
+      const source = action === "source-update replay" ? { ...issue, title: "New source title" } : issue;
+      if (action !== "plain apply") {
+        await assert.rejects(runImport(repo, root, parseImportOptions({ atomic: true }), {
+          resolveToken: () => undefined, fetchIssues: async () => [source], fetchIssueTimeline: async () => [],
+          commitAtomic: (pmRoot, name, entries) => importGithubAtomic(pmRoot, name, entries, {
+            onTransition: context => {
+              if (context.transition === "prepared") throw new WorkspaceTransactionInterruptedError("Pause before the first write");
+            },
+          }),
+        }), /journal is resumable/);
+      }
+      await seedExistingItem(root, mirror!.id, { metadata: { ...mirror!, ...mode }, body: issue.body! }, "Record current mirror mode");
+      const before = await bytes(root, mirror!.id);
+      const citing = await bytes(root, local.id);
+      await assert.rejects(action === "plain apply" ? applyLocalIssueReferences(root, repo, mirrors, plan) : sync(root, source, true, false),
+        /no longer a full GitHub mirror/);
+      assert.deepEqual(await bytes(root, mirror!.id), before);
+      assert.deepEqual(await bytes(root, local.id), citing);
+      assert.equal((await get(mirror!.id, {}, { pmRoot: root })).item.dependencies?.length ?? 0, 0);
+    }));
+  }
+}
 
 test("reference plans skip unavailable endpoints and unrelated legacy metadata", async () => tracker(false, async root => {
   const local = (await create({ title: "Local delivery awaiting a mirror", type: "Chore", tags: tag }, { pmRoot: root })).item;

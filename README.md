@@ -591,8 +591,10 @@ mirrors receive citation edges. Prose mentions use the citation-adoption rules b
 Preview and apply report new edges in `local_issue_references` in JSON and TOON.
 Atomic imports and atomic refreshes record the relationship updates in the same
 saved transaction as the mirror updates. A retry replays the original edges
-with the original item mutations. Issue citations created in the same batch are
-planned from the final tag projection, and reciprocal citations share one edge.
+with the original item mutations. Before writing a pending edge, the native lock
+guard verifies the mirror still qualifies for full import. Issue citations created
+in the same batch are planned from the final tag projection, and reciprocal citations
+share one edge.
 Older mirror pairs gain the edge on the next import. Identical subsequent imports
 preserve tracker bytes. The gated sync PR reports new edges under
 **Local items referencing imported issues**. Use `pm get <mirror> --full` or

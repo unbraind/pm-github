@@ -399,7 +399,7 @@ async function withGithubImportOwnersUnderLease<T>(pmRoot: string, targets: read
           if (observed && observed !== work) observed.corpusReads = (observed.corpusReads ?? 0) + 1;
           return buildGithubOwnershipIndex(items, targets.map(target => target.repo));
         });
-        target.verifyPeers?.(peers, before, after);
+        target.verifyPeers?.(peers, context.before ? { ...context.before.metadata, body: context.before.body } : undefined, after);
         for (const related of target.related ?? []) {
           const item = peers.byId.get(related.id);
           if (!item) throw new GithubImportOwnershipError(related.id, `${related.repo.toLowerCase()}#${related.number}`, ["missing dependency endpoint"]);
