@@ -83,6 +83,33 @@ test("refresh previews and backfills local citations even if source fields are u
   });
 }));
 
+for (const atomic of [false, true]) test(`refresh links citations only from full mirrors (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
+  const mirror = (await createImportMirror({ title: "Full mirror", tags: "gh:fixture/repo#1" }, { pmRoot })).item;
+  const linked = (await createImportMirror({ title: "Link-only mirror", tags: "gh:fixture/repo#2" }, { pmRoot })).item;
+  const provider = (await createImportMirror({ title: "Provider owner", tags: "gh:fixture/repo#3" }, { pmRoot })).item;
+  const curated = (await create({ title: "Curated owner", type: "Chore" }, { pmRoot })).item;
+  await seedExistingItem(pmRoot, linked.id, { metadata: { ...linked, github_link_only: true }, body: "Linked body" }, "Set link-only policy");
+  await seedExistingItem(pmRoot, provider.id, { metadata: { ...provider, jira_id: "PROJ-1" }, body: "Provider body" }, "Set provider identity");
+  await seedExistingItem(pmRoot, curated.id, { metadata: { ...curated, github_url: "https://github.com/fixture/repo/issues/4" }, body: "Curated body" }, "Set local ownership");
+  const local = (await create({ title: "Delivery", tags: "gh:fixture/repo#1,gh:fixture/repo#2,gh:fixture/repo#3,gh:fixture/repo#4" }, { pmRoot })).item;
+  await withMockGithub(transport({ i1: node(), i2: node(2), i3: node(3), i4: node(4) }), async () => {
+    const before = snapshot(pmRoot);
+    const expected = [{ issue: 1, item: mirror.id, local_item: local.id, kind: "related" }];
+    const preview = await runRefresh("fixture/repo", pmRoot, { atomic, "dry-run": true });
+    assert.deepEqual(preview.local_issue_references, expected);
+    assert.deepEqual(snapshot(pmRoot), before);
+    const applied = await runRefresh("fixture/repo", pmRoot, { atomic });
+    assert.deepEqual(applied.local_issue_references, expected);
+    for (const item of [linked, provider, curated]) {
+      assert.equal((await get(item.id, {}, { pmRoot })).item.dependencies?.length ?? 0, 0);
+    }
+    const after = snapshot(pmRoot);
+    for (const [file, data] of Object.entries(before)) if (file.includes(local.id)) assert.equal(after[file], data);
+    assert.equal((await runRefresh("fixture/repo", pmRoot, { atomic })).local_issue_references, undefined);
+    assert.deepEqual(snapshot(pmRoot), after);
+  });
+}));
+
 test("atomic refresh reports the citations replayed from its retained plan", async () => tracker(async (_directory, pmRoot) => {
   const mirror = (await createImportMirror({ title: "Mirror", tags: "gh:fixture/repo#1" }, { pmRoot })).item;
   const upstream = node();

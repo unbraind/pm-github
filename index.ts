@@ -1,4 +1,4 @@
-import { applyLocalIssueReferences, guardLocalIssueReferences, localIssueReferenceMutation, localIssueReferenceReceipt, planLocalIssueReferences, type IssueMirror, type LocalIssueReference } from "./import-references.ts";
+import { applyLocalIssueReferences, canLinkImportReferences, guardLocalIssueReferences, localIssueReferenceMutation, localIssueReferenceReceipt, planLocalIssueReferences, type IssueMirror, type LocalIssueReference } from "./import-references.ts";
 import { writeGithubStateAtomic, syncGithubStatePath, type GithubStateWriteOptions } from "./durable-state.ts";
 import { buildGithubOwnershipIndex, warnGithubOwnershipScope, withGithubItemConsistency, readGithubOwnershipSnapshot, githubRepositoryHash, githubOwnershipClaims, githubOwnedIdentityKeys, assertGithubOwnershipConsistency, assertGithubImportOwner, GithubImportOwnershipError, readGithubImportOwner, withGithubImportOwners, mutateGithubOwnedItem, type GithubOwnershipIndex, type GithubOwnedTarget, ownershipStateOf } from "./import-ownership.ts";
 import { parseGithubIssueUrl, githubUrlTokens } from "./github-url.ts";
@@ -2159,7 +2159,7 @@ export function validateGithubImportPlan(record: GithubImportPlanRecord, items?:
     const refs = entry.localReferences;
     if (entry.referenceOnly !== undefined && (entry.referenceOnly !== true || !entry.match?.id || !refs?.length)) throw invalidReferencePlan();
     if (refs === undefined) continue;
-    if (!Array.isArray(refs) || !refs.length || entry.linkOnly || entry.preserveContent) throw invalidReferencePlan();
+    if (!Array.isArray(refs) || !refs.length || !canLinkImportReferences(entry)) throw invalidReferencePlan();
     for (const edge of refs) {
       if (edge?.kind !== "related" || edge.issue !== entry.issueNumber || edge.item !== itemIds.get(entry.issueNumber) ||
           typeof edge.local_item !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(edge.local_item) || edge.local_item === edge.item) throw invalidReferencePlan();
@@ -4060,7 +4060,7 @@ export async function runImport(
       identity: entry.identity,
       ...(entry.citation_candidates ? { citation_candidates: entry.citation_candidates } : {}) };
   });
-  const mirrors = gatePlan!.filter(entry => !entry.linkOnly && !entry.preserveContent).map(entry => ({
+  const mirrors = gatePlan!.filter(canLinkImportReferences).map(entry => ({
     issue: entry.issueNumber,
     item: entry.match?.id ?? deriveAtomicItemId(repo, entry.issueNumber, workspace.settings.id_prefix, sdkNormalizeItemId),
   }));

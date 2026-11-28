@@ -1,7 +1,7 @@
 import { resolveCanonicalRelationshipKind, type UpdateCommandOptions } from "@unbrained/pm-cli/sdk";
 import { normalizeGithubClaim, parseGithubIssueUrl } from "./github-url.ts";
 import { mutateGithubOwnedItem, readGithubOwnershipSnapshot, withGithubOwnershipLock } from "./import-ownership.ts";
-import type { PmItem } from "./index.ts";
+import type { PmItem, PreparedGithubImport } from "./index.ts";
 
 /** The item selected to mirror one issue, including a stable future ID in previews. */
 export interface IssueMirror { issue: number; item: string }
@@ -26,6 +26,11 @@ function alreadyRelated(item: PmItem | undefined, other: string): boolean {
   const edges: unknown[] = Array.isArray(item?.dependencies) ? item.dependencies : [];
   return edges.some(edge => edge !== null && typeof edge === "object" && "id" in edge && edge.id === other &&
     "kind" in edge && typeof edge.kind === "string" && resolveCanonicalRelationshipKind(edge.kind) === "related");
+}
+
+/** Limit citation writes to full mirrors in both new and persisted import plans. */
+export function canLinkImportReferences(entry: Pick<PreparedGithubImport, "linkOnly" | "preserveContent">): boolean {
+  return !entry.linkOnly && !entry.preserveContent;
 }
 
 /** Project the same missing native edges for preview and for apply. */

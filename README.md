@@ -585,7 +585,8 @@ When an issue has an importer-owned mirror, issue import and refresh add a nativ
 `github_url`. The citing items and their history stay byte-for-byte unchanged.
 A bare `github_url` beside a verified mirror of the same source is a citation.
 Without a mirror, an explicit URL can still select a curated owner.
-Prose mentions continue to use the separate citation-adoption rules below.
+Link-only and curated owners keep their existing refresh policy. Only full
+mirrors receive citation edges. Prose mentions use the citation-adoption rules below.
 
 Preview and apply report new edges in `local_issue_references` in JSON and TOON.
 Atomic imports and atomic refreshes record the relationship updates in the same

@@ -6,9 +6,9 @@ status: open
 priority: 2
 tags[2]: "gh:unbraind/pm-github#296","github_author:unbraind"
 created_at: "2026-11-27T10:45:14Z"
-updated_at: "2026-11-28T01:54:23.395Z"
+updated_at: "2026-11-28T02:10:32.850Z"
 author: pm-github
-comments[14]{created_at,author,text}:
+comments[16]{created_at,author,text}:
   "2026-11-27T22:25:14.902Z",codex-agent,"Reviewing import ownership, the gated repeat check, and closeout before adding a native related edge from the mirror."
   "2026-11-27T22:25:29.054Z",codex-agent,"Reproduced on main with a real non-git tracker: a tagged in-progress Chore plus an open GitHub issue creates the mirror and neither item has a dependency. The pinned SDK provides undirected, non-ordering related relationships. Write the source edge on the mirror only so the citing item and its history stay byte-identical."
   "2026-11-27T22:34:51.655Z",codex-agent,Separate changelog follow-up filed as unbraind/pm-changelog#390 for a single release entry when a mirror and related delivery close in the same release. Verified the pinned host projects the native related edge in full get and deps context. Project-wide context has no association projection or extension section registration.
@@ -23,6 +23,8 @@ comments[14]{created_at,author,text}:
   "2026-11-28T00:53:59.030Z",codex-agent,"Behavioural reverts in a disposable source copy failed 2 atomic rollback/replay cases, 3 legacy import/refresh cases, 1 registered-kind case, 2 first-batch cases, and 2 reciprocal-pair cases. Reverting the history generation fence, refresh recovery receipt, or stable receipt ordering failed one additional test each. Tests keep the native SDK and tracker active."
   "2026-11-28T01:27:24.567Z",codex-agent,"Round 1 targeted suite ran 1978 tests across 72 files. The 1977 passing cases included the gated workflow and minimum SDK. The packed test exposed that the SDK bulk update reserves its activity message for the recovery marker. Expanded the consumer matrix to confirm the original plain activity label and the exact atomic activity event backed by the typed history patch, for npm and Bun in JSON and TOON. All 6 packed projection tests passed on the rerun. Durable named atomic activity projection remains a host follow-up."
   "2026-11-28T01:54:18.543Z",codex-agent,"Round 1 head b2e3ee0 passed exact CI at https://github.com/unbraind/pm-github/actions/runs/46093325963: 2255 tests each on Node 22 and Node 26, exact four-dimensional coverage across 36 authored modules, 11 Bun smoke tests. Merged main at 37b235d after pm-github#298 landed. Preserved the source freshness fence, comment receipts and real no-op gate alongside journaled citation mutations and replay receipts."
+  "2026-11-28T02:09:16.839Z",codex-agent,"Greptile thread PRRT_kwDOTbN4pM68-76D identified inconsistent mirror eligibility. A shared predicate now applies to ordinary import, refresh preview and apply, and persisted-plan replay. The two new real-tracker tests fail against the previous code because preview emits unwanted edges for an explicit link-only record and an importer-created provider owner. The control full mirror is selected, the curated owner remains unlinked, and the tests exercise plain and atomic apply, unchanged citing files, and byte-identical repeat refresh."
+  "2026-11-28T02:10:26.120Z",codex-agent,"The targeted citation suite passed all 16 cases after the mirror-eligibility fix, including both new revert-sensitive refresh cases."
 files[15]{path,scope}:
   .github/workflows/pm-github-sync.yml,project
   closeout.ts,project
@@ -39,10 +41,38 @@ files[15]{path,scope}:
   test/reference-import-identity.test.ts,project
   test/refresh.test.ts,project
   test/repeat-import-noop.test.ts,project
-tests[3]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
-  node --test --test-concurrency=2 --test-name-pattern='one reference-only|two shared references|closed pre-existing|reverse related|closeout accepts tag|refresh previews and backfills|replaying a pending mirror|strict gated sync reports|packed npm and native Bun' test/reference-import-identity.test.ts test/closeout.test.ts test/refresh.test.ts test/repeat-import-noop.test.ts test/import-gate.test.ts test/import-projection.test.ts,project,900,codex-agent,"2026-11-27T22:38:22.147Z",local_mutation,feat/link-imported-issues-to-citing-items
-  node --test --test-concurrency=1 --test-name-pattern='reference linking rechecks|reference plans skip' test/reference-import-identity.test.ts,project,120,codex-agent,"2026-11-27T23:31:27.203Z",local_mutation,feat/link-imported-issues-to-citing-items
-  node --test --test-concurrency=2 --test-name-pattern='projected same-batch|reciprocal citations|legacy importer proof|workspace-defined relationships|second citation refusal|interruption after the first citation|bare citation beside|fresh journal|citations replayed from' test/reference-import-identity.test.ts test/refresh.test.ts test/repeat-import-noop.test.ts,project,180,codex-agent,"2026-11-28T00:53:57.195Z",local_mutation,feat/link-imported-issues-to-citing-items
+tests[4]:
+  - command: node --test --test-concurrency=2 --test-name-pattern='one reference-only|two shared references|closed pre-existing|reverse related|closeout accepts tag|refresh previews and backfills|replaying a pending mirror|strict gated sync reports|packed npm and native Bun' test/reference-import-identity.test.ts test/closeout.test.ts test/refresh.test.ts test/repeat-import-noop.test.ts test/import-gate.test.ts test/import-projection.test.ts
+    scope: project
+    timeout_seconds: 900
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-27T22:38:22.147Z"
+      source_kind: local_mutation
+      source_ref: feat/link-imported-issues-to-citing-items
+  - command: node --test --test-concurrency=1 --test-name-pattern='reference linking rechecks|reference plans skip' test/reference-import-identity.test.ts
+    scope: project
+    timeout_seconds: 120
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-27T23:31:27.203Z"
+      source_kind: local_mutation
+      source_ref: feat/link-imported-issues-to-citing-items
+  - command: node --test --test-concurrency=2 --test-name-pattern='projected same-batch|reciprocal citations|legacy importer proof|workspace-defined relationships|second citation refusal|interruption after the first citation|bare citation beside|fresh journal|citations replayed from' test/reference-import-identity.test.ts test/refresh.test.ts test/repeat-import-noop.test.ts
+    scope: project
+    timeout_seconds: 180
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-28T00:53:57.195Z"
+      source_kind: local_mutation
+      source_ref: feat/link-imported-issues-to-citing-items
+  - command: node --test --test-concurrency=2 --test-name-pattern='refresh links citations only' test/refresh.test.ts
+    scope: project
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-28T02:09:54.599Z"
+      source_kind: local_mutation
+      source_ref: feat/link-imported-issues-to-citing-items
 docs[2]{path,scope}:
   docs/identity-ownership-inventory.md,project
   README.md,project

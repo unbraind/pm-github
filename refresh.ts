@@ -1,4 +1,4 @@
-import { applyLocalIssueReferences, localIssueReferenceReceipt, type IssueMirror, type LocalIssueReference } from "./import-references.ts";
+import { applyLocalIssueReferences, canLinkImportReferences, localIssueReferenceReceipt, type IssueMirror, type LocalIssueReference } from "./import-references.ts";
 import { buildGithubOwnershipIndex, warnGithubOwnershipScope, githubOwnedIdentityKeys, GithubImportOwnershipError, ownershipStateOf } from "./import-ownership.ts";
 import { parseGithubIssueUrl } from "./github-url.ts";
 import { readGithubWorkspace, type GithubStatusRegistry } from "./workspace.ts";
@@ -15,7 +15,7 @@ import {
   resolveGitHubToken, resumeGithubImport, assertGithubImportReplayPreflight, validateGithubImportFidelity, validateGithubImportPlan,
   type GhIssue, type PmItem, type PreparedGithubImport,
 } from "./index.ts";
-import { fetchImportTimeline, importerCreatedItem, type LegacyGithubIdentityConflict, importFidelityFields, normalizeImportValue, readImportReleases } from "./import-fidelity.ts";
+import { fetchImportTimeline, type LegacyGithubIdentityConflict, importFidelityFields, normalizeImportValue, readImportReleases } from "./import-fidelity.ts";
 
 /** An existing item and its unique linked issue number. */
 export interface RefreshTarget { id: string; number: number; item: PmItem }
@@ -273,7 +273,7 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
         const entry = (await prepareGithubImport(issue, repo, opts, token, result.target.item, undefined, context))!;
         row.changes = refreshChanges(entry, workspace.statuses);
         rendered.push(entry);
-        if (importerCreatedItem(result.target.item, repo, result.target.number)) mirrors.push({ issue: row.number, item: row.id });
+        if (canLinkImportReferences(entry)) mirrors.push({ issue: row.number, item: row.id });
         if (row.changes.length) prepared.push(entry);
         else unchanged++;
       }
