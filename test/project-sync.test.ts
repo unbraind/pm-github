@@ -1163,7 +1163,10 @@ for (const launcher of ["npx", "bunx"] as const) {
         fs.writeFileSync(path.join(dist, "index.js"), 'throw new Error("Stale Projects consumer build");');
         setup("npm", ["run", "build", "--", "--outDir", dist]);
         const metadata = JSON.parse(fs.readFileSync(path.join(repository, "package.json"), "utf8")) as { files: string[] };
-        for (const file of new Set(["package.json", ...metadata.files])) {
+        // npm 10 may invoke prepare even with --ignore-scripts. The package's
+        // own bootstrap recognizes npm pack and exits before touching the tracker.
+        const stagingFiles = new Set(["package.json", "LICENSE", "scripts/prepare-merge-driver.ts", ...metadata.files]);
+        for (const file of stagingFiles) {
           if (file.replace(/\/$/, "") === "dist") continue;
           fs.mkdirSync(path.dirname(path.join(packageRoot, file)), { recursive: true });
           fs.copyFileSync(path.join(repository, file), path.join(packageRoot, file));
