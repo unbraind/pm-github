@@ -83,6 +83,51 @@ test("refresh previews and backfills local citations even if source fields are u
   });
 }));
 
+test("atomic refresh reports the citations replayed from its retained plan", async () => tracker(async (_directory, pmRoot) => {
+  const mirror = (await createImportMirror({ title: "Mirror", tags: "gh:fixture/repo#1" }, { pmRoot })).item;
+  const upstream = node();
+  await withMockGithub(transport({ i1: upstream }), async () => {
+    await runRefresh("fixture/repo", pmRoot, { atomic: true });
+    const local = (await create({ title: "Delivery", tags: "gh:fixture/repo#1" }, { pmRoot })).item;
+    const items = (await listAllComplete({ includeBody: true }, { pmRoot })).items;
+    const match = items.find(item => item.id === mirror.id)!;
+    const source: GhIssue = { number: 1, title: upstream.title, body: upstream.body, state: "open", labels: upstream.labels.nodes,
+      assignee: null, milestone: null, user: upstream.author, html_url: upstream.url, created_at: upstream.createdAt, updated_at: upstream.updatedAt };
+    const entry = (await prepareGithubImport(source, "fixture/repo", parseImportOptions({}), undefined, match, undefined,
+      { items, releases: [], timeline: async () => [] }))!;
+    const edges = [{ issue: 1, item: mirror.id, local_item: local.id, kind: "related" as const }];
+    await assert.rejects(importGithubAtomic(pmRoot, "fixture/repo", [{ ...entry, referenceOnly: true, localReferences: edges }], {
+      updateOnly: true, onTransition: context => {
+        if (context.transition === "committing") throw new WorkspaceTransactionInterruptedError("Interrupt atomic refresh after citation");
+      },
+    }), /journal is resumable/);
+    const applied = await runRefresh("fixture/repo", pmRoot, { atomic: true });
+    assert.equal(applied.resumed, 1);
+    assert.deepEqual(applied.local_issue_references, edges);
+    assert.equal(applied.updated, 0);
+  });
+}));
+
+for (const atomic of [false, true]) test(`refresh preserves a bare citation beside a URL-free proven mirror (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
+  const id = deriveAtomicItemId("fixture/repo", 1, "refresh-fixture-", normalizeItemId);
+  const mirror = (await create({ id, title: "Legacy mirror", type: "Issue", author: "pm-github", tags: "gh:fixture/repo#1" }, { pmRoot })).item;
+  const local = (await create({ title: "URL citation", type: "Chore", body: "Keep local context" }, { pmRoot })).item;
+  await seedExistingItem(pmRoot, local.id, { metadata: { ...local, github_url: node().url }, body: "Keep local context" }, "Seed a local URL citation");
+  const before = snapshot(pmRoot);
+  await withMockGithub(transport({ i1: node() }), async () => {
+    const expected = [{ issue: 1, item: mirror.id, local_item: local.id, kind: "related" }];
+    const preview = await runRefresh("fixture/repo", pmRoot, { atomic, "dry-run": true });
+    assert.deepEqual(preview.local_issue_references, expected);
+    assert.deepEqual(snapshot(pmRoot), before);
+    const applied = await runRefresh("fixture/repo", pmRoot, { atomic });
+    assert.deepEqual(applied.local_issue_references, expected);
+    const after = snapshot(pmRoot);
+    for (const [file, value] of Object.entries(before)) if (file.includes(local.id)) assert.equal(after[file], value);
+    assert.equal((await runRefresh("fixture/repo", pmRoot, { atomic })).local_issue_references, undefined);
+    assert.deepEqual(snapshot(pmRoot), after);
+  });
+}));
+
 for (const atomic of [false, true]) {
   test(`apply then re-apply preserves every byte and history line without cache priming (${atomic})`, async () => tracker(async (_directory, pmRoot) => {
     const linked = (await createImportMirror({ title: "Stale", tags: "gh:fixture/repo#1,area,api" }, { pmRoot })).item;

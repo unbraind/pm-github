@@ -5,9 +5,9 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { init, create, get, update, mutateItem, readSettings, getHistoryPath, getItemPath, WorkspaceTransactionInterruptedError, setActiveExtensionRegistrations, listAllComplete, normalizeItemId } from "@unbrained/pm-cli/sdk";
+import { init, create, get, update, mutateItem, readSettings, getHistoryPath, getItemPath, WorkspaceTransactionInterruptedError, setActiveExtensionRegistrations, setActiveExtensionHooks, runWithActiveExtensions, listAllComplete, normalizeItemId } from "@unbrained/pm-cli/sdk";
 import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
-import extension, { runImport, parseImportOptions, importGithubAtomic, prepareGithubImport, deriveAtomicItemId, type GhIssue, type GhComment, type AtomicImportOptions } from "../index.ts";
+import extension, { runImport, parseImportOptions, importGithubAtomic, prepareGithubImport, deriveAtomicItemId, listRetainedGithubImportPlans, validateGithubImportPlan, type GithubImportPlanRecord, type GhIssue, type GhComment, type AtomicImportOptions } from "../index.ts";
 import { refreshChanges } from "../refresh.ts";
 import { persistImportFidelity, buildImportFidelity, selectImportContextIndex } from "../import-fidelity.ts";
 import { captureStderr, withEnv } from "./helpers/mock-github-server.ts";
@@ -190,6 +190,69 @@ test("replaying a pending mirror import links its local citation and converges",
   assert.deepEqual(result.local_issue_references, [{ issue: 1, item: id, local_item: local.id, kind: "related" }]);
   assert.deepEqual(await bytes(pmRoot, local.id), localBefore);
   await repeat(pmRoot, [source], id);
+}));
+
+test("second citation refusal compensates the entire atomic import", async () => tracker(async pmRoot => {
+  const source = [issue(1), issue(2)];
+  const ids = source.map(row => deriveAtomicItemId(repo, row.number, "fixture-", normalizeItemId));
+  const local = [];
+  for (const row of source) {
+    local.push((await create({ title: `Delivery ${row.number}`, type: "Chore", tags: `gh:${repo}#${row.number}` }, { pmRoot })).item.id);
+  }
+  local.sort();
+  const before = await Promise.all(local.map(id => bytes(pmRoot, id)));
+  let reached = false;
+  await runWithActiveExtensions({ path: pmRoot, noExtensions: true }, async () => {
+    setActiveExtensionHooks({ beforeCommand: [], afterCommand: [], onRead: [], onWrite: [], onIndex: [],
+      beforeMutation: [{ layer: "project", name: "fixture-refuse-second-edge", run: async context => {
+        if (context.after?.metadata.id === ids[1] && context.after?.metadata.dependencies?.some(edge => edge.kind === "related")) {
+          reached = true;
+          assert.ok((await get(ids[0]!, {}, { pmRoot })).item.dependencies?.some(edge => edge.kind === "related"));
+          return { allow: false, code: "fixture_citation_refused", message: "Fixture refuses second citation", remediation: "Retry with fixture policy cleared." };
+        }
+      } }] });
+    await assert.rejects(importing(pmRoot, source), /Fixture refuses second citation/);
+  });
+  assert.equal(reached, true);
+  assert.deepEqual((await listAllComplete({}, { pmRoot })).items.map(item => item.id).sort(), local.sort());
+  assert.deepEqual(await Promise.all(local.map(id => bytes(pmRoot, id))), before);
+}));
+
+test("an interruption after the first citation replays the complete original atomic plan", async () => tracker(async pmRoot => {
+  const source = [issue(1), issue(2)];
+  const ids = source.map(row => deriveAtomicItemId(repo, row.number, "fixture-", normalizeItemId));
+  for (const row of source) await create({ title: `Local work ${row.number}`, type: "Chore", tags: `gh:${repo}#${row.number}` }, { pmRoot });
+  await assert.rejects(importing(pmRoot, source, [], async context => {
+    if (context.transition === "step_recorded" && context.stepId?.includes(ids[0]!) &&
+        (await get(ids[0]!, {}, { pmRoot })).item.dependencies?.some(edge => edge.kind === "related")) {
+      throw new WorkspaceTransactionInterruptedError("Interrupted after first citation");
+    }
+  }), /journal is resumable/);
+  const [plan] = await listRetainedGithubImportPlans(pmRoot);
+  assert.ok(plan);
+  assert.equal(plan.entries.flatMap(entry => entry.localReferences ?? []).length, 2);
+  const [first, ...rest] = plan.entries;
+  const edge = first!.localReferences![0]!;
+  const corruptEntries = [
+    { referenceOnly: false }, { referenceOnly: true }, { referenceOnly: true, match: { id: edge.item }, localReferences: undefined },
+    { localReferences: null }, { localReferences: [] }, { linkOnly: true }, { preserveContent: true },
+    { localReferences: [null] }, { localReferences: [{ ...edge, kind: "documents" }] },
+    { localReferences: [{ ...edge, issue: 99 }] }, { localReferences: [{ ...edge, item: "fixture-other" }] },
+    { localReferences: [{ ...edge, local_item: null }] }, { localReferences: [{ ...edge, local_item: "kind=documents,other" }] },
+    { localReferences: [{ ...edge, local_item: edge.item }] }, { localReferences: [edge, edge] },
+  ];
+  // Exercise bad persisted JSON shapes without letting any reach the native journal.
+  for (const change of corruptEntries) {
+    const malformed = { ...plan, entries: [{ ...first, ...change }, ...rest] } as unknown as GithubImportPlanRecord;
+    assert.throws(() => validateGithubImportPlan(malformed), /invalid original citation mutations/, JSON.stringify(change));
+  }
+  assert.throws(() => validateGithubImportPlan({ ...plan, mutations: plan.mutations.slice(0, -1) }), /invalid original citation mutations/);
+  const result = await importing(pmRoot, [issue(3)]);
+  assert.equal(result.transactionId, plan.transactionId);
+  assert.equal(result.replayedOriginalPlan, true);
+  assert.deepEqual(result.local_issue_references, plan.entries.flatMap(entry => entry.localReferences ?? []));
+  for (const id of ids) assert.equal((await get(id, {}, { pmRoot })).item.dependencies?.length, 1);
+  await repeat(pmRoot, source, ids[0]!);
 }));
 
 test("local reopen and interrupted transaction replay restore GitHub close without duplicate effects", async () => tracker(async pmRoot => {

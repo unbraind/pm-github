@@ -586,12 +586,17 @@ Without a mirror, an explicit URL can still select a curated owner.
 Prose mentions continue to use the separate citation-adoption rules below.
 
 Preview and apply report new edges in `local_issue_references` in JSON and TOON.
+Atomic imports and atomic refreshes record the relationship updates in the same
+saved transaction as the mirror updates. A retry replays the original edges
+with the original item mutations. Issue citations created in the same batch are
+planned from the final tag projection, and reciprocal citations share one edge.
 Older mirror pairs gain the edge on the next import. Identical subsequent imports
 preserve tracker bytes. The gated sync PR reports new edges under
 **Local items referencing imported issues**. Use `pm get <mirror> --full` or
 `pm deps <either-item> --format context --kind related` to inspect the edge.
-The write also names the citing IDs in `pm context --section activity`. Use
-the dependency context for durable lookup after the recent activity rolls off.
+In `pm context --section activity`, plain writes name the citing IDs and atomic
+writes show the SDK transaction event for the mirror. The dependency context
+shows both endpoint IDs and the relationship kind.
 
 **Citation adoption is off by default.** Manual imports, the legacy alias and
 scheduled gated syncs retain normal create behavior when explicit ownership is

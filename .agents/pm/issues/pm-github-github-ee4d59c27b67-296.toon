@@ -6,9 +6,9 @@ status: open
 priority: 2
 tags[2]: "gh:unbraind/pm-github#296","github_author:unbraind"
 created_at: "2026-11-27T10:45:14Z"
-updated_at: "2026-11-27T23:31:51.443Z"
+updated_at: "2026-11-28T01:27:28.084Z"
 author: pm-github
-comments[10]{created_at,author,text}:
+comments[13]{created_at,author,text}:
   "2026-11-27T22:25:14.902Z",codex-agent,"Reviewing import ownership, the gated repeat check, and closeout before adding a native related edge from the mirror."
   "2026-11-27T22:25:29.054Z",codex-agent,"Reproduced on main with a real non-git tracker: a tagged in-progress Chore plus an open GitHub issue creates the mirror and neither item has a dependency. The pinned SDK provides undirected, non-ordering related relationships. Write the source edge on the mirror only so the citing item and its history stay byte-identical."
   "2026-11-27T22:34:51.655Z",codex-agent,Separate changelog follow-up filed as unbraind/pm-changelog#390 for a single release entry when a mirror and related delivery close in the same release. Verified the pinned host projects the native related edge in full get and deps context. Project-wide context has no association projection or extension section registration.
@@ -19,6 +19,9 @@ comments[10]{created_at,author,text}:
   "2026-11-27T23:07:18.846Z",codex-agent,"Targeted Node run used 73 files and executed 1984 tests. Passed 1982, with the two repository-wide privacy tests affected by unrelated local-only identities. The exact committed candidate is checked in a clean clone. Minimum SDK packed acceptance, identity inventory, build, typecheck, test typecheck and lint passed. Strict tracker health passed with isolated user configuration."
   "2026-11-27T23:23:14.447Z",codex-agent,Rebased without conflict after pm-github#301 merged at 6229d64. The feature patch was unchanged. Regenerated ownership inventory anchors for the merged workflow and reran the affected workflow and documentation gates.
   "2026-11-27T23:31:51.442Z",codex-agent,"First pushed head passed Node 22 and CodeQL. Node 26 CI reported uncovered linker branches and lines. Added real SDK tests for a citation changed inside the mutation guard and an unavailable mirror, plus legacy projection cases. Both tests failed in a disposable copy with only those guards disabled and passed through the linked test command after restoration. Coverage thresholds are unchanged. CI evidence: https://github.com/unbraind/pm-github/actions/runs/46080879240"
+  "2026-11-28T00:44:20.452Z",codex-agent,"Round 1 review covers three invariants: required relationship writes belong to the atomic journal, complete ownership evidence can identify legacy mirrors without a URL, and builtin-kind comparisons must tolerate unrelated workspace-defined kinds. Also testing one edge per unordered pair and first-pass planning from the whole projected batch. Main is already an ancestor of the PR head."
+  "2026-11-28T00:53:59.030Z",codex-agent,"Behavioural reverts in a disposable source copy failed 2 atomic rollback/replay cases, 3 legacy import/refresh cases, 1 registered-kind case, 2 first-batch cases, and 2 reciprocal-pair cases. Reverting the history generation fence, refresh recovery receipt, or stable receipt ordering failed one additional test each. Tests keep the native SDK and tracker active."
+  "2026-11-28T01:27:24.567Z",codex-agent,"Round 1 targeted suite ran 1978 tests across 72 files. The 1977 passing cases included the gated workflow and minimum SDK. The packed test exposed that the SDK bulk update reserves its activity message for the recovery marker. Expanded the consumer matrix to confirm the original plain activity label and the exact atomic activity event backed by the typed history patch, for npm and Bun in JSON and TOON. All 6 packed projection tests passed on the rerun. Durable named atomic activity projection remains a host follow-up."
 files[15]{path,scope}:
   .github/workflows/pm-github-sync.yml,project
   closeout.ts,project
@@ -35,9 +38,10 @@ files[15]{path,scope}:
   test/reference-import-identity.test.ts,project
   test/refresh.test.ts,project
   test/repeat-import-noop.test.ts,project
-tests[2]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+tests[3]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
   node --test --test-concurrency=2 --test-name-pattern='one reference-only|two shared references|closed pre-existing|reverse related|closeout accepts tag|refresh previews and backfills|replaying a pending mirror|strict gated sync reports|packed npm and native Bun' test/reference-import-identity.test.ts test/closeout.test.ts test/refresh.test.ts test/repeat-import-noop.test.ts test/import-gate.test.ts test/import-projection.test.ts,project,900,codex-agent,"2026-11-27T22:38:22.147Z",local_mutation,feat/link-imported-issues-to-citing-items
   node --test --test-concurrency=1 --test-name-pattern='reference linking rechecks|reference plans skip' test/reference-import-identity.test.ts,project,120,codex-agent,"2026-11-27T23:31:27.203Z",local_mutation,feat/link-imported-issues-to-citing-items
+  node --test --test-concurrency=2 --test-name-pattern='projected same-batch|reciprocal citations|legacy importer proof|workspace-defined relationships|second citation refusal|interruption after the first citation|bare citation beside|fresh journal|citations replayed from' test/reference-import-identity.test.ts test/refresh.test.ts test/repeat-import-noop.test.ts,project,180,codex-agent,"2026-11-28T00:53:57.195Z",local_mutation,feat/link-imported-issues-to-citing-items
 docs[2]{path,scope}:
   docs/identity-ownership-inventory.md,project
   README.md,project

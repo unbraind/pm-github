@@ -6,10 +6,13 @@ import { mkdtempSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { init, create, get, getItemPath, getHistoryPath, listAllComplete, update, runWithActiveExtensions, setActiveExtensionHooks } from "@unbrained/pm-cli/sdk";
-import { runImport, parseImportOptions, type GhIssue } from "../index.ts";
+import { init, create, get, getItemPath, getHistoryPath, listAllComplete, update, runWithActiveExtensions, setActiveExtensionHooks, setActiveExtensionRegistrations, normalizeItemId, commitItemMutations } from "@unbrained/pm-cli/sdk";
+import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
+import type { ExtensionApi } from "@unbrained/pm-cli/sdk/authoring";
+import { runImport, parseImportOptions, deriveAtomicItemId, type GhIssue } from "../index.ts";
 import { applyLocalIssueReferences, planLocalIssueReferences } from "../import-references.ts";
 import { selectRefreshTargets } from "../refresh.ts";
+import { buildGithubOwnershipIndex, ownershipStateOf } from "../import-ownership.ts";
 import { exploreGithubIdentities } from "../identity.ts";
 import { captureStderr, withEnv } from "./helpers/mock-github-server.ts";
 
@@ -158,6 +161,123 @@ test("reference plans skip unavailable endpoints and unrelated legacy metadata",
   const before = await bytes(root, local.id);
   assert.deepEqual(await applyLocalIssueReferences(root, repo, [mirror], planned), []);
   assert.deepEqual(await bytes(root, local.id), before);
+}));
+
+for (const atomic of [false, true]) {
+  test(`projected same-batch citations link on the first import (${atomic})`, async () => tracker(false, async root => {
+    const batch = [
+      { ...issue, labels: [{ name: "gh:o/r#8" }] },
+      { ...issue, number: 8, title: "Same-batch mirror", html_url: "https://github.com/o/r/issues/8" },
+    ];
+    const run = (dryRun: boolean) => runImport(repo, root, parseImportOptions({ atomic, "dry-run": dryRun }), {
+      fetchIssues: async () => batch, resolveToken: () => undefined,
+    });
+    const preview = await run(true);
+    const [citing, cited] = batch.map(item => deriveAtomicItemId(repo, item.number, "fixture-", normalizeItemId));
+    const expected = [{ item: cited, issue: 8, local_item: citing, kind: "related" }];
+    assert.deepEqual("local_issue_references" in preview && preview.local_issue_references, expected);
+    assert.equal((await listAllComplete({}, { pmRoot: root })).items.length, 0);
+    const result = await run(false);
+    assert.deepEqual("local_issue_references" in result && result.local_issue_references, expected);
+    const ids = [citing!, cited!];
+    const before = await Promise.all(ids.map(id => bytes(root, id)));
+    await run(false);
+    assert.deepEqual(await Promise.all(ids.map(id => bytes(root, id))), before);
+  }));
+
+  test(`reciprocal citations choose one stable edge regardless of input order (${atomic})`, async () => tracker(false, async root => {
+    const batch = [
+      { ...issue, labels: [{ name: "gh:o/r#8" }, { name: tag }] },
+      { ...issue, number: 8, title: "Reciprocal mirror", html_url: "https://github.com/o/r/issues/8", labels: [{ name: tag }] },
+    ];
+    const local = (await create({ title: "Distinct local citation", tags: "gh:o/r#8" }, { pmRoot: root })).item;
+    const run = (dryRun: boolean) => runImport(repo, root, parseImportOptions({ atomic, "dry-run": dryRun }), {
+      fetchIssues: async () => batch, resolveToken: () => undefined,
+    });
+    const preview = await run(true);
+    assert.ok("local_issue_references" in preview);
+    assert.equal(preview.local_issue_references?.length, 2);
+    assert.deepEqual(preview.local_issue_references?.map(edge => edge.issue), [7, 8]);
+    assert.equal(preview.local_issue_references?.[1]?.local_item, local.id);
+    batch.reverse();
+    const result = await run(false);
+    assert.deepEqual("local_issue_references" in result && result.local_issue_references, preview.local_issue_references);
+    const items = (await listAllComplete({}, { pmRoot: root })).items;
+    assert.equal(items.flatMap(item => item.dependencies ?? []).filter(edge => edge.kind === "related").length, 2);
+  }));
+}
+
+test("link-only imports use a fresh journal after an explicitly removed edge", async () => tracker(false, async root => {
+  await sync(root, issue, true, false);
+  const [mirror] = (await listAllComplete({}, { pmRoot: root })).items;
+  const local = (await create({ title: "Curated repeat target", type: "Chore", tags: tag }, { pmRoot: root })).item;
+  const first = await sync(root, issue, true, false);
+  await commitItemMutations({ pmRoot: root, transactionId: "github-import-fixture-removal", author: "pm-github",
+    mutations: [{ op: "update", id: mirror!.id, options: { depRemove: [`id=${local.id},kind=related`] } }] });
+  const second = await sync(root, issue, true, false);
+  assert.notEqual(second.transactionId, first.transactionId);
+  assert.deepEqual((await get(mirror!.id, {}, { pmRoot: root })).item.dependencies?.map(dep => dep.id), [local.id]);
+  assert.equal((await sync(root, issue, true, false)).unchanged, true);
+}));
+
+test("legacy importer proof classifies bare URL citations without a source URL", async () => tracker(true, async root => {
+  const id = deriveAtomicItemId(repo, issue.number, "fixture-", normalizeItemId);
+  await create({ id, title: issue.title, type: "Issue", author: "pm-github", tags: tag, body: issue.body! }, { pmRoot: root });
+  const local = (await create({ title: "Citing local chore", type: "Chore" }, { pmRoot: root })).item;
+  await seedExistingItem(root, local.id, { metadata: { ...local, github_url: issue.html_url }, body: "" }, "Seed bare citation URL");
+  const before = await bytes(root, local.id);
+  const items = (await listAllComplete({}, { pmRoot: root })).items;
+  const index = buildGithubOwnershipIndex(items, [repo]);
+  const copy = { ...items.find(item => item.id === local.id)! };
+  assert.deepEqual(ownershipStateOf(index, copy).owners, []);
+  assert.deepEqual(selectRefreshTargets(items, repo).map(target => target.id), [id]);
+  assert.deepEqual((await sync(root, issue, true, true, true)).local_issue_references, [{ item: id, issue: 7, local_item: local.id, kind: "related" }]);
+  assert.equal((await sync(root)).imported, 0);
+  assert.deepEqual(await bytes(root, local.id), before);
+  assert.equal((await get(id, {}, { pmRoot: root })).item.dependencies?.[0]?.id, local.id);
+}));
+
+for (const ambiguity of ["multiple mirrors", "inconsistent source kinds"]) {
+  test(`bare URL citations retain conflict protection with ${ambiguity}`, async () => tracker(false, async root => {
+    const id = deriveAtomicItemId(repo, issue.number, "fixture-", normalizeItemId);
+    const mirror = (await create({ id, title: issue.title, type: "Issue", author: "pm-github", tags: tag }, { pmRoot: root })).item;
+    if (ambiguity === "multiple mirrors") {
+      await create({ id: id.replace("github-", "other-github-"), title: "Second proven mirror", type: "Issue", author: "pm-github", tags: tag }, { pmRoot: root });
+    } else {
+      await seedExistingItem(root, mirror.id, { metadata: { ...mirror, github_url: issue.html_url,
+        external_ref: "https://github.com/o/r/pull/7" }, body: "" }, "Seed ambiguous source kind");
+    }
+    const local = (await create({ title: "Citing local", type: "Chore" }, { pmRoot: root })).item;
+    await seedExistingItem(root, local.id, { metadata: { ...local, github_url: issue.html_url }, body: "" }, "Seed citation URL");
+    const before = await bytes(root, local.id);
+    await assert.rejects(sync(root, issue, true, false), { code: "github_import_owner_conflict" });
+    assert.deepEqual(await bytes(root, local.id), before);
+  }));
+}
+
+test("workspace-defined relationships coexist with builtin related edges in either direction", async () => tracker(false, async root => {
+  await sync(root, issue, true, false);
+  const [mirror] = (await listAllComplete({}, { pmRoot: root })).items;
+  const local = (await create({ title: "Cites and documents", type: "Chore", tags: tag }, { pmRoot: root })).item;
+  const harness = await createExtensionTestHarness({
+    manifest: { name: "reference-fixture", version: "1.0.0", capabilities: ["schema"] },
+    activate(api: ExtensionApi) {
+      api.registerRelationshipKinds([{ kind: "documents", direction: "directed", ordering: false, hierarchy: false,
+        outgoing: "many", incoming: "many", lifecycle: "persistent", compatibilityVersion: 1, allowSelf: false }]);
+    },
+  }, { capabilities: ["schema"] });
+  await runWithActiveExtensions({ path: root, noExtensions: true }, async () => {
+    setActiveExtensionRegistrations(harness.activation.registrations);
+    await update(local.id, { dep: [`id=${mirror!.id},kind=documents`] }, { pmRoot: root });
+    await update(mirror!.id, { dep: [`id=${local.id},kind=documents`] }, { pmRoot: root });
+    const before = await bytes(root, local.id);
+    const preview = await sync(root, issue, true, false, true);
+    const actual = await sync(root, issue, true, false);
+    assert.deepEqual(actual.local_issue_references, preview.local_issue_references);
+    assert.ok(actual.local_issue_references);
+    assert.deepEqual((await get(mirror!.id, {}, { pmRoot: root })).item.dependencies?.map(edge => edge.kind).sort(), ["documents", "related"]);
+    assert.deepEqual(await bytes(root, local.id), before);
+  });
 }));
 
 test("released legacy snapshot resyncs with zero changes beside shared references", async () => tracker(true, async root => {

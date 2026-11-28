@@ -57,7 +57,7 @@ export interface GithubOwnedTarget {
   /** Dependency endpoints must retain their unique ownership inside the source lock. */
   related?: readonly GithubOwnedTarget[];
   /** Validate non-owning relationship endpoints against the locked native corpus. */
-  verifyPeers?: (peers: GithubOwnershipIndex) => void;
+  verifyPeers?: (peers: GithubOwnershipIndex, before?: PmItem, after?: PmItem) => void;
 }
 
 /** Use the same repository hash for import destinations and legacy identity verification. */
@@ -134,20 +134,26 @@ function bareGithubUrlKey(item: PmItem): string | undefined {
 /** Parse each item once and index peer claims in linear snapshot work. */
 export function buildGithubOwnershipIndex(items: readonly PmItem[], repositories: readonly string[] = []): GithubOwnershipIndex {
   const index: GithubOwnershipIndex = { items, repositories: [...repositories], states: new WeakMap(), byId: new Map(), claimants: new Map(), urlReferences: new Map() };
-  const mirrors = new Map<string, number>();
+  const mirrors = new Map<string, string | null>();
   for (const item of items) {
-    const identity = githubImporterIdentity(item, repositories);
-    const url = parseGithubIssueUrl(item.github_url) ?? parseLegacyGithubDescription(item)?.identity;
-    if (identity && url?.key === identity && !url.api) {
-      const key = `${url.kind}:${identity}`;
-      mirrors.set(key, (mirrors.get(key) ?? 0) + 1);
+    const state = githubOwnershipClaims(item, false, false, repositories);
+    index.states.set(item, state);
+    const identity = state.owners[0];
+    if (identity && state.claims.length === 1 && importerCreatedItem(item, "", 0) && item.github_link_only !== true) {
+      const kind = state.kinds[0] ?? "issues";
+      mirrors.set(identity, mirrors.has(identity) || state.kinds.length > 1 ? null : kind);
     }
   }
   for (const item of items) {
     const urlKey = bareGithubUrlKey(item);
-    if (item.id && urlKey && mirrors.get(urlKey) === 1) index.urlReferences.set(item.id, urlKey);
+    if (item.id && urlKey) {
+      const [kind, identity] = urlKey.split(":");
+      if (mirrors.get(identity!) === kind) {
+        index.urlReferences.set(item.id, urlKey);
+        index.states.set(item, citationOwnershipState());
+      }
+    }
     const state = ownershipStateOf(index, item);
-    index.states.set(item, state);
     if (item.id) index.byId.set(item.id, item);
     for (const key of state.claims) {
       const peers = index.claimants.get(key) ?? new Map<string, string[]>();
@@ -183,6 +189,11 @@ export function warnGithubOwnershipScope(index: GithubOwnershipIndex, selected: 
   }
 }
 
+/** Give an indexed citation the same claim-free state as other local references. */
+function citationOwnershipState(): ReturnType<typeof githubOwnershipClaims> {
+  return { owners: [], claims: [], evidence: false, kinds: [], direct: false };
+}
+
 /**
  * Read an item's ownership state from the index, deriving it for a separately allocated copy.
  * The states map is keyed by object identity, so a caller that passes a copy of a corpus record would otherwise read
@@ -194,7 +205,7 @@ export function ownershipStateOf(index: Pick<GithubOwnershipIndex, "states" | "r
   const state = githubOwnershipClaims(item, false, false, index.repositories);
   const reference = item.id && index.urlReferences.get(item.id);
   return reference && bareGithubUrlKey(item) === reference
-    ? { owners: [], claims: [], evidence: false, kinds: [], direct: false }
+    ? citationOwnershipState()
     : state;
 }
 /** Every asserted identity constrains a provenance-bearing item; references alone do not create an owner. */
@@ -388,7 +399,7 @@ async function withGithubImportOwnersUnderLease<T>(pmRoot: string, targets: read
           if (observed && observed !== work) observed.corpusReads = (observed.corpusReads ?? 0) + 1;
           return buildGithubOwnershipIndex(items, targets.map(target => target.repo));
         });
-        target.verifyPeers?.(peers);
+        target.verifyPeers?.(peers, before, after);
         for (const related of target.related ?? []) {
           const item = peers.byId.get(related.id);
           if (!item) throw new GithubImportOwnershipError(related.id, `${related.repo.toLowerCase()}#${related.number}`, ["missing dependency endpoint"]);

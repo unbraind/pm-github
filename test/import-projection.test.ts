@@ -278,28 +278,41 @@ test("packed npm and native Bun consumers preserve mixed-import bytes in JSON an
       assert.equal(durable(pmRoot), relinked, "The actual packed CLI must preserve the relinked item and its history");
       selectPayload([issue(1, labelSets.flat())]);
       const mirror = deriveAtomicItemId("fixture/project", 1, "fixture-", normalizeItemId);
-      for (const bin of ["npm", "bun"]) for (const json of [true, false]) {
+      for (const atomic of [true, false]) for (const bin of ["npm", "bun"]) for (const json of [true, false]) {
         const format = json ? ["--json"] : [];
-        const local = `fixture-reference-${bin}-${json ? "json" : "toon"}`;
+        const local = `fixture-reference-${atomic ? "atomic-" : ""}${bin}-${json ? "json" : "toon"}`;
+        const importArgs = atomic ? args : plainArgs;
         /** Run this consumer's normal pm entry point in its selected format. */
         const pm = (argv: string[]) => run(bin, bin === "npm" ? ["exec", "--offline", "--", "pm", ...argv, ...format]
           : ["--bun", cli, ...argv, ...format], root, environment);
         await pm(["--path", pmRoot, "create", "--title", local, "--id", local, "--type", "chore", "--tags", "gh:fixture/project#1"]);
         const snapshot = durable(pmRoot);
-        const preview = await pm([...args, "--dry-run"]);
+        const preview = await pm([...importArgs, "--dry-run"]);
         const edges = [{ issue: 1, item: mirror, local_item: local, kind: "related" }];
-        const parse = (output: string) => (json ? JSON.parse(output) : decode(output)) as { local_issue_references?: object[] };
+        const parse = (output: string) => (json ? JSON.parse(output) : decode(output)) as { local_issue_references?: object[]; transactionId?: string };
         assert.deepEqual(parse(preview).local_issue_references, edges);
         assert.equal(durable(pmRoot), snapshot);
-        assert.deepEqual(parse(await pm(args)).local_issue_references, edges);
+        const receipt = parse(await pm(importArgs));
+        assert.deepEqual(receipt.local_issue_references, edges);
         const get = await pm(["--path", pmRoot, "get", mirror, "--full"]);
         assert.match(get, new RegExp(local));
         const deps = await pm(["--path", pmRoot, "deps", local, "--format", "context", "--kind", "related"]);
         assert.match(deps, new RegExp(mirror));
         const context = await pm(["--path", pmRoot, "context", "--section", "activity"]);
-        assert.match(context, new RegExp(`Related to local items ${local}`));
+        if (atomic) {
+          assert.ok(receipt.transactionId);
+          const marker = `bulk-item-transaction ${receipt.transactionId} `;
+          const events = await readHistoryEntries(getHistoryPath(pmRoot, mirror), mirror);
+          const updateEvent = events.find(event => event.op === "update" && event.message?.startsWith(marker));
+          assert.ok(updateEvent?.message);
+          assert.ok(context.includes(updateEvent.message), context);
+          assert.match(JSON.stringify(updateEvent.patch), new RegExp(local));
+          assert.match(JSON.stringify(updateEvent.patch), /"kind":"related"/);
+        } else {
+          assert.match(context, new RegExp(`Related to local items ${local}`));
+        }
         const linked = durable(pmRoot);
-        assert.equal(parse(await pm(args)).local_issue_references, undefined);
+        assert.equal(parse(await pm(importArgs)).local_issue_references, undefined);
         assert.equal(durable(pmRoot), linked);
       }
     });
