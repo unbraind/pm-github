@@ -320,6 +320,26 @@ for (const selectedConflicts of [false, true]) test(`Round12 scoped project pull
   }
 }));
 
+test("Projects pull refuses a derived competing claim outside the selected items", async () => tracker(async root => {
+  const ref = { owner: "o", number: 1 };
+  const card = { id: "board", statusName: "Done", content: { typename: "Issue" as const, title: "Board", repo, number: 7 } };
+  const selected = (await create({ title: "Tagged board item", type: "Chore", tags: projectItemTag(ref, card.id) }, { pmRoot: root })).item;
+  const peer = (await create({ title: "Unselected contradictory peer", type: "Chore" }, { pmRoot: root })).item;
+  await change(root, peer.id, { github_repo: repo, github_url: "https://github.com/other/project/issues/9" });
+  const initial = (await listAllComplete({}, { pmRoot: root })).items;
+  const scoped = initial.filter(item => item.id === selected.id);
+  const [entry] = buildProjectPullPlan(scoped, ref, [card], undefined, undefined, initial).entries;
+  assert.equal(entry?.pmId, selected.id, "an unrelated derived claim leaves the unowned card writable");
+  await change(root, peer.id, { github_url: "https://github.com/other/project/issues/7" });
+  const updated = (await listAllComplete({}, { pmRoot: root })).items;
+  const before = await bytes(root, selected.id);
+  assert.throws(() => buildProjectPullPlan(scoped, ref, [card], undefined, undefined, updated), { code: "github_project_link_conflict" });
+  const outcome = await applyPullEntry(entry!, root);
+  assert.equal(outcome.changed, false);
+  assert.match(outcome.error!, /claim the same project card/);
+  assert.deepEqual(await bytes(root, selected.id), before);
+}));
+
 // Documentation is part of the public identity contract, including these deliberate limits.
 test("Round twelve docs distinguish consistency from positive ownership and revisions", () => {
   const inventory = readFileSync(new URL("../docs/identity-ownership-inventory.md", import.meta.url), "utf8");

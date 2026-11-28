@@ -784,7 +784,7 @@ pm github project fields unbraind/5
 Import board items, including draft issues, into pm. An existing link reuses the
 same item. Preview and apply skip matching content and mapped status, and an
 already-closed item keeps its closure and history on repeat.
-Project import and sync require one-to-one links between board cards and tracker
+Project import and pull require one-to-one links between board cards and tracker
 items. Ambiguity during planning stops preview and apply before writes.
 Native writes recheck the planned card against the current tracker links.
 If another item claims the card or the link moves after planning, the affected
@@ -801,10 +801,6 @@ pm github project import unbraind/5 --status-map in_progress=Doing,closed=Shippe
 ### `pm github project sync <owner/number>`
 
 Bidirectionally sync pm items and a board. **Safe by default**: with no `--apply` it previews *both* directions and writes nothing.
-
-If attachment succeeds but a later status or tracker-tag step fails, the sync
-reports the attachment and the failed step. A status failure still records the
-board link when it passes the ownership check, so the retry can use the same card.
 
 - `--push` (pm → board): adds missing pm items to the board — attaching the existing GitHub issue when the pm item is issue-linked, otherwise creating a draft issue — and sets each item's **Status** from its pm status.
 - `--pull` (board → pm): updates each linked pm item's status from the board's Status column (status only — never touches title/body/tags).

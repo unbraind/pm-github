@@ -366,8 +366,6 @@ export function indexPmByProjectItem(
     for (const tag of item.tags ?? []) {
       const p = parseProjectItemTag(tag);
       if (p && p.owner === ownerLc && p.number === ref.number) {
-        const previous = index.get(p.itemId);
-        if (previous && previous.id !== item.id) throw projectLinkConflict("Multiple tracker items claim the same project card.");
         index.set(p.itemId, item);
       }
     }
@@ -408,11 +406,9 @@ export function indexProjectItemsByIssue(
   const index = new Map<string, ProjectItem>();
   for (const pi of projectItems) {
     if (!pi?.id || !pi.content) continue;
-    const key = projectIssueKey(pi.content);
-    if (key) {
-      const previous = index.get(key);
-      if (previous && previous.id !== pi.id) throw projectLinkConflict("Multiple project cards wrap the same GitHub issue.");
-      index.set(key, pi);
+    const c = pi.content;
+    if (c.repo && typeof c.number === "number") {
+      index.set(`${c.repo.toLowerCase()}#${c.number}`, pi);
     }
   }
   return index;
@@ -488,10 +484,10 @@ export function buildProjectPushPlan(
 ): PushPlan {
   const addMissing = opts.addMissing !== false;
   const options = statusField?.options ?? [];
-  const selected = pmItems.filter((item): item is PmItemLike => Boolean(item));
-  const { ownership, projectByPmId } = indexSelectedByIssue(selected, opts.corpus ?? selected, projectItems, ref, { warnForAllSelected: true });
-  const scope = projectWriteScope(ref, projectItems);
-  const ownersById = new Map<string, readonly string[]>();
+  const ownership = buildGithubOwnershipIndex((opts.corpus ?? pmItems).filter((item): item is PmItemLike => Boolean(item)), projectItems.flatMap(item => item.content.repo ? [item.content.repo] : []));
+  warnGithubOwnershipScope(ownership, pmItems.filter((item): item is PmItemLike => Boolean(item)));
+  const byProjectItem = indexProjectItemMap(projectItems);
+  const byIssue = indexProjectItemsByIssue(projectItems);
 
   const entries: PushPlanEntry[] = [];
   const statusSkipped: PushPlan["statusSkipped"] = [];
@@ -501,11 +497,22 @@ export function buildProjectPushPlan(
     const title = item.title ?? "(untitled)";
     const status = item.status ?? "open";
 
-    const linked = projectByPmId.get(item.id);
+    // Find the existing project item this pm item maps to: first by project
+    // provenance tag, then by the issue it wraps (if issue-linked).
+    let linked: ProjectItem | undefined;
+    let linkedByProjectTag = false;
+    for (const tag of item.tags ?? []) {
+      const p = parseProjectItemTag(tag);
+      if (p && p.owner === ref.owner.toLowerCase() && p.number === ref.number) {
+        linked = byProjectItem.get(p.itemId);
+        linkedByProjectTag = true;
+        break;
+      }
+    }
     const keys = githubOwnedIdentityKeys(item, ownership);
-    ownersById.set(item.id, keys);
     const [repository, number] = keys[0]?.split("#") ?? [];
     const issueKey = repository && number ? { repo: repository, number: Number(number) } : undefined;
+    if (!linked && issueKey) linked = byIssue.get(`${issueKey.repo}#${issueKey.number}`);
     if (linked?.content.repo && linked.content.number && ownershipStateOf(ownership, item).evidence) {
       assertGithubOwnershipConsistency(item, { id: item.id, repo: linked.content.repo, number: linked.content.number }, ownership);
     }
@@ -587,18 +594,13 @@ export function buildProjectPushPlan(
     }
   }
 
-  for (const entry of entries) projectWriteBindings.set(entry, { scope, owners: ownersById.get(entry.pmId)! });
   return { entries, statusSkipped };
 }
 
 // Index project items by their own id for O(1) lookup during sync planning.
 function indexProjectItemMap(projectItems: ProjectItem[]): Map<string, ProjectItem> {
   const m = new Map<string, ProjectItem>();
-  for (const pi of projectItems) {
-    if (!pi.id) continue;
-    if (m.has(pi.id)) throw projectLinkConflict("The board returned a duplicate project card.");
-    m.set(pi.id, pi);
-  }
+  for (const pi of projectItems) m.set(pi.id, pi);
   return m;
 }
 
@@ -628,15 +630,19 @@ export interface PullPlanEntry {
  */
 function indexSelectedByIssue(
   selected: PmItemLike[], corpus: PmItemLike[], projectItems: ProjectItem[], ref: ProjectRef,
-  options: { writeTargets?: Set<string>; warnForAllSelected?: boolean } = {},
+  options: { writeTargets?: Set<string> } = {},
 ): {
   ownership: GithubOwnershipIndex;
   pmByItemId: Map<string, PmItemLike>;
   projectByPmId: Map<string, ProjectItem>;
 } {
   const writeTargets = options.writeTargets ?? new Set(projectItems.map(item => item.id));
-  const nodes = indexProjectItemMap(projectItems);
-  const issues = indexProjectItemsByIssue(projectItems.filter(card => writeTargets.has(card.id)));
+  const cards = projectItems.filter(card => card.id);
+  const nodes = indexProjectItemMap(cards);
+  if (nodes.size !== cards.length) throw projectLinkConflict("The board returned a duplicate project card.");
+  const wrapped = cards.filter(card => writeTargets.has(card.id) && projectIssueKey(card.content));
+  const issues = indexProjectItemsByIssue(wrapped);
+  if (issues.size !== wrapped.length) throw projectLinkConflict("Multiple project cards wrap the same GitHub issue.");
   const ownership = buildGithubOwnershipIndex(corpus.filter((item): item is PmItemLike => Boolean(item)), projectItems.flatMap(item => item.content.repo ? [item.content.repo] : []));
   const selectedIds = new Set(selected.map(item => item.id));
   const peers = new Map<string, PmItemLike>(ownership.byId);
@@ -653,10 +659,10 @@ function indexSelectedByIssue(
       if (claimsIssue) issueCandidates.push(item);
       if (claimsIssue || links.length) boardCandidates.push(item);
     }
-    for (const key of state.owners) addProjectClaim(byIssue, key, item);
+    for (const key of state.claims) addProjectClaim(byIssue, key, item);
     for (const id of links) addProjectClaim(byCard, id, item);
   }
-  warnGithubOwnershipScope(ownership, options.warnForAllSelected ? selected : boardCandidates);
+  warnGithubOwnershipScope(ownership, boardCandidates);
   for (const item of issueCandidates) githubOwnedIdentityKeys(item, ownership);
   const pmByItemId = new Map<string, PmItemLike>();
   const projectByPmId = new Map<string, ProjectItem>();

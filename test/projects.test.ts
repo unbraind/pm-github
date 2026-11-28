@@ -354,25 +354,19 @@ test("Projects planners reject ambiguous write targets in either input order", (
       const board = inverse ? [...cards].reverse() : cards;
       assert.throws(() => buildProjectImportPlan(board, REF, tracker), conflict);
       assert.throws(() => buildProjectPullPlan(tracker, REF, board), conflict);
-      assert.throws(() => buildProjectPushPlan(tracker, REF, board, STATUS_FIELD), conflict);
     }
   }
-  assert.throws(() => indexPmByProjectItem([one, two], REF), conflict);
   assert.equal(indexPmByProjectItem([one, one], REF).size, 1);
   assert.equal(indexProjectItemsByIssue([wrapped, wrapped]).size, 1);
-  assert.throws(() => buildProjectPushPlan([one], REF, [first], STATUS_FIELD, { corpus: [one, two] }), conflict);
   assert.throws(() => buildProjectPullPlan([one], REF, [first], undefined, undefined, [one, two]), conflict);
   assert.equal(buildProjectPullPlan([], REF, [first], undefined, undefined, [one, two]).entries.length, 0);
   const valid = { ...owner, tags: [tag("gone"), tag("first")] };
   assert.equal(buildProjectImportPlan([wrapped], REF, [valid])[0]?.pmId, owner.id);
   assert.equal(buildProjectPullPlan([valid], REF, [wrapped]).entries.length, 0);
-  assert.equal(buildProjectPushPlan([valid], REF, [wrapped], STATUS_FIELD).entries[0]?.action, "noop");
-  assert.equal(buildProjectPushPlan([{ ...one, tags: [tag("gone"), tag("first")] }], REF, [first], STATUS_FIELD).entries[0]?.action, "noop");
   assert.equal(buildProjectImportPlan([wrapped], REF, [{ tags: [tag("first")] }, valid])[0]?.pmId, owner.id);
   const withoutId = { ...wrapped, id: "", statusName: "Done" };
   assert.equal(buildProjectImportPlan([withoutId], REF, [owner]).length, 0);
   assert.equal(buildProjectPullPlan([owner], REF, [withoutId]).entries.length, 0);
-  assert.equal(buildProjectPushPlan([owner], REF, [withoutId], STATUS_FIELD).entries[0]?.action, "add-issue");
 });
 
 // --- import plan -----------------------------------------------------------

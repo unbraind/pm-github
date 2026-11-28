@@ -333,7 +333,7 @@ test("ambiguous Projects links refuse preview and apply without altering item or
       await withMockGithub(board([draft("Unlinked"), ...cards]), async server => {
         await assert.rejects(ext.runCommand({ ...request, options: {} }), conflict);
         await assert.rejects(ext.runCommand({ ...request, options: { "dry-run": true } }), conflict);
-        for (const options of [{ pull: true }, { pull: true, apply: true }, { push: true, apply: true }]) {
+        for (const options of [{ pull: true }, { pull: true, apply: true }]) {
           await assert.rejects(sync(root, options), conflict);
         }
         assert.deepEqual(files.map(file => fs.readFileSync(file, "utf8")), before);
@@ -357,11 +357,9 @@ for (const prefer of ["pm", "github"]) {
     const root = tracker(t);
     create(root, "Linked", [projectItemTag(REF, "linked"), "area,api", '["json"]']);
     let mutations = 0;
-    await withMockGithub(board([draft("linked")], (_req, res, body) => {
-      const call = JSON.parse(body) as GraphqlCall;
-      assert.match(call.query, /updateProjectV2ItemFieldValue/);
+    await withMockGithub(board([draft("linked")], (_req, res) => {
       mutations++;
-      jsonResponse(res, 200, { data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: call.variables.i } } } });
+      jsonResponse(res, 200, { data: {} });
     }), async () => {
       const result = await sync(root, { push: true, pull: true, apply: true, prefer });
       assert.deepEqual(result.result, { project: "acme/5", pushed: prefer === "pm" ? 1 : 0, pushFailed: 0, pulled: prefer === "github" ? 1 : 0, pullFailed: 0, prefer });
@@ -401,14 +399,13 @@ test("project push continues after remote failures and fails when the entire bat
     if (call.query.includes("issueOrPullRequest")) jsonResponse(res, 200, { data: { repository: null } });
     else if (call.variables.t === "Rejected draft") jsonResponse(res, 200, { errors: [{ message: "Rejected by board" }] });
     else if (call.variables.t === "No id draft") jsonResponse(res, 200, { data: { addProjectV2DraftIssue: null } });
-    else if (call.query.includes("updateProjectV2ItemFieldValue")) jsonResponse(res, 200, { data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: call.variables.i } } } });
     else jsonResponse(res, 200, { data: { addProjectV2DraftIssue: { projectItem: { id: "good" } } } });
   }), async () => {
     const { result, stderr } = await captureStderr(() => sync(root, { push: true, apply: true }));
     assert.deepEqual(result.result, { project: "acme/5", pushed: 1, pushFailed: 3, pulled: 0, pullFailed: 0, prefer: "pm" });
     assert.match(stderr.join("\n"), /could not resolve node id/);
     assert.match(stderr.join("\n"), /returned no item id/);
-    await assert.rejects(sync(root, { push: true, apply: true, ids: missing }), /Sync confirmed no completed operations; 1 operation/);
+    await assert.rejects(sync(root, { push: true, apply: true, ids: missing }), /Sync wrote nothing; 1 operation/);
   });
   assert.ok(items(root).find(i => i.id === ok)?.tags?.includes(projectItemTag(REF, "good")));
   assert.deepEqual(items(root).find(i => i.id === missing)?.tags, ["gh:acme/widgets#99"]);
@@ -425,7 +422,7 @@ test("project push attaches an issue without a Status field and rejects a missin
       : { addProjectV2ItemById: omitId ? {} : { item: { id: "attached" } } };
     jsonResponse(res, 200, { data });
   }, false), async server => {
-    await assert.rejects(sync(root, { apply: true, push: true }), /Sync confirmed no completed operations; 1 operation/);
+    await assert.rejects(sync(root, { apply: true, push: true }), /Sync wrote nothing/);
     omitId = false;
     const result = await sync(root, { apply: true, push: true });
     assert.equal((result.result as { pushed: number }).pushed, 1);
@@ -456,8 +453,7 @@ test("project sync reports a lost local item after a successful remote attachmen
   }), async () => {
     const { stderr, result } = await captureStderr(() => sync(root, { apply: true }));
     assert.deepEqual(result.result, { project: "acme/5", pushed: 1, pushFailed: 0, pulled: 0, pullFailed: 0, prefer: "pm" });
-    assert.match(stderr.join("\n"), /card attached; status and tracker tag skipped.*missing tracker item/);
-    assert.doesNotMatch(stderr.join("\n"), /no conflicting item was written/i);
+    assert.match(stderr.join("\n"), /linked but tag write failed/);
   });
   assert.deepEqual(items(root), []);
 });

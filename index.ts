@@ -1,5 +1,5 @@
 import { writeGithubStateAtomic, syncGithubStatePath, type GithubStateWriteOptions } from "./durable-state.ts";
-import { buildGithubOwnershipIndex, warnGithubOwnershipScope, withGithubItemConsistency, withGithubOwnershipLock, readGithubOwnershipSnapshot, githubRepositoryHash, githubOwnershipClaims, githubOwnedIdentityKeys, assertGithubOwnershipConsistency, assertGithubImportOwner, GithubImportOwnershipError, readGithubImportOwner, withGithubImportOwners, mutateGithubOwnedItem, type GithubOwnershipIndex, type GithubOwnedTarget, ownershipStateOf } from "./import-ownership.ts";
+import { buildGithubOwnershipIndex, warnGithubOwnershipScope, withGithubItemConsistency, readGithubOwnershipSnapshot, githubRepositoryHash, githubOwnershipClaims, githubOwnedIdentityKeys, assertGithubOwnershipConsistency, assertGithubImportOwner, GithubImportOwnershipError, readGithubImportOwner, withGithubImportOwners, mutateGithubOwnedItem, type GithubOwnershipIndex, type GithubOwnedTarget, ownershipStateOf } from "./import-ownership.ts";
 import { parseGithubIssueUrl, githubUrlTokens } from "./github-url.ts";
 import { canonicalGithubStatus, githubStatusIsTerminal, githubStatusKind, readGithubWorkspace, withGithubInvocationScope, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
@@ -102,7 +102,7 @@ import {
 
 export { resolvePmDataDir } from "./gate.ts";
 
-import { assertProjectWriteBinding, getProjectWriteBinding, type ProjectWriteScope,
+import { assertProjectWriteBinding, getProjectWriteBinding,
   type ProjectItem,
   type ProjectItemContent,
   type ProjectMeta,
@@ -3010,6 +3010,15 @@ export function parseImportOptions(options: Record<string, unknown>): ImportOpti
     ...(expectSource ? { expectSource } : {}),
     adoptCited: optionEnabled(options, "adopt-cited", "adoptCited"),
   };
+}
+
+// Spawn the `pm` CLI with the given argv and return a normalized ok/stdout/stderr
+// result (ok = exit code 0). Centralizes every pm mutation so callers share one
+// error-handling shape.
+function pmRun(args: string[], input?: string): { ok: boolean; stderr: string; stdout: string } {
+  const maxBuffer = pmJsonMaxBuffer();
+  const result = spawnSync("pm", args, { encoding: "utf-8", maxBuffer, input, env: { ...process.env } });
+  return { ok: result.status === 0, stderr: result.stderr || "", stdout: result.stdout || "" };
 }
 
 // ---------------------------------------------------------------------------
@@ -6449,7 +6458,7 @@ async function gqlAddIssue(projectId: string, contentId: string, token: string |
   return id;
 }
 
-/** Set a card's Status and require the provider to confirm the requested card. */
+// Set a project item's single-select Status field to the given option id.
 async function gqlSetStatus(
   projectId: string,
   itemId: string,
@@ -6458,10 +6467,7 @@ async function gqlSetStatus(
   token: string | undefined,
 ): Promise<void> {
   const q = `mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){ updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){ projectV2Item{ id } } }`;
-  const data = await githubGraphQL<GraphqlSetStatusData>(token, q, { p: projectId, i: itemId, f: fieldId, o: optionId });
-  if (data.updateProjectV2ItemFieldValue?.projectV2Item?.id !== itemId) {
-    throw new CommandError("GitHub did not confirm the Projects status update for the requested card.");
-  }
+  await githubGraphQL<GraphqlSetStatusData>(token, q, { p: projectId, i: itemId, f: fieldId, o: optionId });
 }
 
 /**
@@ -6836,79 +6842,54 @@ export async function applyPushEntry(
   projectItems: ProjectItem[],
 ): Promise<{ changed: boolean; error?: string }> {
   try {
-    return await withGithubOwnershipLock(pmRoot, async () => {
-      const binding = getProjectWriteBinding(entry);
-      const scope = binding?.scope ?? { ref, cards: projectItems };
-      const expected = binding?.owners ?? githubOwnedIdentityKeys(pmById.get(entry.pmId) ?? { id: entry.pmId });
-      const content = scope.cards.find(item => item.id === entry.itemId)?.content;
+    const validate = () => {
+      const corpus = readPmItems(pmRoot);
+      const current = corpus.find(item => item.id === entry.pmId);
+      if (!current) throw new GithubImportOwnershipError(entry.pmId, "project association", ["missing tracker item"]);
+      const content = projectItems.find(item => item.id === entry.itemId)?.content;
       const repo = entry.issueRepo ?? content?.repo;
       const number = entry.issueNumber ?? content?.number;
+      const ownership = buildGithubOwnershipIndex(corpus, repo ? [repo] : []);
+      const keys = githubOwnedIdentityKeys(current, ownership);
+      if (entry.action === "add-issue") {
+        assertGithubImportOwner(current, { id: current.id!, repo: entry.issueRepo!, number: entry.issueNumber! }, ownership);
+      } else if (keys.length === 0 && entry.action !== "add-draft" && !current.tags?.includes(projectItemTag(ref, entry.itemId!))) {
+        throw new GithubImportOwnershipError(entry.pmId, "project association", ["missing current board tag or draft authorization"]);
+      } else if (repo && number && keys.length) assertGithubOwnershipConsistency(current, { id: current.id!, repo, number }, ownership);
+    };
+    validate();
+    let itemId = entry.itemId;
+    if (entry.action === "add-draft") {
+      const pm = pmById.get(entry.pmId);
+      itemId = await gqlAddDraft(meta.id, entry.title, pm!.body || pm!.description!, token);
+    } else if (entry.action === "add-issue") {
+      // The private executor receives only buildProjectPushPlan entries. Its
+      // add-issue arm sets both coordinates from shared, consistent ownership.
+      const contentId = await gqlResolveIssueNodeId(entry.issueRepo!, entry.issueNumber!, token);
+      if (!contentId) return { changed: false, error: `could not resolve node id for ${entry.issueRepo}#${entry.issueNumber}` };
+      validate();
+      itemId = await gqlAddIssue(meta.id, contentId, token);
+    }
 
-      /** Read live ownership and optionally check the original board association before a request. */
-      const readTarget = (original: boolean) => {
-        const corpus = readPmItems(pmRoot);
-        const current = corpus.find(item => item.id === entry.pmId);
-        if (!current) throw new GithubImportOwnershipError(entry.pmId, "project association", ["missing tracker item"]);
-        const ownership = buildGithubOwnershipIndex(corpus, repo ? [repo] : []);
-        const keys = githubOwnedIdentityKeys(current, ownership);
-        if (entry.action === "add-issue") {
-          assertGithubImportOwner(current, { id: entry.pmId, repo: entry.issueRepo!, number: entry.issueNumber! }, ownership);
-        } else if (keys.length === 0 && entry.itemId && !current.tags?.includes(projectItemTag(scope.ref, entry.itemId))) {
-          throw new GithubImportOwnershipError(entry.pmId, "project association", ["missing current board tag or draft authorization"]);
-        } else if (repo && number && keys.length) assertGithubOwnershipConsistency(current, { id: entry.pmId, repo, number }, ownership);
-        if (JSON.stringify(keys) !== JSON.stringify(expected)) throw new GithubImportOwnershipError(entry.pmId, "original project item owner", keys);
-        if (original) assertProjectWriteBinding(scope, entry.itemId, current, corpus);
-        return { current, corpus };
-      };
-      const { current } = readTarget(true);
-      let itemId = entry.itemId;
-      if (entry.action === "add-draft") {
-        itemId = await gqlAddDraft(meta.id, entry.title, current.body || current.description!, token);
-      } else if (entry.action === "add-issue") {
-        const contentId = await gqlResolveIssueNodeId(entry.issueRepo!, entry.issueNumber!, token);
-        if (!contentId) return { changed: false, error: `could not resolve node id for ${entry.issueRepo}#${entry.issueNumber}` };
-        readTarget(true);
-        itemId = await gqlAddIssue(meta.id, contentId, token);
+    if (entry.targetOptionId && meta.statusField) {
+      await gqlSetStatus(meta.id, itemId!, meta.statusField.id, entry.targetOptionId, token);
+    }
+    // Ensure the pm item carries the project provenance tag so future syncs are
+    // idempotent (never strips existing tags; only adds the missing one).
+    const pm = pmById.get(entry.pmId);
+    if (pm?.id) {
+      const tag = projectItemTag(ref, itemId!);
+      const existingTags = pm.tags!;
+      if (nativeTagAdditions(existingTags, [tag]).length) {
+        const upd = pmRun([
+          "--path", pmRoot, "update", pm.id,
+          "--add-tags", tag,
+          "--message", `Linked to GitHub project ${ref.owner}/${ref.number}`,
+        ]);
+        if (!upd.ok) return { changed: true, error: `linked but tag write failed — ${upd.stderr}` };
       }
-
-      const tag = projectItemTag(scope.ref, itemId!);
-      const attachedScope: ProjectWriteScope = entry.itemId ? scope : {
-        ref: scope.ref, cards: [...scope.cards, { id: itemId!, content: { typename: "DraftIssue", title: entry.title } }],
-      };
-      /** Validate the new pair before its next side effect and again inside the native tag write. */
-      const check = (item: PmItem, peers: readonly PmItem[]) => {
-        const proposed = entry.itemId ? item : { ...item, tags: [...toImportTags(item.tags), tag] };
-        assertProjectWriteBinding(attachedScope, itemId, proposed, peers);
-      };
-      let statusFailure: string | undefined;
-      if (entry.targetOptionId && meta.statusField) {
-        if (!entry.itemId) {
-          try {
-            const attached = readTarget(false);
-            check(attached.current, attached.corpus);
-          } catch (error) { return { changed: true, error: `card attached; status and tracker tag skipped — ${errorMessage(error)}` }; }
-        }
-        try { await gqlSetStatus(meta.id, itemId!, meta.statusField.id, entry.targetOptionId, token); }
-        catch (error) {
-          if (entry.itemId) throw error;
-          statusFailure = `card attached but status was not confirmed — ${errorMessage(error)}`;
-        }
-      }
-      try {
-        const attached = readTarget(false);
-        check(attached.current, attached.corpus);
-        if (nativeTagAdditions(attached.current.tags, [tag]).length) {
-          await withGithubItemConsistency(pmRoot, entry.pmId, expected, () =>
-            PmClient.forActiveExtensionHost({ pmRoot, noExtensions: true }).update(entry.pmId, {
-              addTags: [tag], message: `Linked to GitHub project ${ref.owner}/${ref.number}`,
-            }), check);
-        }
-      } catch (error) {
-        const tagFailure = `linked but tag write failed — ${errorMessage(error)}`;
-        return { changed: true, error: [statusFailure, tagFailure].filter(Boolean).join("; ") };
-      }
-      return statusFailure ? { changed: true, error: statusFailure } : { changed: true };
-    });
+    }
+    return { changed: true };
   } catch (err: unknown) {
     return { changed: false, error: errorMessage(err) };
   }
@@ -7126,7 +7107,7 @@ async function runProjectSync(ctx: CommandHandlerContext) {
   );
   const result = { project: `${ref.owner}/${ref.number}`, pushed, pushFailed, pulled, pullFailed, prefer };
   if (pushFailed + pullFailed > 0 && pushed + pulled === 0) {
-    throw new CommandError(`Sync confirmed no completed operations; ${pushFailed + pullFailed} operation(s) failed.`);
+    throw new CommandError(`Sync wrote nothing; ${pushFailed + pullFailed} operation(s) failed.`);
   }
   return result;
 }
