@@ -851,7 +851,8 @@ with confirmed writes, `pushPartial` counts the partial subset, and `pushFailed`
 counts failed rows with zero confirmed writes. A batch with only failed writes
 exits nonzero and exposes those receipts in its error context.
 
-The tracker tag is recorded before the Status update. If GitHub rejects Status,
+The tracker tag is recorded before the Status update. Push checks the tracker
+binding again before sending Status. If GitHub rejects Status,
 rerun the same push to update the attached card. If the tag write failed, a
 locally retained draft recovery record in `runtime/github-project-push/` keeps
 the confirmed card ID for the next push. When the attachment response lacks a

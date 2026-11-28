@@ -6962,7 +6962,7 @@ async function replanProjectPush(entry: PushPlanEntry, meta: ProjectMeta, ref: P
   if (entry.action === "set-status" || entry.action === "link-card" || entry.action === "blocked") {
     if (fresh.itemId !== entry.itemId) throw new CommandError("Projects push is missing current board tag or issue binding for the planned card.");
   }
-  return { current, fresh };
+  return { current, fresh, cards };
 }
 
 type ProjectPushSteps = Omit<ProjectPushReceipt, "pmId" | "outcome">;
@@ -7007,10 +7007,13 @@ async function confirmProjectPushTag(
 }
 
 /** Report a Status acknowledgement or refusal independently of the confirmed card and tag. */
-async function applyProjectPushStatus(meta: ProjectMeta, cardId: string, fresh: PushPlanEntry, token: string | undefined): Promise<ProjectPushReceipt["status"]> {
-  if (!fresh.targetOptionId) return { outcome: fresh.targetOptionName ? "unchanged" : "skipped" };
+async function applyProjectPushStatus(meta: ProjectMeta, cardId: string, fresh: PushPlanEntry, token: string | undefined,
+  recheck: () => Promise<PushPlanEntry>,
+): Promise<ProjectPushReceipt["status"]> {
   try {
-    await gqlSetStatus(meta.id, cardId, meta.statusField!.id, fresh.targetOptionId, token);
+    const statusPlan = fresh.targetOptionId ? await recheck() : fresh;
+    if (!statusPlan.targetOptionId) return { outcome: statusPlan.targetOptionName ? "unchanged" : "skipped" };
+    await gqlSetStatus(meta.id, cardId, meta.statusField!.id, statusPlan.targetOptionId, token);
     return { outcome: "updated" };
   } catch (error) {
     return { outcome: "failed", error: errorMessage(error) };
@@ -7038,7 +7041,7 @@ async function performProjectPush(entry: PushPlanEntry, meta: ProjectMeta, ref: 
   const { fresh: planned } = first;
   const node = planned.action === "add-issue" ? await gqlResolveIssueNodeId(planned.issueRepo!, planned.issueNumber!, token) : undefined;
   if (planned.action === "add-issue" && !node) throw new CommandError(`could not resolve node id for ${planned.issueRepo}#${planned.issueNumber}`);
-  const { current, fresh } = node ? await replan() : first;
+  const { current, fresh, cards } = node ? await replan() : first;
 
   let cardId = fresh.itemId;
   let attachment: ProjectPushReceipt["attachment"] = { outcome: "reused" };
@@ -7059,7 +7062,18 @@ async function performProjectPush(entry: PushPlanEntry, meta: ProjectMeta, ref: 
   const cleanupError = recovery || fresh.action === "add-draft" ? await fs.promises.rm(file, { force: true }).catch(
     (error: unknown) => `tracker tag confirmed, but draft recovery cleanup failed — ${errorMessage(error)}`,
   ) : undefined;
-  const status = await applyProjectPushStatus(meta, cardId, fresh, token);
+  const confirmedCard = cardId;
+  const status = await applyProjectPushStatus(meta, confirmedCard, fresh, token, async () => {
+    // GitHub has confirmed a new card ID even if it has not reached a listing page yet.
+    const statusCards: ProjectItem[] = fresh.itemId ? cards : [...cards, {
+      id: confirmedCard,
+      content: fresh.issueRepo
+        ? { typename: "Issue", title: fresh.title, repo: fresh.issueRepo, number: fresh.issueNumber }
+        : { typename: "DraftIssue", title: fresh.title },
+    }];
+    const plannedStatus: PushPlanEntry = { ...fresh, itemId: confirmedCard, action: "set-status" };
+    return (await replanProjectPush(plannedStatus, meta, ref, pmRoot, statusCards, options)).fresh;
+  });
   return { cardId, attachment, status, trackerTag: cleanupError ? { ...trackerTag, error: cleanupError } : trackerTag };
 }
 
@@ -7295,7 +7309,7 @@ async function runProjectSync(ctx: CommandHandlerContext) {
   const result = { project: `${ref.owner}/${ref.number}`, pushed, pushFailed, pulled, pullFailed, prefer,
     ...(pushReceipts.length ? { pushPartial, pushReceipts } : {}) };
   if (pushFailed + pullFailed > 0 && pushed + pulled === 0) {
-    const writeSummary = pushReceipts.some(receipt => receipt.attachment.outcome === "unknown") ? "Sync confirmed no writes" : "Sync wrote nothing";
+    const writeSummary = pushReceipts.some(receipt => receipt.attachment.outcome === "unknown") ? "Sync could not confirm any writes" : "Sync wrote nothing";
     const message = `${writeSummary}; ${pushFailed + pullFailed} operation(s) failed.`;
     if (pushReceipts.length) throw createPmCliExpectedError(message, { context: { code: "github_project_push_failed", ...result } });
     throw new CommandError(message);

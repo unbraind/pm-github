@@ -393,6 +393,49 @@ test("the draft recovery record preserves a confirmed card across a tracker tag 
   assert.deepEqual(items(root).find(item => item.id === id)?.tags, [tag]);
 });
 
+test("Status refuses a competing issue owner that appears during the tracker tag write", async t => {
+  const root = tracker(t);
+  const id = create(root, "Existing issue card");
+  const peer = create(root, "Late issue claimant");
+  const url = "https://github.com/acme/widgets/issues/7";
+  await own(root, id, url);
+  const local = (await sdkGet(id, {}, { pmRoot: root })).item;
+  const meta = { id: "board", title: "Fixture board", url: "", ownerType: "organization" as const,
+    statusField: { id: "status", name: "Status", options: OPTIONS },
+  };
+  const cardId = "existing-issue";
+  const plan = buildProjectPushPlan([local], REF, [{ id: cardId, statusOptionId: "done",
+    content: { typename: "Issue", title: "Existing issue card", repo: "acme/widgets", number: 7 },
+  }], meta.statusField).entries[0]!;
+  const nodes = [{ id: cardId, fieldValueByName: { name: "Done", optionId: "done" },
+    content: { __typename: "Issue", number: 7, repository: { nameWithOwner: "acme/widgets" } },
+  }];
+  let competing = false;
+  const pmRoot = resolvePmRoot(root, root);
+  await withMockGithub(board(nodes, (_req, res) => jsonResponse(res, 200, { data: {
+    updateProjectV2ItemFieldValue: { projectV2Item: { id: cardId } },
+  } })), async server => {
+    const result = await runWithActiveExtensions({ path: pmRoot, noExtensions: true }, async () => {
+      setActiveExtensionHooks({ beforeCommand: [], afterCommand: [], onRead: [], onIndex: [], beforeMutation: [],
+        onWrite: [{ layer: "project", name: "fixture-late-authority", run: async context => {
+          if (competing || !context.path.endsWith(`${id}.toon`)) return;
+          competing = true;
+          await runWithActiveExtensions({ path: pmRoot, noExtensions: true }, () => own(pmRoot, peer, url));
+        } }],
+      });
+      return applyPushEntry(plan, meta, REF, pmRoot, "fixture");
+    });
+    assert.equal(competing, true);
+    assert.equal(server.requests.filter(request => request.body.includes("updateProjectV2ItemFieldValue")).length, 0);
+    assert.equal(result.cardId, cardId);
+    assert.equal(result.outcome, "partial");
+    assert.equal(result.trackerTag.outcome, "written");
+    assert.equal(result.status.outcome, "failed");
+    assert.match(result.status.error!, /claimed by/);
+  });
+  assert.deepEqual(items(root).find(item => item.id === id)?.tags, [projectItemTag(REF, cardId)]);
+});
+
 test("a no-add push stays read-only for an unlinked item", async t => {
   const root = tracker(t);
   const id = create(root, "Leave off board");
@@ -514,15 +557,15 @@ test("ambiguous draft delivery is neither repeated by transport nor replayed fro
     }
   }), async server => {
     const options = { push: true, apply: true, ids: id };
-    const first = await captureStderr(() => assert.rejects(sync(root, options), /confirmed no writes/));
+    const first = await captureStderr(() => assert.rejects(sync(root, options), /could not confirm any writes/));
     assert.match(first.stderr.join("\n"), /HTTP 502/);
     assert.equal(server.requests.filter(request => request.body.includes("addProjectV2DraftIssue")).length, 1);
-    const retry = await captureStderr(() => assert.rejects(sync(root, options), /confirmed no writes/));
+    const retry = await captureStderr(() => assert.rejects(sync(root, options), /could not confirm any writes/));
     assert.match(retry.stderr.join("\n"), /no confirmed card ID/);
     nodes.push({ id: "issue-card", fieldValueByName: { name: "Done", optionId: "done" },
       content: { __typename: "Issue", number: 7, repository: { nameWithOwner: "acme/widgets" } } });
     await own(root, id, "https://github.com/acme/widgets/issues/7");
-    const differentCard = await captureStderr(() => assert.rejects(sync(root, options), /confirmed no writes/));
+    const differentCard = await captureStderr(() => assert.rejects(sync(root, options), /could not confirm any writes/));
     assert.match(differentCard.stderr.join("\n"), /no confirmed card ID/);
     await mutateItem({ pmRoot: root, id, settings: await readSettings(root), author: "fixture", op: "update", mutate: document => {
       delete document.metadata.github_url;
