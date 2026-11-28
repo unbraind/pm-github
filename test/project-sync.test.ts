@@ -108,6 +108,12 @@ function draft(id: string, name = "Done", optionId = "done"): BoardNode {
   return { id, fieldValueByName: { name, optionId }, content: { __typename: "DraftIssue", title: id } };
 }
 
+/** Locate the draft journal for this fixture item without relying on directory order. */
+function projectDraftJournal(root: string, id: string): string {
+  const key = createHash("sha256").update(JSON.stringify([REF.owner, REF.number, id])).digest("hex");
+  return path.join(resolvePmRoot(root, root), "runtime", "github-project-push", `${key}.json`);
+}
+
 /** Invoke the registered Projects command under a synthetic credential. */
 async function sync(root: string, options: Record<string, unknown> = {}) {
   const ext = await harness;
@@ -577,6 +583,7 @@ test("ambiguous draft delivery is neither repeated by transport nor replayed fro
       return { changedFields: ["github_url"] };
     } });
     await sdkUpdate(id, { addTags: [projectItemTag(REF, "already-created")] }, { pmRoot: root });
+    fs.writeFileSync(projectDraftJournal(root, id), JSON.stringify({ boardId: "board", cardId: "already-created" }));
     const recovered = (await sync(root, options)).result as { pushReceipts: unknown[] };
     assert.deepEqual(recovered.pushReceipts, [{ pmId: id, cardId: "already-created", outcome: "applied",
       attachment: { outcome: "reused" }, status: { outcome: "updated" }, trackerTag: { outcome: "present" } }]);
@@ -703,6 +710,8 @@ test("an issue attachment acknowledgement does not count as creation when its ta
       return true;
     });
     await sdkUpdate(peer, { removeTags: [tag] }, { pmRoot: root });
+    const preview = await captureStderr(() => sync(root, { ...args, apply: false }));
+    assert.match(preview.stderr.join("\n"), /link tracker to card concurrent-issue-card/);
     const retry = (await sync(root, args)).result as { pushed: number; pushReceipts: unknown[] };
     assert.equal(retry.pushed, 1);
     assert.deepEqual(retry.pushReceipts, [{ pmId: owner, cardId, outcome: "applied",
@@ -754,6 +763,26 @@ test("a tagged no-op recovers a pending draft and an ordinary no-op stays read-o
     const preview = await sync(root, { ...args, "no-add-missing": true });
     assert.deepEqual((preview.result as { push: unknown }).push, { actionable: 1, statusSkipped: 0 });
     assert.equal(server.requests.length - beforePreview, 2);
+    const journal = projectDraftJournal(root, id);
+    const pending = fs.readFileSync(journal);
+    const other = "unrelated-draft";
+    nodes.push(draft(other, "Todo", "todo"));
+    await sdkUpdate(id, { removeTags: [projectItemTag(REF, first)], addTags: [projectItemTag(REF, other)] }, { pmRoot: root });
+    await assert.rejects(sync(root, { ...args, apply: true, "no-add-missing": true }), (error: unknown) => {
+      assert.equal(readFailedProjectsPush(error).pushReceipts[0]!.attachment.outcome, "unknown");
+      return true;
+    });
+    assert.deepEqual(fs.readFileSync(journal), pending);
+    const confirmed = JSON.stringify({ boardId: "board", cardId: first });
+    fs.writeFileSync(journal, confirmed);
+    await assert.rejects(sync(root, { ...args, apply: true }), /Sync wrote nothing/);
+    assert.equal(fs.readFileSync(journal, "utf8"), confirmed);
+    fs.writeFileSync(journal, pending);
+    await sdkUpdate(id, { removeTags: [projectItemTag(REF, other)] }, { pmRoot: root });
+    await assert.rejects(sync(root, { ...args, apply: true }), /could not confirm any writes/);
+    assert.equal(server.requests.filter(request => request.body.includes("mutation")).length, 1);
+    fs.writeFileSync(journal, confirmed);
+    await sdkUpdate(id, { addTags: [projectItemTag(REF, first)] }, { pmRoot: root });
     const reconciled = (await sync(root, { ...args, apply: true, "no-add-missing": true })).result as { pushed: number; pushReceipts: unknown[] };
     assert.equal(reconciled.pushed, 0);
     assert.deepEqual(reconciled.pushReceipts, [{ pmId: id, cardId: first, outcome: "unchanged",
@@ -763,7 +792,7 @@ test("a tagged no-op recovers a pending draft and an ordinary no-op stays read-o
     assert.equal(noop.pushReceipts, undefined);
     assert.equal(server.requests.length - beforeNoop, 2);
     fs.writeFileSync(path.join(root, "fixture-reconciled"), "");
-    nodes.length = 0;
+    nodes.splice(0);
     await sdkUpdate(id, { removeTags: [projectItemTag(REF, first)] }, { pmRoot: root });
     const replacement = (await sync(root, { ...args, apply: true })).result as { pushed: number };
     assert.equal(replacement.pushed, 1);
@@ -801,6 +830,57 @@ for (const latePeer of [false, true]) test(`Status waves bind the full corpus on
     assert.equal(server.requests.filter(request => request.body.includes("items(first:")).length, 4);
     assert.deepEqual(new Set(writes), new Set(nodes.map(node => node.id).filter(id => !latePeer || id !== disputedCard)));
     if (!latePeer) assert.equal(work.claimParses, 36 * 4);
+  });
+});
+
+test("Status waves on initially untagged issue cards reuse the board inventory through tag repair", async t => {
+  const root = tracker(t);
+  const issueCount = 19;
+  const cards: BoardNode[] = [];
+  for (let number = 1; number <= issueCount; number++) {
+    const item = (await sdkCreate({ type: "Task", title: `Issue ${number}` }, { pmRoot: root })).item;
+    await own(root, item.id, `https://github.com/acme/widgets/issues/${number}`);
+    cards.push({ ...draft(`issue-${number}`), content: { __typename: "Issue", number, repository: { nameWithOwner: "acme/widgets" } } });
+  }
+  const mutated = new Set<string>();
+  const work: GithubOwnershipWork = {};
+  await withMockGithub(board(cards, (_req, res, body) => {
+    const call = JSON.parse(body) as GraphqlCall;
+    assert.match(call.query, /updateProjectV2ItemFieldValue/);
+    const cardId = String(call.variables.i);
+    assert.equal(mutated.has(cardId), false);
+    mutated.add(cardId);
+    jsonResponse(res, 200, { data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: cardId } } } });
+  }), async server => {
+    const { result } = await withGithubOwnershipWork(work, () => sync(root, { push: true, apply: true }));
+    assert.deepEqual(aggregate(result), { project: "acme/5", prefer: "pm", pushed: issueCount, pushFailed: 0, pulled: 0, pullFailed: 0 });
+    assert.equal(server.requests.filter(request => request.body.includes("items(first:")).length, 5);
+    assert.deepEqual(mutated, new Set(cards.map(card => card.id)));
+    // Five complete Status snapshots plus one native peer check and two target documents per tag mutation.
+    assert.equal(work.claimParses, 5 * issueCount + issueCount * (issueCount + 2));
+  });
+  for (const item of items(root)) {
+    assert.equal(item.tags?.length, 1);
+    assert.equal(parseProjectItemTag(item.tags[0]!)?.itemId, item.title.toLowerCase().replace(" ", "-"));
+  }
+});
+
+test("a repaired Status wave retains tag writes when its single post-tag refresh fails", async t => {
+  const root = tracker(t);
+  const id = create(root, "Repair then refresh");
+  await own(root, id, "https://github.com/acme/widgets/issues/7");
+  const cards = [{ ...draft("repaired"), content: { __typename: "Issue", number: 7, repository: { nameWithOwner: "acme/widgets" } } }];
+  const provider = board(cards);
+  let reads = 0;
+  await withMockGithub((req, res, body, base) => {
+    if (body.includes("items(first:") && ++reads === 3) jsonResponse(res, 200, { data: { node: null } });
+    else provider(req, res, body, base);
+  }, async server => {
+    const { result } = await sync(root, { push: true, apply: true, ids: id });
+    assert.deepEqual((result as { pushReceipts: unknown[] }).pushReceipts, [{ pmId: id, cardId: "repaired", outcome: "partial",
+      attachment: { outcome: "reused" }, trackerTag: { outcome: "written" },
+      status: { outcome: "failed", error: "GitHub returned an incomplete Projects board inventory." } }]);
+    assert.ok(server.requests.every(request => !request.body.includes("mutation")));
   });
 });
 
@@ -865,7 +945,7 @@ test("an incomplete refresh refuses the whole Status wave before dispatch", asyn
   });
 });
 
-test("a legacy malformed draft journal recovers with a verified tag while pull owns Status", async t => {
+test("a legacy malformed draft journal requires verified identity while pull owns Status", async t => {
   const root = tracker(t);
   const cardId = "reconciled-draft";
   const id = create(root, "Explicit link", [projectItemTag(REF, cardId)]);
@@ -876,6 +956,17 @@ test("a legacy malformed draft journal recovers with a verified tag while pull o
   const journal = path.join(location, `${key}.json`);
   fs.writeFileSync(journal, JSON.stringify({ boardId: "board", cardId: 123 }));
   await withMockGithub(board([draft(cardId)]), async server => {
+    const previous = fs.readFileSync(journal);
+    const disputed = (await sync(root, { push: true, pull: true, apply: true, prefer: "github", ids: id })).result as {
+      pushed: number; pullFailed: number; pushFailed: number; pulled: number; pushReceipts: { attachment: { outcome: string } }[];
+    };
+    assert.equal(disputed.pushed, 0);
+    assert.equal(disputed.pulled, 1);
+    assert.equal(disputed.pushFailed, 1);
+    assert.equal(disputed.pushReceipts[0]?.attachment.outcome, "unknown");
+    assert.deepEqual(fs.readFileSync(journal), previous);
+    await sdkUpdate(id, { status: "open" }, { pmRoot });
+    fs.writeFileSync(journal, JSON.stringify({ boardId: "board", cardId }));
     const result = (await sync(root, { push: true, pull: true, apply: true, prefer: "github", ids: id })).result as {
       pushed: number; pulled: number; pushReceipts: unknown[];
     };
@@ -935,6 +1026,117 @@ test("a throttled draft retries and definitive HTTP rejection permits a correcte
   });
 });
 
+test("a definitive draft refusal survives failed journal cleanup and can be retried", async t => {
+  const root = tracker(t);
+  const id = create(root, "Refused then corrected");
+  const file = projectDraftJournal(root, id);
+  let attempts = 0;
+  await withMockGithub(board([], (_req, res, body) => {
+    assert.match(body, /addProjectV2DraftIssue/);
+    if (++attempts === 1) {
+      fs.renameSync(file, file + ".retained");
+      fs.mkdirSync(file);
+      jsonResponse(res, 200, { errors: [{ type: "FORBIDDEN", message: "Fixture definitive refusal" }] });
+    } else {
+      jsonResponse(res, 200, { data: { addProjectV2DraftIssue: { projectItem: { id: "after-refusal" } } } });
+    }
+  }, false), async () => {
+    const options = { push: true, apply: true, ids: id };
+    await assert.rejects(sync(root, options), (error: unknown) => {
+      assert.ok(error instanceof Error && "context" in error);
+      const { pushReceipts: [row] } = error.context as { pushReceipts: Array<{ outcome: string; attachment: unknown; cleanupError?: string }> };
+      assert.equal(row!.outcome, "failed");
+      assert.deepEqual(row!.attachment, { outcome: "failed", error: "GitHub GraphQL error: Fixture definitive refusal." });
+      assert.match(row!.cleanupError!, /could not record the confirmed draft refusal.*draft recovery cleanup failed/);
+      return true;
+    });
+    assert.equal(attempts, 1);
+    fs.rmdirSync(file);
+    // Model the persisted refusal after fixing an obstructed runtime directory.
+    fs.writeFileSync(file, JSON.stringify({ boardId: "board", refused: true }));
+    const { result } = await sync(root, options);
+    assert.deepEqual((result as { pushReceipts: unknown[] }).pushReceipts, [{ pmId: id, cardId: "after-refusal", outcome: "applied",
+      attachment: { outcome: "attached" }, status: { outcome: "skipped" }, trackerTag: { outcome: "written" } }]);
+    assert.equal(attempts, 2);
+    assert.equal(fs.existsSync(file), false);
+  });
+});
+
+test("a persisted draft refusal remains definitive until journal unlink succeeds", async t => {
+  const root = tracker(t);
+  const id = create(root, "Refusal with a durable marker");
+  const journal = projectDraftJournal(root, id);
+  let attempts = 0;
+  let blocked = true;
+  const remove = fs.promises.rm;
+  fs.promises.rm = async (file, options) => {
+    if (file === journal && blocked) throw new Error("Fixture journal unlink failure");
+    await remove(file, options);
+  };
+  /** Restore the actual filesystem function after this single journal fault test. */
+  const restoreRemove = () => { fs.promises.rm = remove; };
+  try {
+    await withMockGithub(board([], (_req, res) => {
+      if (++attempts === 1) jsonResponse(res, 200, { errors: [{ type: "FORBIDDEN", message: "Fixture denied" }] });
+      else jsonResponse(res, 200, { data: { addProjectV2DraftIssue: { projectItem: { id: "accepted-after-unlink" } } } });
+    }, false), async () => {
+      const options = { push: true, apply: true, ids: id };
+      for (const expected of ["Fixture denied", "GitHub refused the earlier draft"]) {
+        await assert.rejects(sync(root, options), (error: unknown) => {
+          assert.ok(error instanceof Error && "context" in error);
+          assert.match(error.message, /Sync wrote nothing/);
+          const { pushReceipts: [row] } = error.context as {
+            pushReceipts: Array<{ attachment: { outcome: string; error: string }; cleanupError: string }>;
+          };
+          assert.equal(row!.attachment.outcome, "failed");
+          assert.ok(row!.attachment.error.includes(expected));
+          assert.match(row!.cleanupError, /Fixture journal unlink failure/);
+          return true;
+        });
+        assert.deepEqual(JSON.parse(fs.readFileSync(journal, "utf8")), { boardId: "board", refused: true });
+        assert.equal(attempts, 1);
+      }
+      blocked = false;
+      const { result } = await sync(root, options);
+      assert.equal((result as { pushed: number }).pushed, 1);
+      assert.equal(attempts, 2);
+      assert.equal(fs.existsSync(journal), false);
+    });
+  } finally {
+    restoreRemove();
+  }
+});
+
+test("blank provider diagnostics keep typed attachment and Status failures visible", async t => {
+  const root = tracker(t);
+  const draftId = create(root, "Attachment with blank detail");
+  const statusId = create(root, "Status with blank detail", [projectItemTag(REF, "linked")]);
+  await withMockGithub(board([draft("linked")], (_req, res, body) => {
+    const mutation = body.includes("addProjectV2DraftIssue") ? "addProjectV2DraftIssue" : "updateProjectV2ItemFieldValue";
+    const errors = [{ type: "FORBIDDEN", message: "" }];
+    if (mutation === "updateProjectV2ItemFieldValue") errors.push({ type: "FORBIDDEN", message: " " });
+    jsonResponse(res, 200, { data: { [mutation]: null }, errors });
+  }), async server => {
+    await assert.rejects(sync(root, { push: true, apply: true }), (error: unknown) => {
+      assert.ok(error instanceof Error && "context" in error);
+      assert.match(error.message, /Sync wrote nothing; 2 operation/);
+      const { pushFailed, pushReceipts } = error.context as { pushFailed: number; pushReceipts: Array<{
+        pmId: string; outcome: string; attachment: unknown; status: unknown;
+      }> };
+      assert.equal(pushFailed, 2);
+      for (const row of pushReceipts) assert.equal(row.outcome, "failed");
+      assert.deepEqual(pushReceipts.find(row => row.pmId === draftId)?.attachment,
+        { outcome: "failed", error: "GitHub did not confirm the Projects attachment." });
+      assert.deepEqual(pushReceipts.find(row => row.pmId === statusId)?.status,
+        { outcome: "failed", error: "GitHub did not confirm the Projects Status update." });
+      return true;
+    });
+    assert.equal(server.requests.filter(request => request.body.includes("mutation")).length, 2);
+  });
+});
+
+let projectsConsumerTarball: Buffer | undefined;
+
 for (const launcher of ["npx", "bunx"] as const) {
   const availability = launcher === "bunx" ? spawnSync(launcher, ["--version"]) : undefined;
   const launcherMissing = (availability?.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
@@ -948,19 +1150,35 @@ for (const launcher of ["npx", "bunx"] as const) {
     const repository = path.resolve(import.meta.dirname, "..");
     await withPackedFixture(base, async ({ root, env }) => {
       /** Run local pack and extraction without contacting a registry or reading user credentials. */
-      function setup(command: string, args: string[]) {
-        const result = spawnSync(command, args, { cwd: repository, env, encoding: "utf8" });
+      function setup(command: string, args: string[], cwd = repository) {
+        const result = spawnSync(command, args, { cwd, env, encoding: "utf8" });
         assert.equal(result.status, 0, result.stderr);
         return result.stdout;
       }
-      if (!fs.existsSync(path.join(repository, "dist", "index.js"))) setup("npm", ["run", "build"]);
-      const [{ filename }] = JSON.parse(setup("npm", ["pack", "--ignore-scripts", "--offline", "--json", "--pack-destination", base])) as [{ filename: string }];
+      if (!projectsConsumerTarball) {
+        // Build in an isolated package directory so stale checkout output and parallel packs cannot affect this artifact.
+        const packageRoot = path.join(base, "package");
+        const dist = path.join(packageRoot, "dist");
+        fs.mkdirSync(dist, { recursive: true });
+        fs.writeFileSync(path.join(dist, "index.js"), 'throw new Error("Stale Projects consumer build");');
+        setup("npm", ["run", "build", "--", "--outDir", dist]);
+        const metadata = JSON.parse(fs.readFileSync(path.join(repository, "package.json"), "utf8")) as { files: string[] };
+        for (const file of new Set(["package.json", ...metadata.files])) {
+          if (file.replace(/\/$/, "") === "dist") continue;
+          fs.mkdirSync(path.dirname(path.join(packageRoot, file)), { recursive: true });
+          fs.copyFileSync(path.join(repository, file), path.join(packageRoot, file));
+        }
+        const [{ filename }] = JSON.parse(setup("npm", ["pack", "--ignore-scripts", "--offline", "--json", "--pack-destination", base], packageRoot)) as [{ filename: string }];
+        projectsConsumerTarball = fs.readFileSync(path.join(base, filename));
+      }
+      const archive = path.join(base, "projects-consumer.tgz");
+      fs.writeFileSync(archive, projectsConsumerTarball);
       const pmRoot = path.join(root, ".agents", "pm");
       await sdkInit("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { cwd: root, pmRoot, noExtensions: true });
       assert.equal(fs.existsSync(path.join(root, ".git")), false);
       const installed = path.join(pmRoot, "extensions", "pm-github");
       fs.mkdirSync(installed, { recursive: true });
-      setup("tar", ["-xf", path.join(base, filename), "--strip-components=1", "-C", installed]);
+      setup("tar", ["-xf", archive, "--strip-components=1", "-C", installed]);
       fs.symlinkSync(path.join(repository, "node_modules"), path.join(installed, "node_modules"), "dir");
       env.PATH = path.join(repository, "node_modules", ".bin") + path.delimiter + env.PATH;
       const launcherArgs = launcher === "bunx" ? ["--bun", "--no-install", "pm"] : ["--no-install", "pm"];

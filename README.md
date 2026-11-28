@@ -855,19 +855,29 @@ returns `attachment.outcome: confirmed` and the card ID. GitHub can return an
 existing card, so the acknowledgement confirms only that the card exists.
 A batch with only failed writes exits nonzero and exposes those receipts in its
 error context. The message distinguishes unknown delivery from a rejected write.
+If settling a draft journal also fails, the row includes a separate
+`cleanupError` alongside the provider outcome.
 
-The tracker tag is recorded before the Status update. Push checks the tracker
-binding again before sending Status. If GitHub rejects Status,
-rerun the same push to update the attached card. If the tag write failed, a
-locally retained draft recovery record in `runtime/github-project-push/` keeps
-the confirmed card ID for the next push. When a draft response lacks a
-confirmed ID, the next push reports `attachment.outcome: unknown` and holds off
-on a new draft. Check the board first. If it contains the draft, add the
-corresponding Projects tag to the tracker item and retry. A retry can reconcile
-the record even when its board Status and tracker tag already match. If GitHub confirms
-that no draft was created, remove the matching pending recovery record before
-retrying while no push for that item is running. Recovery files are keyed by the
-SHA-256 of the JSON array `[lowercase owner, project number, tracker item ID]`.
+The tracker tag is recorded before the Status update. Existing cards are
+checked in bounded waves. After repairing local tags, the push refreshes the
+wave's board and tracker bindings again before sending Status. If GitHub rejects
+Status, rerun the same push to update the attached card.
+
+The recovery journal in `runtime/github-project-push/` records a confirmed
+draft ID before writing the tracker tag. If GitHub's response lacks a confirmed
+ID, the next push reports `attachment.outcome: unknown` and retains the journal,
+even when the tracker already has a tag for a visible card. To reconcile the
+journal, stop pushes for that item and verify the specific draft created by
+the attempt. If you find it, set the journal's `cardId` to that draft's exact
+node ID, leave `boardId` intact, and rerun the push. The retry checks that the
+recorded ID and the live binding agree, including when Status already matches.
+If GitHub confirms that no draft was created, remove the matching journal
+before retrying. When GitHub explicitly refuses a draft, a retry can clear the
+recorded refusal automatically after storage is writable. If the receipt says
+the refusal could not be recorded, use the definitive refusal to verify and
+remove the original journal after repairing storage. Recovery filenames are
+the SHA-256 of the JSON array `[lowercase owner, project number, tracker item ID]`
+with the suffix `.json`.
 
 The Projects tag encodes the case-sensitive card node ID as lowercase UTF-8
 hex, in the form `gh-project:<owner>/<number>#<hex node ID>`.
