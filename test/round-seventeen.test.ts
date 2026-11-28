@@ -546,12 +546,15 @@ test("an unexpected identity-field read during planning is preserved before any 
 
 
 test("project helpers refuse missing coordinates or native targets before a GraphQL write", async () => tracker(async root => {
-  await withMockGithub((_request, response) => jsonResponse(response, 200, { data: { repository: { issueOrPullRequest: { id: "issue-node-7" } } } }), async server => {
-    assert.equal(await gqlResolveIssueNodeId("invalid", 7, "fixture"), undefined); assert.deepEqual(server.requests, []);
+  await withMockGithub((_request, response, body) => jsonResponse(response, 200, { data: body.includes("items(first:")
+    ? { node: { items: { nodes: [], pageInfo: { hasNextPage: false } } } }
+    : { repository: { issueOrPullRequest: { id: "issue-node-7" } } } }), async server => {
+    assert.equal(await gqlResolveIssueNodeId("invalid", 7, "fixture"), undefined); assert.deepEqual([...server.requests], []);
     assert.equal(await gqlResolveIssueNodeId(repo, 7, "fixture"), "issue-node-7");
     assert.equal(server.requests.length, 1);
-    const result = await applyPushEntry({ pmId: "fixture-missing", action: "add-draft", title: "Must not write" }, { id: "board-node", title: "Board", url: "https://github.com/orgs/o/projects/1", ownerType: "organization" }, { owner: "o", number: 1 }, new Map(), root, "fixture", []);
-    assert.equal(result.changed, false); assert.match(result.error!, /missing tracker item/); assert.equal(server.requests.length, 1);
+    const result = await applyPushEntry({ pmId: "fixture-missing", action: "add-draft", title: "Must not write" }, { id: "board-node", title: "Board", url: "https://github.com/orgs/o/projects/1", ownerType: "organization" }, { owner: "o", number: 1 }, root, "fixture");
+    assert.equal(result.changed, false); assert.match(result.error!, /missing a tracker item/); assert.equal(server.requests.length, 2);
+    assert.ok(server.requests.every(request => !request.body.includes("mutation")));
   });
 }));
 

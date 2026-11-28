@@ -1,6 +1,6 @@
 import { applyLocalIssueReferences, canLinkImportReferences, guardLocalIssueReferences, localIssueReferenceMutation, localIssueReferenceReceipt, planLocalIssueReferences, type IssueMirror, type LocalIssueReference } from "./import-references.ts";
 import { writeGithubStateAtomic, syncGithubStatePath, type GithubStateWriteOptions } from "./durable-state.ts";
-import { buildGithubOwnershipIndex, warnGithubOwnershipScope, withGithubItemConsistency, readGithubOwnershipSnapshot, githubRepositoryHash, githubOwnershipClaims, githubOwnedIdentityKeys, assertGithubOwnershipConsistency, assertGithubImportOwner, GithubImportOwnershipError, readGithubImportOwner, withGithubImportOwners, mutateGithubOwnedItem, type GithubOwnershipIndex, type GithubOwnedTarget, ownershipStateOf } from "./import-ownership.ts";
+import { buildGithubOwnershipIndex, warnGithubOwnershipScope, withGithubOwnershipLock, withGithubItemConsistency, readGithubOwnershipSnapshot, githubRepositoryHash, githubOwnershipClaims, githubOwnedIdentityKeys, assertGithubOwnershipConsistency, assertGithubImportOwner, GithubImportOwnershipError, readGithubImportOwner, withGithubImportOwners, mutateGithubOwnedItem, type GithubOwnershipIndex, type GithubOwnedTarget, ownershipStateOf } from "./import-ownership.ts";
 import { parseGithubIssueUrl, githubUrlTokens } from "./github-url.ts";
 import { canonicalGithubStatus, githubStatusIsTerminal, githubStatusKind, readGithubWorkspace, withGithubInvocationScope, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
@@ -60,6 +60,7 @@ export type { GithubWebhookDelivery, WebhookProposal, WebhookReconciliation, Web
 import http from "node:http";
 import https from "node:https";
 import crypto from "node:crypto";
+import { z } from "zod";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -103,12 +104,14 @@ import {
 
 export { resolvePmDataDir } from "./gate.ts";
 
-import { assertProjectWriteBinding, getProjectWriteBinding,
+import { assertProjectPushTag, assertProjectWriteBinding, getProjectWriteBinding,
   type ProjectItem,
   type ProjectItemContent,
   type ProjectMeta,
   type ProjectRef,
   type ProjectStatusField,
+  type PushPlanEntry,
+  type PushPlanOptions,
   buildProjectImportPlan,
   buildProjectPullPlan,
   buildProjectPushPlan,
@@ -640,6 +643,16 @@ export function isRetryableStatus(status: number, headers: Record<string, string
   return false;
 }
 
+/** Retain provider status so non-idempotent callers can distinguish refused requests from ambiguous delivery. */
+class GithubHttpRequestError extends Error {
+  readonly status: number;
+
+  /** Keep the existing diagnostic and expose its HTTP status to the write path. */
+  constructor(status: number, method: string, url: string) {
+    super(`GitHub API returned HTTP ${status} for ${method} ${new URL(url).pathname}`);
+    this.status = status;
+  }
+}
 // Request with rate-limit/backoff handling. Retries on 429/5xx and GitHub
 // rate-limit 403s, honoring Retry-After / X-RateLimit-Reset. Throws on a
 // non-retryable error status so callers can map it to a semantic exit code.
@@ -649,12 +662,13 @@ async function request(
   token: string | undefined,
   payload?: string,
   maxRetries = 4,
+  retryServerErrors = true,
 ): Promise<FetchResult> {
   let attempt = 0;
   for (;;) {
     const res = await requestOnce(method, url, token, payload);
     if (res.status >= 200 && res.status < 300) return res;
-    if (attempt < maxRetries && isRetryableStatus(res.status, res.headers)) {
+    if (attempt < maxRetries && (retryServerErrors || res.status < 500) && isRetryableStatus(res.status, res.headers)) {
       const wait = computeBackoffMs(res.headers, attempt);
       console.error(
         `GitHub returned HTTP ${res.status}; retrying in ${Math.round(wait / 1000)}s ` +
@@ -664,7 +678,7 @@ async function request(
       attempt++;
       continue;
     }
-    throw new Error(`GitHub API returned HTTP ${res.status} for ${method} ${new URL(url).pathname}`);
+    throw new GithubHttpRequestError(res.status, method, url);
   }
 }
 
@@ -6335,6 +6349,7 @@ export async function githubGraphQLResponse<T>(
   token: string | undefined,
   query: string,
   variables: Record<string, unknown>,
+  retryServerErrors = true,
 ): Promise<GraphQLResponse<T>> {
   if (!token) {
     throw new CommandError(
@@ -6343,7 +6358,7 @@ export async function githubGraphQLResponse<T>(
     );
   }
   const payload = JSON.stringify({ query, variables });
-  const res = await request("POST", graphqlUrl(), token, payload);
+  const res = await request("POST", graphqlUrl(), token, payload, 4, retryServerErrors);
   let parsed: GraphQLResponse<T>;
   try {
     parsed = JSON.parse(res.body) as GraphQLResponse<T>;
@@ -6460,7 +6475,7 @@ function normalizeProjectItemNode(n: GraphqlProjectItemNode): ProjectItem {
  * @param token - GitHub token.
  * @returns Every item on the board, in page order.
  */
-async function fetchProjectItems(projectId: string, token: string | undefined): Promise<ProjectItem[]> {
+async function fetchProjectItems(projectId: string, token: string | undefined, requireComplete = false): Promise<ProjectItem[]> {
   const query = `
     query($id:ID!,$cursor:String){
       node(id:$id){ ... on ProjectV2 {
@@ -6480,16 +6495,22 @@ async function fetchProjectItems(projectId: string, token: string | undefined): 
       }}
     }`;
   const items: ProjectItem[] = [];
+  const seenCursors = new Set<string>();
   let cursor: string | undefined;
   for (;;) {
-    const data = await githubGraphQL<GraphqlFetchProjectItemsData>(token, query, { id: projectId, cursor: cursor ?? null });
-    const conn = data.node?.items;
+    const response = await githubGraphQLResponse<GraphqlFetchProjectItemsData>(token, query, { id: projectId, cursor: cursor ?? null });
+    const conn = response.data!.node?.items;
+    if (requireComplete && (response.errors?.length || !conn?.nodes || typeof conn.pageInfo?.hasNextPage !== "boolean" ||
+        conn.nodes.some(node => !node?.id) || (conn.pageInfo.hasNextPage && (!conn.pageInfo.endCursor || seenCursors.has(conn.pageInfo.endCursor))))) {
+      throw new CommandError("GitHub returned an incomplete Projects board inventory.");
+    }
     if (!conn) break;
     for (const n of conn.nodes ?? []) {
       if (n) items.push(normalizeProjectItemNode(n));
     }
     if (conn.pageInfo?.hasNextPage && conn.pageInfo.endCursor) {
       cursor = conn.pageInfo.endCursor;
+      if (requireComplete) seenCursors.add(cursor);
     } else {
       break;
     }
@@ -6513,8 +6534,8 @@ async function gqlAddDraft(
   token: string | undefined,
 ): Promise<string> {
   const q = `mutation($p:ID!,$t:String!,$b:String){ addProjectV2DraftIssue(input:{projectId:$p,title:$t,body:$b}){ projectItem{ id } } }`;
-  const d = await githubGraphQL<GraphqlAddDraftData>(token, q, { p: projectId, t: title, b: body });
-  const id = d.addProjectV2DraftIssue?.projectItem?.id;
+  const response = await githubGraphQLResponse<GraphqlAddDraftData>(token, q, { p: projectId, t: title, b: body }, false);
+  const id = response.data!.addProjectV2DraftIssue?.projectItem?.id;
   if (!id) throw new CommandError("addProjectV2DraftIssue returned no item id.");
   return id;
 }
@@ -6535,7 +6556,7 @@ async function gqlAddIssue(projectId: string, contentId: string, token: string |
   return id;
 }
 
-// Set a project item's single-select Status field to the given option id.
+/** Update the single-select Status and require GitHub to acknowledge the same card. */
 async function gqlSetStatus(
   projectId: string,
   itemId: string,
@@ -6544,7 +6565,11 @@ async function gqlSetStatus(
   token: string | undefined,
 ): Promise<void> {
   const q = `mutation($p:ID!,$i:ID!,$f:ID!,$o:String!){ updateProjectV2ItemFieldValue(input:{projectId:$p,itemId:$i,fieldId:$f,value:{singleSelectOptionId:$o}}){ projectV2Item{ id } } }`;
-  await githubGraphQL<GraphqlSetStatusData>(token, q, { p: projectId, i: itemId, f: fieldId, o: optionId });
+  const response = await githubGraphQLResponse<GraphqlSetStatusData>(token, q, { p: projectId, i: itemId, f: fieldId, o: optionId });
+  if (response.data!.updateProjectV2ItemFieldValue?.projectV2Item?.id !== itemId) {
+    const errors = response.errors?.map(error => error.message).join("; ");
+    throw new CommandError(errors || "GitHub returned no matching card ID for the Status write.");
+  }
 }
 
 /**
@@ -6894,82 +6919,161 @@ async function runProjectImport(ctx: CommandHandlerContext) {
 
 // --- project sync (bidirectional) ------------------------------------------
 
-/**
- * Push one pm item's status onto its board item.
- *
- * Tolerates a missing target option (writes the item but skips the Status set).
- * Returns whether a real change was made and an optional error string so the
- * caller can continue the batch per-item.
- *
- * @param entry - The push-plan entry to execute.
- * @param meta - The board metadata (id, Status field).
- * @param ref - The board reference (for the provenance tag).
- * @param pmById - Local pm items keyed by id (for body lookup and tagging).
- * @param pmRoot - Workspace root for the `pm` tag write.
- * @param token - GitHub token for the GraphQL calls.
- * @returns Whether the item changed, plus an optional error message.
- */
-export async function applyPushEntry(
-  entry: ReturnType<typeof buildProjectPushPlan>["entries"][number],
-  meta: ProjectMeta,
-  ref: ProjectRef,
-  pmById: Map<string, PmItem>,
-  pmRoot: string,
-  token: string | undefined,
-  projectItems: ProjectItem[],
-): Promise<{ changed: boolean; error?: string }> {
-  try {
-    const validate = () => {
-      const corpus = readPmItems(pmRoot);
-      const current = corpus.find(item => item.id === entry.pmId);
-      if (!current) throw new GithubImportOwnershipError(entry.pmId, "project association", ["missing tracker item"]);
-      const content = projectItems.find(item => item.id === entry.itemId)?.content;
-      const repo = entry.issueRepo ?? content?.repo;
-      const number = entry.issueNumber ?? content?.number;
-      const ownership = buildGithubOwnershipIndex(corpus, repo ? [repo] : []);
-      const keys = githubOwnedIdentityKeys(current, ownership);
-      if (entry.action === "add-issue") {
-        assertGithubImportOwner(current, { id: current.id!, repo: entry.issueRepo!, number: entry.issueNumber! }, ownership);
-      } else if (keys.length === 0 && entry.action !== "add-draft" && !current.tags?.includes(projectItemTag(ref, entry.itemId!))) {
-        throw new GithubImportOwnershipError(entry.pmId, "project association", ["missing current board tag or draft authorization"]);
-      } else if (repo && number && keys.length) assertGithubOwnershipConsistency(current, { id: current.id!, repo, number }, ownership);
-    };
-    validate();
-    let itemId = entry.itemId;
-    if (entry.action === "add-draft") {
-      const pm = pmById.get(entry.pmId);
-      itemId = await gqlAddDraft(meta.id, entry.title, pm!.body || pm!.description!, token);
-    } else if (entry.action === "add-issue") {
-      // The private executor receives only buildProjectPushPlan entries. Its
-      // add-issue arm sets both coordinates from shared, consistent ownership.
-      const contentId = await gqlResolveIssueNodeId(entry.issueRepo!, entry.issueNumber!, token);
-      if (!contentId) return { changed: false, error: `could not resolve node id for ${entry.issueRepo}#${entry.issueNumber}` };
-      validate();
-      itemId = await gqlAddIssue(meta.id, contentId, token);
-    }
+/** Results from independent Projects push writes and the confirmed card, if any. */
+interface ProjectPushReceipt {
+  pmId: string;
+  cardId?: string;
+  outcome: "applied" | "partial" | "unchanged" | "failed";
+  attachment: { outcome: "attached" | "reused" | "failed" | "unknown" | "not_attempted"; error?: string };
+  status: { outcome: "updated" | "unchanged" | "skipped" | "failed" | "not_attempted"; error?: string };
+  trackerTag: { outcome: "written" | "present" | "failed" | "not_attempted"; error?: string };
+}
 
-    if (entry.targetOptionId && meta.statusField) {
-      await gqlSetStatus(meta.id, itemId!, meta.statusField.id, entry.targetOptionId, token);
-    }
-    // Ensure the pm item carries the project provenance tag so future syncs are
-    // idempotent (never strips existing tags; only adds the missing one).
-    const pm = pmById.get(entry.pmId);
-    if (pm?.id) {
-      const tag = projectItemTag(ref, itemId!);
-      const existingTags = pm.tags!;
-      if (nativeTagAdditions(existingTags, [tag]).length) {
-        const upd = pmRun([
-          "--path", pmRoot, "update", pm.id,
-          "--add-tags", tag,
-          "--message", `Linked to GitHub project ${ref.owner}/${ref.number}`,
-        ]);
-        if (!upd.ok) return { changed: true, error: `linked but tag write failed — ${upd.stderr}` };
-      }
-    }
-    return { changed: true };
-  } catch (err: unknown) {
-    return { changed: false, error: errorMessage(err) };
+const projectDraftRecovery = z.object({ boardId: z.string(), cardId: z.string().min(1).optional() });
+
+/** Read the durable intent for a non-idempotent attachment. Missing intent means no draft is pending. */
+async function readProjectDraftRecovery(file: string) {
+  const raw = await fs.promises.readFile(file, "utf8").catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== "ENOENT") throw error;
+    return undefined;
+  });
+  return raw === undefined ? undefined : projectDraftRecovery.parse(JSON.parse(raw));
+}
+
+/** Replan against the complete live board and tracker before authorizing an attachment or status write. */
+async function replanProjectPush(entry: PushPlanEntry, meta: ProjectMeta, ref: ProjectRef, pmRoot: string,
+  cards: ProjectItem[], options: PushPlanOptions, recoveredCardId?: string,
+) {
+  const listed = await listAllComplete({ includeBody: true }, { pmRoot, noExtensions: true });
+  certifyCompleteListResult(listed);
+  const corpus = listed.items;
+  const current = corpus.find(item => item.id === entry.pmId);
+  if (!current) throw new CommandError("The Projects push is missing a tracker item.");
+  if (recoveredCardId) assertProjectPushTag(ref, recoveredCardId, current, corpus);
+  const selected = recoveredCardId
+    ? { ...current, tags: [...(current.tags ?? []), projectItemTag(ref, recoveredCardId)] }
+    : current;
+  const fresh = buildProjectPushPlan([selected], ref, cards, meta.statusField, { ...options, corpus }).entries[0]!;
+  if (fresh.issueRepo !== entry.issueRepo || fresh.issueNumber !== entry.issueNumber) {
+    const observed = fresh.issueRepo ? `${fresh.issueRepo}#${fresh.issueNumber}` : "curated/unowned";
+    throw new CommandError(`Projects push current owner changed to ${observed}; build a fresh plan.`);
   }
+  if (fresh.action === "blocked") throw new CommandError(fresh.reason!);
+  if (entry.action === "set-status" || entry.action === "link-card" || entry.action === "blocked") {
+    if (fresh.itemId !== entry.itemId) throw new CommandError("Projects push is missing current board tag or issue binding for the planned card.");
+  }
+  return { current, fresh };
+}
+
+type ProjectPushSteps = Omit<ProjectPushReceipt, "pmId" | "outcome">;
+const unattemptedPush: ProjectPushSteps = {
+  attachment: { outcome: "not_attempted" }, status: { outcome: "not_attempted" }, trackerTag: { outcome: "not_attempted" },
+};
+
+/** Reserve a draft attempt durably before sending its non-idempotent mutation. */
+async function attachProjectDraft(file: string, boardId: string, title: string, body: string | undefined, token: string | undefined):
+  Promise<{ cardId?: string; attachment: ProjectPushReceipt["attachment"] }> {
+  await writeGithubStateAtomic(file, JSON.stringify({ boardId }), { exclusive: true });
+  try {
+    const cardId = await gqlAddDraft(boardId, title, body, token);
+    return { cardId, attachment: { outcome: "attached" } };
+  } catch (error) {
+    // Retain the reservation whenever the response does not settle delivery.
+    if (error instanceof GithubHttpRequestError && [400, 401, 403, 404, 422, 429].includes(error.status)) {
+      await fs.promises.rm(file, { force: true });
+      return { attachment: { outcome: "failed", error: errorMessage(error) } };
+    }
+    return { attachment: { outcome: "unknown", error: errorMessage(error) } };
+  }
+}
+
+/** Persist the card ID and guarded native tag before attempting the independent Status mutation. */
+async function confirmProjectPushTag(
+  pmRoot: string, ref: ProjectRef, cardId: string, current: PmItem, fresh: PushPlanEntry, file: string, boardId: string,
+): Promise<ProjectPushReceipt["trackerTag"]> {
+  try {
+    if (fresh.action === "add-draft") await writeGithubStateAtomic(file, JSON.stringify({ boardId, cardId }));
+    const tag = projectItemTag(ref, cardId);
+    if (!nativeTagAdditions(current.tags, [tag]).length) return { outcome: "present" };
+    const owners = fresh.issueRepo ? [`${fresh.issueRepo}#${fresh.issueNumber}`] : [];
+    const client = PmClient.forActiveExtensionHost({ pmRoot, noExtensions: true });
+    await withGithubItemConsistency(pmRoot, current.id, owners, () => client.update(current.id!, {
+      addTags: [tag], message: `Linked to GitHub project ${ref.owner}/${ref.number}`,
+    }), (item, peers) => assertProjectPushTag(ref, cardId, item, peers));
+    return { outcome: "written" };
+  } catch (error) {
+    return { outcome: "failed", error: `linked but tag write failed — ${errorMessage(error)}` };
+  }
+}
+
+/** Report a Status acknowledgement or refusal independently of the confirmed card and tag. */
+async function applyProjectPushStatus(meta: ProjectMeta, cardId: string, fresh: PushPlanEntry, token: string | undefined): Promise<ProjectPushReceipt["status"]> {
+  if (!fresh.targetOptionId) return { outcome: fresh.targetOptionName ? "unchanged" : "skipped" };
+  try {
+    await gqlSetStatus(meta.id, cardId, meta.statusField!.id, fresh.targetOptionId, token);
+    return { outcome: "updated" };
+  } catch (error) {
+    return { outcome: "failed", error: errorMessage(error) };
+  }
+}
+
+/** Reconcile a pending attachment and apply only steps authorized by the re-read binding. */
+async function performProjectPush(entry: PushPlanEntry, meta: ProjectMeta, ref: ProjectRef,
+  pmRoot: string, token: string | undefined, options: PushPlanOptions,
+): Promise<ProjectPushSteps> {
+  const key = crypto.createHash("sha256").update(JSON.stringify([ref.owner.toLowerCase(), ref.number, entry.pmId])).digest("hex");
+  const file = path.join(pmRoot, "runtime", "github-project-push", `${key}.json`);
+  const recovery = await readProjectDraftRecovery(file);
+  if (recovery && recovery.boardId !== meta.id) {
+    throw new CommandError("The Projects board changed while a draft attachment was pending. Verify the binding before pushing.");
+  }
+  /** Obtain a fresh board inventory before reading local write authority. */
+  const replan = async () => replanProjectPush(entry, meta, ref, pmRoot, await fetchProjectItems(meta.id, token, true), options, recovery?.cardId);
+  const first = await replan();
+  const prior = first.fresh.itemId;
+  if (recovery && !recovery.cardId && (!prior || nativeTagAdditions(first.current.tags, [projectItemTag(ref, prior)]).length > 0)) {
+    return { ...unattemptedPush, attachment: { outcome: "unknown",
+      error: "An earlier draft attachment has no confirmed card ID. Verify the board and reconcile the tracker tag before retrying." } };
+  }
+  const { fresh: planned } = first;
+  const node = planned.action === "add-issue" ? await gqlResolveIssueNodeId(planned.issueRepo!, planned.issueNumber!, token) : undefined;
+  if (planned.action === "add-issue" && !node) throw new CommandError(`could not resolve node id for ${planned.issueRepo}#${planned.issueNumber}`);
+  const { current, fresh } = node ? await replan() : first;
+
+  let cardId = fresh.itemId;
+  let attachment: ProjectPushReceipt["attachment"] = { outcome: "reused" };
+  if (fresh.action === "add-issue") {
+    cardId = await gqlAddIssue(meta.id, node!, token);
+    attachment = { outcome: "attached" };
+  } else if (fresh.action === "add-draft") {
+    const body = typeof current.body === "string" && current.body ? current.body : current.description;
+    const draft = await attachProjectDraft(file, meta.id, fresh.title, body, token);
+    if (!draft.cardId) return { ...unattemptedPush, attachment: draft.attachment };
+    cardId = draft.cardId;
+    attachment = draft.attachment;
+  }
+  if (!cardId) return unattemptedPush;
+  const trackerTag = await confirmProjectPushTag(pmRoot, ref, cardId, current, fresh, file, meta.id);
+  if (trackerTag.outcome === "failed") return { ...unattemptedPush, cardId, attachment, trackerTag };
+
+  const cleanupError = recovery || fresh.action === "add-draft" ? await fs.promises.rm(file, { force: true }).catch(
+    (error: unknown) => `tracker tag confirmed, but draft recovery cleanup failed — ${errorMessage(error)}`,
+  ) : undefined;
+  const status = await applyProjectPushStatus(meta, cardId, fresh, token);
+  return { cardId, attachment, status, trackerTag: cleanupError ? { ...trackerTag, error: cleanupError } : trackerTag };
+}
+
+/** Execute one push under the workspace ownership lease and retain successes before later steps run. @internal */
+export async function applyPushEntry(entry: PushPlanEntry, meta: ProjectMeta, ref: ProjectRef,
+  pmPath: string, token: string | undefined, options: PushPlanOptions = {},
+): Promise<ProjectPushReceipt & { changed: boolean; error?: string }> {
+  const steps = await readGithubWorkspace(pmPath).then(({ pmRoot }) =>
+    withGithubOwnershipLock(pmRoot, () => performProjectPush(entry, meta, ref, pmRoot, token, options)))
+    .catch((error: unknown): ProjectPushSteps => ({ ...unattemptedPush, attachment: { outcome: "failed", error: errorMessage(error) } }));
+  const changed = steps.attachment.outcome === "attached" || steps.status.outcome === "updated" || steps.trackerTag.outcome === "written";
+  const error = steps.attachment.error ?? steps.trackerTag.error ?? steps.status.error;
+  const outcome = error ? changed ? "partial" : "failed" : changed ? "applied" : "unchanged";
+  return { ...steps, pmId: entry.pmId, outcome, changed, error };
 }
 
 // Build the pm CLI argv that applies one pull (project → pm) status transition.
@@ -7078,7 +7182,7 @@ async function runProjectSync(ctx: CommandHandlerContext) {
   }
 
   // Direction resolution. Preview (no --apply) shows BOTH plans unless one is
-  // explicitly requested. --apply defaults to push (never mutates pm silently).
+  // explicitly requested. --apply defaults to applying the push plan.
   const previewBoth = !wantPush && !wantPull;
   const doPush = previewBoth || wantPush;
   const doPull = previewBoth || wantPull;
@@ -7094,18 +7198,16 @@ async function runProjectSync(ctx: CommandHandlerContext) {
   }
 
   const meta = await resolveProject(ref, token);
-  const projectItems = await fetchProjectItems(meta.id, token);
+  const projectItems = await fetchProjectItems(meta.id, token, doPush);
   const allPm = readPmItems(ctx.pm_root);
   const scoped = scopeItemsByIds(allPm, scopedIds.length > 0 ? scopedIds : undefined);
   if (scoped.missing.length > 0) {
     throw new CommandError(`--ids included unknown pm item id(s): ${scoped.missing.join(", ")}`, EXIT_CODE.NOT_FOUND);
   }
-  const pmById = new Map<string, PmItem>();
-  for (const it of scoped.selected) if (it.id) pmById.set(it.id, it);
-
   const workspace = await readGithubWorkspace(ctx.pm_root);
+  const pushOptions = { addMissing, statusMap, statuses: workspace.statuses };
   const pushPlan = doPush
-    ? buildProjectPushPlan(scoped.selected, ref, projectItems, meta.statusField, { addMissing, statusMap, statuses: workspace.statuses, corpus: allPm })
+    ? buildProjectPushPlan(scoped.selected, ref, projectItems, meta.statusField, { ...pushOptions, corpus: allPm })
     : undefined;
   const pullPlan = doPull
     ? buildProjectPullPlan(scoped.selected, ref, projectItems, statusMap, workspace.statuses, allPm)
@@ -7118,23 +7220,25 @@ async function runProjectSync(ctx: CommandHandlerContext) {
   const pushItemIds = new Set((pushPlan?.entries ?? []).filter((e) => e.action === "set-status").map((e) => e.itemId));
   const pullItemIds = new Set((pullPlan?.entries ?? []).map((e) => e.itemId));
 
-  const pushActionable = (pushPlan?.entries ?? []).filter((e) => e.action !== "noop");
+  const pushCandidates = (pushPlan?.entries ?? []).filter((e) => e.action !== "noop");
+  const pushBlocked = pushCandidates.filter(e => e.action === "blocked");
   const pullActionable = pullPlan?.entries ?? [];
 
   if (!apply) {
     if (pushPlan) {
       console.error(`[dry-run] push (pm → project ${ref.owner}/${ref.number}):`);
-      for (const e of pushActionable) {
+      for (const e of pushCandidates) {
         const detail =
           e.action === "set-status" ? `${e.currentOptionName ?? "(none)"} → ${e.targetOptionName}`
           : e.action === "add-draft" ? `add draft${e.targetOptionName ? ` @ ${e.targetOptionName}` : ""}`
-          : `add issue ${e.issueRepo}#${e.issueNumber}${e.targetOptionName ? ` @ ${e.targetOptionName}` : ""}`;
+          : e.action === "add-issue" ? `add issue ${e.issueRepo}#${e.issueNumber}${e.targetOptionName ? ` @ ${e.targetOptionName}` : ""}`
+          : e.action === "link-card" ? `link tracker to card ${e.itemId}` : `blocked — ${e.reason}`;
         console.error(`  ${e.pmId} "${e.title}": ${detail}`);
       }
       for (const s of pushPlan.statusSkipped) {
         console.error(`  [skip] ${s.pmId} "${s.title}": pm status "${s.status}" maps to no board option`);
       }
-      if (pushActionable.length === 0) console.error("  (nothing to push)");
+      if (pushCandidates.length === 0) console.error("  (nothing to push)");
     }
     if (pullPlan) {
       console.error(`[dry-run] pull (project ${ref.owner}/${ref.number} → pm):`);
@@ -7148,22 +7252,28 @@ async function runProjectSync(ctx: CommandHandlerContext) {
     return {
       dryRun: true,
       project: `${ref.owner}/${ref.number}`,
-      push: pushPlan ? { actionable: pushActionable.length, statusSkipped: pushPlan.statusSkipped.length } : undefined,
+      push: pushPlan ? { actionable: pushCandidates.length - pushBlocked.length, statusSkipped: pushPlan.statusSkipped.length,
+        ...(pushBlocked.length ? { blocked: pushBlocked.map(e => ({ pmId: e.pmId, cardId: e.itemId, reason: e.reason })) } : {}),
+      } : undefined,
       pull: pullPlan ? { actionable: pullActionable.length, statusSkipped: pullPlan.statusSkipped.length } : undefined,
     };
   }
 
   let pushed = 0;
   let pushFailed = 0;
+  let pushPartial = 0;
+  const pushReceipts: ProjectPushReceipt[] = [];
   if (applyPush && pushPlan) {
-    for (const e of pushActionable) {
+    for (const e of pushCandidates) {
       if (prefer === "github" && e.action === "set-status" && pullItemIds.has(e.itemId!)) {
         continue; // pull wins for this linked item
       }
-      const r = await applyPushEntry(e, meta, ref, pmById, ctx.pm_root, token, projectItems);
-      if (r.error && !r.changed) { console.error(`  push ${e.pmId} "${e.title}": ${r.error}`); pushFailed++; continue; }
-      if (r.error) console.error(`  push ${e.pmId}: ${r.error}`);
-      pushed++;
+      const { changed, error, ...receipt } = await applyPushEntry(e, meta, ref, ctx.pm_root, token, pushOptions);
+      pushReceipts.push(receipt);
+      if (error) console.error(`  push ${e.pmId} (${receipt.outcome}): ${error}`);
+      if (receipt.outcome === "failed") pushFailed++;
+      if (receipt.outcome === "partial") pushPartial++;
+      if (changed) pushed++;
     }
   }
 
@@ -7179,12 +7289,16 @@ async function runProjectSync(ctx: CommandHandlerContext) {
   }
 
   console.error(
-    `Sync complete on ${ref.owner}/${ref.number}: pushed ${pushed}${pushFailed ? ` (${pushFailed} failed)` : ""}, ` +
+    `Sync complete on ${ref.owner}/${ref.number}: pushed ${pushed}${pushPartial ? ` (${pushPartial} partial)` : ""}${pushFailed ? ` (${pushFailed} failed)` : ""}, ` +
       `pulled ${pulled}${pullFailed ? ` (${pullFailed} failed)` : ""}.`,
   );
-  const result = { project: `${ref.owner}/${ref.number}`, pushed, pushFailed, pulled, pullFailed, prefer };
+  const result = { project: `${ref.owner}/${ref.number}`, pushed, pushFailed, pulled, pullFailed, prefer,
+    ...(pushReceipts.length ? { pushPartial, pushReceipts } : {}) };
   if (pushFailed + pullFailed > 0 && pushed + pulled === 0) {
-    throw new CommandError(`Sync wrote nothing; ${pushFailed + pullFailed} operation(s) failed.`);
+    const writeSummary = pushReceipts.some(receipt => receipt.attachment.outcome === "unknown") ? "Sync confirmed no writes" : "Sync wrote nothing";
+    const message = `${writeSummary}; ${pushFailed + pullFailed} operation(s) failed.`;
+    if (pushReceipts.length) throw createPmCliExpectedError(message, { context: { code: "github_project_push_failed", ...result } });
+    throw new CommandError(message);
   }
   return result;
 }

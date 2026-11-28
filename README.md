@@ -826,7 +826,7 @@ Bidirectionally sync pm items and a board. **Safe by default**: with no `--apply
 
 - `--push` (pm → board): adds missing pm items to the board — attaching the existing GitHub issue when the pm item is issue-linked, otherwise creating a draft issue — and sets each item's **Status** from its pm status.
 - `--pull` (board → pm): updates each linked pm item's status from the board's Status column (status only — never touches title/body/tags).
-- `--apply` writes; with neither direction flag it defaults to `--push` (so pm is never mutated silently).
+- `--apply` writes. With neither direction flag, it applies the push plan.
 - `--prefer pm|github` resolves conflicts when applying both directions (default `pm`).
 
 ```bash
@@ -838,7 +838,32 @@ pm github project sync unbraind/5 --push --apply --ids pm-1,pm-2  # scope by id
 pm github project sync unbraind/5 --push --apply --no-add-missing # only reconcile linked items
 ```
 
-> The GitHub Projects v2 item node id is case-sensitive but pm normalizes tag values to lowercase, so the node id is hex-encoded inside the provenance tag to round-trip losslessly. This is what makes re-sync idempotent instead of silently double-adding.
+Before a push writes, it rechecks the live board and every tracker claimant for
+the card. Concurrent pushes in the same tracker reuse a card that the first push
+attached. A board tag whose card is missing from the live inventory blocks
+replacement. Verify the tag against the board before clearing or replacing it.
+
+Applied pushes with attempted entries return `pushReceipts` in JSON and TOON.
+Each row includes the tracker item ID, the confirmed card ID when available, and
+separate `attachment`, `status`, and `trackerTag` outcomes. A row is
+`partial` when a write succeeded and a later step failed. `pushed` counts rows
+with confirmed writes, `pushPartial` counts the partial subset, and `pushFailed`
+counts failed rows with zero confirmed writes. A batch with only failed writes
+exits nonzero and exposes those receipts in its error context.
+
+The tracker tag is recorded before the Status update. If GitHub rejects Status,
+rerun the same push to update the attached card. If the tag write failed, a
+locally retained draft recovery record in `runtime/github-project-push/` keeps
+the confirmed card ID for the next push. When the attachment response lacks a
+confirmed ID, the next push reports `attachment.outcome: unknown` and holds off
+on a new draft. Check the board first. If it contains the draft, add the
+corresponding Projects tag to the tracker item and retry. If GitHub confirms
+that no draft was created, remove the matching pending recovery record before
+retrying while no push for that item is running. Recovery files are keyed by the
+SHA-256 of the JSON array `[lowercase owner, project number, tracker item ID]`.
+
+The Projects tag encodes the case-sensitive card node ID as lowercase UTF-8
+hex, in the form `gh-project:<owner>/<number>#<hex node ID>`.
 
 ## Search (pm search → GitHub)
 

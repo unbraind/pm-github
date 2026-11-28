@@ -443,7 +443,11 @@ test("Ownership routing inventory: consistent external-ref owner and reference-o
   assert.equal(indexPmByIssue(items).get("o/r#7")!.id, id);
   const board = [{ id: "fixture-board-item", statusName: "Done", content: { typename: "Issue" as const, title: "Remote", repo, number: 7 } }];
   const push = buildProjectPushPlan(items, { owner: "o", number: 1 }, board, undefined).entries;
-  assert.equal(push.find(entry => entry.pmId === id)!.action, "noop");
+  const existingCard = push.find(entry => entry.pmId === id)!;
+  assert.equal(existingCard.action, "link-card");
+  assert.equal(existingCard.itemId, "fixture-board-item");
+  assert.equal(existingCard.issueRepo, repo);
+  assert.equal(existingCard.issueNumber, 7);
   assert.equal(push.find(entry => entry.pmId === reference.id)!.action, "add-draft");
   assert.equal(buildProjectPullPlan(items, { owner: "o", number: 1 }, board).entries[0]!.pmId, id);
   assert.equal(buildProjectImportPlan(board, { owner: "o", number: 1 }, items)[0]!.pmId, id);

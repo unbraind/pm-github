@@ -427,9 +427,11 @@ export function indexProjectItemsByIssue(
  *   duplicating it as a draft.
  * - `set-status` — change the Status single-select of an item already on the
  *   board.
+ * - `link-card` — record the association to a card that already has the intended Status.
+ * - `blocked` — a board tag points to a card the inventory has not confirmed.
  * - `noop` — no write needed; carried so dry-run output can show why.
  */
-export type PushAction = "add-draft" | "add-issue" | "set-status" | "noop";
+export type PushAction = "add-draft" | "add-issue" | "set-status" | "link-card" | "blocked" | "noop";
 
 /**
  * One pm item's resolved fate under the push plan, produced by
@@ -450,7 +452,7 @@ export interface PushPlanEntry {
   targetOptionName?: string;
   /** The item's current Status option name (for divergence display). */
   currentOptionName?: string;
-  /** For add-issue: the existing issue to attach, as owner/repo#number. */
+  /** Verified native issue ownership, when present, as owner/repo#number. */
   issueRepo?: string;
   issueNumber?: number;
   /** Why an entry is a noop / skipped-status (human readable). */
@@ -484,117 +486,69 @@ export function buildProjectPushPlan(
 ): PushPlan {
   const addMissing = opts.addMissing !== false;
   const options = statusField?.options ?? [];
-  const ownership = buildGithubOwnershipIndex((opts.corpus ?? pmItems).filter((item): item is PmItemLike => Boolean(item)), projectItems.flatMap(item => item.content.repo ? [item.content.repo] : []));
-  warnGithubOwnershipScope(ownership, pmItems.filter((item): item is PmItemLike => Boolean(item)));
-  const byProjectItem = indexProjectItemMap(projectItems);
-  const byIssue = indexProjectItemsByIssue(projectItems);
-
+  const selected = pmItems.filter((item): item is PmItemLike => Boolean(item?.id));
+  const corpus = (opts.corpus ?? selected).filter((item): item is PmItemLike => Boolean(item));
+  const { ownership, projectByPmId } = indexSelectedByIssue(selected, corpus, projectItems, ref);
+  warnGithubOwnershipScope(ownership, selected);
   const entries: PushPlanEntry[] = [];
   const statusSkipped: PushPlan["statusSkipped"] = [];
 
-  for (const item of pmItems) {
-    if (!item?.id) continue;
+  for (const item of selected) {
+    const pmId = item.id!;
     const title = item.title ?? "(untitled)";
     const status = item.status ?? "open";
-
-    // Find the existing project item this pm item maps to: first by project
-    // provenance tag, then by the issue it wraps (if issue-linked).
-    let linked: ProjectItem | undefined;
-    let linkedByProjectTag = false;
-    for (const tag of item.tags ?? []) {
-      const p = parseProjectItemTag(tag);
-      if (p && p.owner === ref.owner.toLowerCase() && p.number === ref.number) {
-        linked = byProjectItem.get(p.itemId);
-        linkedByProjectTag = true;
-        break;
-      }
-    }
     const keys = githubOwnedIdentityKeys(item, ownership);
     const [repository, number] = keys[0]?.split("#") ?? [];
-    const issueKey = repository && number ? { repo: repository, number: Number(number) } : undefined;
-    if (!linked && issueKey) linked = byIssue.get(`${issueKey.repo}#${issueKey.number}`);
+    const issue = repository && number ? { issueRepo: repository, issueNumber: Number(number) } : {};
+    const identity = { pmId, title, ...issue };
+    const linked = projectByPmId.get(pmId);
+    const tags = indexPmByProjectItem([item], ref);
+    if (tags.size > 1 || (tags.size && linked && !tags.has(linked.id))) {
+      throw projectLinkConflict("The tracker item has conflicting links to this board.");
+    }
+    if (!linked && tags.size) {
+      entries.push({ ...identity, action: "blocked", itemId: tags.keys().next().value,
+        reason: "The tracker item's board tag points to a card missing from the live board. Verify the binding before pushing." });
+      continue;
+    }
     if (linked?.content.repo && linked.content.number && ownershipStateOf(ownership, item).evidence) {
-      assertGithubOwnershipConsistency(item, { id: item.id, repo: linked.content.repo, number: linked.content.number }, ownership);
+      assertGithubOwnershipConsistency(item, { id: pmId, repo: linked.content.repo, number: linked.content.number }, ownership);
     }
 
-    // Resolve the target Status option for this pm status.
-    const targetOption = statusField
-      ? resolveOptionForStatus(status, options, opts.statusMap, opts.statuses)
-      : undefined;
-    if (statusField && !targetOption) {
-      statusSkipped.push({ pmId: item.id, title, status });
-    }
-
+    const target = statusField ? resolveOptionForStatus(status, options, opts.statusMap, opts.statuses) : undefined;
+    if (statusField && !target) statusSkipped.push({ pmId, title, status });
+    const option = { targetOptionId: target?.id, targetOptionName: target?.name };
     if (linked) {
-      // Already on the board: only (maybe) reconcile its Status.
-      if (!targetOption) {
-        entries.push({
-          action: "noop",
-          pmId: item.id,
-          title,
-          itemId: linked.id,
-          currentOptionName: linked.statusName,
-          reason: statusField ? `pm status "${status}" has no matching board option` : "project has no Status field",
-        });
-        continue;
+      const binding = { ...identity, itemId: linked.id, currentOptionName: linked.statusName };
+      if (target && linked.statusOptionId !== target.id) {
+        entries.push({ ...binding, ...option, action: "set-status" });
+      } else if (!tags.has(linked.id)) {
+        entries.push({ ...binding, targetOptionName: target?.name, action: "link-card" });
+      } else {
+        const reason = target ? "already in sync" : statusField ? `pm status "${status}" has no matching board option` : "project has no Status field";
+        entries.push({ ...binding, targetOptionName: target?.name, action: "noop", reason });
       }
-      if (linked.statusOptionId === targetOption.id) {
-        entries.push({
-          action: "noop",
-          pmId: item.id,
-          title,
-          itemId: linked.id,
-          currentOptionName: linked.statusName,
-          targetOptionName: targetOption.name,
-          reason: "already in sync",
-        });
-        continue;
-      }
-      entries.push({
-        action: "set-status",
-        pmId: item.id,
-        title,
-        itemId: linked.id,
-        currentOptionName: linked.statusName,
-        targetOptionId: targetOption.id,
-        targetOptionName: targetOption.name,
-      });
       continue;
     }
-
-    // Not on the board yet.
     if (!addMissing) {
-      entries.push({
-        action: "noop",
-        pmId: item.id,
-        title,
-        reason: "not on board (--no-add-missing)",
-      });
+      entries.push({ ...identity, action: "noop", reason: "not on board (--no-add-missing)" });
       continue;
     }
-    if (issueKey) {
-      // Attach the existing issue rather than creating a duplicate draft.
-      entries.push({
-        action: "add-issue",
-        pmId: item.id,
-        title,
-        issueRepo: issueKey.repo,
-        issueNumber: issueKey.number,
-        targetOptionId: targetOption?.id,
-        targetOptionName: targetOption?.name,
-      });
-    } else {
-      entries.push({
-        action: "add-draft",
-        pmId: item.id,
-        title,
-        targetOptionId: targetOption?.id,
-        targetOptionName: targetOption?.name,
-      });
-    }
+    entries.push({ ...identity, ...option, action: issue.issueRepo ? "add-issue" : "add-draft" });
   }
 
   return { entries, statusSkipped };
+}
+
+/** Allow one local tag for a confirmed card and refuse any competing claimant. */
+export function assertProjectPushTag(ref: ProjectRef, cardId: string, item: PmItemLike, peers: readonly PmItemLike[]): void {
+  const tags = indexPmByProjectItem([item], ref);
+  if (tags.size && (tags.size !== 1 || !tags.has(cardId))) {
+    throw projectLinkConflict("The tracker item's project card link changed during push.");
+  }
+  if (indexPmByProjectItem(peers.filter(peer => peer.id !== item.id), ref).has(cardId)) {
+    throw projectLinkConflict("Another tracker item claims the confirmed project card.");
+  }
 }
 
 // Index project items by their own id for O(1) lookup during sync planning.

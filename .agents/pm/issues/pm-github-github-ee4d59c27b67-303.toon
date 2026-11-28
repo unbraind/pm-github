@@ -1,0 +1,45 @@
+id: pm-github-github-ee4d59c27b67-303
+title: "Projects push: fence stale attachment plans and report partial outcomes (duplicate drafts; a rejected status write after an accepted attachment reports nothing written)"
+description: "GH issue #303: https://github.com/unbraind/pm-github/issues/303 · author @unbraind · created 2026-11-28T01:50:33Z · updated 2026-11-28T01:50:56Z"
+type: Issue
+status: open
+priority: 2
+tags[2]: "gh:unbraind/pm-github#303","github_author:unbraind"
+created_at: "2026-11-28T01:50:33Z"
+updated_at: "2026-11-28T06:28:21.259Z"
+author: pm-github
+comments[8]{created_at,author,text}:
+  "2026-11-28T05:25:22.563Z",codex-agent,Imported issue 303 with native provenance. Checking the duplicate attachment and status rejection against real non-git trackers and loopback GraphQL. Scope is Projects push and its receipt.
+  "2026-11-28T05:25:54.447Z",codex-agent,"Reproduced 2 of 2 regressions on main 4fb4854 in non-git trackers. Two plans built from the empty board returned two draft IDs. A Status error after draft creation threw Sync wrote nothing; 1 operation(s) failed. Plan: serialize Projects push against complete live bindings, persist draft recovery before attachment, and expose per-step outcomes."
+  "2026-11-28T05:32:34.328Z",codex-agent,The separate REST issue export component also submits two issue POST requests when applying two stale unlinked-item plans. Verified with an instrumented local transport. Tracked in GitHub issue 304 and its imported PM item. No REST export changes in this PR.
+  "2026-11-28T05:43:00.596Z",codex-agent,"Projects push now rebuilds under the native ownership lease with a complete live board and tracker corpus, keeps a draft recovery record until its tag is confirmed, and returns independent attachment, Status and tag receipts. The initial 10 focused and 8 extended checks passed, including four packed npm and Bun format combinations. Running the cross-reference suite and behavioral reverts before push."
+  "2026-11-28T06:08:46.489Z",codex-agent,The related suite exposed two fixtures that expected old Projects push behavior. Keep the missing attachment-ID assertion on a complete board and independently prove an ID-less board entry refuses before mutation. Assert stale tags are blocked and existing issue cards can backfill a tag without Status writes. Added the updated planner suite to the linked tests.
+  "2026-11-28T06:14:27.656Z",codex-agent,"Behavioral revert proofs in a disposable copy: seven isolated changes caused seven expected failures. Running the stale entry created two cards, dropping the absent-card and peer-claim guards lost their refusals, rethrowing the Status failure lost the accepted attachment receipt, discarding the retained card ID prevented recovery, restoring automatic 5xx retries replayed draft creation, and omitting pushReceipts broke the packed formatter check. The broad related run passed 1975 cases and flagged two old fixture expectations. Both corrected cases passed the targeted rerun, giving 1977 passing distinct cases across 68 related files."
+  "2026-11-28T06:20:01.834Z",codex-agent,"The linked runner supplies an isolated PM_PATH. Two new fault-injection fixtures assumed implicit root discovery ignored it, so their recovery paths pointed at the runner's empty tracker. Their helpers now explicitly resolve the fixture tracker, matching the normal command path. Product code needed no change."
+  "2026-11-28T06:28:19.138Z",codex-agent,"Final local verification: 1977 distinct related Node cases across 68 files, including the corrected fixture rerun. The three PM-linked commands passed 129 Node cases, 40 native Bun cases, and 175 planner and ownership cases. Packed npm and Bun launchers passed all four JSON and TOON combinations. Typecheck, both builds, lint, docstrings (344 declarations), duplication (37 modules and zero duplicated lines), and the ownership inventory (106 groups and 336 sites) passed. The related REST export defect is in issue 304. Full release and coverage gates are left to CI."
+files[7]{path,scope}:
+  index.ts,project
+  projects.ts,project
+  test/ownership-consistency.test.ts,project
+  test/project-sync.test.ts,project
+  test/projects.test.ts,project
+  test/round-eighteen.test.ts,project
+  test/round-seventeen.test.ts,project
+tests[3]{command,scope,provenance{author,created_at,source_kind,source_ref}}:
+  "npm run build && PATH=node_modules/.bin:$PATH node --test --test-concurrency=2 test/project-sync.test.ts test/round-eighteen.test.ts test/round-seventeen.test.ts",project,codex-agent,"2026-11-28T05:39:49.092Z",local_mutation,fix/projects-push-fence-and-partial-receipts
+  "PATH=node_modules/.bin:$PATH bun test --timeout 600000 test/project-sync.test.ts",project,codex-agent,"2026-11-28T05:39:52.198Z",local_mutation,fix/projects-push-fence-and-partial-receipts
+  "PATH=node_modules/.bin:$PATH node --test --test-concurrency=2 test/projects.test.ts test/ownership-consistency.test.ts",project,codex-agent,"2026-11-28T06:08:44.205Z",local_mutation,fix/projects-push-fence-and-partial-receipts
+docs[2]{path,scope}:
+  docs/identity-ownership-inventory.md,project
+  README.md,project
+github_close_reason: ""
+github_closed_at: ""
+github_created_at: "2026-11-28T01:50:33Z"
+github_link_only: false
+github_number: 303
+github_release: ""
+github_state: open
+github_state_reason: unspecified
+github_updated_at: "2026-11-28T01:50:56Z"
+github_url: "https://github.com/unbraind/pm-github/issues/303"
+body: "Found while reviewing the pull request that fixes issue 287 (repeat-import no-op). That pull request restored Projects push to main's behaviour to keep its scope, so both defects remain on main.\n\n\nWith one native item and an empty board, build two push plans before either applies. Applying both produces two remote drafts and two board tags on the same item. Separately, let `addProjectV2DraftIssue` return a card ID and reject `updateProjectV2ItemFieldValue`. Current `main` reports `Sync wrote nothing; 1 operation(s) failed.` after the provider has accepted the attachment. The previous PR implementation returned `pushed: 1, pushFailed: 0` in JSON for that same partial outcome.\n\nBefore attachment, revalidate the live board and complete tracker binding, including tags for cards absent from the original snapshot. Preserve or reconcile the confirmed card ID before retrying. Expose attachment, status, and tracker-tag results in JSON and TOON with an explicit partial outcome. Add real non-git tracker tests proving that two stale plans yield one card and one tag, and that a status refusal remains visible while retry reuses the attached card."
