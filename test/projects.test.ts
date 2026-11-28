@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { captureStderr } from "./helpers/mock-github-server.ts";
 
 import {
   DEFAULT_STATUS_CANDIDATES,
@@ -73,7 +74,7 @@ test("project indexes omit redacted content and tolerate missing local provenanc
   assert.equal(indexProjectItemsByIssue([{ id: "no-number", content: { typename: "Issue", title: "", repo: "acme/widgets" } }]).size, 0);
 });
 
-test("push planning reconciles issue links, stale board links, missing metadata, and boards without Status", () => {
+test("push planning links live issue cards and fences stale tags, with or without Status", () => {
   const board: ProjectItem[] = [{ id: "issue", content: { typename: "Issue", title: "", repo: "acme/widgets", number: 7 } }];
   const local = [
     null, {}, { id: "default" },
@@ -84,11 +85,30 @@ test("push planning reconciles issue links, stale board links, missing metadata,
   assert.equal(plan.entries.length, 3);
   assert.equal(plan.entries[0].title, "(untitled)");
   assert.equal(plan.entries[0].action, "add-draft");
-  assert.equal(plan.entries[1].action, "noop");
-  assert.equal(plan.entries[1].reason, "project has no Status field");
-  assert.equal(plan.entries[2].action, "add-draft");
+  assert.equal(plan.entries[1].action, "link-card");
+  assert.equal(plan.entries[1].itemId, "issue");
+  assert.equal(plan.entries[1].targetOptionId, undefined);
+  assert.equal(plan.entries[2].action, "blocked");
+  assert.equal(plan.entries[2].itemId, "gone");
+  assert.match(plan.entries[2].reason!, /card missing from the live board/);
   const unmapped = buildProjectPushPlan([{ id: "linked", status: "blocked", github_url: "https://github.com/acme/widgets/issues/7", tags: ["gh:acme/widgets#7"] }], REF, board, STATUS_FIELD);
-  assert.equal(unmapped.entries[0].reason, 'pm status "blocked" has no matching board option');
+  assert.equal(unmapped.entries[0].action, "link-card");
+  assert.equal(unmapped.entries[0].targetOptionId, undefined);
+  assert.deepEqual(unmapped.statusSkipped, [{ pmId: "linked", title: "(untitled)", status: "blocked" }]);
+});
+
+test("a Projects push plan diagnoses each unselected ownership conflict once", async () => {
+  const selected = { id: "pm-selected", title: "Selected", status: "open" };
+  const peers = [
+    { id: "pm-peer-a", github_url: "https://github.com/acme/widgets/issues/7" },
+    { id: "pm-peer-b", github_url: "https://github.com/acme/widgets/issues/7" },
+  ];
+  const { stderr, result } = await captureStderr(async () =>
+    buildProjectPushPlan([selected], REF, [], STATUS_FIELD, { corpus: [selected, ...peers] }));
+  const expected = JSON.stringify({ code: "out_of_scope_github_owner_conflict", items: ["pm-peer-a", "pm-peer-b"], identity: "acme/widgets#7" });
+  assert.deepEqual(stderr, [expected]);
+  assert.equal(result.entries[0]?.action, "add-draft");
+  assert.throws(() => buildProjectPushPlan([peers[0]!], REF, [], STATUS_FIELD, { corpus: peers }), /claimed by/);
 });
 
 test("pull planning uses issue provenance with missing local metadata and leaves absent statuses alone", () => {

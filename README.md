@@ -826,7 +826,7 @@ Bidirectionally sync pm items and a board. **Safe by default**: with no `--apply
 
 - `--push` (pm → board): adds missing pm items to the board — attaching the existing GitHub issue when the pm item is issue-linked, otherwise creating a draft issue — and sets each item's **Status** from its pm status.
 - `--pull` (board → pm): updates each linked pm item's status from the board's Status column (status only — never touches title/body/tags).
-- `--apply` writes; with neither direction flag it defaults to `--push` (so pm is never mutated silently).
+- `--apply` writes. With neither direction flag, it applies the push plan.
 - `--prefer pm|github` resolves conflicts when applying both directions (default `pm`).
 
 ```bash
@@ -838,7 +838,49 @@ pm github project sync unbraind/5 --push --apply --ids pm-1,pm-2  # scope by id
 pm github project sync unbraind/5 --push --apply --no-add-missing # only reconcile linked items
 ```
 
-> The GitHub Projects v2 item node id is case-sensitive but pm normalizes tag values to lowercase, so the node id is hex-encoded inside the provenance tag to round-trip losslessly. This is what makes re-sync idempotent instead of silently double-adding.
+Before a push writes, it rechecks the live board and every tracker claimant for
+the card. Status-only updates to already-tagged cards share one fresh board
+and tracker read per wave of up to 16 cards. Concurrent pushes in the same tracker reuse a card that the first push
+attached. A board tag whose card is missing from the live inventory blocks
+replacement. Verify the tag against the board before clearing or replacing it.
+
+Applied pushes with attempted entries return `pushReceipts` in JSON and TOON.
+Each row includes the tracker item ID, the confirmed card ID when available, and
+separate `attachment`, `status`, and `trackerTag` outcomes. A row is
+`partial` when it records a confirmed write and another step was refused or
+has uncertain delivery. `pushed` counts rows
+with confirmed writes, `pushPartial` counts the partial subset, and `pushFailed`
+counts failed rows with zero confirmed writes. An issue attachment acknowledgement
+returns `attachment.outcome: confirmed` and the card ID. GitHub can return an
+existing card, so the acknowledgement confirms only that the card exists.
+A batch with only failed writes exits nonzero and exposes those receipts in its
+error context. The message distinguishes unknown delivery from a rejected write.
+If settling a draft journal also fails, the row includes a separate
+`cleanupError` alongside the provider outcome.
+
+The tracker tag is recorded before the Status update. Existing cards are
+checked in bounded waves. After repairing local tags, the push refreshes the
+wave's board and tracker bindings again before sending Status. If GitHub rejects
+Status, rerun the same push to update the attached card.
+
+The recovery journal in `runtime/github-project-push/` records a confirmed
+draft ID before writing the tracker tag. If GitHub's response lacks a confirmed
+ID, the next push reports `attachment.outcome: unknown` and retains the journal,
+even when the tracker already has a tag for a visible card. To reconcile the
+journal, stop pushes for that item and verify the specific draft created by
+the attempt. If you find it, set the journal's `cardId` to that draft's exact
+node ID, leave `boardId` intact, and rerun the push. The retry checks that the
+recorded ID and the live binding agree, including when Status already matches.
+If GitHub confirms that no draft was created, remove the matching journal
+before retrying. When GitHub explicitly refuses a draft, a retry can clear the
+recorded refusal automatically after storage is writable. If the receipt says
+the refusal could not be recorded, use the definitive refusal to verify and
+remove the original journal after repairing storage. Recovery filenames are
+the SHA-256 of the JSON array `[lowercase owner, project number, tracker item ID]`
+with the suffix `.json`.
+
+The Projects tag encodes the case-sensitive card node ID as lowercase UTF-8
+hex, in the form `gh-project:<owner>/<number>#<hex node ID>`.
 
 ## Search (pm search → GitHub)
 

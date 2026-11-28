@@ -1,0 +1,118 @@
+id: pm-github-github-ee4d59c27b67-303
+title: "Projects push: fence stale attachment plans and report partial outcomes (duplicate drafts; a rejected status write after an accepted attachment reports nothing written)"
+description: "GH issue #303: https://github.com/unbraind/pm-github/issues/303 · author @unbraind · created 2026-11-28T01:50:33Z · updated 2026-11-28T01:50:56Z"
+type: Issue
+status: open
+priority: 2
+tags[2]: "gh:unbraind/pm-github#303","github_author:unbraind"
+created_at: "2026-11-28T01:50:33Z"
+updated_at: "2026-11-28T10:41:39.884Z"
+author: pm-github
+comments[22]{created_at,author,text}:
+  "2026-11-28T05:25:22.563Z",codex-agent,Imported issue 303 with native provenance. Checking the duplicate attachment and status rejection against real non-git trackers and loopback GraphQL. Scope is Projects push and its receipt.
+  "2026-11-28T05:25:54.447Z",codex-agent,"Reproduced 2 of 2 regressions on main 4fb4854 in non-git trackers. Two plans built from the empty board returned two draft IDs. A Status error after draft creation threw Sync wrote nothing; 1 operation(s) failed. Plan: serialize Projects push against complete live bindings, persist draft recovery before attachment, and expose per-step outcomes."
+  "2026-11-28T05:32:34.328Z",codex-agent,The separate REST issue export component also submits two issue POST requests when applying two stale unlinked-item plans. Verified with an instrumented local transport. Tracked in GitHub issue 304 and its imported PM item. No REST export changes in this PR.
+  "2026-11-28T05:43:00.596Z",codex-agent,"Projects push now rebuilds under the native ownership lease with a complete live board and tracker corpus, keeps a draft recovery record until its tag is confirmed, and returns independent attachment, Status and tag receipts. The initial 10 focused and 8 extended checks passed, including four packed npm and Bun format combinations. Running the cross-reference suite and behavioral reverts before push."
+  "2026-11-28T06:08:46.489Z",codex-agent,The related suite exposed two fixtures that expected old Projects push behavior. Keep the missing attachment-ID assertion on a complete board and independently prove an ID-less board entry refuses before mutation. Assert stale tags are blocked and existing issue cards can backfill a tag without Status writes. Added the updated planner suite to the linked tests.
+  "2026-11-28T06:14:27.656Z",codex-agent,"Behavioral revert proofs in a disposable copy: seven isolated changes caused seven expected failures. Running the stale entry created two cards, dropping the absent-card and peer-claim guards lost their refusals, rethrowing the Status failure lost the accepted attachment receipt, discarding the retained card ID prevented recovery, restoring automatic 5xx retries replayed draft creation, and omitting pushReceipts broke the packed formatter check. The broad related run passed 1975 cases and flagged two old fixture expectations. Both corrected cases passed the targeted rerun, giving 1977 passing distinct cases across 68 related files."
+  "2026-11-28T06:20:01.834Z",codex-agent,"The linked runner supplies an isolated PM_PATH. Two new fault-injection fixtures assumed implicit root discovery ignored it, so their recovery paths pointed at the runner's empty tracker. Their helpers now explicitly resolve the fixture tracker, matching the normal command path. Product code needed no change."
+  "2026-11-28T06:28:19.138Z",codex-agent,"Final local verification: 1977 distinct related Node cases across 68 files, including the corrected fixture rerun. The three PM-linked commands passed 129 Node cases, 40 native Bun cases, and 175 planner and ownership cases. Packed npm and Bun launchers passed all four JSON and TOON combinations. Typecheck, both builds, lint, docstrings (344 declarations), duplication (37 modules and zero duplicated lines), and the ownership inventory (106 groups and 336 sites) passed. The related REST export defect is in issue 304. Full release and coverage gates are left to CI."
+  "2026-11-28T06:36:55.468Z",codex-agent,"Exact head 1b115ee passed CodeQL and Semgrep. Two Projects push review findings reproduced or verified against the change: discussion r4725852740 raced a native issue claim through the tag write and observed one unwanted Status mutation; r4725852746 identified ambiguous delivery wording that implied certainty. The candidate rereads complete tracker authority for the confirmed card before Status and reports that it could not confirm any writes after unknown delivery. Re-running related gates before delivery."
+  "2026-11-28T06:47:13.942Z",codex-agent,"Review regression evidence: the original 1b115ee Status path sent one mutation after a concurrent native issue claim. With the pre-Status rerender it sent zero, reported a partial result, and retained the written tag. The unknown-delivery fixture previously emitted Sync confirmed no writes and now requires Sync could not confirm any writes. Both new focused checks passed. Typecheck, builds, lint, docstrings, ownership inventory and zero-duplication checks passed for the follow-up. The related suite is rerunning before push."
+  "2026-11-28T06:58:32.139Z",codex-agent,"Stopped at the 30-minute push cutoff. PR 305 remains at 1b115ee. Exact-head CI observation: test (26) in_progress https://github.com/unbraind/pm-github/actions/runs/46116818985/job/140892415986|test (22) success https://github.com/unbraind/pm-github/actions/runs/46116818985/job/140892416135. The unpushed review commit 31c5871 fixes discussions r4725852740 and r4725852746. Reverting the late binding recheck reproduced one unauthorized Status mutation, and reverting the unknown-delivery wording failed the message assertion. Both tests passed in the PM-linked Node run and the focused native Bun run. The broader rerun emitted 1229 passes before it was stopped to meet the cutoff. The review commit passed typecheck, builds, lint, changelog, duplication, identity inventory and fresh-clone privacy (4809 objects)."
+  "2026-11-28T07:19:45.836Z",codex-agent,"Resumed round one from the clean retained worktree. Both imported records were open. The PR is at 1b115ee, and the local branch retains the two previously verified Greptile fixes and cutoff evidence. Fetched base 4fb4854 is already an ancestor. Reviewing provider evidence, mutation receipts, bounded Status work, journal recovery and packed runtime prerequisites within the existing PR files."
+  "2026-11-28T07:30:37.507Z",codex-agent,"Round-one rules: validate provider identity before authorizing mutations or confirming IDs; distinguish acknowledged binding from a newly confirmed write; preserve uncertainty for every mutation phase; reconcile durable intent even for no-op plans; share certified binding snapshots across bounded Status-only waves and recheck after a native tag write; diagnose each ownership conflict once; make packed tests establish their build and optional launcher prerequisites. The 35-card control uses four board reads and four complete ownership snapshots including planning. The raced control refuses one card claimed between waves and updates the other 34. A clean checkout packed test passed via Bun for both launchers. A separate Node-only checkout ran npm JSON and TOON and explicitly skipped Bun."
+  "2026-11-28T07:32:35.055Z",codex-agent,Eleven independent round-one behavioral reversions failed the intended test in a disposable source copy. r4725852740 allowed the late disputed Status write; r4725852746 restored the misleading delivery wording; r4725990806 trusted partial issue inventory; r4725990808 accepted malformed provider IDs; r4725990810 restored one complete read per Status; r4725990811 counted an issue acknowledgement as creation; r4725990814 skipped pending no-ops; r4725990816 claimed no writes after an uncertain Status; r4725990821 duplicated ownership diagnostics; r4725990823 failed packing in a clean Bun checkout; r4725990827 failed on a Node-only PATH. The corresponding fixed cases passed in the focused and clean packed controls.
+  "2026-11-28T07:32:39.770Z",codex-agent,"The first pushed head ultimately failed the Node 26 coverage threshold at 99.95 lines, 99.95 statements, 99.95 branches and 99.82 functions. In the round-one patch the obsolete pm subprocess helper (formerly used only by Projects push) is removed, and the shared aggregate receipt has a pull-only total-refusal test. Coverage and the full release gate remain delegated to exact-head CI."
+  "2026-11-28T08:34:53.910Z",codex-agent,"Round 1 local verification: 68 cross-reference Node test files ran 1,992 cases, with 1,991 passing initially. The sole failure was the missing pre-mutation refusal for an unreadable recovery directory. The corrected diagnostic and six adjacent cases passed in a focused rerun, for 1,992 distinct cases verified. PM-linked checks 5 and 6 passed 11 Node and 2 Bun cases. A clean packed consumer fixture passed both launchers under Bun, and a Node-only PATH passed npm and skipped only bunx. Typecheck, build, test compilation, lint, docstrings, duplication and the generated identity inventory passed. Out-of-scope follow-up candidates: independently bootstrapping the packed fixtures for import projection, import selection, closeout, workflow diagnostics, the import gate and minimum SDK. The REST issue-creation analogue is tracked as #304."
+  "2026-11-28T09:05:53.136Z",codex-agent,"Round 1 verification cutoff after the shared-runner hold check and push of cf04ccbe165eaccce34a9aa5476bcffa08413044. Exact-head Node 22 passed 2,321 tests and CodeQL passed: https://github.com/unbraind/pm-github/actions/runs/46126568969. Node 26 remained in the npm release gate, with coverage certification and the following Bun smoke pending: https://github.com/unbraind/pm-github/actions/runs/46126568949/job/140922357310 (workflow https://github.com/unbraind/pm-github/actions/runs/46126568949). This repository schedules its full Bun release job on main and scheduled CI Deep. Native Bun passed all 97 focused cases across both Projects files. Clean-clone privacy passed: 4,833 objects audited. The claim was released and the item is open. This evidence is recorded locally to preserve the exact pushed head."
+  "2026-11-28T09:19:56.678Z",codex-agent,"Round 2 started on the existing branch. The base is already an ancestor. The prior exact-head Node 26 run reported 99.97% branch coverage, with two uncovered Projects branches at the previous head. I will cover those while addressing repeated scans on the retag path, unproven draft recovery, definitive refusal cleanup, typed receipt failures and stale packed fixtures."
+  "2026-11-28T09:30:50.548Z",codex-agent,"Round 2 isolated revert proofs (each failed its named fixture): r4725990810 restored initially tagged-only batching, so the 19 initially untagged issue cards made 20 board reads instead of 5; r4726357937 restored unlink-before-return, so the first draft refusal receipt lost the provider reason behind the unlink error; r4726357940 restored tag-only journal clearance, so the wrong-card no-op unexpectedly succeeded; r4726357944 classified the row by message truthiness, so blank attachment and Status refusals did not reject the sync; r4726357947 skipped the build when staged dist already existed, so the packed npx fixture loaded its seeded stale module. The live checks retain the native peer guard on real tag mutations, batch board and tracker reads across linked Status waves, and preserve the absence check on new attachments."
+  "2026-11-28T10:16:00.401Z",codex-agent,"Round 2 pre-push gates: 68 focused and cross-reference Node files reported 1,996 of 1,997 passing initially. The sole failure was a new preview assertion copied into the wrong fixture. Its removal left the existing draft-recovery assertion intact; that case and the intended issue-card preview case both passed the focused rerun. All 1,997 distinct Node cases are verified. The final focus passed 13 Node cases. Pinned PM linked checks 7 and 6 passed 11 Node and 2 native Bun cases. Typecheck, build, test compilation, lint, 351 documented declarations across 36 files, duplication and the generated identity inventory passed. The prior pushed head lacked coverage certification; exact-head CI for this revision will report its own result. Follow-up candidates are standalone artifact setup in the import projection, import selection, closeout, workflow diagnostic, import gate and minimum SDK test fixtures. The REST issue-creation analogue remains tracked in #304."
+  "2026-11-28T10:38:23.778Z",codex-agent,"Exact-head Node 22 on b8bc92d ran 2,326 cases, with 2,324 passing. npm 10.9.9 invoked prepare during both packed consumer fixtures despite the pack ignore-scripts flag. The isolated package staging directory lacked the repository bootstrap. Local Node 22.23.4 with the same npm 10.9.9 reproduced both failures. The fixture now stages the real prepare launcher, whose npm pack guard exits before installing any merge drivers. The fixture also stages the package license, and it still compiles fresh in isolation, seeds obsolete output to test freshness, and verifies JSON and TOON in both launchers."
+  "2026-11-28T10:41:36.208Z",codex-agent,"Packed fixture portability proof for r4726357947: both launcher cases failed locally with Node 22.23.4 and npm 10.9.9 when staging omitted the prepare launcher. Both pass with the repository pack-safe bootstrap included. Both also pass under native Bun using npm 10.9.9 and under Node 26.13.0 and npm 11.20.0. Typecheck, test compilation, lint and the identity inventory passed again after the fixture-only correction."
+files[7]:
+  - path: index.ts
+    scope: project
+    note: "Round-one provider receipts and bounded Status waves; Round 2 batch tag repair fencing, journal identity, typed failure receipts and current-source packed regression."
+  - path: projects.ts
+    scope: project
+  - path: test/ownership-consistency.test.ts
+    scope: project
+  - path: test/project-sync.test.ts
+    scope: project
+    note: "Round 2 batch tag repair fencing, journal identity, typed failure receipts and current-source packed regression."
+  - path: test/projects.test.ts
+    scope: project
+  - path: test/round-eighteen.test.ts
+    scope: project
+  - path: test/round-seventeen.test.ts
+    scope: project
+tests[7]:
+  - command: "npm run build && PATH=node_modules/.bin:$PATH node --test --test-concurrency=2 test/project-sync.test.ts test/round-eighteen.test.ts test/round-seventeen.test.ts"
+    scope: project
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-28T05:39:49.092Z"
+      source_kind: local_mutation
+      source_ref: fix/projects-push-fence-and-partial-receipts
+  - command: "PATH=node_modules/.bin:$PATH bun test --timeout 600000 test/project-sync.test.ts"
+    scope: project
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-28T05:39:52.198Z"
+      source_kind: local_mutation
+      source_ref: fix/projects-push-fence-and-partial-receipts
+  - command: "PATH=node_modules/.bin:$PATH node --test --test-concurrency=2 test/projects.test.ts test/ownership-consistency.test.ts"
+    scope: project
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-28T06:08:44.205Z"
+      source_kind: local_mutation
+      source_ref: fix/projects-push-fence-and-partial-receipts
+  - command: "PATH=node_modules/.bin:$PATH node --test --test-concurrency=2 --test-name-pattern=\"Status refuses a competing issue owner|ambiguous draft delivery\" test/project-sync.test.ts"
+    scope: project
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-28T06:36:57.497Z"
+      source_kind: local_mutation
+      source_ref: fix/projects-push-fence-and-partial-receipts
+  - command: "PATH=node_modules/.bin:$PATH node --test --test-concurrency=2 --test-name-pattern=\"Status refuses a competing issue owner|ambiguous draft delivery|incomplete live board|malformed mutation IDs|issue attachment acknowledgement|tagged no-op recovers|Status waves bind|accepted Status with a lost response|unselected ownership conflict|legacy malformed draft journal\" test/project-sync.test.ts test/projects.test.ts"
+    scope: project
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-28T07:30:31.608Z"
+      source_kind: local_mutation
+      source_ref: fix/projects-push-fence-and-partial-receipts
+  - command: "PATH=node_modules/.bin:$PATH bun test --timeout 180000 --test-name-pattern=\"packed npm and Bun consumers\" test/project-sync.test.ts"
+    scope: project
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-28T07:30:33.795Z"
+      source_kind: local_mutation
+      source_ref: fix/projects-push-fence-and-partial-receipts
+  - command: "PATH=node_modules/.bin:$PATH node --test --test-concurrency=2 --test-name-pattern=\"tagged no-op|initially untagged|repaired Status wave|legacy malformed|definitive draft refusal|persisted draft refusal|blank provider|ambiguous draft delivery|Status wave refuses|issue attachment acknowledgement|recovery refuses a different board\" test/project-sync.test.ts"
+    scope: project
+    timeout_seconds: 600
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-28T09:30:29.292Z"
+      source_kind: local_mutation
+      source_ref: fix/projects-push-fence-and-partial-receipts
+docs[2]:
+  - path: docs/identity-ownership-inventory.md
+    scope: project
+  - path: README.md
+    scope: project
+    note: Verified card ID recovery and separate provider and journal cleanup outcomes.
+github_close_reason: ""
+github_closed_at: ""
+github_created_at: "2026-11-28T01:50:33Z"
+github_link_only: false
+github_number: 303
+github_release: ""
+github_state: open
+github_state_reason: unspecified
+github_updated_at: "2026-11-28T01:50:56Z"
+github_url: "https://github.com/unbraind/pm-github/issues/303"
+body: "Found while reviewing the pull request that fixes issue 287 (repeat-import no-op). That pull request restored Projects push to main's behaviour to keep its scope, so both defects remain on main.\n\n\nWith one native item and an empty board, build two push plans before either applies. Applying both produces two remote drafts and two board tags on the same item. Separately, let `addProjectV2DraftIssue` return a card ID and reject `updateProjectV2ItemFieldValue`. Current `main` reports `Sync wrote nothing; 1 operation(s) failed.` after the provider has accepted the attachment. The previous PR implementation returned `pushed: 1, pushFailed: 0` in JSON for that same partial outcome.\n\nBefore attachment, revalidate the live board and complete tracker binding, including tags for cards absent from the original snapshot. Preserve or reconcile the confirmed card ID before retrying. Expose attachment, status, and tracker-tag results in JSON and TOON with an explicit partial outcome. Add real non-git tracker tests proving that two stale plans yield one card and one tag, and that a status refusal remains visible while retry reuses the attached card."

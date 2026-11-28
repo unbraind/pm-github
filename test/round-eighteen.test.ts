@@ -42,6 +42,15 @@ async function native(root: string, fields: Record<string, unknown> = {}): Promi
 /** Refusals preserve authoritative item and history bytes after the peer's own change. */
 function bytes(root: string, item: PmItem) { return [getItemPath(root, String(item.type), item.id!), getHistoryPath(root, item.id!)].map(file => readFileSync(file, "hex")); }
 
+/** Return a real complete board page for the push revalidation query. */
+function projectInventory(cards: ProjectItem[] = []) {
+  return { node: { items: { nodes: cards.map(card => ({
+    id: card.id, fieldValueByName: { name: card.statusName, optionId: card.statusOptionId },
+    content: { __typename: card.content.typename, title: card.content.title, number: card.content.number,
+      repository: { nameWithOwner: card.content.repo } },
+  })), pageInfo: { hasNextPage: false } } } };
+}
+
 for (const clear of [false, true]) test(`board add-issue requires a current positive owner after node resolution (${clear})`, async () => tracker(async root => {
   const item = await native(root, { github_url: issueUrl });
   const plan = buildProjectPushPlan([item], ref, [], meta.statusField).entries[0]!;
@@ -49,20 +58,22 @@ for (const clear of [false, true]) test(`board add-issue requires a current posi
   let peerBytes = bytes(root, item);
   await withMockGithub(async (_request, response, body) => {
     const query = (JSON.parse(body) as { query: string }).query;
-    if (query.includes("issueOrPullRequest")) {
+    if (query.includes("items(first:")) jsonResponse(response, 200, { data: projectInventory() });
+    else if (query.includes("issueOrPullRequest")) {
       if (clear) { await change(root, item.id!, {}, ["github_url"]); peerBytes = bytes(root, item); }
       jsonResponse(response, 200, { data: { repository: { issueOrPullRequest: { id: "ISSUE_NODE" } } } });
     } else if (query.includes("addProjectV2ItemById")) jsonResponse(response, 200, { data: { addProjectV2ItemById: { item: { id: "ATTACHED_NODE" } } } });
     else jsonResponse(response, 200, { data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: "ATTACHED_NODE" } } } });
   }, async server => {
-    const result = await applyPushEntry(plan, meta, ref, new Map([[item.id!, item]]), root, "fixture", []);
+    const result = await applyPushEntry(plan, meta, ref, root, "fixture");
     if (clear) {
       assert.equal(result.changed, false); assert.match(result.error!, /current owner.*curated\/unowned/);
-      assert.equal(server.requests.length, 1, "Only the read query may reach GitHub; no attachment or status mutation");
+      assert.equal(server.requests.filter(request => request.body.includes("mutation")).length, 0, "No attachment or status mutation may reach GitHub");
+      assert.equal(server.requests.filter(request => request.body.includes("issueOrPullRequest")).length, 1);
       assert.deepEqual(bytes(root, item), peerBytes);
       assert.equal((await get(item.id!, {}, { pmRoot: root })).item.tags!.some(tag => tag.startsWith("gh-project:")), false);
     } else {
-      assert.equal(result.changed, true, result.error ?? "Unexpected board refusal"); assert.equal(server.requests.length, 3);
+      assert.equal(result.changed, true, result.error ?? "Unexpected board refusal"); assert.equal(server.requests.length, 5);
       assert.equal((await get(item.id!, {}, { pmRoot: root })).item.github_url, issueUrl);
       assert.ok((await get(item.id!, {}, { pmRoot: root })).item.tags!.includes(projectItemTag(ref, "ATTACHED_NODE")));
     }
@@ -75,10 +86,12 @@ for (const removeTag of [false, true]) test(`a zero-owner board status needs its
   const plan = buildProjectPushPlan([item], ref, board, meta.statusField).entries[0]!; assert.equal(plan.action, "set-status");
   if (removeTag) await change(root, item.id!, { tags: ["retained"] });
   const before = bytes(root, item);
-  await withMockGithub((_request, response) => jsonResponse(response, 200, { data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: "EXISTING_NODE" } } } }), async server => {
-    const result = await applyPushEntry(plan, meta, ref, new Map([[item.id!, item]]), root, "fixture", board);
+  await withMockGithub((_request, response, body) => jsonResponse(response, 200, { data: body.includes("items(first:")
+    ? projectInventory(board) : { updateProjectV2ItemFieldValue: { projectV2Item: { id: "EXISTING_NODE" } } } }), async server => {
+    const result = await applyPushEntry(plan, meta, ref, root, "fixture");
     assert.equal(result.changed, !removeTag, result.error ?? "Unexpected board result");
-    assert.equal(server.requests.length, removeTag ? 0 : 1);
+    assert.equal(server.requests.length, removeTag ? 1 : 2);
+    assert.equal(server.requests.filter(request => request.body.includes("mutation")).length, removeTag ? 0 : 1);
     if (removeTag) assert.match(result.error!, /missing current board tag/);
     assert.deepEqual(bytes(root, item), before);
   });
@@ -89,11 +102,11 @@ test("zero-owner draft creation remains authorized without an issue link or exis
   assert.equal(plan.action, "add-draft");
   await withMockGithub((_request, response, body) => {
     const query = (JSON.parse(body) as { query: string }).query;
-    jsonResponse(response, 200, { data: query.includes("addProjectV2DraftIssue") ? { addProjectV2DraftIssue: { projectItem: { id: "DRAFT_NODE" } } }
+    jsonResponse(response, 200, { data: query.includes("items(first:") ? projectInventory() : query.includes("addProjectV2DraftIssue") ? { addProjectV2DraftIssue: { projectItem: { id: "DRAFT_NODE" } } }
       : { updateProjectV2ItemFieldValue: { projectV2Item: { id: "DRAFT_NODE" } } } });
   }, async server => {
-    const result = await applyPushEntry(plan, meta, ref, new Map([[item.id!, item]]), root, "fixture", []);
-    assert.equal(result.changed, true, result.error ?? "Unexpected board refusal"); assert.equal(server.requests.length, 2);
+    const result = await applyPushEntry(plan, meta, ref, root, "fixture");
+    assert.equal(result.changed, true, result.error ?? "Unexpected board refusal"); assert.equal(server.requests.length, 3);
     const after = (await listAllComplete({ includeBody: true }, { pmRoot: root })).items[0]!;
     for (const field of ["title", "type", "created_at", "body"] as const) assert.equal(after[field], item[field]);
     assert.ok(after.tags!.includes(projectItemTag(ref, "DRAFT_NODE")));
@@ -258,9 +271,10 @@ test("board status retains a current matching issue owner", async () => tracker(
   const board: ProjectItem[] = [{ id: "EXISTING_NODE", statusName: "In Progress", content: { typename: "Issue", title: "Existing issue", repo, number: 7 } }];
   const plan = buildProjectPushPlan([item], ref, board, meta.statusField).entries[0]!, before = bytes(root, item);
   assert.equal(plan.action, "set-status");
-  await withMockGithub((_request, response) => jsonResponse(response, 200, { data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: "EXISTING_NODE" } } } }), async server => {
-    const result = await applyPushEntry(plan, meta, ref, new Map([[item.id!, item]]), root, "fixture", board);
-    assert.equal(result.changed, true, result.error ?? "Unexpected matching-owner refusal"); assert.equal(server.requests.length, 1);
+  await withMockGithub((_request, response, body) => jsonResponse(response, 200, { data: body.includes("items(first:")
+    ? projectInventory(board) : { updateProjectV2ItemFieldValue: { projectV2Item: { id: "EXISTING_NODE" } } } }), async server => {
+    const result = await applyPushEntry(plan, meta, ref, root, "fixture");
+    assert.equal(result.changed, true, result.error ?? "Unexpected matching-owner refusal"); assert.equal(server.requests.length, 2);
     assert.deepEqual(bytes(root, item), before);
   });
 }));

@@ -1,0 +1,21 @@
+id: pm-github-github-ee4d59c27b67-304
+title: Fence repeated REST issue creation in pm github export
+description: "GH issue #304: https://github.com/unbraind/pm-github/issues/304 · author @unbraind · created 2026-11-28T05:30:54Z · updated 2026-11-28T05:30:54Z"
+type: Issue
+status: open
+priority: 2
+tags[2]: "gh:unbraind/pm-github#304","github_author:unbraind"
+created_at: "2026-11-28T05:30:54Z"
+updated_at: "2026-11-28T05:32:32.302Z"
+author: pm-github
+github_close_reason: ""
+github_closed_at: ""
+github_created_at: "2026-11-28T05:30:54Z"
+github_link_only: false
+github_number: 304
+github_release: ""
+github_state: open
+github_state_reason: unspecified
+github_updated_at: "2026-11-28T05:30:54Z"
+github_url: "https://github.com/unbraind/pm-github/issues/304"
+body: "While auditing #303, the separate REST export path showed the same duplicate-create class. Build two export plans for one unlinked native item before either applies. Applying both against an instrumented transport records two POST requests to the target repository's issues endpoint. The registered command revalidates tracker ownership before POST, but a successful create does not establish a local binding and the receipt does not name the returned issue. Retrying a non-idempotent POST after ambiguous delivery has the same duplication risk.\n\nKeep the fix scoped to REST issue export. Reconcile the confirmed issue identity before another create, fence concurrent attempts, and distinguish confirmed creation from ambiguous delivery in the public receipt. Use a synthetic repository fixture to verify the two-plan race and a dropped response without creating public issues during testing."
