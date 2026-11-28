@@ -1383,6 +1383,10 @@ workflowTest("the executable reusable workflow never publishes each adversarial 
 workflowTest("strict gated sync reports new deferred mirrors in the review and summary after the repeat import", async () => {
   const { root, base, git } = initSyncRepo("strict");
   try {
+    const pmRoot = path.join(root, ".agents/pm");
+    const local = (await create({ title: "Local delivery", type: "Chore", tags: "gh:acme/widgets#1", createMode: "progressive" }, { pmRoot })).item;
+    assert.equal(git(["add", "--", `.agents/pm/chores/${local.id}.toon`, `.agents/pm/history/${local.id}.jsonl`]).status, 0);
+    assert.equal(git(["commit", "-qm", "Add a local issue citation"]).status, 0);
     const env = await prepareWorkflowFixture(root, base);
     assert.equal(git(["switch", "-c", SYNC_BRANCH]).status, 0);
     const handle = githubHandler([issue(1, "First mirror", null), issue(2, "Second mirror", null)]);
@@ -1397,6 +1401,7 @@ workflowTest("strict gated sync reports new deferred mirrors in the review and s
       const section = "### Needs curation\n\n" + items.map((file, index) =>
         `- \`${file.slice(0, -5)}\` · GitHub issue #${index + 1} · deadline, acceptance_criteria, estimated_minutes, assignee\n`).join("");
       const review = fs.readFileSync(env.REVIEW_RECEIPT!, "utf8");
+      assert.ok(review.includes(`### Local items referencing imported issues\n\n- GitHub issue #1 · \`${items[0]!.slice(0, -5)}\` is related to \`${local.id}\`\n`), review);
       assert.ok(review.endsWith(section), review);
       assert.equal(fs.readFileSync(env.GITHUB_STEP_SUMMARY!, "utf8"), section);
     });

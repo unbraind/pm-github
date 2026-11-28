@@ -9,7 +9,7 @@ import {
   type BulkItemMutation, type CommitItemMutationsOptions, type ItemMetadata,
 } from "@unbrained/pm-cli/sdk";
 import { readRefreshItems } from "./refresh.ts";
-import { githubOwnershipClaims } from "./import-ownership.ts";
+import { buildGithubOwnershipIndex, ownershipStateOf } from "./import-ownership.ts";
 import { serializeImportTags, githubLinkReferences, legacyGithubDescriptionIdentity } from "./import-fidelity.ts";
 
 /** Full certified metadata plus the explicitly requested body projection. */
@@ -46,17 +46,19 @@ function identity(value: string): string {
 function graph(items: readonly IdentityItem[]): { nodes: IdentityNode[]; edges: IdentityEdge[] } {
   const nodes: IdentityNode[] = [];
   const edges: IdentityEdge[] = [];
+  const index = buildGithubOwnershipIndex(items);
   for (const item of items) {
     const id = item.id!;
     const providers = [...new Set(Object.entries(item).filter(([key, value]) => /^(linear|jira|ado)_(?:.*_)?(?:id|key|url|identifier)$/i.test(key) && Boolean(value) && (typeof value !== "string" || value.trim() !== "")).map(([key]) => key.split("_")[0]!.toLowerCase()))].sort();
     const claims: IdentityEdge[] = [];
     for (const tag of item.tags) if (/^gh:[^/\s]+\/[^#\s]+#[1-9]\d*$/i.test(tag)) claims.push({ item: id, identity: identity(tag), source: "tag", strength: "mention" });
-    const ownership = githubOwnershipClaims(item);
+    const ownership = ownershipStateOf(index, item);
     for (const source of ["external_ref", "github_url"]) {
       const value = ownValue(item, source);
       if (typeof value !== "string") continue;
       const key = normalizeGithubClaim(value);
       if (key && ownership.claims.includes(key)) claims.push({ item: id, identity: `gh:${key}`, source, strength: "claim" });
+      else if (key && index.urlReferences.has(id) && source === "github_url") claims.push({ item: id, identity: `gh:${key}`, source, strength: "mention" });
       else if (source === "external_ref" && !/^gh:/i.test(value) && !parseGithubIssueUrl(value) && /^[a-z][a-z0-9_-]*:\S+$/i.test(value)) {
         claims.push({ item: id, identity: value, source, strength: "claim" });
       }

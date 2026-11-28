@@ -778,6 +778,12 @@ jobs:
             (.[] | "- `\(.item)` · GitHub issue #\(.issue) · \(.fields | join(", "))")
           ' "${RUNNER_TEMP}/pm-github-import.json" > "${RUNNER_TEMP}/pm-github-import-curation.md"
 
+          jq -r '
+            .local_issue_references // [] | select(length > 0) |
+            "### Local items referencing imported issues\n",
+            (.[] | "- GitHub issue #\(.issue) · `\(.item)` is related to `\(.local_item)`")
+          ' "${RUNNER_TEMP}/pm-github-import.json" > "${RUNNER_TEMP}/pm-github-import-references.md"
+
       - name: Verify repeat import is a no-op
         env:
           GH_TOKEN: ${{ github.token }}
@@ -978,6 +984,10 @@ jobs:
             if [[ -s "${RUNNER_TEMP}/pm-github-import-conflicts.md" ]]; then
               printf '\n%s\n\n' "Import conflicts for review:"
               cat "${RUNNER_TEMP}/pm-github-import-conflicts.md"
+            fi
+            if [[ -s "${RUNNER_TEMP}/pm-github-import-references.md" ]]; then
+              printf '\n'
+              cat "${RUNNER_TEMP}/pm-github-import-references.md"
             fi
             if [[ -s "${curation_file}" ]]; then
               printf '\n'

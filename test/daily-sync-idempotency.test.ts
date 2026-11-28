@@ -44,7 +44,13 @@ for (const atomic of [false, true]) test(`random issue sets imported twice produ
         const owner = (await create({ title: "Old native owner", type: "Issue", tags: "gh:fixture/project#1" }, { pmRoot: root, noExtensions: true })).item;
         const deps = { fetchIssues: async () => source, resolveToken: () => undefined };
         const options = parseImportOptions({ atomic });
-        await captureStderr(() => runImport("fixture/project", root, options, deps));
+        const initial = snapshot(root);
+        const expected = (await captureStderr(() => runImport("fixture/project", root, { ...options, dryRun: true }, deps))).result;
+        assert.deepEqual(snapshot(root), initial, "the initial preview writes no edges");
+        const first = (await captureStderr(() => runImport("fixture/project", root, options, deps))).result;
+        assert.ok("local_issue_references" in first && "local_issue_references" in expected);
+        assert.deepEqual(first.local_issue_references, expected.local_issue_references);
+        assert.equal(first.local_issue_references?.[0]?.local_item, owner.id);
         const before = snapshot(root);
         const second = (await captureStderr(() => runImport("fixture/project", root, options, deps))).result;
         assert.deepEqual(snapshot(root), before, `seed ${seed}: identical issues must not stamp updated_at or append history`);

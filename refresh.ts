@@ -1,3 +1,4 @@
+import { applyLocalIssueReferences, canLinkImportReferences, localIssueReferenceReceipt, type IssueMirror, type LocalIssueReference } from "./import-references.ts";
 import { buildGithubOwnershipIndex, warnGithubOwnershipScope, githubOwnedIdentityKeys, GithubImportOwnershipError, ownershipStateOf } from "./import-ownership.ts";
 import { parseGithubIssueUrl } from "./github-url.ts";
 import { readGithubWorkspace, type GithubStatusRegistry } from "./workspace.ts";
@@ -10,7 +11,7 @@ import { join, basename } from "node:path";
 import { listAllComplete, certifyCompleteListResult, previewItemMutations, resolvePmRoot } from "@unbrained/pm-cli/sdk";
 import {
   CommandError, EXIT_CODE, decodeCompletePmItems, githubGraphQLResponse, githubImportSdkMutations, importGithubAtomic,
-  listUnfinishedGithubImports, listRetainedGithubImportPlans, parseImportOptions, prepareGithubImport, readGithubImportPlan,
+  listUnfinishedGithubImports, listRetainedGithubImportPlans, parseImportOptions, planImportReferences, prepareGithubImport, readGithubImportPlan, withImportReferences,
   resolveGitHubToken, resumeGithubImport, assertGithubImportReplayPreflight, validateGithubImportFidelity, validateGithubImportPlan,
   type GhIssue, type PmItem, type PreparedGithubImport,
 } from "./index.ts";
@@ -214,6 +215,7 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
   }
   let targets = initialTargets.filter(target => !deferredIds.has(target.id));
   let resumed = 0;
+  const recoveredLinks: LocalIssueReference[] = [];
   if (recovery.size) {
     if (opts.dryRun) {
       throw new CommandError(`Refresh cannot preview while GitHub transaction ${[...recovery.keys()].join(", ")} is unfinished for selected linked items. Re-run without --dry-run to complete it.`);
@@ -242,7 +244,8 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
       records.push(record);
     }
     for (const record of records) {
-      await resumeGithubImport(pmRoot, record);
+      const result = await resumeGithubImport(pmRoot, record);
+      recoveredLinks.push(...result.referenceLinks ?? []);
       resumed++;
     }
     // The replay finalized the interrupted targets; re-read so this run
@@ -253,6 +256,8 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
   }
   const plan: RefreshEntry[] = [];
   const prepared: PreparedGithubImport[] = [];
+  const rendered: PreparedGithubImport[] = [];
+  const mirrors: IssueMirror[] = [];
   let unchanged = 0;
   let missing = 0;
   let filtered = 0;
@@ -267,6 +272,8 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
         if (opts.since && Date.parse(issue.updated_at) < Date.parse(opts.since)) { filtered++; continue; }
         const entry = (await prepareGithubImport(issue, repo, opts, token, result.target.item, undefined, context))!;
         row.changes = refreshChanges(entry, workspace.statuses);
+        rendered.push(entry);
+        if (canLinkImportReferences(entry)) mirrors.push({ issue: row.number, item: row.id });
         if (row.changes.length) prepared.push(entry);
         else unchanged++;
       }
@@ -275,10 +282,17 @@ export async function runRefresh(repoArg: string | undefined, pmRoot: string, op
   }
   // Validate all finalization projections even when applying one item at a time.
   for (const entry of prepared) validateGithubImportFidelity(entry, repo, `Refresh issue #${entry.issueNumber}`, items);
-  if (!opts.dryRun && prepared.length) {
-    if (opts.atomic) await importGithubAtomic(pmRoot, repo, prepared, { updateOnly: true });
-    else for (const entry of prepared) await importGithubAtomic(pmRoot, repo, [entry], { updateOnly: true });
+  const referencePlan = planImportReferences(items, repo, mirrors, rendered);
+  let links: readonly LocalIssueReference[] = referencePlan;
+  if (!opts.dryRun) {
+    if (opts.atomic) {
+      const transaction = withImportReferences(prepared, rendered, referencePlan);
+      if (transaction.length) links = (await importGithubAtomic(pmRoot, repo, transaction, { updateOnly: true })).referenceLinks ?? [];
+    } else {
+      for (const entry of prepared) await importGithubAtomic(pmRoot, repo, [entry], { updateOnly: true });
+      links = await applyLocalIssueReferences(pmRoot, repo, mirrors, referencePlan);
+    }
   }
-  return { ...(deferredImports.length ? { deferred_imports: deferredImports } : {}), ...identityConflictFields, repo, dryRun: opts.dryRun, atomic: opts.atomic, selected: targets.length, filtered,
+  return { ...localIssueReferenceReceipt([...recoveredLinks, ...links]), ...(deferredImports.length ? { deferred_imports: deferredImports } : {}), ...identityConflictFields, repo, dryRun: opts.dryRun, atomic: opts.atomic, selected: targets.length, filtered,
     unchanged, updated: prepared.length, missing, created: 0, resumed, plan };
 }
