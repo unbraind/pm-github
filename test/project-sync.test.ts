@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { withGithubOwnershipWork, type GithubOwnershipWork } from "../import-ownership.ts";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -10,8 +11,8 @@ import { createExtensionTestHarness } from "@unbrained/pm-cli/sdk/testing";
 import { decode as decodeToon } from "@toon-format/toon";
 import { boundedCli } from "./helpers/bounded-cli.ts";
 import { withPackedFixture } from "./helpers/packed-fixture.ts";
-import extension, { applyPushEntry } from "../index.ts";
-import { buildProjectPushPlan, projectItemTag } from "../projects.ts";
+import extension, { applyPushEntry, readPmItems } from "../index.ts";
+import { buildProjectPushPlan, parseProjectItemTag, projectItemTag } from "../projects.ts";
 import { captureStderr, jsonResponse, withEnv, withMockGithub } from "./helpers/mock-github-server.ts";
 import type { MockGithubHandler } from "./helpers/mock-github-server.ts";
 import { nodeScenario } from "./helpers/node-scenario.ts";
@@ -243,7 +244,7 @@ test("a rejected Projects status reports the attached card and retry reuses it",
       nodes.push(draft("attached"));
       jsonResponse(res, 200, { data: { addProjectV2DraftIssue: { projectItem: { id: "attached" } } } });
     } else if (statusReply === "reject") {
-      jsonResponse(res, 200, { data: { updateProjectV2ItemFieldValue: null }, errors: [{ message: "Status refused" }] });
+      jsonResponse(res, 200, { data: { updateProjectV2ItemFieldValue: null }, errors: [{ type: "FORBIDDEN", message: "Status refused" }] });
     } else if (statusReply === "wrong-card") {
       jsonResponse(res, 200, { data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: "different-card" } } } });
     } else {
@@ -259,7 +260,7 @@ test("a rejected Projects status reports the attached card and retry reuses it",
     });
     assert.deepEqual(items(root).find(item => item.id === id)?.tags, [projectItemTag(REF, "attached")]);
     statusReply = "wrong-card";
-    const wrongCard = await captureStderr(() => assert.rejects(sync(root, { push: true, apply: true }), /Sync wrote nothing/));
+    const wrongCard = await captureStderr(() => assert.rejects(sync(root, { push: true, apply: true }), /could not confirm any writes/));
     assert.match(wrongCard.stderr.join("\n"), /no matching card ID for the Status write/);
     statusReply = "accept";
     const retry = await sync(root, { push: true, apply: true });
@@ -443,11 +444,15 @@ test("a no-add push stays read-only for an unlinked item", async t => {
   const meta = { id: "board", title: "Fixture board", url: "", ownerType: "organization" as const };
   const options = { addMissing: false };
   const plan = buildProjectPushPlan([local], REF, [], undefined, options).entries[0]!;
+  const oldPlan = buildProjectPushPlan([local], REF, [], undefined).entries[0]!;
   assert.equal(plan.action, "noop");
+  assert.equal(oldPlan.action, "add-draft");
   await withMockGithub(board([]), async server => {
-    const result = await applyPushEntry(plan, meta, REF, root, "fixture", options);
-    assert.equal(result.outcome, "unchanged");
-    assert.equal(result.attachment.outcome, "not_attempted");
+    for (const entry of [plan, oldPlan]) {
+      const result = await applyPushEntry(entry, meta, REF, root, "fixture", options);
+      assert.equal(result.outcome, "unchanged");
+      assert.equal(result.attachment.outcome, "not_attempted");
+    }
     assert.ok(server.requests.every(request => !request.body.includes("mutation")));
   });
 });
@@ -582,6 +587,7 @@ test("ambiguous draft delivery is neither repeated by transport nor replayed fro
 test("incomplete live board pages cannot authorize a Projects attachment", async t => {
   const root = tracker(t);
   const id = create(root, "Requires a complete board");
+  await own(root, id, "https://github.com/acme/widgets/issues/7");
   const local = (await sdkGet(id, {}, { pmRoot: root })).item;
   const meta = { id: "board", title: "Fixture board", url: "", ownerType: "organization" as const };
   const plan = buildProjectPushPlan([local], REF, [], undefined).entries[0]!;
@@ -592,6 +598,11 @@ test("incomplete live board pages cannot authorize a Projects attachment", async
     inventory([], undefined),
     inventory([null], { hasNextPage: false }),
     inventory([{}], { hasNextPage: false }),
+    inventory([{ id: 123, content: { __typename: "DraftIssue" } }], { hasNextPage: false }),
+    inventory([{ id: "issue", content: { __typename: "Issue", number: 7 } }], { hasNextPage: false }),
+    inventory([{ id: "pull", content: { __typename: "PullRequest", number: "7", repository: { nameWithOwner: "Acme/Widgets" } } }], { hasNextPage: false }),
+    inventory([{ id: "pull", content: { __typename: "PullRequest", number: 0, repository: { nameWithOwner: "Acme/Widgets" } } }], { hasNextPage: false }),
+    inventory([{ id: "issue", content: { __typename: "Issue", number: 7, repository: { nameWithOwner: "acme/widgets/other" } } }], { hasNextPage: false }),
     inventory([], { hasNextPage: true }),
     inventory([], { hasNextPage: true, endCursor: "repeated" }),
     { ...inventory([], { hasNextPage: false }), errors: [{ message: "partial visibility" }] },
@@ -602,6 +613,303 @@ test("incomplete live board pages cannot authorize a Projects attachment", async
       assert.ok(server.requests.every(request => !request.body.includes("mutation")));
     });
   }
+});
+
+test("an opaque card cannot prove that a tracker-owned issue is absent", async t => {
+  const root = tracker(t);
+  const id = create(root, "Known issue");
+  await own(root, id, "https://github.com/acme/widgets/issues/7");
+  await withMockGithub(board([{ id: "private-card", content: null }], (_req, res) => {
+    jsonResponse(res, 200, { data: { repository: { issueOrPullRequest: { id: "issue-node" } } } });
+  }), async server => {
+    const result = await captureStderr(() => assert.rejects(sync(root, { push: true, apply: true, ids: id }), /Sync wrote nothing/));
+    assert.match(result.stderr.join("\n"), /incomplete Projects board inventory for issue attachment/);
+    assert.ok(server.requests.every(request => !request.body.includes("mutation")));
+  });
+});
+
+test("malformed mutation IDs cannot confirm drafts, issue attachment, or Status delivery", async t => {
+  const root = tracker(t);
+  const statusCard = "status-card";
+  for (const [operation, value] of [["draft", 123], ["draft", "  "], ["issue", { id: "mis-shaped" }], ["status", "other-card"]] as const) {
+    const item = (await sdkCreate({ type: "Task", title: `Malformed ${operation} ${String(value)}`,
+      tags: operation === "status" ? projectItemTag(REF, statusCard) : undefined }, { pmRoot: root })).item;
+    if (operation === "issue") await own(root, item.id, "https://github.com/acme/widgets/issues/7");
+    const cards = operation === "status" ? [draft(statusCard)] : [];
+    await withMockGithub(board(cards, (_req, res, body) => {
+      if (body.includes("issueOrPullRequest")) {
+        jsonResponse(res, 200, { data: { repository: { issueOrPullRequest: { id: "issue-node" } } } });
+      } else if (operation === "draft") {
+        jsonResponse(res, 200, { data: { addProjectV2DraftIssue: { projectItem: { id: value } } } });
+      } else if (operation === "issue") {
+        jsonResponse(res, 200, { data: { addProjectV2ItemById: { item: { id: value } } } });
+      } else {
+        jsonResponse(res, 200, { data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: value } } } });
+      }
+    }), async server => {
+      const options = { push: true, apply: true, ids: item.id };
+      await assert.rejects(sync(root, options), (error: unknown) => {
+        const receipt = readFailedProjectsPush(error);
+        assert.equal(receipt.pushed, 0);
+        assert.equal(receipt.pushReceipts[0]![operation === "status" ? "status" : "attachment"].outcome, "unknown");
+        assert.equal(receipt.pushReceipts[0]!.cardId, operation === "status" ? statusCard : undefined);
+        return true;
+      });
+      if (operation === "draft") await assert.rejects(sync(root, options), (error: unknown) => {
+        assert.match(readFailedProjectsPush(error).pushReceipts[0]!.attachment.error!, /earlier draft attachment has no confirmed/);
+        return true;
+      });
+      assert.equal(server.requests.filter(request => request.body.includes("mutation")).length, 1);
+    });
+    assert.deepEqual((await sdkGet(item.id, {}, { pmRoot: root })).item.tags ?? [], operation === "status" ? [projectItemTag(REF, statusCard)] : []);
+  }
+});
+
+/** Read the CLI's structured refusal and require honest unknown-delivery wording. */
+function readFailedProjectsPush(error: unknown) {
+  assert.ok(error instanceof Error);
+  assert.match(error.message, /Sync could not confirm any writes/);
+  assert.ok("context" in error);
+  return error.context as { pushed: number; pushReceipts: { cardId?: string; attachment: { outcome: string; error?: string };
+    status: { outcome: string; error?: string }; trackerTag: { outcome: string; error?: string } }[] };
+}
+
+test("an issue attachment acknowledgement does not count as creation when its tag is refused", async t => {
+  const root = tracker(t);
+  const owner = create(root, "Owner");
+  const peer = create(root, "Late card claimant");
+  await own(root, owner, "https://github.com/acme/widgets/issues/7");
+  const nodes: BoardNode[] = [];
+  const cardId = "concurrent-issue-card";
+  const tag = projectItemTag(REF, cardId);
+  await withMockGithub(board(nodes, async (_req, res, body) => {
+    if (body.includes("issueOrPullRequest")) {
+      jsonResponse(res, 200, { data: { repository: { issueOrPullRequest: { id: "issue-node" } } } });
+    } else {
+      nodes.push({ id: cardId, fieldValueByName: { name: "Todo", optionId: "todo" },
+        content: { __typename: "Issue", number: 7, repository: { nameWithOwner: "Acme/Widgets" } } });
+      await sdkUpdate(peer, { addTags: [tag] }, { pmRoot: root });
+      jsonResponse(res, 200, { data: { addProjectV2ItemById: { item: { id: cardId } } } });
+    }
+  }), async server => {
+    const args = { push: true, apply: true, ids: owner };
+    await assert.rejects(sync(root, args), (error: unknown) => {
+      const { pushed, pushReceipts: [row] } = readFailedProjectsPush(error);
+      assert.equal(pushed, 0);
+      assert.equal(row!.cardId, cardId);
+      assert.equal(row!.attachment.outcome, "confirmed");
+      assert.equal(row!.trackerTag.outcome, "failed");
+      assert.equal(row!.status.outcome, "not_attempted");
+      return true;
+    });
+    await sdkUpdate(peer, { removeTags: [tag] }, { pmRoot: root });
+    const retry = (await sync(root, args)).result as { pushed: number; pushReceipts: unknown[] };
+    assert.equal(retry.pushed, 1);
+    assert.deepEqual(retry.pushReceipts, [{ pmId: owner, cardId, outcome: "applied",
+      attachment: { outcome: "reused" }, trackerTag: { outcome: "written" }, status: { outcome: "unchanged" } }]);
+    assert.equal(server.requests.filter(request => request.body.includes("mutation")).length, 1);
+  });
+});
+
+test("an issue acknowledgement plus a tag already written by a peer counts zero writes", async t => {
+  const root = tracker(t);
+  const id = create(root, "Late native tag");
+  await own(root, id, "https://github.com/acme/widgets/issues/7");
+  const cardId = "already-linked";
+  const tag = projectItemTag(REF, cardId);
+  await withMockGithub(board([], async (_req, res, body) => {
+    if (body.includes("issueOrPullRequest")) {
+      jsonResponse(res, 200, { data: { repository: { issueOrPullRequest: { id: "issue-node" } } } });
+    } else {
+      await sdkUpdate(id, { addTags: [tag] }, { pmRoot: root });
+      jsonResponse(res, 200, { data: { addProjectV2ItemById: { item: { id: cardId } } } });
+    }
+  }, false), async () => {
+    const result = (await sync(root, { push: true, apply: true, ids: id })).result as { pushed: number; pushReceipts: unknown[] };
+    assert.equal(result.pushed, 0);
+    assert.deepEqual(result.pushReceipts, [{ pmId: id, cardId, outcome: "unchanged",
+      attachment: { outcome: "confirmed" }, trackerTag: { outcome: "present" }, status: { outcome: "skipped" } }]);
+  });
+  assert.deepEqual((await sdkGet(id, {}, { pmRoot: root })).item.tags, [tag]);
+});
+
+test("a tagged no-op recovers a pending draft and an ordinary no-op stays read-only", async t => {
+  const root = tracker(t);
+  const id = create(root, "Lost draft response");
+  const first = "lost-response";
+  const nodes: BoardNode[] = [];
+  await withMockGithub(board(nodes, (_req, res, body) => {
+    assert.match(body, /addProjectV2DraftIssue/);
+    if (!nodes.length && !fs.existsSync(path.join(root, "fixture-reconciled"))) {
+      nodes.push(draft(first));
+      jsonResponse(res, 502, {});
+    } else {
+      jsonResponse(res, 200, { data: { addProjectV2DraftIssue: { projectItem: { id: "replacement" } } } });
+    }
+  }, false), async server => {
+    const args = { push: true, ids: id };
+    await assert.rejects(sync(root, { ...args, apply: true }), /could not confirm any writes/);
+    await sdkUpdate(id, { addTags: [projectItemTag(REF, first)] }, { pmRoot: root });
+    const beforePreview = server.requests.length;
+    const preview = await sync(root, { ...args, "no-add-missing": true });
+    assert.deepEqual((preview.result as { push: unknown }).push, { actionable: 1, statusSkipped: 0 });
+    assert.equal(server.requests.length - beforePreview, 2);
+    const reconciled = (await sync(root, { ...args, apply: true, "no-add-missing": true })).result as { pushed: number; pushReceipts: unknown[] };
+    assert.equal(reconciled.pushed, 0);
+    assert.deepEqual(reconciled.pushReceipts, [{ pmId: id, cardId: first, outcome: "unchanged",
+      attachment: { outcome: "reused" }, trackerTag: { outcome: "present" }, status: { outcome: "skipped" } }]);
+    const beforeNoop = server.requests.length;
+    const noop = (await sync(root, { ...args, apply: true })).result as { pushReceipts?: unknown[] };
+    assert.equal(noop.pushReceipts, undefined);
+    assert.equal(server.requests.length - beforeNoop, 2);
+    fs.writeFileSync(path.join(root, "fixture-reconciled"), "");
+    nodes.length = 0;
+    await sdkUpdate(id, { removeTags: [projectItemTag(REF, first)] }, { pmRoot: root });
+    const replacement = (await sync(root, { ...args, apply: true })).result as { pushed: number };
+    assert.equal(replacement.pushed, 1);
+    assert.equal(server.requests.filter(request => request.body.includes("mutation")).length, 2);
+  });
+});
+
+for (const latePeer of [false, true]) test(`Status waves bind the full corpus once per batch (late claimant: ${latePeer})`, async t => {
+  const root = tracker(t);
+  const nodes = Array.from({ length: 35 }, (_, i) => draft(`wave-${i}`));
+  const ids: string[] = [];
+  for (const node of nodes) {
+    const item = (await sdkCreate({ type: "Task", title: node.id!, tags: projectItemTag(REF, node.id!) }, { pmRoot: root })).item;
+    ids.push(item.id);
+  }
+  const peer = (await sdkCreate({ type: "Task", title: "Other tracker claimant" }, { pmRoot: root })).item;
+  const laterItem = readPmItems(root).filter(item => ids.includes(item.id!))[20]!;
+  const disputedCard = parseProjectItemTag(laterItem.tags![0]!)!.itemId;
+  let introduced = false;
+  const writes: string[] = [];
+  const work: GithubOwnershipWork = {};
+  await withMockGithub(board(nodes, async (_req, res, body) => {
+    const call = JSON.parse(body) as GraphqlCall;
+    assert.match(call.query, /updateProjectV2ItemFieldValue/);
+    writes.push(String(call.variables.i));
+    if (latePeer && !introduced) {
+      introduced = true;
+      await sdkUpdate(peer.id, { addTags: [projectItemTag(REF, disputedCard)] }, { pmRoot: root });
+    }
+    jsonResponse(res, 200, { data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: call.variables.i } } } });
+  }), async server => {
+    const result = await withGithubOwnershipWork(work, () => sync(root, { push: true, apply: true, ids: ids.join(",") }));
+    assert.deepEqual(aggregate(result.result), { project: "acme/5", prefer: "pm", pushed: latePeer ? 34 : 35,
+      pushFailed: latePeer ? 1 : 0, pulled: 0, pullFailed: 0 });
+    assert.equal(server.requests.filter(request => request.body.includes("items(first:")).length, 4);
+    assert.deepEqual(new Set(writes), new Set(nodes.map(node => node.id).filter(id => !latePeer || id !== disputedCard)));
+    if (!latePeer) assert.equal(work.claimParses, 36 * 4);
+  });
+});
+
+test("an unreadable journal directory refuses the push before mutation", async t => {
+  const root = tracker(t);
+  const id = create(root, "Linked", [projectItemTag(REF, "status")]);
+  const runtime = path.join(resolvePmRoot(root, root), "runtime");
+  fs.mkdirSync(runtime, { recursive: true });
+  fs.writeFileSync(path.join(runtime, "github-project-push"), "");
+  await withMockGithub(board([draft("status")]), async server => {
+    await assert.rejects(sync(root, { push: true, apply: true, ids: id }), /Could not read Projects draft recovery directory/);
+    assert.ok(server.requests.every(request => !request.body.includes("mutation")));
+  });
+});
+
+test("a Status wave refuses a deleted target and serializes overdue tag writes", async t => {
+  const root = tracker(t);
+  const deleted = create(root, "Deleted after planning", [projectItemTag(REF, "deleted")]);
+  const retagged = create(root, "Tag removed after planning", [projectItemTag(REF, "retagged")]);
+  await own(root, retagged, "https://github.com/acme/widgets/issues/7");
+  const cards = [draft("deleted"), { ...draft("retagged"),
+    content: { __typename: "Issue", number: 7, repository: { nameWithOwner: "acme/widgets" } },
+  }];
+  let inventories = 0;
+  const provider = board(cards, (_req, res, body) => {
+    const call = JSON.parse(body) as GraphqlCall;
+    assert.equal(call.variables.i, "retagged");
+    jsonResponse(res, 200, { data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: "retagged" } } } });
+  });
+  await withMockGithub(async (request, response, body, base) => {
+    if (body.includes("items(first:") && ++inventories === 2) {
+      pm(root, ["delete", deleted, "--message", "Fixture delete"]);
+      await sdkUpdate(retagged, { removeTags: [projectItemTag(REF, "retagged")] }, { pmRoot: root });
+    }
+    provider(request, response, body, base);
+  }, async server => {
+    const result = (await sync(root, { push: true, apply: true })).result as { pushed: number; pushFailed: number; pushReceipts: Record<string, unknown>[] };
+    assert.equal(result.pushed, 1);
+    assert.equal(result.pushFailed, 1);
+    assert.equal(result.pushReceipts.find(row => row.pmId === deleted)?.outcome, "failed");
+    assert.deepEqual(result.pushReceipts.find(row => row.pmId === retagged)?.trackerTag, { outcome: "written" });
+    assert.equal(inventories, 3);
+    assert.equal(server.requests.filter(request => request.body.includes("mutation")).length, 1);
+  });
+});
+
+test("an incomplete refresh refuses the whole Status wave before dispatch", async t => {
+  const root = tracker(t);
+  const id = create(root, "Linked", [projectItemTag(REF, "status")]);
+  let inventories = 0;
+  const good = board([draft("status")]);
+  await withMockGithub((request, response, body, base) => {
+    if (body.includes("items(first:") && ++inventories === 2) {
+      jsonResponse(response, 200, { data: { node: null } });
+    } else {
+      good(request, response, body, base);
+    }
+  }, async server => {
+    const result = await captureStderr(() => assert.rejects(sync(root, { push: true, apply: true, ids: id }), /Sync wrote nothing/));
+    assert.match(result.stderr.join("\n"), /incomplete Projects board inventory/);
+    assert.ok(server.requests.every(request => !request.body.includes("mutation")));
+  });
+});
+
+test("a legacy malformed draft journal recovers with a verified tag while pull owns Status", async t => {
+  const root = tracker(t);
+  const cardId = "reconciled-draft";
+  const id = create(root, "Explicit link", [projectItemTag(REF, cardId)]);
+  const pmRoot = resolvePmRoot(root, root);
+  const location = path.join(pmRoot, "runtime", "github-project-push");
+  fs.mkdirSync(location, { recursive: true });
+  const key = createHash("sha256").update(JSON.stringify([REF.owner, REF.number, id])).digest("hex");
+  const journal = path.join(location, `${key}.json`);
+  fs.writeFileSync(journal, JSON.stringify({ boardId: "board", cardId: 123 }));
+  await withMockGithub(board([draft(cardId)]), async server => {
+    const result = (await sync(root, { push: true, pull: true, apply: true, prefer: "github", ids: id })).result as {
+      pushed: number; pulled: number; pushReceipts: unknown[];
+    };
+    assert.equal(result.pushed, 0);
+    assert.equal(result.pulled, 1);
+    assert.deepEqual(result.pushReceipts, [{ pmId: id, cardId, outcome: "unchanged",
+      attachment: { outcome: "reused" }, trackerTag: { outcome: "present" }, status: { outcome: "skipped" } }]);
+    assert.ok(server.requests.every(request => !request.body.includes("mutation")));
+  });
+  assert.equal(fs.existsSync(journal), false);
+  assert.equal((await sdkGet(id, {}, { pmRoot })).item.status, "closed");
+});
+
+test("an accepted Status with a lost response remains unconfirmed without replaying", async t => {
+  const root = tracker(t);
+  const id = create(root, "Status timeout", [projectItemTag(REF, "status")]);
+  const nodes = [draft("status")];
+  await withMockGithub(board(nodes, (_req, res, body) => {
+    assert.match(body, /updateProjectV2ItemFieldValue/);
+    nodes[0] = draft("status", "Todo", "todo");
+    jsonResponse(res, 502, {});
+  }), async server => {
+    const args = { push: true, apply: true, ids: id };
+    await assert.rejects(sync(root, args), (error: unknown) => {
+      const { pushed, pushReceipts: [row] } = readFailedProjectsPush(error);
+      assert.equal(pushed, 0);
+      assert.equal(row!.status.outcome, "unknown");
+      assert.match(row!.status.error!, /HTTP 502/);
+      return true;
+    });
+    const repeated = (await sync(root, args)).result as { pushed: number };
+    assert.equal(repeated.pushed, 0);
+    assert.equal(server.requests.filter(request => request.body.includes("mutation")).length, 1);
+  });
 });
 
 test("a throttled draft retries and definitive HTTP rejection permits a corrected push", async t => {
@@ -627,28 +935,34 @@ test("a throttled draft retries and definitive HTTP rejection permits a correcte
   });
 });
 
-test("packed npm and Bun consumers expose the same Projects partial receipt in JSON and TOON", {
-  timeout: 180_000, skip: process.platform === "win32" && "packed launcher fixture uses Unix npm, Bun and tar executables",
-}, async () => {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "pm-project-consumer-"));
-  const repository = path.resolve(import.meta.dirname, "..");
-  await withPackedFixture(base, async ({ root, env }) => {
-    /** Run local pack and extraction without contacting a registry or reading user credentials. */
-    function setup(command: string, args: string[]) {
-      const result = spawnSync(command, args, { cwd: repository, env, encoding: "utf8" });
-      assert.equal(result.status, 0, result.stderr);
-      return result.stdout;
-    }
-    const [{ filename }] = JSON.parse(setup("npm", ["pack", "--ignore-scripts", "--offline", "--json", "--pack-destination", base])) as [{ filename: string }];
-    const pmRoot = path.join(root, ".agents", "pm");
-    await sdkInit("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { cwd: root, pmRoot, noExtensions: true });
-    assert.equal(fs.existsSync(path.join(root, ".git")), false);
-    const installed = path.join(pmRoot, "extensions", "pm-github");
-    fs.mkdirSync(installed, { recursive: true });
-    setup("tar", ["-xf", path.join(base, filename), "--strip-components=1", "-C", installed]);
-    fs.symlinkSync(path.join(repository, "node_modules"), path.join(installed, "node_modules"), "dir");
-    env.PATH = path.join(repository, "node_modules", ".bin") + path.delimiter + env.PATH;
-    for (const launcher of ["npx", "bunx"]) {
+for (const launcher of ["npx", "bunx"] as const) {
+  const availability = launcher === "bunx" ? spawnSync(launcher, ["--version"]) : undefined;
+  const launcherMissing = (availability?.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
+  test(`packed npm and Bun consumers expose the same Projects partial receipt in JSON and TOON (${launcher})`, {
+    timeout: 180_000,
+    skip: process.platform === "win32" ? "packed launcher fixture uses Unix npm and tar executables" :
+      launcherMissing && "Bun is unavailable on PATH",
+  }, async () => {
+    if (availability) assert.equal(availability.status, 0, availability.error?.message ?? "bunx --version must succeed");
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), "pm-project-consumer-"));
+    const repository = path.resolve(import.meta.dirname, "..");
+    await withPackedFixture(base, async ({ root, env }) => {
+      /** Run local pack and extraction without contacting a registry or reading user credentials. */
+      function setup(command: string, args: string[]) {
+        const result = spawnSync(command, args, { cwd: repository, env, encoding: "utf8" });
+        assert.equal(result.status, 0, result.stderr);
+        return result.stdout;
+      }
+      if (!fs.existsSync(path.join(repository, "dist", "index.js"))) setup("npm", ["run", "build"]);
+      const [{ filename }] = JSON.parse(setup("npm", ["pack", "--ignore-scripts", "--offline", "--json", "--pack-destination", base])) as [{ filename: string }];
+      const pmRoot = path.join(root, ".agents", "pm");
+      await sdkInit("fixture", { defaults: true, withPackages: false, agentGuidance: "skip" }, { cwd: root, pmRoot, noExtensions: true });
+      assert.equal(fs.existsSync(path.join(root, ".git")), false);
+      const installed = path.join(pmRoot, "extensions", "pm-github");
+      fs.mkdirSync(installed, { recursive: true });
+      setup("tar", ["-xf", path.join(base, filename), "--strip-components=1", "-C", installed]);
+      fs.symlinkSync(path.join(repository, "node_modules"), path.join(installed, "node_modules"), "dir");
+      env.PATH = path.join(repository, "node_modules", ".bin") + path.delimiter + env.PATH;
       const launcherArgs = launcher === "bunx" ? ["--bun", "--no-install", "pm"] : ["--no-install", "pm"];
       for (const format of ["json", "toon"]) {
         const item = (await sdkCreate({ type: "Task", title: `Consumer ${launcher} ${format}` }, { pmRoot, noExtensions: true })).item;
@@ -657,7 +971,7 @@ test("packed npm and Bun consumers expose the same Projects partial receipt in J
           if (body.includes("addProjectV2DraftIssue")) {
             jsonResponse(res, 200, { data: { addProjectV2DraftIssue: { projectItem: { id: cardId } } } });
           } else {
-            jsonResponse(res, 200, { errors: [{ message: "Fixture Status refusal" }] });
+            jsonResponse(res, 200, { errors: [{ type: "FORBIDDEN", message: "Fixture Status refusal" }] });
           }
         }), async server => {
           const args = [...launcherArgs, "--path", pmRoot, "github", "project", "sync", "acme/5", "--push", "--apply", "--ids", item.id];
@@ -675,9 +989,9 @@ test("packed npm and Bun consumers expose the same Projects partial receipt in J
         });
         assert.deepEqual((await sdkGet(item.id, {}, { pmRoot })).item.tags, [projectItemTag(REF, cardId)]);
       }
-    }
+    });
   });
-});
+}
 
 test("project import applies configured terminal aliases with SDK lifecycle fidelity and stable pull previews", async t => {
   const root = tracker(t);
@@ -868,6 +1182,9 @@ test("project pull preserves canceled lifecycle metadata and reports a failed te
     const { stderr, result } = await captureStderr(() => sync(root, { pull: true, apply: true }));
     assert.deepEqual(aggregate(result.result), { project: "acme/5", pushed: 0, pushFailed: 0, pulled: 1, pullFailed: 1, prefer: "pm" });
     assert.match(stderr.join("\n"), /1 failed/);
+    const refused = await captureStderr(() =>
+      assert.rejects(sync(root, { pull: true, apply: true, ids: closedId }), /Sync wrote nothing; 1 operation/));
+    assert.ok(refused.stderr.some(line => line.includes(`pull ${closedId}`)));
   });
   const local = items(root).find(i => i.title === "Cancel");
   assert.equal(local?.status, "canceled");
@@ -910,7 +1227,7 @@ test("project push attaches an issue without a Status field and rejects a missin
       : { addProjectV2ItemById: omitId ? {} : { item: { id: "attached" } } };
     jsonResponse(res, 200, { data });
   }, false), async server => {
-    await assert.rejects(sync(root, { apply: true, push: true }), /Sync wrote nothing/);
+    await assert.rejects(sync(root, { apply: true, push: true }), /could not confirm any writes/);
     omitId = false;
     const result = await sync(root, { apply: true, push: true });
     assert.equal((result.result as { pushed: number }).pushed, 1);

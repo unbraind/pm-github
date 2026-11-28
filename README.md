@@ -839,26 +839,32 @@ pm github project sync unbraind/5 --push --apply --no-add-missing # only reconci
 ```
 
 Before a push writes, it rechecks the live board and every tracker claimant for
-the card. Concurrent pushes in the same tracker reuse a card that the first push
+the card. Status-only updates to already-tagged cards share one fresh board
+and tracker read per wave of up to 16 cards. Concurrent pushes in the same tracker reuse a card that the first push
 attached. A board tag whose card is missing from the live inventory blocks
 replacement. Verify the tag against the board before clearing or replacing it.
 
 Applied pushes with attempted entries return `pushReceipts` in JSON and TOON.
 Each row includes the tracker item ID, the confirmed card ID when available, and
 separate `attachment`, `status`, and `trackerTag` outcomes. A row is
-`partial` when a write succeeded and a later step failed. `pushed` counts rows
+`partial` when it records a confirmed write and another step was refused or
+has uncertain delivery. `pushed` counts rows
 with confirmed writes, `pushPartial` counts the partial subset, and `pushFailed`
-counts failed rows with zero confirmed writes. A batch with only failed writes
-exits nonzero and exposes those receipts in its error context.
+counts failed rows with zero confirmed writes. An issue attachment acknowledgement
+returns `attachment.outcome: confirmed` and the card ID. GitHub can return an
+existing card, so the acknowledgement confirms only that the card exists.
+A batch with only failed writes exits nonzero and exposes those receipts in its
+error context. The message distinguishes unknown delivery from a rejected write.
 
 The tracker tag is recorded before the Status update. Push checks the tracker
 binding again before sending Status. If GitHub rejects Status,
 rerun the same push to update the attached card. If the tag write failed, a
 locally retained draft recovery record in `runtime/github-project-push/` keeps
-the confirmed card ID for the next push. When the attachment response lacks a
+the confirmed card ID for the next push. When a draft response lacks a
 confirmed ID, the next push reports `attachment.outcome: unknown` and holds off
 on a new draft. Check the board first. If it contains the draft, add the
-corresponding Projects tag to the tracker item and retry. If GitHub confirms
+corresponding Projects tag to the tracker item and retry. A retry can reconcile
+the record even when its board Status and tracker tag already match. If GitHub confirms
 that no draft was created, remove the matching pending recovery record before
 retrying while no push for that item is running. Recovery files are keyed by the
 SHA-256 of the JSON array `[lowercase owner, project number, tracker item ID]`.

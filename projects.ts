@@ -473,6 +473,8 @@ export interface PushPlanOptions {
   statuses?: GithubStatusRegistry;
   /** Complete peer corpus when the command scopes selected items. */
   corpus?: PmItemLike[];
+  /** The command already reported scope diagnostics before locked revalidation. */
+  quietOwnership?: boolean;
 }
 
 // Build the pm → project plan. Pure and side-effect free so it is unit-testable
@@ -488,8 +490,9 @@ export function buildProjectPushPlan(
   const options = statusField?.options ?? [];
   const selected = pmItems.filter((item): item is PmItemLike => Boolean(item?.id));
   const corpus = (opts.corpus ?? selected).filter((item): item is PmItemLike => Boolean(item));
-  const { ownership, projectByPmId } = indexSelectedByIssue(selected, corpus, projectItems, ref);
-  warnGithubOwnershipScope(ownership, selected);
+  const { ownership, projectByPmId } = indexSelectedByIssue(selected, corpus, projectItems, ref, {
+    warnScope: opts.quietOwnership ? "quiet" : "selected",
+  });
   const entries: PushPlanEntry[] = [];
   const statusSkipped: PushPlan["statusSkipped"] = [];
 
@@ -584,7 +587,7 @@ export interface PullPlanEntry {
  */
 function indexSelectedByIssue(
   selected: PmItemLike[], corpus: PmItemLike[], projectItems: ProjectItem[], ref: ProjectRef,
-  options: { writeTargets?: Set<string> } = {},
+  options: { writeTargets?: Set<string>; warnScope?: "selected" | "quiet" } = {},
 ): {
   ownership: GithubOwnershipIndex;
   pmByItemId: Map<string, PmItemLike>;
@@ -616,7 +619,7 @@ function indexSelectedByIssue(
     for (const key of state.claims) addProjectClaim(byIssue, key, item);
     for (const id of links) addProjectClaim(byCard, id, item);
   }
-  warnGithubOwnershipScope(ownership, boardCandidates);
+  if (options.warnScope !== "quiet") warnGithubOwnershipScope(ownership, options.warnScope === "selected" ? selected : boardCandidates);
   for (const item of issueCandidates) githubOwnedIdentityKeys(item, ownership);
   const pmByItemId = new Map<string, PmItemLike>();
   const projectByPmId = new Map<string, ProjectItem>();
