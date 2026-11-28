@@ -6,9 +6,9 @@ status: open
 priority: 2
 tags[2]: "gh:unbraind/pm-github#303","github_author:unbraind"
 created_at: "2026-11-28T01:50:33Z"
-updated_at: "2026-11-28T06:47:18.061Z"
+updated_at: "2026-11-28T06:58:32.140Z"
 author: pm-github
-comments[10]{created_at,author,text}:
+comments[11]{created_at,author,text}:
   "2026-11-28T05:25:22.563Z",codex-agent,Imported issue 303 with native provenance. Checking the duplicate attachment and status rejection against real non-git trackers and loopback GraphQL. Scope is Projects push and its receipt.
   "2026-11-28T05:25:54.447Z",codex-agent,"Reproduced 2 of 2 regressions on main 4fb4854 in non-git trackers. Two plans built from the empty board returned two draft IDs. A Status error after draft creation threw Sync wrote nothing; 1 operation(s) failed. Plan: serialize Projects push against complete live bindings, persist draft recovery before attachment, and expose per-step outcomes."
   "2026-11-28T05:32:34.328Z",codex-agent,The separate REST issue export component also submits two issue POST requests when applying two stale unlinked-item plans. Verified with an instrumented local transport. Tracked in GitHub issue 304 and its imported PM item. No REST export changes in this PR.
@@ -19,6 +19,7 @@ comments[10]{created_at,author,text}:
   "2026-11-28T06:28:19.138Z",codex-agent,"Final local verification: 1977 distinct related Node cases across 68 files, including the corrected fixture rerun. The three PM-linked commands passed 129 Node cases, 40 native Bun cases, and 175 planner and ownership cases. Packed npm and Bun launchers passed all four JSON and TOON combinations. Typecheck, both builds, lint, docstrings (344 declarations), duplication (37 modules and zero duplicated lines), and the ownership inventory (106 groups and 336 sites) passed. The related REST export defect is in issue 304. Full release and coverage gates are left to CI."
   "2026-11-28T06:36:55.468Z",codex-agent,"Exact head 1b115ee passed CodeQL and Semgrep. Two Projects push review findings reproduced or verified against the change: discussion r4725852740 raced a native issue claim through the tag write and observed one unwanted Status mutation; r4725852746 identified ambiguous delivery wording that implied certainty. The candidate rereads complete tracker authority for the confirmed card before Status and reports that it could not confirm any writes after unknown delivery. Re-running related gates before delivery."
   "2026-11-28T06:47:13.942Z",codex-agent,"Review regression evidence: the original 1b115ee Status path sent one mutation after a concurrent native issue claim. With the pre-Status rerender it sent zero, reported a partial result, and retained the written tag. The unknown-delivery fixture previously emitted Sync confirmed no writes and now requires Sync could not confirm any writes. Both new focused checks passed. Typecheck, builds, lint, docstrings, ownership inventory and zero-duplication checks passed for the follow-up. The related suite is rerunning before push."
+  "2026-11-28T06:58:32.139Z",codex-agent,"Stopped at the 30-minute push cutoff. PR 305 remains at 1b115ee. Exact-head CI observation: test (26) in_progress https://github.com/unbraind/pm-github/actions/runs/46116818985/job/140892415986|test (22) success https://github.com/unbraind/pm-github/actions/runs/46116818985/job/140892416135. The unpushed review commit 31c5871 fixes discussions r4725852740 and r4725852746. Reverting the late binding recheck reproduced one unauthorized Status mutation, and reverting the unknown-delivery wording failed the message assertion. Both tests passed in the PM-linked Node run and the focused native Bun run. The broader rerun emitted 1229 passes before it was stopped to meet the cutoff. The review commit passed typecheck, builds, lint, changelog, duplication, identity inventory and fresh-clone privacy (4809 objects)."
 files[7]{path,scope}:
   index.ts,project
   projects.ts,project
