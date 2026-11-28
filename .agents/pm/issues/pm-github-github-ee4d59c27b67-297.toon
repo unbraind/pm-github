@@ -1,0 +1,21 @@
+id: pm-github-github-ee4d59c27b67-297
+title: Roll out and verify repeat-import recovery in four gated sync callers
+description: "GH issue #297: https://github.com/unbraind/pm-github/issues/297 · author @unbraind · created 2026-11-27T11:32:22Z · updated 2026-11-27T11:32:53Z"
+type: Issue
+status: open
+priority: 2
+tags[2]: "gh:unbraind/pm-github#297","github_author:unbraind"
+created_at: "2026-11-27T11:32:22Z"
+updated_at: "2026-11-27T11:33:55.232Z"
+author: pm-github
+github_close_reason: ""
+github_closed_at: ""
+github_created_at: "2026-11-27T11:32:22Z"
+github_link_only: false
+github_number: 297
+github_release: ""
+github_state: open
+github_state_reason: unspecified
+github_updated_at: "2026-11-27T11:32:53Z"
+github_url: "https://github.com/unbraind/pm-github/issues/297"
+body: "The pm-github importer and reusable workflow changes are tracked in #287. The published 2026.11.26 package still reproduces the pm-rl repeat failure. The merged #288 comment fix landed after that tag, and its built code preserves item and history bytes against the same frozen source.\n\nAfter a release includes the fixes, update the reusable workflow pin and installed extension together in pm-rl, pm-web, pm-vcs, and pm-hypothesis. Record the exact caller and reusable workflow SHAs, installed extension version, and hosted run URL for each caller. Confirm that apply and repeat succeed with unchanged issue evidence and that a source change stops the run before branch publication. Preserve the existing privacy and repeat-diff gates.\n\nReported caller failures are documented in [pm-rl #210](https://github.com/unbraind/pm-rl/issues/210), [pm-web #369](https://github.com/unbraind/pm-web/issues/369), the [pm-vcs repeat run](https://github.com/unbraind/pm-vcs/actions/runs/45801461445), and [pm-hypothesis #61](https://github.com/unbraind/pm-hypothesis/issues/61). The pm-rl reproduction identified a duplicate long comment. The other callers still need independent hosted verification."

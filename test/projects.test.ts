@@ -331,6 +331,44 @@ test("buildProjectPullPlan: in-sync item produces no entry", () => {
   assert.equal(buildProjectPullPlan(pmItems, REF, projectItems).entries.length, 0);
 });
 
+test("Projects planners reject ambiguous write targets in either input order", () => {
+  const first: ProjectItem = { id: "first", statusName: "Todo", statusOptionId: "opt_todo", content: { typename: "DraftIssue", title: "First" } };
+  const second: ProjectItem = { ...first, id: "second", statusName: "In Progress" };
+  const wrapped: ProjectItem = { ...first, content: { typename: "Issue", title: "Issue", repo: "upstream/repo", number: 7 } };
+  /** Encode a fixture card ID just as the tracker does. */
+  const tag = (id: string) => projectItemTag(REF, id);
+  const owner = { id: "owned", status: "open", github_url: "https://github.com/upstream/repo/issues/7" };
+  const one = { id: "one", status: "open", tags: [tag("first")] };
+  const two = { id: "two", status: "in_progress", tags: [tag("first")] };
+  const conflict = { code: "github_project_link_conflict" };
+  for (const { items, cards } of [
+    { items: [{ ...one, tags: [tag("first"), tag("second")] }], cards: [first, second] },
+    { items: [{ ...owner, tags: [tag("second")] }], cards: [wrapped, second] },
+    { items: [one, two], cards: [first] },
+    { items: [one, owner], cards: [wrapped] },
+    { items: [], cards: [wrapped, { ...wrapped, id: second.id, content: { ...wrapped.content, repo: "Upstream/Repo" } }] },
+    { items: [], cards: [first, { ...second, id: first.id }] },
+  ]) {
+    for (const inverse of [false, true]) {
+      const tracker = inverse ? [...items].reverse() : items;
+      const board = inverse ? [...cards].reverse() : cards;
+      assert.throws(() => buildProjectImportPlan(board, REF, tracker), conflict);
+      assert.throws(() => buildProjectPullPlan(tracker, REF, board), conflict);
+    }
+  }
+  assert.equal(indexPmByProjectItem([one, one], REF).size, 1);
+  assert.equal(indexProjectItemsByIssue([wrapped, wrapped]).size, 1);
+  assert.throws(() => buildProjectPullPlan([one], REF, [first], undefined, undefined, [one, two]), conflict);
+  assert.equal(buildProjectPullPlan([], REF, [first], undefined, undefined, [one, two]).entries.length, 0);
+  const valid = { ...owner, tags: [tag("gone"), tag("first")] };
+  assert.equal(buildProjectImportPlan([wrapped], REF, [valid])[0]?.pmId, owner.id);
+  assert.equal(buildProjectPullPlan([valid], REF, [wrapped]).entries.length, 0);
+  assert.equal(buildProjectImportPlan([wrapped], REF, [{ tags: [tag("first")] }, valid])[0]?.pmId, owner.id);
+  const withoutId = { ...wrapped, id: "", statusName: "Done" };
+  assert.equal(buildProjectImportPlan([withoutId], REF, [owner]).length, 0);
+  assert.equal(buildProjectPullPlan([owner], REF, [withoutId]).entries.length, 0);
+});
+
 // --- import plan -----------------------------------------------------------
 
 test("buildProjectImportPlan: creates for new items, updates linked, dual-tags issues", () => {

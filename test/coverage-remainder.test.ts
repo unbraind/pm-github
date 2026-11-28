@@ -621,8 +621,7 @@ test("project import dry-run counts an update and apply fails closed when every 
           ] } },
         } });
       }, async () => {
-        await withFakePm(`for arg in "$@"; do if [ "$arg" = "create" ]; then echo create-refused >&2; exit 1; fi; done
-exec "$REAL_PM" "$@"`, async () => {
+        await withNativeRefusal(root, before => !before, async () => {
           await assert.rejects(ext.runCommand({
             command: "github project import",
             args: ["acme/5"],
@@ -778,22 +777,19 @@ test("Projects import fails closed at each local mutation boundary", async () =>
     const created = spawnSync(REAL_PM, ["--path", root, "create", "task", "Linked", "--tags", projectItemTag({ owner: "acme", number: 5 }, "linked")], { encoding: "utf8" });
     assert.equal(created.status, 0, created.stderr);
     for (const fixture of [
-      { id: "linked", fail: "update", invalidId: false, diagnostic: /update failed/ },
-      { id: "linked", fail: "close", invalidId: false, diagnostic: /close failed/ },
-      { id: "new", fail: "create", invalidId: true, diagnostic: /could not read created item id/ },
-      { id: "new", fail: "close", invalidId: false, diagnostic: /close failed/ },
+      { id: "linked", fail: "update", diagnostic: /update failed/ },
+      { id: "linked", fail: "close", diagnostic: /close failed after tracker update/ },
+      { id: "linked", fail: "close", diagnostic: /close failed —/ },
+      { id: "new", fail: "create", diagnostic: /create failed/ },
+      { id: "new", fail: "close", diagnostic: /close failed after creating tracker item/ },
     ]) {
       await withEnv({ GITHUB_TOKEN: "fixture-token", GH_TOKEN: undefined }, () => withMockGithub((_req, res, body) => {
         const query = (JSON.parse(body) as { query: string }).query;
         jsonResponse(res, 200, { data: query.includes("projectV2(number:") ? { user: { projectV2: {
           id: "board", title: "Board", statusField: { id: "status", name: "Status", options: [{ id: "done", name: "Done" }] },
         } } } : { node: { items: { nodes: [{ id: fixture.id, fieldValueByName: { name: "Done", optionId: "done" }, content: { __typename: "DraftIssue", title: "Closed candidate" } }], pageInfo: {} } } } });
-      }, () => withFakePm(`for arg in "$@"; do
-if [ "$arg" = "${fixture.fail}" ]; then
-${fixture.invalidId ? "printf 'invalid-json'; exit 0" : "echo mutation-refused >&2; exit 1"}
-fi
-done
-exec "$REAL_PM" "$@"`, async () => {
+      }, () => withNativeRefusal(root, (before, after) => fixture.fail === "create" ? !before
+        : Boolean(before) && (fixture.fail === "close") === (after?.status === "closed"), async () => {
         const { stderr } = await captureStderr(() => assert.rejects((harnessPromise.then(ext => ext.runCommand({ command: "github project import", args: ["acme/5"], pmRoot: root }))), /Imported 0 project item/));
         assert.match(stderr.join("\n"), fixture.diagnostic);
       })));

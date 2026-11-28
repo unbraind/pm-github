@@ -1646,16 +1646,22 @@ workflowTest("packed installed CLI repeats a completed gated import under native
     const handle = githubHandler([issue(1, "Synthetic issue", "Reviewed public body.")]);
     await withMockGithub(handle, async () => {
       const runEnv = { ...env, PM_GITHUB_API_BASE: process.env.PM_GITHUB_API_BASE };
-      const first = await executeWorkflow(workflowShell(["Gated GitHub to pm import"]), root, runEnv);
+      const first = await executeWorkflow(workflowShell(["Preview GitHub to pm plan", "Gated GitHub to pm import"]), root, runEnv);
       assert.equal(first.code, 0, first.stderr);
-      const snapshot = () => fs.readdirSync(path.join(root, ".agents/pm/issues")).filter(file => file.endsWith(".toon"))
-        .map(file => fs.readFileSync(path.join(root, ".agents/pm/issues", file), "utf8"));
+      const sourceSnapshot = fs.readFileSync(path.join(env.RUNNER_TEMP!, "pm-github-source-snapshot"), "utf8").trim();
+      assert.match(sourceSnapshot, /^[a-f0-9]{64}$/);
+      const snapshot = () => ["issues", "history"].flatMap(dir => {
+        const folder = path.join(root, ".agents/pm", dir);
+        return fs.readdirSync(folder).filter(file => !file.startsWith("_") && /\.(?:toon|jsonl)$/.test(file))
+          .sort().map(file => fs.readFileSync(path.join(folder, file), "utf8"));
+      });
       const before = snapshot();
-      assert.equal(before.length, 1);
+      assert.equal(before.length, 2);
       const cli = fs.realpathSync(path.join(root, "node_modules/.bin/pm"));
       for (let repeat = 0; repeat < 3; repeat++) {
         const started = Date.now();
-        const result = await boundedCli("bun", ["--bun", cli, "github", "import", "acme/widgets", "--state", "all", "--atomic", "--gate", "--with-comments", "--json"], root, runEnv);
+        const result = await boundedCli("bun", ["--bun", cli, "github", "import", "acme/widgets", "--state", "all", "--atomic", "--gate", "--with-comments",
+          "--expect-source", sourceSnapshot, "--json"], root, runEnv);
         assert.equal(result.timedOut, false);
         assert.equal(result.signal, null, `native Bun repeat ${repeat + 1} exceeded its unchanged 45s budget: ${result.stderr}`);
         assert.equal(result.code, 0, result.stderr);

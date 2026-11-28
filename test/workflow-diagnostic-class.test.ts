@@ -11,6 +11,7 @@ import { scanLineForRuleHits } from "../gate.ts";
 import { decodeWorkflowDiagnostic, readWorkflowFailure, redactWorkflowFailure } from "../workflow-diagnostic.ts";
 import { boundedCli } from "./helpers/bounded-cli.ts";
 import { withPackedFixture } from "./helpers/packed-fixture.ts";
+import { jsonResponse, withMockGithub } from "./helpers/mock-github-server.ts";
 
 const packageRoot = join(import.meta.dirname, "..");
 const cli = join(packageRoot, "node_modules/.bin/pm");
@@ -112,6 +113,25 @@ test("generic stderr wrappers cannot displace a specific text cause or structure
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("structured blocked receipts retain safe ownership remedies over secondary errors", () => {
+  const root = mkdtempSync(join(tmpdir(), "blocked-workflow-"));
+  try {
+    const report = join(root, "stdout.json"), error = join(root, "stderr.txt");
+    const remedy = "Set github_url to https://github.com/fixture/project/issues/42 on the intended owner, then retry.";
+    writeFileSync(error, "Error: A secondary error");
+    for (const plan of [undefined, [], [{ action: "skip", remedy }], [{ action: "ambiguous_citation", remedy: "private fixture text" }],
+      [{ action: "ambiguous_citation", remedy }]]) {
+      writeFileSync(report, JSON.stringify({ blocked: true, code: "ambiguous_citation", plan }));
+      const { reason } = readWorkflowFailure(report, error, undefined);
+      assert.match(reason, /ambiguous_citation.*Set github_url/);
+      assert.equal(reason.includes(remedy), plan?.[0]?.action === "ambiguous_citation" && plan[0].remedy === remedy);
+      assert.doesNotMatch(reason, /secondary error|private fixture text/);
+    }
+    writeFileSync(report, JSON.stringify({ blocked: true, code: "unknown_refusal" }));
+    assert.match(readWorkflowFailure(report, error, undefined).reason, /preview was blocked.*Inspect its plan/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("packed npm and Bun diagnostics preserve specific redacted causes in JSON and TOON without git", { timeout: 600_000 }, async () => {
   const base = mkdtempSync(join(tmpdir(), "diagnostic-packed-"));
   await withPackedFixture(base, async ({ root, env }) => {
@@ -195,5 +215,39 @@ export default {
       assert.ok(!decoded.reason.includes(privatePath));
       assert.equal(durable(pmRoot), before, "diagnostics must preserve durable non-git tracker state");
     }
+    const remedy = "Set github_url to https://github.com/fixture/project/issues/42 on the intended owner, then retry.";
+    writeFileSync(report, JSON.stringify({ blocked: true, code: "ambiguous_citation", plan: [{ action: "ambiguous_citation", remedy }] }));
+    for (const bin of ["npm", "bun"]) {
+      const args = ["--path", pmRoot, "github", "workflow-diagnostic", "--report", report, "--error-file", error];
+      const output = await run(bin, bin === "npm" ? ["exec", "--offline", "--", "pm", ...args, "--json"] : ["--bun", cli, ...args]);
+      const diagnostic = (bin === "npm" ? JSON.parse(output) : decode(output)) as { reason: string };
+      assert.ok(diagnostic.reason.includes(remedy));
+      assert.equal(durable(pmRoot), before);
+    }
+    const issue = { number: 42, title: "Selected source", body: "", state: "open", labels: [], comments: 0,
+      html_url: "https://github.com/fixture/project/issues/42", created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-02T00:00:00Z" };
+    let available = true;
+    await withMockGithub((request, response) => {
+      if (request.url?.endsWith("/issues/42")) jsonResponse(response, available ? 200 : 404, available ? issue : {});
+      else jsonResponse(response, 200, []);
+    }, async server => {
+      const environment = { ...env, PM_GITHUB_API_BASE: server.baseUrl, GITHUB_TOKEN: "fixture" };
+      for (const bin of ["npm", "bun"]) {
+        available = true;
+        const json = bin === "npm";
+        const launcher = json ? ["exec", "--offline", "--", "pm"] : ["--bun", cli];
+        const args = [...launcher, "--path", pmRoot, "github", "import", "fixture/project", "--issue", "42",
+          "--output-format", json ? "json" : "toon"];
+        const preview = await run(bin, [...args, "--gate", "--dry-run"], root, environment);
+        const { source_snapshot } = (json ? JSON.parse(preview) : decode(preview)) as { source_snapshot: string };
+        assert.match(source_snapshot, /^[a-f0-9]{64}$/);
+        available = false;
+        const refused = await boundedCli(bin, [...args, "--expect-source", source_snapshot], root, environment);
+        assert.equal(refused.timedOut, false);
+        assert.notEqual(refused.code, 0);
+        assert.match(refused.stderr, json ? /github_import_source_drift/ : /GitHub import source drift/i);
+        assert.equal(durable(pmRoot), before);
+      }
+    });
   });
 });

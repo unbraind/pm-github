@@ -125,6 +125,7 @@ for (const mode of ["failed", "missing", "forged"] as const) test(`recovery pref
   catch (caught) { error = caught; }
   assert.ok(JSON.stringify(snapshot(root)) === JSON.stringify(before), "Recovery changed tracker files or history before privacy approval");
   assert.equal((error as { code?: string } | undefined)?.code, "github_import_preflight_failed");
+  assert.doesNotMatch(String(error), /no item was written/i);
   assert.equal((await listAllComplete({}, { pmRoot: root })).items.length, 0);
 }, true));
 

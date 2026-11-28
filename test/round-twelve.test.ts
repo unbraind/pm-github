@@ -13,9 +13,10 @@ import extension, { runImport, parseImportOptions, prepareGithubImport, importGi
   readGithubImportPlan, listRetainedGithubImportPlans, applyPullEntry, type GhIssue, type PmItem, type GhComment } from "../index.ts";
 import { selectRefreshTargets, runRefresh } from "../refresh.ts";
 import { githubOwnershipClaims, withGithubImportOwners, withGithubOwnershipWork, type GithubOwnershipWork } from "../import-ownership.ts";
-import { buildProjectPullPlan, buildProjectPushPlan, indexPmByIssue } from "../projects.ts";
+import { buildProjectPullPlan, buildProjectPushPlan, indexPmByIssue, projectItemTag } from "../projects.ts";
 import { writeGithubStateAtomic } from "../durable-state.ts";
 import { captureStderr, withEnv, withMockGithub, jsonResponse } from "./helpers/mock-github-server.ts";
+import { appendedHistory } from "./helpers/history-assertions.ts";
 
 const repo = "o/r";
 const source: GhIssue = { number: 7, title: "Public source", body: "Public body", state: "open", labels: [], user: null,
@@ -204,6 +205,101 @@ for (const conflicting of [true, false]) test(`Round12 project pull rechecks pee
   else assert.equal((await get(local.id, {}, { pmRoot: root })).item.status, "in_progress");
 }));
 
+for (const peerClaim of ["none", "moved", "competing"] as const) test(`Projects pull rechecks draft card ownership before closing (${peerClaim})`, async () => tracker(async root => {
+  const ref = { owner: "o", number: 1 };
+  const tag = projectItemTag(ref, "board-card");
+  const local = (await create({ title: "Original card owner", type: "Chore", tags: tag }, { pmRoot: root })).item;
+  const peer = (await create({ title: "Another item", type: "Chore" }, { pmRoot: root })).item;
+  const records = (await listAllComplete({}, { pmRoot: root })).items;
+  const entry = buildProjectPullPlan(records, ref, [{ id: "board-card", statusName: "Done", content: { typename: "DraftIssue", title: "Board" } }]).entries[0]!;
+  if (peerClaim !== "none") await change(root, peer.id, { tags: [tag] });
+  if (peerClaim === "moved") await change(root, local.id, { tags: [] });
+  const before = await bytes(root, local.id);
+  const outcome = await applyPullEntry(entry, root);
+  assert.equal(outcome.changed, peerClaim === "none", outcome.error ?? "Unexpected project result");
+  if (peerClaim === "none") assert.equal((await get(local.id, {}, { pmRoot: root })).item.status, "closed");
+  else {
+    assert.match(outcome.error!, /project card/i);
+    assert.deepEqual(await bytes(root, local.id), before);
+  }
+}));
+
+for (const operation of ["create", "update"] as const) test(`Projects import rejects a card claimed inside the native ${operation} boundary`, async () => tracker(async root => {
+  const tag = projectItemTag({ owner: "o", number: 1 }, "card");
+  const local = operation === "update" ? (await create({ title: "Original item", type: "Chore", tags: tag }, { pmRoot: root })).item : undefined;
+  const peer = (await create({ title: "Claiming peer", type: "Chore" }, { pmRoot: root })).item;
+  const before = local ? await bytes(root, local.id) : undefined;
+  let competed = false;
+  const ext = await harness;
+  await runWithActiveExtensions({ path: root, noExtensions: true }, async () => {
+    setActiveExtensionHooks({ beforeCommand: [], afterCommand: [], onRead: [], onWrite: [], onIndex: [], beforeMutation: [
+      { layer: "project", name: "project-card-race", run: async context => {
+        if (competed || context.operation !== operation) return;
+        competed = true;
+        await change(root, peer.id, { tags: [tag] });
+      } },
+    ] });
+    await withMockGithub((_req, response, body) => {
+      const { query } = JSON.parse(body);
+      jsonResponse(response, 200, { data: query.includes("projectV2(number:") ? {
+        organization: { projectV2: { id: "board", title: "Fixture board" } },
+      } : { node: { items: { nodes: [{ id: "card", content: { __typename: "DraftIssue", title: "Changed name" } }], pageInfo: {} } } } });
+    }, async () => {
+      const { stderr } = await captureStderr(() => assert.rejects(ext.runCommand({
+        command: "github project import", args: ["o/1"], pmRoot: root,
+      }), /Imported 0 project item/));
+      assert.match(stderr.join("\n"), /claim the same project card/);
+    });
+  });
+  assert.equal(competed, true);
+  assert.equal((await listAllComplete({}, { pmRoot: root })).items.length, local ? 2 : 1);
+  if (local) assert.deepEqual(await bytes(root, local.id), before);
+}));
+
+for (const shape of [
+  { name: "wrapped issue", typename: "Issue", description: "GH issue #7: https://github.com/o/r/issues/7 · native notes", kind: "issues" },
+  { name: "wrapped pull request", typename: "PullRequest", description: "GH PR #7: https://github.com/o/r/pull/7", kind: "pull" },
+  { name: "tagged draft", typename: "DraftIssue", description: "GitHub issue: https://www.github.com/O/R/issues/7/", kind: "issues" },
+  { name: "explicit issue plus matching legacy declaration", typename: "Issue", description: "GH issue #7: https://github.com/o/r/issues/7", kind: "issues", explicit: true },
+  { name: "explicit issue plus unrelated declaration", typename: "Issue", description: "GH issue #8: https://github.com/o/r/issues/8", kind: "issues", explicit: true, replace: true },
+] as const) test(`Projects import preserves applicable legacy ownership on update and repeat (${shape.name})`, async () => tracker(async root => {
+  const local = (await create({ title: "Before board import", type: "Chore", description: shape.description,
+    ...(shape.typename === "DraftIssue" ? { tags: projectItemTag({ owner: "o", number: 1 }, "card") } : {}),
+  }, { pmRoot: root })).item;
+  if ("explicit" in shape) await change(root, local.id, { github_url: source.html_url });
+  const initial = await bytes(root, local.id);
+  const ext = await harness;
+  await withMockGithub((_request, response, body) => {
+    const { query } = JSON.parse(body);
+    jsonResponse(response, 200, { data: query.includes("projectV2(number:") ? {
+      organization: { projectV2: { id: "board", title: "Fixture board" } },
+    } : { node: { items: { pageInfo: { hasNextPage: false }, nodes: [{
+      id: "card", fieldValueByName: { name: "Done" }, content: { __typename: shape.typename, title: "After board import", body: "New board body",
+        ...(shape.typename !== "DraftIssue" ? { number: 7, repository: { nameWithOwner: repo } } : {}),
+      },
+    }] } } } });
+  }, async () => {
+    const run = async (options: Record<string, boolean> = {}) => (await ext.runCommand({ command: "github project import", args: ["o/1"], pmRoot: root, options })).result;
+    assert.deepEqual(await run({ "dry-run": true }), { dryRun: true, project: "o/1", wouldImport: 0, wouldUpdate: 1, planned: 1 });
+    assert.deepEqual(await bytes(root, local.id), initial);
+    assert.deepEqual(await run(), { imported: 0, updated: 1, skipped: 0, project: "o/1", planned: 1 });
+    const item = (await get(local.id, {}, { pmRoot: root })).item;
+    assert.equal(item.title, "After board import");
+    assert.equal(item.status, "closed");
+    if (shape.typename === "DraftIssue") assert.equal(item.body?.trim(), "New board body");
+    assert.deepEqual(githubOwnershipClaims(item).owners, ["o/r#7"]);
+    assert.deepEqual(githubOwnershipClaims(item).kinds, [shape.kind]);
+    if ("replace" in shape) assert.match(item.description!, /^GH project item o\/1/);
+    else assert.equal(item.description, shape.description);
+    const after = await bytes(root, local.id);
+    const history = appendedHistory(Buffer.from(initial[1]!, "hex").toString("utf8"), Buffer.from(after[1]!, "hex").toString("utf8"));
+    assert.deepEqual(history.map(row => row.op), ["update", "close"]);
+    assert.deepEqual(await run({ "dry-run": true }), { dryRun: true, project: "o/1", wouldImport: 0, wouldUpdate: 0, planned: 1 });
+    assert.deepEqual(await run(), { imported: 0, updated: 0, skipped: 0, project: "o/1", planned: 1 });
+    assert.deepEqual(await bytes(root, local.id), after);
+  });
+}));
+
 for (const selectedConflicts of [false, true]) test(`Round12 scoped project pull ignores conflicts confined to unselected items (selected conflicts: ${selectedConflicts})`, async () => tracker(async root => {
   const selected = (await create({ title: "Selected board owner", type: "Chore", status: "open" }, { pmRoot: root })).item;
   await change(root, selected.id, { github_url: source.html_url });
@@ -222,6 +318,26 @@ for (const selectedConflicts of [false, true]) test(`Round12 scoped project pull
     const plan = buildProjectPullPlan(scoped, { owner: "o", number: 1 }, board, undefined, undefined, corpus);
     assert.deepEqual(plan.entries.map(entry => entry.pmId), [selected.id]);
   }
+}));
+
+test("Projects pull refuses a derived competing claim outside the selected items", async () => tracker(async root => {
+  const ref = { owner: "o", number: 1 };
+  const card = { id: "board", statusName: "Done", content: { typename: "Issue" as const, title: "Board", repo, number: 7 } };
+  const selected = (await create({ title: "Tagged board item", type: "Chore", tags: projectItemTag(ref, card.id) }, { pmRoot: root })).item;
+  const peer = (await create({ title: "Unselected contradictory peer", type: "Chore" }, { pmRoot: root })).item;
+  await change(root, peer.id, { github_repo: repo, github_url: "https://github.com/other/project/issues/9" });
+  const initial = (await listAllComplete({}, { pmRoot: root })).items;
+  const scoped = initial.filter(item => item.id === selected.id);
+  const [entry] = buildProjectPullPlan(scoped, ref, [card], undefined, undefined, initial).entries;
+  assert.equal(entry?.pmId, selected.id, "an unrelated derived claim leaves the unowned card writable");
+  await change(root, peer.id, { github_url: "https://github.com/other/project/issues/7" });
+  const updated = (await listAllComplete({}, { pmRoot: root })).items;
+  const before = await bytes(root, selected.id);
+  assert.throws(() => buildProjectPullPlan(scoped, ref, [card], undefined, undefined, updated), { code: "github_project_link_conflict" });
+  const outcome = await applyPullEntry(entry!, root);
+  assert.equal(outcome.changed, false);
+  assert.match(outcome.error!, /claim the same project card/);
+  assert.deepEqual(await bytes(root, selected.id), before);
 }));
 
 // Documentation is part of the public identity contract, including these deliberate limits.

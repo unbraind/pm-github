@@ -122,6 +122,30 @@ test("scheduled repeat import preserves item and history bytes after identical G
   });
 }));
 
+test("a snapshot-bound import rejects changed assignment evidence before writing", async () => tracker(async root => {
+  const repo = "fixture/project";
+  let issue = { number: 1, title: "Source issue", body: "Public source evidence.", state: "open" as const, labels: [],
+    assignee: { login: "fixture" }, milestone: { title: "Delivery" }, user: { login: "fixture" },
+    created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-02T00:00:00Z", html_url: `https://github.com/${repo}/issues/1` };
+  const deps = { fetchIssues: async () => [issue], resolveToken: () => undefined };
+  const opts = parseImportOptions({ atomic: true, gate: true, "dry-run": true });
+  const preview = await runImport(repo, root, opts, deps);
+  assert.ok("source_snapshot" in preview && preview.source_snapshot);
+  const expectSource = preview.source_snapshot;
+  const applyOptions = parseImportOptions({ atomic: true, gate: true, "expect-source": expectSource });
+  assert.equal(applyOptions.expectSource, expectSource);
+  const before = snapshot(root);
+  issue = { ...issue, milestone: { title: "Moved delivery" } };
+  await assert.rejects(runImport(repo, root, applyOptions, deps), {
+    code: "github_import_source_drift",
+  });
+  assert.equal(snapshot(root), before);
+  issue = { ...issue, milestone: { title: "Delivery" } };
+  const apply = await runImport(repo, root, { ...applyOptions, gate: false }, deps);
+  assert.equal("imported" in apply && apply.imported, 1);
+  assert.equal("source_snapshot" in apply && apply.source_snapshot, expectSource);
+}));
+
 test("unchanged import comparison includes content, type and optional assignment fields", () => {
   const source = { number: 1, title: "Source", body: "Body", state: "open" as const, labels: [], assignee: null, milestone: null,
     created_at: "2026-10-01T00:00:00Z", updated_at: "2026-10-02T00:00:00Z", html_url: "https://github.com/fixture/project/issues/1" };
