@@ -22,10 +22,10 @@ on:
         required: false
         default: "."
       post-closeout-script:
-        description: "Caller npm script after closeout. Required for generated paths on tracker changes. Otherwise a missing or empty script skips the hook"
+        description: "Caller npm post-script. Omit for automatic policy (no changelog hook on pm-changelog 2026.11.28+ unless generating artifacts). Empty disables the hook. A named script still runs."
         type: string
         required: false
-        default: "changelog:full"
+        default: "@auto"
       generated-paths:
         description: "Whitespace-separated root artifact filenames produced by the caller post-script"
         type: string
@@ -210,7 +210,7 @@ jobs:
           [[ "${SYNC_BRANCH}" == pm-github/closeout ]] || { echo "::error::Closeout branch must be pm-github/closeout."; exit 1; }
           git check-ref-format "refs/heads/${SYNC_BRANCH}"
           [[ "${SYNC_BRANCH}" != "${DEFAULT_BRANCH}" ]] || { echo "::error::The closeout bot branch cannot be the caller default branch."; exit 1; }
-          [[ -z "${POST_CLOSEOUT_SCRIPT:-}" || "${POST_CLOSEOUT_SCRIPT:-}" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.:-]*$ ]] || { echo "::error::post-closeout-script must be an npm script name, not a shell command."; exit 1; }
+          [[ -z "${POST_CLOSEOUT_SCRIPT:-}" || "${POST_CLOSEOUT_SCRIPT}" == @auto || "${POST_CLOSEOUT_SCRIPT:-}" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.:-]*$ ]] || { echo "::error::post-closeout-script must be an npm script name, not a shell command."; exit 1; }
           IFS=$' \t\n' read -r -d '' -a generated_paths < <(printf '%s\0' "${GENERATED_PATHS:-}")
           if [[ -n "${generated_paths[0]:-}" && -z "${POST_CLOSEOUT_SCRIPT:-}" ]]; then
             echo "::error::generated-paths requires a caller npm post-script."
@@ -381,8 +381,8 @@ jobs:
           '
 
       # The explicit publication allowlist is the SDK-resolved tracker (except
-      # extensions, locks, checkpoints and extension setup files) and CHANGELOG.md. Nothing else may
-      # change, even if unstaged or untracked. Keep all boundaries on this list.
+      # extensions, locks, checkpoints and extension setup files), declared
+      # artifacts and, for legacy callers, CHANGELOG.md.
       - name: Resolve sync commit scope
         shell: bash
         run: |
@@ -390,7 +390,23 @@ jobs:
           PM_SYNC_TRACKER="$(cd "${NPM_PROJECT_PATH}" && node --input-type=module -e 'import { resolvePmRoot } from "@unbrained/pm-cli/sdk"; import { relative } from "node:path"; const p = relative(process.env.GITHUB_WORKSPACE, resolvePmRoot(process.env.GITHUB_WORKSPACE)); if (!p || p === ".." || p.startsWith("../") || /[\r\n]/.test(p)) throw new Error("Sync tracker must be inside the repository"); process.stdout.write(p);')"
           export PM_SYNC_TRACKER
           printf 'PM_SYNC_TRACKER=%s\n' "${PM_SYNC_TRACKER}" >> "${GITHUB_ENV}"
-          cat > "${RUNNER_TEMP}/pm-github-sync-scope.sh" <<'SCOPE'
+          # Probe the caller's installed CLI once, before applying tracker writes.
+          # Record only the verdict; help output is never published or sourced.
+          node --input-type=module -e '
+            import { execFileSync } from "node:child_process";
+            import { join } from "node:path";
+            const cwd = process.env.NPM_PROJECT_PATH;
+            let supportsPending = false;
+            try {
+              const help = execFileSync(join(cwd, "node_modules/.bin/pm-changelog"), ["--help"], {
+                cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"],
+                timeout: 10000, maxBuffer: 65536, killSignal: "SIGKILL",
+              });
+              supportsPending = /^[ \t]+--check-pending(?:[ \t]|$)/m.test(help);
+            } catch { /* Missing or unusable caller CLI retains legacy policy. */ }
+            console.log("legacy_changelog=" + !supportsPending);
+          ' > "${RUNNER_TEMP}/pm-github-sync-scope.sh"
+          cat >> "${RUNNER_TEMP}/pm-github-sync-scope.sh" <<'SCOPE'
           report_workflow_failure() {
             local report_file="$1" error_file="$2" diff_file="${3:-/dev/null}"
             local diagnostic="${RUNNER_TEMP}/pm-github-diagnostic.json" patch="${RUNNER_TEMP}/pm-github-diagnostic.patch" compatibility_hint=""
@@ -413,21 +429,24 @@ jobs:
           }
           # Diagnostics can use this helper before the tracker is resolved.
           [[ -n "${PM_SYNC_TRACKER:-}" ]] || return 0
-          mapfile -t sync_scope < <(printf '%s\n' \
+          legacy_changelog="${legacy_changelog:-true}"
+          mapfile -t tracker_scope < <(printf '%s\n' \
             ":(top,literal)${PM_SYNC_TRACKER}" \
-            ':(top,literal)CHANGELOG.md' \
             ":(top,exclude,literal)${PM_SYNC_TRACKER}/extensions" \
             ":(top,exclude,literal)${PM_SYNC_TRACKER}/locks" \
             ":(top,exclude,literal)${PM_SYNC_TRACKER}/checkpoints" \
             ":(top,exclude,literal)${PM_SYNC_TRACKER}/settings.json" \
             ":(top,exclude,literal)${PM_SYNC_TRACKER}/history/_workspace.jsonl")
-          tracker_scope=("${sync_scope[0]}" "${sync_scope[@]:2}")
           IFS=$' \t\n' read -r -d '' -a generated_paths < <(printf '%s\0' "${GENERATED_PATHS:-}")
           generated_scope=()
           for generated_path in "${generated_paths[@]}"; do
             generated_scope+=(":(top,literal)${generated_path}")
           done
-          sync_scope+=("${generated_scope[@]}")
+          sync_scope=("${tracker_scope[0]}")
+          if [[ "${legacy_changelog}" == true ]]; then
+            sync_scope+=(':(top,literal)CHANGELOG.md')
+          fi
+          sync_scope+=("${tracker_scope[@]:1}" "${generated_scope[@]}")
           check_generated_paths_clean() {
             [[ -n "${generated_paths[0]:-}" ]] || return 0
             local changed generated_path
@@ -474,8 +493,29 @@ jobs:
               fi
             done
           }
+          caller_changelog_status() {
+            git --literal-pathspecs status --porcelain=v1 --untracked-files=all --ignored=matching -- CHANGELOG.md
+          }
+          check_pending_changelog_clean() {
+            [[ "${legacy_changelog}" == false ]] || return 0
+            local changed
+            changed="$(caller_changelog_status)" || return 1
+            if [[ -n "${changed}" || ( -d CHANGELOG.md && ! -L CHANGELOG.md ) ]]; then
+              echo "::error::Changed path outside sync commit scope: CHANGELOG.md"
+              return 1
+            fi
+          }
+          restore_caller_changelog() {
+            if git cat-file -e HEAD:CHANGELOG.md 2>/dev/null; then
+              git --literal-pathspecs restore --source=HEAD --staged --worktree -- CHANGELOG.md
+            else
+              git --literal-pathspecs rm -q --cached --ignore-unmatch -- CHANGELOG.md
+              rm -f -- CHANGELOG.md
+            fi
+          }
           check_sync_scope() {
-            check_sync_setup_clean
+            check_sync_setup_clean || return 1
+            check_pending_changelog_clean || return 1
             local entry path failed=0
             git status --porcelain=v1 -z --untracked-files=all > "${RUNNER_TEMP}/pm-github-sync-status"
             while IFS= read -r -d '' entry; do
@@ -494,7 +534,7 @@ jobs:
                   "$1" == "${PM_SYNC_TRACKER}/locks" || "$1" == "${PM_SYNC_TRACKER}/locks/"* || \
                   "$1" == "${PM_SYNC_TRACKER}/checkpoints" || "$1" == "${PM_SYNC_TRACKER}/checkpoints/"* ]]; then
               : # Runtime paths are deliberately outside the publication allowlist.
-            elif [[ "$1" == "${PM_SYNC_TRACKER}/"* || "$1" == CHANGELOG.md ]]; then
+            elif [[ "$1" == "${PM_SYNC_TRACKER}/"* || ( "$1" == CHANGELOG.md && "${legacy_changelog}" == true ) ]]; then
               return 0
             fi
             local generated_path
@@ -506,7 +546,7 @@ jobs:
           }
           changelog_policy_hash() {
             local index_hash worktree_hash
-            index_hash="$(git ls-files --stage -z -- "${sync_scope[@]}" | sha256sum)" || return 1
+            index_hash="$(git ls-files --stage -z -- "${sync_scope[@]}" ':(top,literal)CHANGELOG.md' | sha256sum)" || return 1
             # Hash raw bytes in addition to index entries so clean filters cannot
             # hide changes from the policy, and new paths and deletions are visible.
             worktree_hash="$(
@@ -561,10 +601,44 @@ jobs:
               fi
             done
           }
+          run_caller_post_script() {
+            local script="$1" have_candidate="$2" changed
+            check_pending_changelog_clean || return 1
+            if [[ "${legacy_changelog}" == true ]]; then
+              echo "::notice::Keeping legacy changelog behavior. Install pm-changelog 2026.11.28 or newer for tracker-only changelog publication."
+            fi
+            if [[ "${script}" == @auto ]]; then
+              if [[ "${legacy_changelog}" == false && -z "${generated_paths[0]:-}" ]]; then
+                return 0
+              fi
+              script=changelog:full
+            elif [[ "${script}" == changelog:full && "${legacy_changelog}" == false ]]; then
+              echo "::notice::Explicit changelog:full is deprecated for changelog-only automation. The hook still runs and its CHANGELOG.md output is discarded. Omit the override if it only regenerates the changelog."
+            fi
+            if [[ -n "${generated_paths[0]:-}" ]]; then
+              run_generated_post_script "${script}" "${have_candidate}"
+            elif [[ -n "${script}" ]]; then
+              (cd "${NPM_PROJECT_PATH}" && npm run --if-present "${script}")
+            else
+              return 0
+            fi
+            if [[ "${legacy_changelog}" == false ]]; then
+              # The clean precondition makes this hook's output safe to discard.
+              # Reject a directory instead of treating nested files as changelog output.
+              if [[ -d CHANGELOG.md && ! -L CHANGELOG.md ]]; then
+                check_pending_changelog_clean || return 1
+              fi
+              changed="$(caller_changelog_status)"
+              if [[ -n "${changed}" ]]; then
+                restore_caller_changelog
+              fi
+            fi
+          }
           gate_sync_change() {
             check_sync_scope
             stage_sync_paths "${tracker_scope[@]}" "${generated_scope[@]}"
-            if [[ -e CHANGELOG.md ]] || git ls-files --error-unmatch -- CHANGELOG.md >/dev/null 2>&1; then
+            if [[ "${legacy_changelog}" == true ]] &&
+              { [[ -e CHANGELOG.md ]] || git ls-files --error-unmatch -- CHANGELOG.md >/dev/null 2>&1; }; then
               git --literal-pathspecs add -- CHANGELOG.md
             fi
             git diff --cached --name-only -z --no-renames -- "${sync_scope[@]}" > "${RUNNER_TEMP}/pm-github-sync-commit-paths"
@@ -682,18 +756,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "${GENERATED_PATHS:-}" =~ [^[:space:]] ]]; then
-            source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
-            have_candidate=true
-            if [[ "${CLOSEOUT_CLOSED}" == 0 && "${CLOSEOUT_REVIEW:-0}" == 0 ]]; then have_candidate=false; fi
-            run_generated_post_script "${POST_CLOSEOUT_SCRIPT}" "${have_candidate}"
-          elif [[ -n "${POST_CLOSEOUT_SCRIPT}" ]]; then
-            (cd "${NPM_PROJECT_PATH}" && npm run --if-present "${POST_CLOSEOUT_SCRIPT}")
-          fi
+          source "${RUNNER_TEMP}/pm-github-sync-scope.sh"
+          have_candidate=true
+          if [[ "${CLOSEOUT_CLOSED}" == 0 && "${CLOSEOUT_REVIEW:-0}" == 0 ]]; then have_candidate=false; fi
+          run_caller_post_script "${POST_CLOSEOUT_SCRIPT:-}" "${have_candidate}"
 
       # Check every changed path immediately after the caller script. Extension
       # setup files stay outside the patch and are restored before publication.
-      - name: Gate tracker and regenerated changelog
+      - name: Gate proposed commit
         shell: bash
         run: |
           set -euo pipefail
@@ -713,7 +783,7 @@ jobs:
             exit 0
           fi
           if ! (cd "${NPM_PROJECT_PATH}" && npm run --if-present changelog:check); then
-            echo "::error::Caller changelog policy failed (npm run changelog:check). Verify that the declared post-script produces the expected changelog."
+            echo "::error::Caller changelog policy failed (npm run changelog:check). Verify the caller uses a read-only policy that accepts the proposed changes."
             exit 1
           fi
           after="$(changelog_policy_hash)"
@@ -806,12 +876,7 @@ jobs:
             # Changelog drift alone belongs to the caller's changelog check;
             # publish regenerated output only alongside tracker changes.
             if ! git diff --cached --quiet -- CHANGELOG.md; then
-              if git cat-file -e HEAD:CHANGELOG.md 2>/dev/null; then
-                git --literal-pathspecs restore --source=HEAD --staged --worktree -- CHANGELOG.md
-              else
-                git --literal-pathspecs rm -q --cached --ignore-unmatch -- CHANGELOG.md
-                rm -f -- CHANGELOG.md
-              fi
+              restore_caller_changelog
               echo "::notice::The caller's changelog differs from a fresh regeneration; the repository's own changelog:check owns that drift. Discarding CHANGELOG.md because no tracker item changed."
             fi
             restore_sync_setup
@@ -859,10 +924,10 @@ jobs:
             counts="$(jq -r '"close \(.counts.close), skip \(.counts.skip), refuse \(.counts.refuse), needs_review \(.counts.needs_review)"' "${summary_file}")"
             if [[ "$(jq -r '.counts.close' "${summary_file}")" != 0 ]]; then
               printf '%s\n' "chore(pm): close items delivered by merged pull requests"
-              printf '%s\n' "The closeout command verified delivery and head checks for closed items; needs_review items remain open with every candidate listed below. The proposed tracker change and regenerated changelog passed the fail-closed privacy gate before anything was committed. \`${DEFAULT_BRANCH}\` is never pushed directly."
+              printf '%s\n' "The closeout command verified delivery and head checks for closed items; needs_review items remain open with every candidate listed below. The proposed commit passed the fail-closed privacy gate before anything was committed. \`${DEFAULT_BRANCH}\` is never pushed directly."
             else
               printf '%s\n' "chore(pm): record merged-PR closeout review candidates"
-              printf '%s\n' "No items were closed by this closeout run; it records merged-PR closeout review candidates only. Plan actions: ${counts}; needs_review items remain open with every candidate listed below. The proposed tracker change and regenerated changelog passed the fail-closed privacy gate before anything was committed. \`${DEFAULT_BRANCH}\` is never pushed directly."
+              printf '%s\n' "No items were closed by this closeout run; it records merged-PR closeout review candidates only. Plan actions: ${counts}; needs_review items remain open with every candidate listed below. The proposed commit passed the fail-closed privacy gate before anything was committed. \`${DEFAULT_BRANCH}\` is never pushed directly."
             fi
           }
           mapfile -t closeout_publication < <(closeout_publication_text)

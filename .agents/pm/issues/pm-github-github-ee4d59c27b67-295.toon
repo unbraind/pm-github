@@ -1,0 +1,61 @@
+id: pm-github-github-ee4d59c27b67-295
+title: "Gated sync commits a regenerated CHANGELOG.md in every sync PR; once pm-changelog treats Unreleased as pending, commit tracker files only"
+description: "GH issue #295: https://github.com/unbraind/pm-github/issues/295 · author @unbraind · created 2026-11-27T10:45:12Z · updated 2026-11-27T10:45:48Z"
+type: Issue
+status: open
+priority: 2
+tags[2]: "gh:unbraind/pm-github#295","github_author:unbraind"
+created_at: "2026-11-27T10:45:12Z"
+updated_at: "2026-11-27T21:39:02.846Z"
+author: pm-github
+comments[7]:
+  - created_at: "2026-11-27T20:27:44.831Z"
+    author: codex-agent
+    text: "Tracing both reusable workflows and reproducing the changelog conflict in an isolated Git fixture before changing the publication scope. Compatibility must preserve named caller scripts, explicitly disabled hooks, and declared generated outputs."
+  - created_at: "2026-11-27T20:36:29.803Z"
+    author: codex-agent
+    text: "Confirmed nine cited gated-sync pull requests include CHANGELOG.md. The compatibility fixture now publishes only the imported item and history with the pending-aware build, passes the caller check, and both remaining proposals merge cleanly after the first sibling lands. The workflow probe reads only the caller-local launcher. Automatic legacy defaults, explicit scripts and artifact generation retain their invocation contract."
+  - created_at: "2026-11-27T20:39:45.655Z"
+    author: codex-agent
+    text: Follow-up #300 tracks the existing caller pins and the pm-vcs bundle generator that stages the regenerated changelog before computing its artifact. The independent strict-wrapper exit decisions already have unbraind/pm-changelog#385. No downstream workflow or package was edited.
+  - created_at: "2026-11-27T20:42:27.392Z"
+    author: codex-agent
+    text: "Revert proof with pre-fix workflow behavior and the pending-aware main changelog build: the sync candidate conflicted after merging sibling one. Both explicit hook controls also failed on the missing deprecation and the migration contract failed against the pre-fix docs. The fixed sibling test passed with a tracker-only push into the disposable remote and a pending-only caller check."
+  - created_at: "2026-11-27T20:55:21.821Z"
+    author: codex-agent
+    text: "Isolated behavior reverts failed 5/5 checks: removing automatic legacy generation failed the real tagged sync and closeout checks, skipping the explicit hook failed its pre-hook assertion in both workflows, and dropping restoration rejected the modern closeout artifact proposal at the changed-path gate. The same fixed cases passed with the Bun-installed archives in the PM-linked run, which passed 11/11. The two real tarballs exposed the expected capability under npm and native Bun launchers."
+  - created_at: "2026-11-27T21:12:07.189Z"
+    author: codex-agent
+    text: Both publication path tests failed when the old allowlist included CHANGELOG.md and passed after restoring pending mode. The offline fixture and both real packed npm and Bun caller runs passed. The shared object-store privacy gate surfaced four identity findings on two older unreachable commits outside every named ref. The isolated base and staged patch audits passed on 4665 and 4682 objects respectively.
+    edited_at: "2026-11-27T21:13:40.373Z"
+  - created_at: "2026-11-27T21:39:00.807Z"
+    author: codex-agent
+    text: "Local targeted evidence covers 1025 tests: the main batch reported 992/996, including all 186 closeout decision cases. The two setup refusals loaded the earlier helper and passed 2/2 on the final helper. Both shared-store privacy failures passed in the 26/26 isolated rerun. The two additional workflow-reference files passed 29/29. The npm and Bun packed cases each passed 11/11, and the offline fixture and scope controls passed 3/3. Typecheck, test typecheck, lint and identity inventory passed. CI will verify the pushed head."
+files[8]{path,scope}:
+  .github/workflows/pm-github-closeout.yml,project
+  .github/workflows/pm-github-sync.yml,project
+  test/attestation-workflow-operands.test.ts,project
+  test/changelog-placement.test.ts,project
+  test/closeout-workflow-decisions.ts,project
+  test/closeout-workflow-publication.ts,project
+  test/helpers/closeout-workflow.ts,project
+  test/import-gate.test.ts,project
+tests[1]{command,scope,timeout_seconds,provenance{author,created_at,source_kind,source_ref}}:
+  node --test --test-concurrency=2 --test-name-pattern='gated sync publishes pending tracker changes|caller templates and migration guidance|pending policy skips the automatic hook|regenerated output passes the caller policy|closeout pending policy publishes|closeout publishes a declared generated artifact|closeout policy rejects caller changes to a generated artifact' test/changelog-placement.test.ts test/import-gate.test.ts test/closeout-workflow.test.ts,project,600,codex-agent,"2026-11-27T20:42:18.699Z",local_mutation,feat/sync-commits-tracker-files-only
+docs[5]{path,scope}:
+  docs/changelog-release-placement.md,project
+  docs/closeout-workflow-caller.yml,project
+  docs/identity-ownership-inventory.md,project
+  docs/sync-workflow-caller.yml,project
+  README.md,project
+github_close_reason: ""
+github_closed_at: ""
+github_created_at: "2026-11-27T10:45:12Z"
+github_link_only: false
+github_number: 295
+github_release: ""
+github_state: open
+github_state_reason: unspecified
+github_updated_at: "2026-11-27T10:45:48Z"
+github_url: "https://github.com/unbraind/pm-github/issues/295"
+body: "## Problem\n\nThe gated sync runs the caller's `post-import-script` (default `changelog:full`) and commits the regenerated `CHANGELOG.md` in the sync PR. Each sync PR therefore edits the same `## Unreleased` hunk as every other open PR in the repository. Merging any of them makes the others conflict or fail `changelog:check`. The regenerated file is also where reviewers find real regressions that have nothing to do with the imported issues.\n\nOpen sync PRs on 2026-11-27, with Sourcery findings in `CHANGELOG.md` only:\n\n- pm-beads#233 and pm-presets#219: \"Dependency updates disappear from changelog\"\n- pm-brief#224: the same, plus duplicate records\n- pm-web#344: \"Current release disappears from changelog\"\n- pm-ops#332: \"Closure appears under wrong date\"\n\npm-glossary#47, pm-web#344, pm-vcs#217, pm-vcs#211, pm-swarm#81 and pm-slack-standup#202 also have red or dirty checks from the same drift.\n\n## Proposal (after pm-changelog#384 is released)\n\npm-changelog#384 makes `changelog:check` treat the `Unreleased` section as pending, so a PR no longer has to commit its own changelog entry. Once that is released:\n\n- the gated sync commits **only tracker files** (`.agents/pm/**`) plus any declared `generated-paths`;\n- the `post-import-script` default becomes empty;\n- when a caller still passes `changelog:full`, the sync warns once that the step is redundant and skips writing `CHANGELOG.md`, or the input is deprecated with a clear notice;\n- the next release regenerates `CHANGELOG.md` as it does today.\n\nThe closeout workflow should do the same if it also regenerates `CHANGELOG.md`.\n\n## Acceptance\n\n- A sync of a real fixture repository with two open sibling PRs produces a PR that changes no `CHANGELOG.md`. After one sibling merges, the sync PR and the other sibling both stay mergeable.\n- The caller's `changelog:check` passes on the sync PR with pm-changelog ≥ the #384 release.\n- The README and the workflow input docs explain the change. The template caller and the migration note for callers that pass `post-import-script` explicitly are updated.\n- Every new behaviour has a test that fails on revert.\n\nBlocked by unbraind/pm-changelog#384."

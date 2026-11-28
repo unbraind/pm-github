@@ -676,7 +676,7 @@ test("the reusable sync workflow is a workflow_call with an optional legacy vers
   assert.match(workflow, /^on:\n  workflow_call:/m);
   assert.match(workflow, /pm-github-version:\n\s+description:[^\n]+\n\s+type: string\n\s+required: false/);
   assert.match(workflow, /repository:\n\s+description:/);
-  assert.match(workflow, /post-import-script:[\s\S]*?default: "changelog:full"/);
+  assert.match(workflow, /post-import-script:[\s\S]*?default: "@auto"/);
   assert.match(workflow, /ci-workflows:[\s\S]*?default: "ci.yml codeql.yml"/);
   assert.doesNotMatch(workflow, /^on:\n  schedule:/m, "the schedule stays with the caller");
   // Job permissions cover issue reads, branch pushes, review PR writes and dispatch.
@@ -697,7 +697,7 @@ test("the caller default branch guard is first and preserves the remaining step 
     "Configure PM merge drivers", "Isolate workflow setup artifacts", "Verify gate is available", "Validate GitHub access",
     "Revalidate GitHub blockers (report only)", "Preview GitHub to pm plan",
     "Gated GitHub to pm import", "Verify repeat import is a no-op", "Run caller post-import script",
-    "Gate tracker and regenerated changelog", "Check caller changelog policy", "Verify strict pm health",
+    "Gate proposed commit", "Check caller changelog policy", "Verify strict pm health",
     "Create automation app token", "Validate publication credentials",
     "Commit gated sync changes and open review PR", "Dispatch caller CI and report parked runs",
     "Confirm caller CI registration and summarize handoff",
@@ -810,7 +810,7 @@ test("the gated import runs after validate/plan and before health, commit, and p
   assert.ok(install < validate, "the pinned extension is installed before it is used");
   assert.ok(validate < plan && plan < gated, "validate and dry-run plan precede the gated import");
   const postImport = stepOffset("Run caller post-import script");
-  const privacyGate = stepOffset("Gate tracker and regenerated changelog");
+  const privacyGate = stepOffset("Gate proposed commit");
   const callerCheck = stepOffset("Check caller changelog policy");
   const dispatch = stepOffset("Dispatch caller CI and report parked runs");
   assert.ok(gated < postImport && postImport < privacyGate && privacyGate < callerCheck && callerCheck < health && health < commit && commit < dispatch,
@@ -1012,13 +1012,92 @@ esac
 }
 
 const WORKFLOW_IMPORT_SEQUENCE = ["Resolve sync commit scope", "Validate GitHub access", "Revalidate GitHub blockers (report only)", "Preview GitHub to pm plan", "Gated GitHub to pm import",
-  "Verify repeat import is a no-op", "Run caller post-import script", "Gate tracker and regenerated changelog", "Check caller changelog policy",
+  "Verify repeat import is a no-op", "Run caller post-import script", "Gate proposed commit", "Check caller changelog policy",
   "Verify strict pm health", "Validate publication credentials", "Commit gated sync changes and open review PR", "Dispatch caller CI and report parked runs"] as const;
 
 // Core unit tests above run in both tiers; exhaustive shell scenarios keep
 // their original registrations and assertions, with a deterministic quick prefix.
 const importWorkflowCorpus = workflowCorpus(test, "import-workflow");
 const workflowTest = importWorkflowCorpus.test;
+
+
+test("gated sync publishes pending tracker changes and stays mergeable after a sibling merge", async () => {
+  const { root, base, bare, git } = initSyncRepo();
+  try {
+    const installedBin = process.env.PM_GITHUB_TEST_PENDING_CHANGELOG_BIN;
+    // Without an external artifact, exercise workflow policy and the real Git
+    // publication boundary with a self-contained pending-aware caller.
+    const generator = path.join(root, "fixture-changelog.cjs");
+    fs.writeFileSync(generator, [
+      'const fs = require("node:fs");',
+      'if (process.argv.includes("--help")) { console.log("  --check-pending  Strict check"); process.exit(0); }',
+      'if (process.argv.includes("--check")) { console.error("pending_only"); process.exit(0); }',
+      'const pending = fs.readdirSync(".agents/pm/issues").some(name => name.endsWith(".toon"));',
+      'fs.writeFileSync("CHANGELOG.md", "# Changelog\\n\\n## Unreleased\\n\\n" + (pending ? "- Synced delivery\\n\\n" : "") + "## 2026.9.2 - 2026-09-02\\n\\nNo changes.\\n");',
+    ].join("\n"));
+    const full = installedBin
+      ? "pm-changelog --pm-root .agents/pm --mode replace --output CHANGELOG.md --status closed --all-release-tags --release-version-from-package --date-from-version --include-empty"
+      : "node fixture-changelog.cjs";
+    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ version: "2026.9.2",
+      scripts: { "changelog:full": full, "changelog:check": "npm run changelog:full -- --check" } }));
+    assert.equal(git(["add", "--", "package.json", "fixture-changelog.cjs"]).status, 0);
+    assert.equal(spawnSync("git", ["commit", "-qm", "Configure caller changelog"], { cwd: root,
+      env: { ...process.env, GIT_AUTHOR_DATE: "2026-09-02T12:00:00Z", GIT_COMMITTER_DATE: "2026-09-02T12:00:00Z" } }).status, 0);
+    assert.equal(git(["tag", "v2026.9.2"]).status, 0);
+    const env = await prepareWorkflowFixture(root, base);
+    const bin = path.join(root, "node_modules/.bin/pm-changelog");
+    if (installedBin) fs.symlinkSync(installedBin, bin);
+    else fs.writeFileSync(bin, "#!/usr/bin/env bash\nexec node fixture-changelog.cjs \"$@\"\n", { mode: 0o755 });
+    const baseline = await executeWorkflow("npm run changelog:full", root, env);
+    assert.equal(baseline.code, 0, baseline.stdout + baseline.stderr);
+    const baselinePath = path.join(root, "CHANGELOG.md");
+    const rendered = fs.readFileSync(baselinePath, "utf8");
+    if (!/^## Unreleased$/m.test(rendered)) fs.writeFileSync(baselinePath, rendered.replace(/^## /m, "## Unreleased\n\n## "));
+    assert.equal(git(["add", "--", "CHANGELOG.md"]).status, 0);
+    assert.equal(git(["commit", "-qm", "Record released changelog"]).status, 0);
+    assert.equal(git(["push", "-q", "origin", "main"]).status, 0);
+
+    const changelog = path.join(root, "CHANGELOG.md");
+    const initial = fs.readFileSync(changelog, "utf8");
+    assert.equal(git(["switch", "-c", "sibling-one"]).status, 0);
+    assert.match(initial, /^## Unreleased$/m);
+    fs.writeFileSync(changelog, initial.replace(/^## Unreleased$/m, "## Unreleased\n\n- Another pending change"));
+    assert.equal(git(["commit", "-qam", "First sibling proposal"]).status, 0);
+    assert.equal(git(["switch", "-c", "sibling-two", "main"]).status, 0);
+    fs.writeFileSync(path.join(root, "sibling.txt"), "Independent proposal\n");
+    assert.equal(git(["add", "--", "sibling.txt"]).status, 0);
+    assert.equal(git(["commit", "-qm", "Second sibling proposal"]).status, 0);
+    assert.equal(git(["push", "-q", "origin", "sibling-one", "sibling-two"]).status, 0);
+    assert.equal(git(["switch", "-c", SYNC_BRANCH, "main"]).status, 0);
+    const automatic = /post-import-script:\n(?:[^\n]+\n){3}\s+default: "([^"]*)"/.exec(workflow)?.[1];
+    assert.notEqual(automatic, undefined);
+    const handle = githubHandler([{ ...issue(1, "Synced delivery", null), state: "closed",
+      state_reason: "completed", closed_at: "2026-10-02T00:00:00Z" }]);
+    await withMockGithub((req, res, url, server) => {
+      if (req.url === "/repos/acme/widgets") jsonResponse(res, 200, { private: false });
+      else handle(req, res, url, server);
+    }, async server => {
+      const result = await executeWorkflow(workflowShell(WORKFLOW_IMPORT_SEQUENCE), root,
+        { ...env, POST_IMPORT_SCRIPT: automatic, CI_WORKFLOWS: "", PM_GITHUB_API_BASE: server.baseUrl });
+      assert.equal(result.code, 0, result.stdout + result.stderr);
+      assert.match(result.stdout, /> (?:\S+ )?changelog:check$/m);
+    });
+    assert.deepEqual(remoteRefs(bare), ["refs/heads/" + SYNC_BRANCH, "refs/heads/main", "refs/heads/sibling-one", "refs/heads/sibling-two"].sort());
+    assert.deepEqual(fs.readFileSync(env.REVIEW_ACTIONS!, "utf8").trim().split("\n"), ["create"]);
+    const paths = git(["diff", "--name-only", "main", SYNC_BRANCH]).stdout.trim().split("\n");
+    assert.equal(git(["switch", "main"]).status, 0);
+    assert.equal(git(["merge", "--ff-only", "sibling-one"]).status, 0);
+    assert.equal(git(["merge-tree", "--write-tree", "main", SYNC_BRANCH]).status, 0, "sync should merge after sibling one");
+    assert.equal(git(["merge-tree", "--write-tree", "main", "sibling-two"]).status, 0, "sibling two should still merge");
+    assert.equal(paths.length, 2);
+    assert.ok(paths.every(file => /^\.agents\/pm\/(?:issues\/.*\.toon|history\/.*\.jsonl)$/.test(file)), paths.join("\n"));
+    assert.equal(git(["merge", "--no-commit", "--no-ff", SYNC_BRANCH]).status, 0);
+    assert.equal(fs.readFileSync(changelog, "utf8"), initial.replace(/^## Unreleased$/m, "## Unreleased\n\n- Another pending change"));
+    const merged = await executeWorkflow("npm run changelog:check", root, env);
+    assert.equal(merged.code, 0, merged.stdout + merged.stderr);
+    assert.match(merged.stderr, /pending_only/i);
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
 
 for (const mode of ["declared", "undeclared", "disabled", "mixed", "private"] as const) {
   test(`generated artifact consumer: ${mode} sync hook and committed bundle`, async () => {
@@ -1681,7 +1760,12 @@ for (const directory of [".", "tests/oracle"]) {
       // npm must ignore the failing lifecycle script and preserve both manifests.
       assert.equal(fs.readFileSync(path.join(project, "package.json"), "utf8"), manifest);
       assert.equal(fs.readFileSync(path.join(project, "package-lock.json"), "utf8"), lock);
-      const post = await executeWorkflow(workflowShell(["Run caller post-import script"]), root, env);
+      assert.equal(spawnSync("git", ["init", "-q", root]).status, 0);
+      const scope = path.join(project, "node_modules/@unbrained");
+      fs.mkdirSync(scope, { recursive: true });
+      fs.symlinkSync(path.join(repoRoot, "node_modules/@unbrained/pm-cli"), path.join(scope, "pm-cli"));
+      const post = await executeWorkflow(workflowShell(["Resolve sync commit scope", "Run caller post-import script"]), root,
+        { ...env, RUNNER_TEMP: base, PM_PATH: path.join(root, ".agents/pm") });
       assert.equal(post.code, 0, post.stdout + post.stderr);
       assert.equal(fs.readFileSync(env.NPM_RECEIPT!, "utf8"), project);
       if (directory === ".") {
@@ -1981,9 +2065,10 @@ workflowTest("post-import script can be overridden or disabled and defaults tole
   try {
     fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ scripts: { custom: "node custom.cjs" } }));
     fs.writeFileSync(path.join(root, "custom.cjs"), 'require("node:fs").writeFileSync("CHANGELOG.md", "custom");\n');
-    const shell = workflowShell(["Run caller post-import script"]);
+    const env = await prepareWorkflowFixture(root, base);
+    const shell = workflowShell(["Resolve sync commit scope", "Run caller post-import script"]);
     for (const script of ["changelog:full", "", "custom"]) {
-      const result = await executeWorkflow(shell, root, { ...process.env, NPM_PROJECT_PATH: root, POST_IMPORT_SCRIPT: script });
+      const result = await executeWorkflow(shell, root, { ...env, POST_IMPORT_SCRIPT: script });
       assert.equal(result.code, 0, result.stderr);
       assert.equal(fs.existsSync(path.join(root, "CHANGELOG.md")), script === "custom");
     }

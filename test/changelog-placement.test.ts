@@ -11,7 +11,7 @@ import { parseImportOptions, runImport, type GhIssue } from "../index.ts";
 
 const source = resolve(import.meta.dirname, "..");
 const cli = join(source, "node_modules/.bin/pm");
-const generator = join(source, "node_modules/pm-changelog/dist/cli.js");
+const generator = process.env.PM_GITHUB_TEST_LEGACY_CHANGELOG_BIN ?? join(source, "node_modules/.bin/pm-changelog");
 const repo = "fixture/project";
 const completed = "2026-10-15T12:00:00Z";
 
@@ -36,8 +36,21 @@ test("wrapper guidance preserves caller changelog policy", () => {
   assert.match(readme, /adds flags or sets environment variables, keep the wrapper and override or move that policy into \x60changelog:full\x60/);
 });
 
+test("caller templates and migration guidance select automatic changelog handling", () => {
+  const readme = readFileSync(join(source, "README.md"), "utf8").replace(/\s+/g, " ");
+  assert.match(readme, /explicit \x60changelog:full\x60 override when it only regenerates the changelog/);
+  assert.match(readme, /A strict \x60--check-pending\x60 check can reject the proposed changes/);
+  for (const [kind, input] of [["sync", "post-import-script"], ["closeout", "post-closeout-script"]]) {
+    const documentation = readFileSync(join(source, `docs/${kind}-workflow-caller.yml`), "utf8");
+    const contract = readFileSync(join(source, `.github/workflows/pm-github-${kind}.yml`), "utf8");
+    assert.ok(documentation.includes(`Omit ${input} for automatic selection`));
+    assert.ok(!documentation.split("\n").some(line => line.trimStart().startsWith(`${input}:`)));
+    assert.match(contract, /description: "Caller npm post-script\. Omit .*pm-changelog 2026\.11\.28\+.*Empty disables.*named script still runs/);
+  }
+});
+
 /** Execute the production post-script and caller policy steps with real npm. */
-function postScript(kind: string, root: string, script = "changelog:full") {
+function postScript(kind: string, root: string, script = "@auto") {
   const workflow = readFileSync(join(source, `.github/workflows/pm-github-${kind}.yml`), "utf8");
   const steps = workflow.split("      - name: ");
   const names = ["Resolve sync commit scope", `Run caller post-${kind === "sync" ? "import" : "closeout"} script`, "Check caller changelog policy"];
@@ -82,6 +95,8 @@ for (const kind of ["closeout", "sync"]) {
         assert.equal(spawnSync(cli, ["--pm-path", pmRoot, "init", "--defaults", "--agent-guidance", "skip"], { cwd: root }).status, 0);
         mkdirSync(join(root, "node_modules/@unbrained"), { recursive: true });
         symlinkSync(join(source, "node_modules/@unbrained/pm-cli"), join(root, "node_modules/@unbrained/pm-cli"), "junction");
+        mkdirSync(join(root, "node_modules/.bin"));
+        symlinkSync(generator, join(root, "node_modules/.bin/pm-changelog"));
         writeFileSync(join(root, "package.json"), JSON.stringify({ version: "2026.9.2", scripts: {
           "changelog:full": `node ${JSON.stringify(generator)} --stdin --pm-root .agents/pm --mode replace --output CHANGELOG.md --all-release-tags --include-empty --release-version-from-package --date-from-version`,
           "changelog:check": "npm run changelog:full -- --check",
@@ -114,6 +129,7 @@ for (const kind of ["closeout", "sync"]) {
         const result = postScript(kind, root);
         assert.equal(result.status, 0, result.stdout + result.stderr);
         assert.match(result.stdout, /> changelog:check/);
+        assert.equal(result.stdout.match(/::notice::Keeping legacy changelog behavior.*2026\.11\.28/g)?.length, 1);
         const changelog = readFileSync(join(root, "CHANGELOG.md"), "utf8");
         const sections = changelog.split(/^## /m).slice(1);
         const releases = sections.filter(section => /^\d{4}\.\d+\.\d+\b/.test(section));
@@ -139,4 +155,50 @@ for (const kind of ["closeout", "sync"]) {
       } finally { rmSync(root, { recursive: true, force: true }); }
     });
   }
+}
+
+for (const kind of ["sync", "closeout"]) {
+  test(`${kind}: pending policy skips the automatic hook and preserves explicit npm lifecycle hooks`, () => {
+    const root = mkdtempSync(join(tmpdir(), "placement-explicit-"));
+    const changelog = join(root, "CHANGELOG.md");
+    const scripts = {
+      "changelog:full": "printf 'regenerated\\n' > CHANGELOG.md && git add -- CHANGELOG.md",
+      "prechangelog:full": "echo 'pre hook ran'",
+      "postchangelog:full": "echo 'post hook ran'",
+    };
+    const env = { ...process.env, GIT_AUTHOR_NAME: "Fixture", GIT_COMMITTER_NAME: "Fixture",
+      GIT_AUTHOR_EMAIL: "fixture@users.noreply.github.com", GIT_COMMITTER_EMAIL: "fixture@users.noreply.github.com" };
+    try {
+      assert.equal(spawnSync("git", ["init", "-q"], { cwd: root }).status, 0);
+      mkdirSync(join(root, "node_modules/@unbrained"), { recursive: true });
+      symlinkSync(join(source, "node_modules/@unbrained/pm-cli"), join(root, "node_modules/@unbrained/pm-cli"));
+      mkdirSync(join(root, "node_modules/.bin"));
+      const launcher = join(root, "node_modules/.bin/pm-changelog");
+      const installed = process.env.PM_GITHUB_TEST_PENDING_CHANGELOG_BIN;
+      if (installed) symlinkSync(installed, launcher);
+      else writeFileSync(launcher, "#!/usr/bin/env bash\nprintf '  --check-pending  Strict check\\n'\n", { mode: 0o755 });
+      writeFileSync(join(root, "package.json"), JSON.stringify({ scripts }));
+      writeFileSync(changelog, "Original\n");
+      assert.equal(spawnSync("git", ["add", "--", "CHANGELOG.md", "package.json"], { cwd: root }).status, 0);
+      assert.equal(spawnSync("git", ["commit", "-qm", "Caller input"], { cwd: root, env }).status, 0);
+
+      for (const input of ["@auto", "", "changelog:full"]) {
+        const result = postScript(kind, root, input);
+        assert.equal(result.status, 0, result.stdout + result.stderr);
+        if (input === "changelog:full") {
+          assert.match(result.stdout, /pre hook ran/);
+          assert.match(result.stdout, /post hook ran/);
+          assert.equal(result.stdout.match(/::notice::Explicit changelog:full is deprecated/g)?.length, 1);
+        } else assert.doesNotMatch(result.stdout, /hook ran|regenerated/);
+        assert.equal(readFileSync(changelog, "utf8"), "Original\n");
+        assert.equal(spawnSync("git", ["diff", "--cached", "--exit-code"], { cwd: root }).status, 0);
+      }
+      writeFileSync(changelog, "Unsaved caller edit\n");
+      const result = postScript(kind, root, "changelog:full");
+      assert.equal(result.status, 1, result.stdout + result.stderr);
+      assert.match(result.stdout, /Changed path outside sync commit scope: CHANGELOG\.md/);
+      assert.doesNotMatch(result.stdout, /hook ran/);
+      assert.equal(readFileSync(changelog, "utf8"), "Unsaved caller edit\n");
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
 }

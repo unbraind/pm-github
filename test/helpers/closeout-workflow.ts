@@ -280,7 +280,7 @@ ${shell(name, source)}
 
 export const setup = ["Disarm previous closeout auto-merge", "Require caller default branch", "Validate closeout inputs", "Validate npm project directory", "Prepare sync branch from default branch",
   "Install dependencies", "Resolve sync commit scope", "Require clean setup artifacts", "Install pinned pm-github extension", "Configure PM merge drivers", "Isolate workflow setup artifacts", "Verify gate is available"];
-export const finish = ["Close delivered tracker items", "Run caller post-closeout script", "Gate tracker and regenerated changelog", "Check caller changelog policy", "Verify strict pm health",
+export const finish = ["Close delivered tracker items", "Run caller post-closeout script", "Gate proposed commit", "Check caller changelog policy", "Verify strict pm health",
   "Validate publication credentials", "Commit gated closeout changes and open review PR", "Dispatch caller CI and report parked runs"];
 
 /** No remote bot ref is the publication invariant for every refused or no-op run. */

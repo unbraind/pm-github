@@ -1229,19 +1229,18 @@ large repositories. Terminal items are skipped and the command retains its
 normal eligibility, child/epic, required-check and strict-close rules. Full
 closeout reports stay in runner scratch storage. The PR body lists
 actionable rows with item, PR number, action and code, plus skip counts by reason.
-This compact summary passes its own privacy scan before publication. The caller's `post-closeout-script` defaults to `changelog:full`,
-run through `npm run --if-present` in the npm project after closeout writes.
-Without `generated-paths`, an empty value disables generation. After the privacy scan, the workflow runs
-the same project's `changelog:check` if present when it has tracker changes to
-publish. If the check rejects the output, the workflow fails before committing.
-The script can regenerate the root `CHANGELOG.md` and any root artifacts explicitly
-named in `generated-paths`. Closeout commits the changed outputs with the tracker
-changes. See the [shared generated-path rules](#automated-sync-workflow).
+This compact summary passes its own privacy scan before publication. The
+`post-closeout-script` input uses the same automatic policy as
+`post-import-script`. With pm-changelog 2026.11.28 or later, closeout normally
+publishes the tracker and any declared artifacts. Older callers can also
+publish their regenerated root changelog. The caller's read-only
+`changelog:check` still runs after the scan when tracker changes are ready to
+publish. See the [shared post-script and migration rules](#automated-sync-workflow).
 
 | Safety boundary | Closeout and sync parity |
 | --- | --- |
 | Entry and install | Caller default-branch guard, contained npm project, exact package version, SHA-pinned Actions, no persisted checkout credentials |
-| Proposed publication | SDK-resolved tracker, root changelog and declared generated files. The workflow excludes setup, extension, lock and checkpoint files and checks every changed path. |
+| Proposed publication | SDK-resolved tracker, declared generated files and, for legacy callers, root changelog. The workflow excludes setup, extension, lock and checkpoint files and checks every changed path. |
 | Privacy | Same fail-closed full-context staged-diff scan after the caller script and immediately before commit; unreadable input refuses publication |
 | Validation | Strict PM health; explicit item/history scope committed together |
 | Branch and PR | Explicit force-with-lease against the observed bot ref; push only bot branch; owned PR lookup excludes forks |
@@ -1356,9 +1355,9 @@ for reliable caller CI invocation with `GITHUB_TOKEN`
 
 The reusable workflow's first step resolves the caller's default branch using the repository API with the job token, falling back to `github.event.repository.default_branch` only when present. Scheduled payloads need no `repository` object. If neither source provides a valid branch, the job fails closed with a clear error before checkout. It requires `github.ref` to equal `refs/heads/<resolved-default-branch>`. A mismatch fails before checkout or any sync operation with a one-line error naming both refs. Scheduled calls and manual `workflow_dispatch` calls on the default branch are accepted; manual dispatches selecting another branch are refused. Checkout, sync-branch preparation, PR lookup/base and tracker links all use that resolved branch, including defaults such as `trunk` or `release/stable`. Callers need no guard of their own. Repin the reusable workflow to a release commit containing this guard to receive it.
 
-Fleet repos sync their issues into pm through ONE audited implementation: the reusable `workflow_call` workflow at [`.github/workflows/pm-github-sync.yml`](.github/workflows/pm-github-sync.yml). Its safety order is validate → dry-run plan → **gated import** → verify the repeat import is a no-op → caller post-import script → **full changed-path scope check and privacy gate** → caller changelog check for tracker changes → strict health → repeat scope check and scan immediately before commit/push/review PR → caller CI dispatch. The default `post-import-script` is `changelog:full`, invoked with `npm run --if-present`: it runs the caller's own generator when present, so imported closed issues and their changelog entries land in the same commit. Actions are pinned by commit SHA. The sync job requests `contents: write`, `pull-requests: write`, `issues: read`, and `actions: write` for dispatch. The separate failure-issue job inherits the caller grant and needs `issues: write` to create or update one tracking issue and close it after recovery. An owned alert is authored by GitHub Actions (`github-actions[bot]`) and carries the hidden body marker `<!-- pm-github-sync-status -->`. The job also recognizes legacy bot alerts by exact title and adds the marker on the next failure. It leaves same-title issues from other authors untouched and reports them in the job summary. The visible body contains the failing step, current-attempt run URL and rule names. Older read-only callers keep syncing but cannot write alerts; updating a workflow pin cannot elevate their permissions. See [daily sync recovery](docs/daily-sync-recovery.md) for source triage, no-op guarantees and rollout requirements.
+Fleet repos sync their issues into pm through ONE audited implementation: the reusable `workflow_call` workflow at [`.github/workflows/pm-github-sync.yml`](.github/workflows/pm-github-sync.yml). Its safety order is validate → dry-run plan → **gated import** → verify the repeat import is a no-op → caller post-import script → **full changed-path scope check and privacy gate** → caller changelog check for tracker changes → strict health → repeat scope check and scan immediately before commit/push/review PR → caller CI dispatch. Actions are pinned by commit SHA. The sync job requests `contents: write`, `pull-requests: write`, `issues: read`, and `actions: write` for dispatch. The separate failure-issue job inherits the caller grant and needs `issues: write` to create or update one tracking issue and close it after recovery. An owned alert is authored by GitHub Actions (`github-actions[bot]`) and carries the hidden body marker `<!-- pm-github-sync-status -->`. The job also recognizes legacy bot alerts by exact title and adds the marker on the next failure. It leaves same-title issues from other authors untouched and reports them in the job summary. The visible body contains the failing step, current-attempt run URL and rule names. Older read-only callers keep syncing but cannot write alerts; updating a workflow pin cannot elevate their permissions. See [daily sync recovery](docs/daily-sync-recovery.md) for source triage, no-op guarantees and rollout requirements.
 
-After validation succeeds, a run with no tracker changes skips the caller changelog check and discards any regenerated `CHANGELOG.md` drift. The sync closes any owned open review PR and exits without pushing or dispatching CI. Changelog changes are published together with tracker changes.
+After validation succeeds, a run with no tracker changes skips the caller changelog check and discards any regenerated `CHANGELOG.md` drift. The sync closes any owned open review PR and exits without pushing or dispatching CI. Legacy changelog changes are published only alongside tracker changes.
 
 The workflow passes the preview's source snapshot to both the apply and the
 repeat import. Source drift stops the run before publication. The repeat must
@@ -1374,7 +1373,7 @@ Before extension and attributes setup, both reusable maintenance workflows requi
 The explicit allowed scope for changed paths is:
 
 - Files beneath the SDK-resolved repository-local pm tracker, excluding its `extensions/`, `locks/`, and `checkpoints/` runtime directories. The extension setup files `settings.json` and `history/_workspace.jsonl` are permitted during setup, then restored before publication and excluded from both the scan and commit.
-- The repository-root `CHANGELOG.md`.
+- For a legacy caller, the repository-root `CHANGELOG.md`.
 - Repository-root files explicitly named in `generated-paths`, after the caller's post-script generates them for a tracker change.
 
 After the caller script and again immediately before committing, `git status --porcelain=v1 -z --untracked-files=all` enumerates staged, unstaged, and untracked changes, including both sides of renames. Every path outside this list produces an error and prevents publication. Allowed changes are staged and the privacy gate scans the exact NUL-delimited path list passed to `git commit --only --pathspec-from-file` with literal pathspecs. The final scan is regenerated from current content; any finding, unreadable input, or script failure prevents publication. The restricted commit also excludes unrelated staged content if a scope check is bypassed.
@@ -1386,34 +1385,50 @@ Optional inputs:
 | `pm-github-version` | workflow release version | Deprecated exact extension hold. The selected release must supply `source_snapshot` at gated preview and accept `--expect-source` on apply and repeat. |
 | `adopt-cited` | `false` | Explicitly enable conservative normalized citation adoption for preview, import and repeat verification. Use `github_url` to link an owner explicitly. Leave false to retain normal creates with read-only candidate hints. |
 | `npm-project-dir` | `.` | Relative npm project directory for `npm ci --ignore-scripts`, the CLI `node_modules/.bin` PATH entry, and `post-import-script`. Must have `package.json`, contain no `..` segments, and resolve inside the workspace (including symlinks); invalid paths fail before caching/install. The tracker and publication scope stay at the repository root. |
-| `post-import-script` | `changelog:full` | Caller npm script name invoked after import and before the final scan. With no generated paths, missing scripts are skipped and `""` disables the hook. Raw shell commands are not accepted. When tracker changes are ready to publish, the workflow runs the same project's `changelog:check` if present. |
-| `generated-paths` | `""` | Whitespace-separated literal filenames at the repository root. Each name starts with an ASCII letter, digit or underscore and may also contain periods and hyphens. `CHANGELOG.md` has its own scope. The input rejects dotfiles, nested paths, and reserved root filenames case-insensitively. Reserved names include `package.json` and standard dependency lockfile names such as `package-lock.json`, `Package.resolved`, and `pylock.toml`. The same input works with `post-closeout-script` in the closeout workflow. |
+| `post-import-script` | Automatic | Omit to select the caller's changelog policy. An empty string disables the hook when no artifacts are declared. A named npm script runs after import and before the final scan. Missing scripts are skipped unless generated paths are declared. The same project's `changelog:check` runs when tracker changes are ready to publish. |
+| `generated-paths` | `""` | Whitespace-separated literal filenames at the repository root. Each name starts with an ASCII letter, digit or underscore and may also contain periods and hyphens. The legacy changelog has its own scope. The input rejects dotfiles, nested paths, and reserved root filenames case-insensitively. Reserved names include `package.json` and standard dependency lockfile names such as `package-lock.json`, `Package.resolved`, and `pylock.toml`. The same input works with `post-closeout-script` in the closeout workflow. |
 | `automation-app-client-id` | `""` | Optional GitHub App client ID, paired with the `automation_app_private_key` workflow-call secret. Enables eligible native PR runs through a fresh repo-scoped token; absent credentials retain GITHUB_TOKEN with a notice. |
 | `ci-workflows` | `ci.yml codeql.yml` | Explicit whitespace-separated filename override in the caller's `.github/workflows`. Missing/non-dispatchable workflows are reported; zero dispatchable workflows fails. Empty disables dispatch and auto-merge. See the CI and landing contract above. |
 
-Both workflows run the caller's declared post-script without adding arguments.
-With `generated-paths`, the workflow starts from clean output paths, stages
-the tracker for generators that enumerate indexed files, and requires the
-named npm script to succeed when there are tracker changes to publish.
-Each declared output must then be a regular, publishable file. No-op runs skip
-this generator. Changed outputs join the tracker and changelog in one commit
-and go through the same fail-closed privacy scan. The caller's
-`changelog:check` and its npm lifecycle hooks must leave those files unchanged
-through staging and commit.
-After upgrading, callers can remove the `changelog:automation` wrapper and its
-input override only if the wrapper solely delegates to `changelog:full` and
-neither `prechangelog:automation` nor `postchangelog:automation` is defined.
-If the wrapper adds flags or sets environment variables, keep the wrapper and
-override or move that policy into `changelog:full`. If it has lifecycle hooks,
-keep the wrapper and override or preserve the hook behavior in the
-`changelog:full` lifecycle before removing them.
+Both workflows probe the installed `pm-changelog` launcher in
+`npm-project-dir` for `--check-pending`. With that capability, introduced in
+pm-changelog 2026.11.28, the automatic hook is empty unless there are declared
+generated paths. The commit contains the tracker and declared generated files.
+A missing launcher or an older CLI retains `changelog:full` as the automatic
+hook, with one notice naming the minimum version. Release generation continues
+to write the complete changelog.
+
+Explicit scripts still run without added arguments, including npm lifecycle
+hooks. With a pending-aware caller, the workflow restores any root
+`CHANGELOG.md` output from the hook before checking and committing. The
+caller's `changelog:check` and its lifecycle hooks must be read-only. A strict
+`--check-pending` check can reject the proposed changes and prevent publication.
+
+After upgrading, omit an explicit `changelog:full` override when it only
+regenerates the changelog. Both workflows emit a deprecation notice for the
+explicit name with a pending-aware caller. Callers can remove the `changelog:automation`
+wrapper and its input override only if the wrapper solely delegates to
+`changelog:full` and neither `prechangelog:automation` nor
+`postchangelog:automation` is defined. If it adds flags or sets environment
+variables, keep the wrapper and override or move that policy into
+`changelog:full`. Keep any declared artifact or lifecycle hook behavior in an
+explicit script.
+
+With `generated-paths`, the workflow starts from clean output paths and stages
+the tracker for generators that enumerate indexed files. On a tracker change,
+the selected npm script must succeed and leave each declared output as a regular,
+publishable file. Omission retains `changelog:full` for this case. No-op runs skip
+the artifact generator. Changed artifacts join the tracker in one commit and
+pass the same fail-closed privacy scan.
 
 For a package that commits a source bundle, set `generated-paths: selfhost.bundle`
-and `post-import-script: self-host:write` under `with:`. If the bundle also
-includes the changelog, select a caller npm script such as `pm-sync:generate`
-that runs `npm run changelog:full && npm run self-host:write` in that order.
-Generators that enumerate Git's index should also stage a newly created
-changelog before reading the candidate tree.
+and `post-import-script: self-host:write` under `with:`. For a pending-aware
+caller, build a bundle that includes the changelog from the committed
+`CHANGELOG.md` and the proposed tracker files. Those are the bytes available
+when checking the resulting commit. A legacy caller can use a script such as
+`pm-sync:generate` that runs `changelog:full` before generating the bundle.
+Generators that enumerate the index should stage a legacy changelog before
+reading the candidate tree.
 
 A fleet repo owns the schedule and calls it with a pinned release SHA (see [`docs/sync-workflow-caller.yml`](docs/sync-workflow-caller.yml)):
 
@@ -1445,8 +1460,8 @@ Replace `RELEASE_COMMIT_SHA` with a reviewed release commit containing this chan
 For a caller such as `unbraind/pm-rust` with no root `package.json`, add
 `npm-project-dir: tests/oracle` under `with:`. Its `tests/oracle/package.json`
 provides the CLI and post-import npm script; Git and pm tracker operations still
-run from the repository root. A script that regenerates the changelog must write
-the repository-root `CHANGELOG.md` to stay within the publication allowlist.
+run from the repository root. A legacy changelog generator writes the
+repository-root `CHANGELOG.md`, which is the path accepted by both workflows.
 
 Bot-created PRs using GITHUB_TOKEN may have `pull_request` runs parked in
 `action_required`. The optional App token makes publication start native

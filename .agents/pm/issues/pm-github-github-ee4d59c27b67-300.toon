@@ -1,0 +1,21 @@
+id: pm-github-github-ee4d59c27b67-300
+title: Roll out tracker-only sync and closeout to reusable workflow callers
+description: "GH issue #300: https://github.com/unbraind/pm-github/issues/300 · author @unbraind · created 2026-11-27T20:38:36Z · updated 2026-11-27T20:39:01Z"
+type: Issue
+status: open
+priority: 2
+tags[2]: "gh:unbraind/pm-github#300","github_author:unbraind"
+created_at: "2026-11-27T20:38:36Z"
+updated_at: "2026-11-27T20:39:31.646Z"
+author: pm-github
+github_close_reason: ""
+github_closed_at: ""
+github_created_at: "2026-11-27T20:38:36Z"
+github_link_only: false
+github_number: 300
+github_release: ""
+github_state: open
+github_state_reason: unspecified
+github_updated_at: "2026-11-27T20:39:01Z"
+github_url: "https://github.com/unbraind/pm-github/issues/300"
+body: "Tracks the caller rollout for #295 after releases of pm-changelog and the reusable pm-github workflows are available.\n\nThe audited caller workflows in pm-beads, pm-presets, pm-brief, pm-web, pm-ops, pm-glossary, pm-vcs, pm-swarm and pm-slack-standup currently pin the older workflow behavior. Repin those callers and verify that tracker-only sync and closeout candidates pass the consuming project's checks. Remove explicit `changelog:full` overrides only when their sole purpose is regenerating the changelog. Retain custom checks such as pm-presets' `closeout:check`.\n\npm-vcs is a coupled artifact caller. Its sync and closeout call `self-host:tracker-candidate`, which regenerates and stages `CHANGELOG.md` before writing `selfhost.bundle`. Its bundle verification includes the committed changelog. Update the workflow-only generator to build from the staged tracker and committed changelog when adopting tracker-only publication. Verify the bundle against the resulting commit, and keep release-time generation intact.\n\nThe independently strict caller changelog checks in pm-ops, pm-slack, pm-gantt-chart and pm-review are already tracked in unbraind/pm-changelog#385. Validate the caller's read-only exit policy before repinning a workflow that relies on a custom check."
