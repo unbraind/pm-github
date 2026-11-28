@@ -2,6 +2,7 @@ import { type GithubOwnershipIndex, buildGithubOwnershipIndex, warnGithubOwnersh
 import { parseGithubUrl } from "./github-url.ts";
 import { canonicalGithubStatus, githubStatusKind, type GithubStatusRegistry } from "./workspace.ts";
 import { ownValue } from "./own-record.ts";
+import { EXIT_CODE, PmCliError } from "@unbrained/pm-cli/sdk";
 // pm-github — GitHub Projects v2 support (pure logic layer).
 //
 // GitHub Projects v2 is a GraphQL-only API, structurally different from the REST
@@ -332,6 +333,17 @@ export function mapOptionNameToPmStatus(
 // Indexing helpers
 // ---------------------------------------------------------------------------
 
+/** Describe the association conflict without inferring effects of earlier mutations. */
+function projectLinkConflict(reason: string): PmCliError {
+  return new PmCliError(`${reason} Resolve the conflicting GitHub Projects links and retry.`,
+    EXIT_CODE.USAGE, { code: "github_project_link_conflict" });
+}
+
+/** Use the same repository key for matching wrapped issues in every planner. */
+function projectIssueKey(content: ProjectItemContent): string | undefined {
+  return content.repo && typeof content.number === "number" ? `${content.repo.toLowerCase()}#${content.number}` : undefined;
+}
+
 /**
  * Index pm items by the project-item id they are linked to, scoped to one board.
  *
@@ -592,6 +604,13 @@ function indexProjectItemMap(projectItems: ProjectItem[]): Map<string, ProjectIt
   return m;
 }
 
+/** Collect each distinct tracker claimant for a board or issue key. */
+function addProjectClaim(claims: Map<string, Set<PmItemLike>>, key: string, item: PmItemLike): void {
+  const owners = claims.get(key) ?? new Set<PmItemLike>();
+  owners.add(item);
+  claims.set(key, owners);
+}
+
 // ---------------------------------------------------------------------------
 // Pull plan (project -> pm status)
 // ---------------------------------------------------------------------------
@@ -605,27 +624,86 @@ export interface PullPlanEntry {
 }
 
 /**
- * Index the selected items by the issue each one owns, checking their claims against the complete owner
- * corpus for the board's repositories. Only selected items are looked up, so a conflict between two
- * unselected items that the plan never touches cannot abort it, while a selected item that conflicts with
- * an unselected peer still refuses.
+ * Resolve one-to-one links using project tags and issue ownership together.
+ * Include unselected peers in claims, but refuse their local conflicts only
+ * when a selected item also claims the card.
  */
-function indexSelectedByIssue(selected: PmItemLike[], corpus: PmItemLike[], projectItems: ProjectItem[], ref: ProjectRef): { ownership: GithubOwnershipIndex; pmByIssue: Map<string, PmItemLike>; pmByItemId: Map<string, PmItemLike> } {
+function indexSelectedByIssue(
+  selected: PmItemLike[], corpus: PmItemLike[], projectItems: ProjectItem[], ref: ProjectRef,
+  options: { writeTargets?: Set<string> } = {},
+): {
+  ownership: GithubOwnershipIndex;
+  pmByItemId: Map<string, PmItemLike>;
+  projectByPmId: Map<string, ProjectItem>;
+} {
+  const writeTargets = options.writeTargets ?? new Set(projectItems.map(item => item.id));
+  const cards = projectItems.filter(card => card.id);
+  const nodes = indexProjectItemMap(cards);
+  if (nodes.size !== cards.length) throw projectLinkConflict("The board returned a duplicate project card.");
+  const wrapped = cards.filter(card => writeTargets.has(card.id) && projectIssueKey(card.content));
+  const issues = indexProjectItemsByIssue(wrapped);
+  if (issues.size !== wrapped.length) throw projectLinkConflict("Multiple project cards wrap the same GitHub issue.");
   const ownership = buildGithubOwnershipIndex(corpus.filter((item): item is PmItemLike => Boolean(item)), projectItems.flatMap(item => item.content.repo ? [item.content.repo] : []));
-  const issues = new Set(projectItems.flatMap(item => item.content.repo && item.content.number ? [`${item.content.repo.toLowerCase()}#${item.content.number}`] : []));
-  const nodes = new Set(projectItems.map(item => item.id));
-  const candidates = selected.filter(item => ownershipStateOf(ownership, item).claims.some(key => issues.has(key)) || (item.tags ?? []).some(tag => {
-    const parsed = parseProjectItemTag(tag);
-    return parsed && parsed.owner === ref.owner.toLowerCase() && parsed.number === ref.number && nodes.has(parsed.itemId);
-  }));
-  warnGithubOwnershipScope(ownership, candidates);
-  return { ownership, pmByIssue: indexPmByIssue(candidates, ownership), pmByItemId: indexPmByProjectItem(candidates, ref) };
+  const selectedIds = new Set(selected.map(item => item.id));
+  const peers = new Map<string, PmItemLike>(ownership.byId);
+  for (const item of selected) if (item.id) peers.set(item.id, item);
+  const byIssue = new Map<string, Set<PmItemLike>>();
+  const byCard = new Map<string, Set<PmItemLike>>();
+  const boardCandidates: PmItemLike[] = [];
+  const issueCandidates: PmItemLike[] = [];
+  for (const item of peers.values()) {
+    const state = ownershipStateOf(ownership, item);
+    const links = [...indexPmByProjectItem([item], ref).keys()].filter(id => nodes.has(id));
+    if (selectedIds.has(item.id)) {
+      const claimsIssue = state.claims.some(key => issues.has(key));
+      if (claimsIssue) issueCandidates.push(item);
+      if (claimsIssue || links.length) boardCandidates.push(item);
+    }
+    for (const key of state.claims) addProjectClaim(byIssue, key, item);
+    for (const id of links) addProjectClaim(byCard, id, item);
+  }
+  warnGithubOwnershipScope(ownership, boardCandidates);
+  for (const item of issueCandidates) githubOwnedIdentityKeys(item, ownership);
+  const pmByItemId = new Map<string, PmItemLike>();
+  const projectByPmId = new Map<string, ProjectItem>();
+  for (const card of nodes.values()) {
+    const key = projectIssueKey(card.content);
+    const owners = new Set([...(byCard.get(card.id) ?? []), ...(byIssue.get(key ?? "") ?? [])]);
+    const target = [...owners].find(item => selectedIds.has(item.id));
+    if (!target) continue;
+    pmByItemId.set(card.id, target);
+    if (!writeTargets.has(card.id)) continue;
+    if (owners.size !== 1) throw projectLinkConflict("Multiple tracker items claim the same project card.");
+    if (projectByPmId.has(target.id!)) throw projectLinkConflict("Multiple project cards claim the same tracker item.");
+    projectByPmId.set(target.id!, card);
+  }
+  return { ownership, pmByItemId, projectByPmId };
 }
 
-const projectPullOwners = new WeakMap<object, readonly string[]>();
+/** The board identity and eligible cards used to authorize a local mutation. */
+export interface ProjectWriteScope {
+  ref: ProjectRef;
+  cards: ProjectItem[];
+  writeTargets?: Set<string>;
+}
 
-/** Preserve the planning snapshot's owner decision without adding content to public plan rows. */
-export function getProjectPullOwners(entry: object): readonly string[] | undefined { return projectPullOwners.get(entry); }
+const projectWriteBindings = new WeakMap<object, { scope: ProjectWriteScope; owners: readonly string[] }>();
+
+/** Copy the provider identities so later edits to caller-owned objects cannot change a plan's authority. */
+function projectWriteScope(ref: ProjectRef, cards: ProjectItem[], writeTargets?: Set<string>): ProjectWriteScope {
+  return { ref: { ...ref }, cards: cards.map(card => ({ ...card, content: { ...card.content } })), writeTargets };
+}
+
+/** Retain private mutation authority without adding fields to public plan receipts. */
+export function getProjectWriteBinding(entry: object): { scope: ProjectWriteScope; owners: readonly string[] } | undefined {
+  return projectWriteBindings.get(entry);
+}
+
+/** Resolve the planned board association again using the writer's current peer corpus. */
+export function assertProjectWriteBinding(scope: ProjectWriteScope, cardId: string | undefined, item: PmItemLike, peers: readonly PmItemLike[]): void {
+  const { projectByPmId } = indexSelectedByIssue([item], [...peers], scope.cards, scope.ref, { writeTargets: scope.writeTargets });
+  if (projectByPmId.get(item.id!)?.id !== cardId) throw projectLinkConflict("The tracker item's project card link changed after planning.");
+}
 
 /** Board-to-tracker status changes and board options that require an explicit mapping. */
 export interface PullPlan {
@@ -645,29 +723,28 @@ export function buildProjectPullPlan(
   statuses?: GithubStatusRegistry,
   corpus: PmItemLike[] = pmItems,
 ): PullPlan {
-  const { ownership, pmByIssue, pmByItemId } = indexSelectedByIssue(pmItems, corpus, projectItems, ref);
+  const mapped = new Map(projectItems.map(card => [card.id, mapOptionNameToPmStatus(card.statusName, statusMap, statuses)]));
+  const writeTargets = new Set([...mapped].filter(([, status]) => status !== undefined).map(([id]) => id));
+  const { ownership, pmByItemId } = indexSelectedByIssue(pmItems, corpus, projectItems, ref, { writeTargets });
+  const scope = projectWriteScope(ref, projectItems, writeTargets);
   const entries: PullPlanEntry[] = [];
   const statusSkipped: PullPlan["statusSkipped"] = [];
 
   for (const pi of projectItems) {
-    let pm = pmByItemId.get(pi.id);
-    if (!pm && pi.content.repo && typeof pi.content.number === "number") {
-      pm = pmByIssue.get(`${pi.content.repo.toLowerCase()}#${pi.content.number}`);
-    }
-    if (!pm || !pm.id || !pmItems.some(selected => selected.id === pm!.id)) continue; // unlinked project items are handled by import
-    if (pi.content.repo && pi.content.number && ownershipStateOf(ownership, pm).evidence) {
-      assertGithubOwnershipConsistency(pm, { id: pm.id, repo: pi.content.repo, number: pi.content.number }, ownership);
-    }
-
-    const toStatus = mapOptionNameToPmStatus(pi.statusName, statusMap, statuses);
+    const pm = pmByItemId.get(pi.id);
+    if (!pm?.id) continue; // unlinked project items are handled by import
+    const toStatus = mapped.get(pi.id);
     if (!toStatus) {
       if (pi.statusName) statusSkipped.push({ itemId: pi.id, optionName: pi.statusName });
       continue;
     }
+    if (pi.content.repo && pi.content.number && ownershipStateOf(ownership, pm).evidence) {
+      assertGithubOwnershipConsistency(pm, { id: pm.id, repo: pi.content.repo, number: pi.content.number }, ownership);
+    }
     const fromStatus = canonicalGithubStatus(pm.status ?? "open", statuses);
     if (fromStatus === toStatus) continue;
     const entry = { itemId: pi.id, pmId: pm.id, title: pm.title ?? "(untitled)", fromStatus, toStatus };
-    projectPullOwners.set(entry, githubOwnedIdentityKeys(pm, ownership));
+    projectWriteBindings.set(entry, { scope, owners: githubOwnedIdentityKeys(pm, ownership) });
     entries.push(entry);
   }
 
@@ -710,12 +787,13 @@ export function buildProjectImportPlan(
   statusMap?: Map<string, string>,
   statuses?: GithubStatusRegistry,
 ): ImportPlanEntry[] {
-  const { ownership, pmByIssue, pmByItemId } = indexSelectedByIssue(pmItems, pmItems, projectItems.filter(item => item.content.typename !== "Unknown"), ref);
+  const candidates = projectItems.filter(item => item.id && item.content.typename !== "Unknown");
+  const { ownership, pmByItemId } = indexSelectedByIssue(pmItems, pmItems, candidates, ref);
+  const scope = projectWriteScope(ref, candidates);
   const plan: ImportPlanEntry[] = [];
 
-  for (const pi of projectItems) {
+  for (const pi of candidates) {
     const c = pi.content;
-    if (c.typename === "Unknown") continue; // redacted / inaccessible content
     const title = (c.title || "").trim() || `(project item ${pi.id})`;
 
     // Prefer the board's Status; fall back to the wrapped issue's own state.
@@ -732,10 +810,7 @@ export function buildProjectImportPlan(
       }
     }
 
-    let existing = pmByItemId.get(pi.id);
-    if (!existing && c.repo && typeof c.number === "number") {
-      existing = pmByIssue.get(`${c.repo.toLowerCase()}#${c.number}`);
-    }
+    const existing = pmByItemId.get(pi.id);
 
     if (existing?.id && c.repo && c.number && ownershipStateOf(ownership, existing).evidence) {
       assertGithubOwnershipConsistency(existing, { id: existing.id, repo: c.repo, number: c.number }, ownership);
@@ -753,7 +828,7 @@ export function buildProjectImportPlan(
     }
     const tags = [...new Set([...(existing?.tags ?? []), ...provenance])];
 
-    plan.push({
+    const entry: ImportPlanEntry = {
       action: existing?.id ? "update" : "create",
       itemId: pi.id,
       title,
@@ -763,7 +838,9 @@ export function buildProjectImportPlan(
       tags,
       pmId: existing?.id,
       content: c,
-    });
+    };
+    projectWriteBindings.set(entry, { scope, owners: existing ? githubOwnedIdentityKeys(existing, ownership) : [] });
+    plan.push(entry);
   }
   return plan;
 }

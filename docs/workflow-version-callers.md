@@ -3,7 +3,7 @@
 Public default-branch contents API scan completed: 2026-11-14 09:14 UTC.
 Scanned 37 canonical fleet repository names and read 217 workflow files through `gh api repos/unbraind/<repo>/contents/.github/workflows/<file>`. Private repositories are excluded. No caller was edited.
 
-Migration: in each caller, move the workflow pin to the release containing #238 **and remove `pm-github-version` in the same change**. A pin update alone keeps every stale input below as an explicit hold, so the caller would go on installing the older extension (now with a warning). Keep the Dependabot-maintained workflow SHA and its same-line release comment. Keep an input only as a deliberate hold; it installs the requested version and warns when it differs from the workflow release.
+Migration: in each caller, move the workflow pin to the release containing #238 **and remove `pm-github-version` in the same change**. A pin update alone keeps every stale input below as an explicit hold, so the caller would go on installing the older extension (now with a warning). Keep the Dependabot-maintained workflow SHA and its same-line release comment. A deliberate hold still selects the installed version. With the snapshot-bound sync workflow, the selected extension must emit `source_snapshot` at gated preview and accept `--expect-source` on apply and repeat. A hold without this support, such as `2026.11.26`, stops at preview. Update the workflow to a compatible published release and remove the old hold, or pin a compatible published extension.
 
 | Caller | Workflow file | Reusable workflow | Current pin | Pin comment | Input version |
 | --- | --- | --- | --- | --- | --- |

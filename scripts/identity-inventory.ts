@@ -13,6 +13,8 @@ const additional = new Map([
   ["import-fidelity.ts/legacyGithubDescriptionIdentity", "Legacy native declaration identity: anchored at description start, first complete issue/PR URL, with trailing punctuation removed. No link-only marker or whole-description match is required."],
   ["import-fidelity.ts/githubLinkReferences", "Reference extraction only: supported link fields expose prose and API URL mentions, never owner claims or an import target."],
   ["projects.ts/indexSelectedByIssue", "Build one complete ownership index, then validate only selected tracker items matched by current board issue keys or project-item IDs. Off-board conflicts warn; a peer claiming a board candidate still refuses."],
+  ["projects.ts/assertProjectWriteBinding", "Resolve the original board scope against the current tracker item and peers. Refuse a changed, missing or competing association at the mutation boundary."],
+  ["index.ts/runProjectImport", "Preserve a verified legacy description that names the planned issue or PR owner. Projects tags retain board provenance, and create, update and close recheck the current association under the native lock."],
   ["import-ownership.ts/bareGithubUrlKey", "A plain canonical URL is contextual beside a verified importer mirror of the same kind and issue. Corroborated provenance and standalone explicit owners retain their guards."],
   ["import-references.ts/referenceKeys", "Read whole GitHub reference tags and explicit URLs to discover related items. These locators authorize no ownership change."],
   ["import-references.ts/applyLocalIssueReferences", "Write native related edges on guarded mirrors only, with the citing endpoints rechecked in the mirror write hook."],

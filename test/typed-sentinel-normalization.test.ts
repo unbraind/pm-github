@@ -8,6 +8,7 @@ import { normalizeItemId, getHistoryPath, PmClient } from "@unbrained/pm-cli/sdk
 import { normalizeImportValue } from "../import-fidelity.ts";
 import { deriveAtomicItemId, parseImportOptions, runImport, type GhIssue } from "../index.ts";
 import { captureStderr, withEnv } from "./helpers/mock-github-server.ts";
+import { appendedHistory } from "./helpers/history-assertions.ts";
 
 test("GH-1614 importer normalization preserves literal typed assignee identities", async (t) => {
   const cwd = mkdtempSync(join(tmpdir(), "github-typed-identities-"));
@@ -96,10 +97,7 @@ test("GH-1614 existing owner restores literal source assignee after update then 
     assert.equal(current.assignee, "none");
     assert.equal(current.sprint, "null");
     const history = readFileSync(historyPath, "utf8");
-    assert.ok(history.startsWith(historyBefore), "retain the existing owner's history");
-    const events = history.slice(historyBefore.length).trim().split("\n").map(line => JSON.parse(line) as {
-      op: string; patch: { op: string; path: string; value?: unknown }[];
-    });
+    const events = appendedHistory(historyBefore, history);
     const update = events.findIndex(event => event.op === "update");
     const close = events.findIndex(event => event.op === "close");
     const restore = events.findIndex(event => event.op === "import");

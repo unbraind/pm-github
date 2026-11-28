@@ -69,6 +69,24 @@ for (const atomic of [false, true]) test(`random issue sets imported twice produ
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
 
+test("plain import does not plan a write solely to change a creation-only item type", async () => {
+  const root = mkdtempSync(join(tmpdir(), "plain-import-type-"));
+  try {
+    const initialized = spawnSync(join(packageRoot, "node_modules/.bin/pm"), ["--path", root, "init", "fixture"], { encoding: "utf8" });
+    assert.equal(initialized.status, 0, initialized.stderr);
+    const deps = { fetchIssues: async () => issues(17).slice(0, 1), resolveToken: () => undefined };
+    const apply = (options: Record<string, unknown>) =>
+      captureStderr(() => runImport("fixture/project", root, parseImportOptions(options), deps));
+    await apply({ type: "Task" });
+    const before = snapshot(root);
+    const preview = await apply({ "dry-run": true, gate: true });
+    assert.equal("wouldUpdate" in preview.result && preview.result.wouldUpdate, 0);
+    const repeat = await apply({});
+    assert.equal("updated" in repeat.result && repeat.result.updated, 0);
+    assert.deepEqual(snapshot(root), before);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("gated preview and apply share privacy verdicts for generated non-git source plans", async () => {
   const directory = mkdtempSync(join(tmpdir(), "sync-preview-property-"));
   try {

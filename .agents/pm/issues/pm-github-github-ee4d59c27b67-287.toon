@@ -1,0 +1,208 @@
+id: pm-github-github-ee4d59c27b67-287
+title: Gated sync on 2026.11.25 stops at the repeat no-op check after item updated_at changes
+description: "GH issue #287: https://github.com/unbraind/pm-github/issues/287 · author @unbraind · created 2026-11-26T10:29:01Z · updated 2026-11-26T13:28:22Z"
+type: Issue
+pm_format_version: 2
+status: open
+priority: 2
+tags[2]: "gh:unbraind/pm-github#287","github_author:unbraind"
+created_at: "2026-11-26T10:29:01Z"
+updated_at: "2026-11-28T00:57:19.162Z"
+author: pm-github
+comments[42]{created_at,author,text}:
+  "2026-11-27T11:17:01.364Z",codex-agent,Investigating the four hosted repeat-gate failures. The pinned caller reproduction will compare native documents and history across both passes and distinguish the published versions from the later merged comment fix.
+  "2026-11-27T11:21:45.811Z",codex-agent,"Reproduced on pm-rl main e11861f with its locked PM CLI 2026.11.24 and pinned pm-github 2026.11.25. A frozen nine-issue REST and closure snapshot produced 17, 18, then 19 native comments for item 202. Both new comment_add rows share provider comment 7140375699. The repeat appended one history row touching comments and updated_at while reporting zero item updates and unchanged. Published 2026.11.26 differs in dist only by its version literal and predates merged #288. Auditing body, lifecycle, annotations, and dependency writes independently."
+  "2026-11-27T11:33:28.528Z",codex-agent,"Release comparison confirmed: 2026.11.25 and 2026.11.26 both append comment 7140375699 twice (history 36 → 38 → 39). Merged #288 reads full native annotation text and preserves the original provider timestamp (history 36 → 38 → 38). Existing dependency writes are byte-idempotent on the pinned SDK but their duplicate receipt used to count a link. The workflow now compares a source-only snapshot before writes and still requires both byte-diff checks and the privacy scan. Consumer adoption and independent hosted verification are tracked in issue #297."
+  "2026-11-27T11:45:41.408Z",codex-agent,"Behavioral revert proof in disposable copies: disabling the source guard or removing its apply and repeat workflow arguments each failed the source-drift regression. Removing either recovery fence replayed a pending plan and failed the rejection check. Reverting the annotation receipt, dependency receipt, plain type comparison or Projects no-op comparison each failed its targeted assertion. Restoring the released comment read/append function in the candidate on the frozen pm-rl caller again produced 17 → 18 → 19 comments and appended a history row. Reverting only the reader stayed byte-identical for unchanged text because native ifAbsent still deduplicated. The caller SDK projected the legacy 1,221-character comment as 253 characters and dropped its marker. The fixed linked test command passed 7/7."
+  "2026-11-27T11:45:45.081Z",codex-agent,"Packed candidate contained 103 files and the source snapshot module. On frozen pm-rl main e11861f with PM CLI 2026.11.24, both npm and native Bun returned a matching snapshot and zero repeat imports or updates. Native comment and history bytes were identical and the privacy scan passed. The historical hosted pm-rl repeat failure was verified on run 45975772213. Verification of a hosted caller with the fixed release is tracked in #297."
+  "2026-11-27T12:07:27.436Z",codex-agent,"The selected-issue acceptance case counted a repeat as updated solely because the first pass had created a Task. Its assertions now preserve original endpoint and genuine-update coverage and also require a byte-identical no-op for the identical source. The shared object-store privacy scan found only two unrelated dangling commit objects, both absent from every ref and from a fresh remote clone. The exact delivery commit will be scanned in that clone."
+  "2026-11-27T12:40:54.994Z",codex-agent,"The corrected selection file passed all 26 tests through the pinned PM linked runner, with zero skips. Restoring the old plain comparison made the real-tracker selection test fail with 1 reported update instead of 0. The production code and packed replay are unchanged by this fixture update."
+  "2026-11-27T13:02:09.806Z",codex-agent,"Local gates passed: 1,832 distinct test cases over 68 related files and four focused sync-workflow cases, after rerunning the two updated fixtures. The PM-linked commands passed 7/7, 26/26, and 1/1. The packed Bun fixture now uses the workflow preview receipt, runs three repeats under the existing 45-second budget, and compares item and history bytes. Dependency coverage also compares both files on repeat. Typecheck, build, test compilation, lint, docstrings and duplication passed. Exact caller adoption remains tracked in #297."
+  "2026-11-27T13:24:16.854Z",codex-agent,Exact CI on 1a44bfc found five ownership-inventory failures and two import snapshot coverage gaps. Refreshing the generated ownership ledger and adding a direct real-tracker drift test that covers the refusal and assignment evidence. Coverage thresholds stay at 100 in all four dimensions.
+  "2026-11-27T13:28:18.595Z",codex-agent,"CI follow-up: regenerated and checked the ownership inventory, including the native comment routing helper. Inventory and scheduled refusal tests passed 26/26 through the pinned PM runner, with zero skips. The new real non-git tracker test covers both matching and changed assignment evidence. Reverting only the source comparison made it fail because the expected github_import_source_drift refusal was lost. Typecheck, test compilation, and lint passed. Exact-head CI on 1a44bfc recorded 2,163 passing tests and five inventory failures before this correction."
+  "2026-11-27T13:58:07.077Z",codex-agent,"Exact-head CI for 18b4523 completed before the 30-minute cutoff. Node 22 and Node 26 each passed 2,169 tests with zero failures or skips. CodeQL passed. The Node 26 release gate refused 99.94% branch coverage at the unchanged 100% threshold. The remaining uncovered branches are in index.ts at lines 3008, 4070 and 6740. Lines, statements, and functions reached 100%. CI run https://github.com/unbraind/pm-github/actions/runs/46007591910 and failed release job https://github.com/unbraind/pm-github/actions/runs/46007591910/job/140534605925. This post-CI tracker receipt is local so the PR head stays at the exact tested commit."
+  "2026-11-27T14:13:54.730Z",codex-agent,"Review round 1: the Projects history check can mistake an empty suffix for one row. Audit positive mutation assertions package-wide for vacuous checks, require real append-only evidence, and test absent and malformed evidence. Add in-process cases for the three branch coverage gaps from the prior exact-head run."
+  "2026-11-27T14:17:44.036Z",codex-agent,"Review rule: assertions claiming mutation evidence must require the expected durable records before testing their contents. Audited JSONL slicing, splitting, filtering and history assertions across CLI and SDK import, Projects, refresh, closeout, JSON and TOON output, and packed npm/Bun and non-Git consumers. The Projects suffix accepted empty text and the issue closure check accepted zero closure events. Both now require actual evidence. The existing-owner sentinel proof shares the append-only decoder. Byte-identical no-op checks remain in place. Review thread PRRT_kwDOTbN4pM680MO5."
+  "2026-11-27T14:18:02.683Z",codex-agent,"Review revert proof: deleting the nonempty-suffix guard fails the adversarial test with Missing expected exception. Hiding closure patches from the real tracker assertion fails closed finalization with the missing source instant. Removing Projects close-reason comparison fails the reason-only update receipt (0 instead of 1). Dropping the parsed expect-source option fails the snapshot-bound case with an absent digest. All four temporary changes were restored. An explicitly undefined atomic comment receipt remains omitted and a real annotations import reports one added comment."
+  "2026-11-27T14:22:09.841Z",codex-agent,"The native Projects lifecycle probe showed that create omits close_reason for a custom terminal status while update persists it. On the pre-fix comparison, the real-tracker repeat preview reports wouldUpdate: 1 for the freshly created alias card. Comparing only recorded reasons restores zero preview and apply writes and identical item/history bytes, while the reason-only canceled case still repairs a recorded conflict exactly once. Focused Projects cases passed 3/3 after the fix."
+  "2026-11-27T15:14:38.265Z",codex-agent,"Review gates passed: six linked test files 114/114, focused Projects 3/3, all changed and referencing files plus packed consumers 1467/1467 across 66 files at configured CI depth with two workers. The default deeper suite was interrupted after 1229 passes and zero failures. Typecheck, build, test build, lint, docstrings, duplication and ownership inventory all passed. Packed npm and native Bun preserve mixed-import bytes in JSON and TOON. The declared minimum SDK consumer passed."
+  "2026-11-27T16:27:41.689Z",codex-agent,"Review round 2. Merged the single upstream release commit. Checking the shared Projects association planners for many-to-one and one-to-many targets, including peers outside a selected scope. Checking reusable sync resolver, preview capability and caller guidance against a real older pin. Preview and apply must make the same pre-write decision."
+  "2026-11-27T16:38:00.611Z",codex-agent,"Projects rule: each mutable plan target needs exactly one source. Audited import, pull, push, tags, wrapped issues, stale links, duplicate board rows and peer claims outside selected IDs. Every writable Projects association is checked before filtering for no-ops or executing a mutation. Pull cards without a resolved status remain inert. Issue import already rejects duplicate or conflicting source identities, refresh requires unique targets and closeout plans per item. Pin rule: a workflow hold selects an exact installed version and the workflow must explain and check its capability separately. The real 2026.11.26 package installs exactly and stops at gated preview with zero item/history writes. The sync diagnostic, input description, README, recovery guide and caller inventory all explain the source snapshot requirement and recovery. Closeout has a separate decision-code capability contract."
+  "2026-11-27T16:41:56.546Z",codex-agent,"Round 2 revert proofs. The old Projects writer applied identical snapshots as Second/open (+2 history records), First/in_progress (+1), then Second/open (+1). The new real-tracker refusal test failed on the old planner with Missing expected rejection; the six-case two-order planner corpus also failed on the old source. Reverting workflow diagnostics removed the selected version and pin recovery from the real 2026.11.26 refusal. Restoring the loose jq filter accepted a malformed receipt and failed the expected exit-one assertion. Reverting each of README, daily-sync recovery and caller inventory independently failed the guide contract test. The CLI emits a stable refusal code for JSON and renders the same refusal in prose when TOON is selected."
+  "2026-11-27T17:14:50.164Z",codex-agent,The combined scoped test command reached its 1800-second local wrapper timeout with 545 recorded passes and zero observed test failures. Retained the completed evidence and continued the unfinished workflow cases plus the files whose results had not been reported. The two continuation commands each use one worker.
+  "2026-11-27T17:39:45.602Z",codex-agent,The continued gate caught an identity-less board row incorrectly treated as an existing card. The planner now excludes rows without card IDs as import and pull sources. Push retains the independently owned issue attachment path. Its existing real-response test failed before the correction and passed afterward. The permutation corpus also covers the identity-less row in all three planners.
+  "2026-11-27T17:45:12.763Z",codex-agent,"Four existing scoped-ownership cases identified suppressed off-board warnings during local verification. Shared association planning now retains the original diagnostic scope for import and pull, and the full selected scope for push. All 24 scoped-ownership cases passed after the correction, including all four revert failures. The original run had five failures total counting the independently corrected missing-card identity."
+  "2026-11-27T17:49:37.853Z",codex-agent,"Round 2 local gates complete. The 35-file scope covered 1056 cases: 545 recorded before the PM wrapper timeout, 15 remaining workflow cases passed, and the 19-file continuation reported 491 passes and five regressions. All five passed after the corrections, with Projects and inventory 71/71, scoped ownership 24/24, and the final PM-linked suite 14/14 including packed npm and native Bun. Typecheck, build, test build, lint, docstrings, duplication and identity inventory passed on the corrected source. The full scoped command now has a longer PM wrapper timeout and the same assertions."
+  "2026-11-27T18:45:31.000Z",codex-agent,Review round 3. The branch is current with main. Auditing the Projects association from plan through mutation and structured preview refusal classification before snapshot validation.
+  "2026-11-27T19:00:35.528Z",codex-agent,"Round 3 rule for Projects: a writer must re-prove the full association used for planning at the mutation boundary. Verified the old pull closes the original draft owner after a move or competing claim. Reuse the same board association resolver with a copied provider scope and live native peer metadata on pull and import, including create and separate close. Push checks before GraphQL writes and again under the native tag lock after attachment. GitHub issue import, export, refresh and closeout rely on issue identity rather than a board card. A detached pull row cannot authorize a write; a live plan for a native unowned draft remains supported. Projects import now consumes native SDK results. The legacy CLI receipt parser still has its independent tests."
+  "2026-11-27T19:00:36.546Z",codex-agent,"Round 3 rule for sync receipts: a typed refusal takes precedence over capability checks and secondary stderr. The real ambiguous-citation preview exited successfully with a blocked plan, which the old workflow mislabeled as a pin problem. A blocked report now reaches the existing privacy-gated diagnostic before hash validation, even if it includes a valid-looking digest. Diagnostics expose the validated github_url remedy and omit arbitrary prose. Actual apply already returned a typed nonzero refusal; shared diagnostic formatting covers both. Closeout scenarios use their own refusal receipts."
+  "2026-11-27T19:01:20.765Z",codex-agent,"Round 3 behavioral reverts in a disposable source copy. Removing only the shared board association check made seven adversarial cases fail: moved and contested pull, native import create and update, reassigned push with retained issue ownership, and peer claims during attachment and status writes. The uncontested control still passed. Removing the blocked preview branch restored the wrong pin diagnostic in a real CLI preview. Removing structured blocked precedence made the diagnostics property test choose secondary stderr over the ownership remedy. The initial live baseline also reproduced all three requested refusal failures before code changes. Fixed focused suite passed 15/15."
+  "2026-11-27T19:33:16.062Z",codex-agent,"Round 3 local gates passed. Focused checks 16/16. PM-linked 73-file suite at configured CI depth with two workers 1877/1877, zero skips or failures. Covered direct SDK, JSON and TOON, real non-git trackers, packed npm and native Bun, declared minimum SDK and the reusable workflow. Typecheck, package and test builds, lint, 331 docstrings, zero configured duplication and the syntax-derived ownership inventory passed. No repeat or privacy gate was weakened."
+  "2026-11-27T19:46:24.808Z",codex-agent,The exact-head Greptile review identified a legacy issue description as the only ownership proof that Projects import would replace. Reproducing the preview and apply disagreement on native items and checking all other writers that can overwrite a declaration.
+  "2026-11-27T19:49:23.426Z",codex-agent,"Legacy-owner rule: a content writer must preserve accepted source authority and source kind across its proposed document. Native Projects import replaces descriptions, so it now omits that field when the shared parser finds a declaration that names the verified planned owner. The same decision drives preview and the no-op projection. Unrelated descriptions still refresh. Projects pull only writes lifecycle state and push only adds board provenance. Issue import and refresh preserve curated content or write the exact issue declaration and fidelity for a verified mirror. Export and closeout do not replace the native description. Both CLI receipt formats and packed consumers share the same command handler."
+  "2026-11-27T19:52:04.391Z",codex-agent,"Legacy ownership revert proof on a real non-git tracker: running the new tests against the prior Projects writer caused three apply refusals after successful previews (wrapped issue, wrapped PR and tagged draft). A fourth case lost the matching declaration even with an explicit issue URL. The unrelated declaration control still passed. Fixed tests check the existing ID, issue identity and kind, the native update and close records, and byte-identical item and history on repeat."
+  "2026-11-27T20:03:59.896Z",codex-agent,"Exact-head CI on e0f0e31 passed 2,187 tests on both Node versions and CodeQL. Node 26 stopped at the unchanged 100% branch threshold: the only uncovered branch was the local empty-tag fallback when projecting a Projects attachment. The native complete reader and locked metadata already supply tags. The projection now uses the same SDK tag normalizer as the write-side addition, which handles the optional input and preserves native tag atoms. Coverage will be certified by CI."
+  "2026-11-27T20:58:37.083Z",codex-agent,"Legacy Projects and coverage follow-up verified. The focused five-case set passed. The pinned PM runner repeated all 73 related files with two workers and passed 1,882 of 1,882 cases, zero skips, failures or cancellations. The five new cases each verified a no-write preview, accepted update and close, and a byte-identical repeat. Typecheck, build, test compilation, lint, 331 docstrings, configured duplication and the regenerated ownership inventory passed. The review thread is indexed by its public discussion link in the delivery report."
+  "2026-11-27T21:35:53.497Z",codex-agent,"Review round 4. The outside-diff report is a selected issue disappearing between preview and apply. A snapshot-bound refusal needs the same typed source-drift result when a once-available selection is absent, and ordinary selection and transport errors must keep their meanings. Projects conflict text also needs to describe only the refused action because an earlier remote attachment, native update or other batch entry may already have succeeded. Auditing the typed terminals and all package messages that assert absence of writes."
+  "2026-11-27T21:43:56.731Z",codex-agent,"Round 4 audit. Snapshot-bound selected REST issues that return 404 or are excluded by the PR selection use the same source-drift refusal as a changed digest before plan or tracker writes. The list importer already fingerprints selected membership. Authorization, transport and malformed responses still report fetch failures. Plain and atomic paths, both command names, and packed npm and native Bun use the same importer. Projects last-mile conflicts now describe the refused operation and preserve confirmed earlier effects. A confirmed attachment can record its link safely after a status refusal, and a fresh plan then targets the same card. A competing link still refuses the native tag. Other shared ownership, annotation, recovery, post-write verification and export messages now describe only verified effects. Closeout derives publication statements from typed action receipts and the workflow refusal describes publication only."
+  "2026-11-27T21:46:17.836Z",codex-agent,"Round 4 behavioral revert proof. In a disposable source copy, removing only the two snapshot-bound selection branches made the real CLI selected-issue regression fail with the ordinary HTTP 404 instead of github_import_source_drift. Restoring only the Projects conflict constructor made both live peer-race cases fail because the result claimed no writes after the provider confirmed the attachment. The starting implementation also failed to report the confirmed attachment after a status error, while the existing-card control passed. Fixed focus was 26/26, including missing and wrong-card GraphQL receipts, overlapping tracker-tag claims, preserved attachment on retry, JSON and TOON on native trackers, and actual npm and Bun packed consumers."
+  "2026-11-27T22:02:37.087Z",codex-agent,"The package audit also found a blocker command help hint promising nothing changed for exit 4 even when the native --comment path appended an annotation. The hint now points to actual annotations in the report. The existing real-tracker test checks the registered hint against the actual native write. Refresh documentation now describes ownership refusal at selection and apply, while retaining its existing explanation of earlier recovery commits."
+  "2026-11-27T22:12:58.972Z",codex-agent,"Round 4 local verification passed. The pinned PM-linked two-worker run passed 1,952 of 1,952 cases across 74 files, without skips, failures or cancellations. After the blocker help correction, the complete blocker file passed 35 of 35. Restoring only the original blocker hint failed its real annotation-write case because exit 4 had already added an annotation. Focused 26 of 26, compilation, typecheck, lint, all 334 docstrings, configured duplication and ownership inventory also passed. The outside-diff finding is in review 6093501982 and the Projects conflict thread is PRRT_kwDOTbN4pM688I55."
+  "2026-11-27T22:42:31.537Z",codex-agent,"Exact-head CI on 25cbc32 passed 2,262 tests per Node version and CodeQL. Node 26 stopped at 99.95% branch coverage because the packed and built CLI regressions do not register three selected-source branches in the authored module. The same two declines now run through the source SDK entry point against an actual tracker and HTTP transport. The focused SDK case passed and failed when the selected-fetch guards alone were reverted. The production code and gate thresholds remain unchanged."
+  "2026-11-28T00:19:47.010Z",codex-agent,"Review round 5. Merged current main 6229d64 and regenerated the workflow and source anchors after reproducing the three-way inventory conflict. Restoring Projects push planning, mutation and receipts to main because safe draft deduplication requires provider and local fencing and partial push reporting needs an explicit receipt contract. The separate push follow-up will cover both defects. Retaining Projects import and pull changes and checking the reviewer’s additional derived-ownership report in those paths."
+  "2026-11-28T00:24:13.041Z",codex-agent,"Round 5 proofs. Confirmed in disposable non-git trackers that two push plans taken before either apply create two drafts and persist two board tags on both the previous PR code and current main. After attachment plus rejected status, the previous PR reports pushed 1 and pushFailed 0 in JSON; main emits a total-failure diagnostic even though the provider accepted attachment. Eight scoped push implementation blocks now match main byte-for-byte, and the prior push-only test edits are reverted with them. Follow-up needs fresh-provider and tracker binding before creation, recovery after attachment uncertainty, and a structured partial outcome shared by JSON and TOON. In retained Projects import and pull, any derived peer claim for the selected card now competes with a board tag. Reverting only the claim index to primary owners failed the live non-git pull test; an unrelated derived claim remained writable. The inventory checker failed when only the pre-merge workflow anchor was restored."
+  "2026-11-28T00:57:15.109Z",codex-agent,"Round 5 local verification passed. Focused 7/7, both scratch proof variants 2/2 apiece, and the pinned two-worker PM test passed 1,948 of 1,948 across 74 related files with no skips, failures or cancellations. It covered real tracker, workflow, JSON/TOON, minimum-SDK and packed npm/native Bun cases. Typecheck, builds, lint, 333 docstrings, configured duplication and generated inventory passed. Restoring the push-only files and hunks narrowed the net PR diff; the repeat no-op workflow gate and existing baseline push tests remain in place. The in-scope derived-ownership thread is PRRT_kwDOTbN4pM689mnH."
+files[30]{path,scope}:
+  .github/workflows/pm-github-sync.yml,project
+  comment-mirror.ts,project
+  import-fidelity.ts,project
+  import-ownership.ts,project
+  import-source.ts,project
+  index.ts,project
+  projects.ts,project
+  scripts/identity-inventory.ts,project
+  test/blockers.test.ts,project
+  test/coverage-remainder.test.ts,project
+  test/daily-sync-idempotency.test.ts,project
+  test/helpers/history-assertions.ts,project
+  test/history-assertions.test.ts,project
+  test/import-gate.test.ts,project
+  test/import-projection.test.ts,project
+  test/import-selection.test.ts,project
+  test/link-deps.test.ts,project
+  test/linked-import-regression.test.ts,project
+  test/project-sync.test.ts,project
+  test/projects.test.ts,project
+  test/repeat-import-noop.test.ts,project
+  test/review-round3-identity.test.ts,project
+  test/round-eighteen.test.ts,project
+  test/round-seventeen.test.ts,project
+  test/round-twelve.test.ts,project
+  test/scheduled-refusals.test.ts,project
+  test/smoke.test.ts,project
+  test/typed-sentinel-normalization.test.ts,project
+  test/workflow-diagnostic-class.test.ts,project
+  workflow-diagnostic.ts,project
+tests[13]:
+  - command: "node --test --test-concurrency=2 --test-name-pattern=\"reusable sync binds|legacy TOON import|linked reserved-ID import repeats|creation-only item type|project import skips|runImport --link-deps writes|interrupted transaction replay\" test/linked-import-regression.test.ts test/daily-sync-idempotency.test.ts test/project-sync.test.ts test/link-deps.test.ts test/repeat-import-noop.test.ts"
+    scope: project
+    timeout_seconds: 1200
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-27T11:34:15.919Z"
+      source_kind: local_mutation
+      source_ref: fix/repeat-import-preserves-updated-at
+  - command: node --test --test-concurrency=1 test/import-selection.test.ts
+    scope: project
+    timeout_seconds: 900
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-27T12:28:36.332Z"
+      source_kind: local_mutation
+      source_ref: fix/repeat-import-preserves-updated-at
+  - command: "node --test --test-concurrency=1 --test-name-pattern=\"packed installed CLI repeats a completed gated import\" test/import-gate.test.ts"
+    scope: project
+    timeout_seconds: 300
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-27T12:52:30.711Z"
+      source_kind: local_mutation
+      source_ref: fix/repeat-import-preserves-updated-at
+  - command: node --test --test-concurrency=2 test/identity-inventory.test.ts test/scheduled-refusals.test.ts
+    scope: project
+    timeout_seconds: 600
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-27T13:25:17.326Z"
+      source_kind: local_mutation
+      source_ref: fix/repeat-import-preserves-updated-at
+  - command: node --test --test-concurrency=2 test/history-assertions.test.ts test/project-sync.test.ts test/repeat-import-noop.test.ts test/round-seventeen.test.ts test/scheduled-refusals.test.ts test/typed-sentinel-normalization.test.ts
+    scope: project
+    timeout_seconds: 900
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-27T14:17:42.745Z"
+      source_kind: local_mutation
+      source_ref: fix/repeat-import-preserves-updated-at
+  - command: PM_TEST_DEPTH=quick node --test --test-concurrency=2 test/bot-pr-workflow.test.ts test/changelog-placement.test.ts test/ci-codeql.test.ts test/ci-routing.test.ts test/ci-tiers.test.ts test/closeout-attribution.test.ts test/closeout-revision.test.ts test/coverage-edges.test.ts test/coverage-remainder.test.ts test/daily-sync-alert.test.ts test/dependabot-merge.test.ts test/gate.test.ts test/handler-failures.test.ts test/identity-inventory.test.ts test/import-conflict-report.test.ts test/import-gate.test.ts test/import-projection.test.ts test/linked-import-regression.test.ts test/minimum-sdk-consumer.test.ts test/own-property.test.ts test/ownership-consistency.test.ts test/package-metadata.test.ts test/packed-fixture.test.ts test/project-sync.test.ts test/projects.test.ts test/refresh.test.ts test/review-round1.test.ts test/round-eighteen.test.ts test/round-seventeen.test.ts test/round-twelve.test.ts test/scoped-ownership.test.ts test/self-versioned-workflows.test.ts test/workflow-diagnostic-class.test.ts test/workflow-rule-names.test.ts test/workspace-resolution.test.ts
+    scope: project
+    timeout_seconds: 7200
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-27T16:41:11.988Z"
+      source_kind: local_mutation
+      source_ref: fix/repeat-import-preserves-updated-at
+    updated_by: codex-agent
+    updated_at: "2026-11-27T17:40:21.544Z"
+  - command: PM_TEST_DEPTH=quick node --test --test-concurrency=1 test/import-projection.test.ts test/linked-import-regression.test.ts test/minimum-sdk-consumer.test.ts test/own-property.test.ts test/ownership-consistency.test.ts test/package-metadata.test.ts test/packed-fixture.test.ts test/project-sync.test.ts test/projects.test.ts test/refresh.test.ts test/review-round1.test.ts test/round-eighteen.test.ts test/round-seventeen.test.ts test/round-twelve.test.ts test/scoped-ownership.test.ts test/self-versioned-workflows.test.ts test/workflow-diagnostic-class.test.ts test/workflow-rule-names.test.ts test/workspace-resolution.test.ts
+    scope: project
+    timeout_seconds: 3600
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-27T17:14:51.910Z"
+      source_kind: local_mutation
+      source_ref: fix/repeat-import-preserves-updated-at
+  - command: "PM_TEST_DEPTH=quick node --test --test-concurrency=2 --test-name-pattern=\"ambiguous|incompatible published hold|sync pin guides|missing identity from the real attachment|off-board|unknown board|packed npm and native Bun\" test/import-projection.test.ts test/linked-import-regression.test.ts test/project-sync.test.ts test/projects.test.ts test/scoped-ownership.test.ts"
+    scope: project
+    timeout_seconds: 900
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-27T17:45:15.200Z"
+      source_kind: local_mutation
+      source_ref: fix/repeat-import-preserves-updated-at
+  - command: PM_TEST_DEPTH=quick node --test --test-concurrency=2 test/atomic.test.ts test/blockers.test.ts test/bot-pr-workflow.test.ts test/changelog-placement.test.ts test/ci-codeql.test.ts test/ci-routing.test.ts test/ci-tiers.test.ts test/cited-issue-adoption.test.ts test/closeout-attribution.test.ts test/closeout-revision.test.ts test/closeout.test.ts test/comments-sync.test.ts test/complete-corpus.test.ts test/coverage-boundaries.test.ts test/coverage-edges.test.ts test/coverage-remainder.test.ts test/daily-sync-alert.test.ts test/daily-sync-idempotency.test.ts test/dependabot-merge.test.ts test/discussion-model.test.ts test/discussions.test.ts test/dryrun-preview.test.ts test/durable-recovery.test.ts test/gate.test.ts test/github-url.test.ts test/handler-failures.test.ts test/http-boundary.test.ts test/identity-inventory.test.ts test/identity.test.ts test/import-conflict-report.test.ts test/import-errors.test.ts test/import-fidelity.test.ts test/import-gate.test.ts test/import-lock.test.ts test/import-ownership.test.ts test/import-projection.test.ts test/import-regex.test.ts test/import-selection.test.ts test/issue-forms.test.ts test/label-import-model.test.ts test/labels.test.ts test/legacy-description-compatibility.test.ts test/link-deps.test.ts test/linked-import-regression.test.ts test/minimum-sdk-consumer.test.ts test/own-property.test.ts test/owner-field-values.test.ts test/ownership-consistency.test.ts test/package-metadata.test.ts test/packed-fixture.test.ts test/project-sync.test.ts test/projects.test.ts test/reference-import-identity.test.ts test/refresh.test.ts test/repeat-import-noop.test.ts test/review-import-identity.test.ts test/review-round1.test.ts test/review-round3-identity.test.ts test/round-eighteen.test.ts test/round-seven.test.ts test/round-seventeen.test.ts test/round-twelve.test.ts test/scheduled-refusals.test.ts test/scoped-ownership.test.ts test/sdk-adoption.test.ts test/self-versioned-workflows.test.ts test/smoke.test.ts test/strict-import-admission.test.ts test/typed-sentinel-normalization.test.ts test/webhooks.test.ts test/workflow-diagnostic-class.test.ts test/workflow-rule-names.test.ts test/workspace-resolution.test.ts
+    scope: project
+    timeout_seconds: 7200
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-27T19:00:41.134Z"
+      source_kind: local_mutation
+      source_ref: fix/repeat-import-preserves-updated-at
+  - command: "PM_TEST_DEPTH=quick node --test --test-concurrency=2 --test-name-pattern=\"Projects import preserves applicable legacy ownership\" test/round-twelve.test.ts"
+    scope: project
+    timeout_seconds: 900
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-27T19:51:26.757Z"
+      source_kind: local_mutation
+      source_ref: fix/repeat-import-preserves-updated-at
+  - command: PM_TEST_DEPTH=quick node --test --test-concurrency=2 test/atomic.test.ts test/blockers.test.ts test/bot-pr-workflow.test.ts test/changelog-placement.test.ts test/ci-codeql.test.ts test/ci-routing.test.ts test/ci-tiers.test.ts test/cited-issue-adoption.test.ts test/closeout-attribution.test.ts test/closeout-revision.test.ts test/closeout.test.ts test/comments-sync.test.ts test/complete-corpus.test.ts test/coverage-boundaries.test.ts test/coverage-edges.test.ts test/coverage-remainder.test.ts test/daily-sync-alert.test.ts test/daily-sync-idempotency.test.ts test/dependabot-merge.test.ts test/discussion-model.test.ts test/discussions.test.ts test/dryrun-preview.test.ts test/durable-recovery.test.ts test/gate.test.ts test/github-url.test.ts test/handler-failures.test.ts test/http-boundary.test.ts test/identity-inventory.test.ts test/identity.test.ts test/import-conflict-report.test.ts test/import-errors.test.ts test/import-fidelity.test.ts test/import-gate.test.ts test/import-lock.test.ts test/import-ownership.test.ts test/import-projection.test.ts test/import-regex.test.ts test/import-selection.test.ts test/issue-forms.test.ts test/label-import-model.test.ts test/labels.test.ts test/legacy-description-compatibility.test.ts test/link-deps.test.ts test/linked-import-regression.test.ts test/minimum-sdk-consumer.test.ts test/own-property.test.ts test/owner-field-values.test.ts test/ownership-consistency.test.ts test/package-metadata.test.ts test/packed-fixture.test.ts test/project-sync.test.ts test/projects.test.ts test/reference-import-identity.test.ts test/refresh.test.ts test/repeat-import-noop.test.ts test/review-import-identity.test.ts test/review-round1.test.ts test/review-round3-identity.test.ts test/round-eighteen.test.ts test/round-seven.test.ts test/round-seventeen.test.ts test/round-twelve.test.ts test/scheduled-refusals.test.ts test/scoped-ownership.test.ts test/sdk-adoption.test.ts test/self-versioned-workflows.test.ts test/smoke.test.ts test/strict-import-admission.test.ts test/typed-sentinel-normalization.test.ts test/webhooks.test.ts test/workflow-diagnostic-class.test.ts test/workflow-host-compatibility.test.ts test/workflow-rule-names.test.ts test/workspace-resolution.test.ts
+    scope: project
+    timeout_seconds: 7200
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-27T21:44:02.231Z"
+      source_kind: local_mutation
+      source_ref: fix/repeat-import-preserves-updated-at
+  - command: PM_TEST_DEPTH=quick node --test --test-concurrency=2 test/blockers.test.ts
+    scope: project
+    timeout_seconds: 1800
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-27T22:02:38.995Z"
+      source_kind: local_mutation
+      source_ref: fix/repeat-import-preserves-updated-at
+  - command: PM_TEST_DEPTH=quick node --test --test-concurrency=2 test/import-selection.test.ts
+    scope: project
+    timeout_seconds: 1800
+    provenance:
+      author: codex-agent
+      created_at: "2026-11-27T22:42:11.124Z"
+      source_kind: local_mutation
+      source_ref: fix/repeat-import-preserves-updated-at
+docs[4]{path,scope}:
+  docs/daily-sync-recovery.md,project
+  docs/identity-ownership-inventory.md,project
+  docs/workflow-version-callers.md,project
+  README.md,project
+github_close_reason: ""
+github_closed_at: ""
+github_created_at: "2026-11-26T10:29:01Z"
+github_link_only: false
+github_number: 287
+github_release: ""
+github_state: open
+github_state_reason: unspecified
+github_updated_at: "2026-11-26T13:28:22Z"
+github_url: "https://github.com/unbraind/pm-github/issues/287"
+body: "## Hosted evidence\n\nTwo actual runs reach and pass both `Preview GitHub to pm plan` and `Gated GitHub to pm import`, then fail `Verify repeat import is a no-op` without publishing a branch:\n\n- [PM Web run 45792469885 / job 139814702911](https://github.com/unbraind/pm-web/actions/runs/45792469885/job/139814702911), caller `12a277c0d4cb069af0c5b3ada73f08d02138f782`, installed pm-github `2026.11.25`. The repeat reports a changed `updated_at` on `pm-web-5sx6`. Consumer alert: [pm-web#369](https://github.com/unbraind/pm-web/issues/369).\n- [PM RL run 45799801908 / job 139839761659](https://github.com/unbraind/pm-rl/actions/runs/45799801908/job/139839761659), caller `273a68769d1ab37b1bbc89a71b4fba1a8f9613d6`. After the separate provenance issue was fixed by [pm-rl#211](https://github.com/unbraind/pm-rl/pull/211), the repeat reports a changed `updated_at` on `pm-rl-github-eecd7460423f-202`. Consumer alert: [pm-rl#210](https://github.com/unbraind/pm-rl/issues/210).\n\nThese are the same observed failure class, not proof of a single underlying cause. The logs do not show whether the provider records changed between the two imports, nor prove this is the same cause as the closed 2026.10.19 history-churn report #175. This is distinct from the host-compatibility, timestamp validation, and reserved-ID preview refusals.\n\n## Acceptance\n\nFor a pinned unchanged source snapshot, the initial write and identical repeat must preserve the item timestamp, authoritative history and permitted changes on the repeat. If source inputs actually change between passes, return a clear source-drift diagnostic without publishing; retain the fail-closed privacy and no-op gates. Include a sanitized regression exercising both stable and changed evidence and verify the matching hosted workflow on at least one affected consumer."
